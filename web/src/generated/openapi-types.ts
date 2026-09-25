@@ -1859,6 +1859,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/machines/{device_id}/providers/{provider}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Browser Machine Models
+         * @description Browser launch-picker models. Same body shape as the agents route.
+         */
+        get: operations["list_browser_machine_models_timeline_machines__device_id__providers__provider__models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/semantic": {
         parameters: {
             query?: never;
@@ -2365,6 +2385,26 @@ export interface paths {
          * @description Frecency-ranked recent workspaces for the launch picker, scoped to one machine.
          */
         get: operations["list_machine_workspaces_agents_machines__device_id__workspaces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/machines/{device_id}/providers/{provider}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Machine Models
+         * @description Recent provider-reported model ids for one enrolled machine.
+         */
+        get: operations["list_machine_models_agents_machines__device_id__providers__provider__models_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3988,6 +4028,8 @@ export interface components {
             intent: string;
             /** Client Request Id */
             client_request_id: string;
+            /** Model */
+            model?: string | null;
             /** Attachments */
             attachments: string[];
         };
@@ -4107,6 +4149,8 @@ export interface components {
             project?: string | null;
             /** Display Name */
             display_name?: string | null;
+            /** Model */
+            model?: string | null;
             /**
              * Launch Surface
              * @default web
@@ -4123,6 +4167,8 @@ export interface components {
             message: string;
             /** Client Request Id */
             client_request_id: string;
+            /** Model */
+            model?: string | null;
         };
         /** ConsoleTurnCreateResponse */
         ConsoleTurnCreateResponse: {
@@ -6743,6 +6789,40 @@ export interface components {
             /** Matched By */
             matched_by: ("lexical" | "dense")[];
         };
+        /** RecentModel */
+        RecentModel: {
+            /**
+             * Model
+             * @description Provider model id, preserving the provider's exact casing.
+             */
+            model: string;
+            /**
+             * Last Used At
+             * Format: date-time
+             * @description When this model was last reported by a completed turn.
+             */
+            last_used_at: string;
+        };
+        /** RecentModelsResponse */
+        RecentModelsResponse: {
+            /**
+             * Device Id
+             * @description Machine the models are scoped to.
+             */
+            device_id: string;
+            /**
+             * Provider
+             * @description Provider whose usage facts supplied the models.
+             */
+            provider: string;
+            /**
+             * Days Back
+             * @description Lookback window used to select sessions.
+             */
+            days_back: number;
+            /** Models */
+            models?: components["schemas"]["RecentModel"][];
+        };
         /** RefreshOut */
         RefreshOut: {
             /** Expires In */
@@ -8065,6 +8145,8 @@ export interface components {
              * @description Optional immutable bug report to stage before a Console turn
              */
             report_id?: string | null;
+            /** Model */
+            model?: string | null;
         };
         /**
          * SessionInputResponse
@@ -8842,6 +8924,11 @@ export interface components {
             last_turn?: components["schemas"]["LastTurnResponse"] | null;
             /** @description The provider's latest away recap for this session, when it wrote one. */
             recap?: components["schemas"]["SessionRecapResponse"] | null;
+            /**
+             * Selected Model
+             * @description Model selected for future Console turns from the session's provider configuration. Distinct from usage_latest.model, which is the model the provider observed on the last completed turn.
+             */
+            selected_model?: string | null;
             /** @description Model, effort and context size from the provider's last turn-ending response. */
             usage_latest?: components["schemas"]["UsageLatestResponse"] | null;
             /** @description Server-derived timeline-card presentation */
@@ -13883,6 +13970,43 @@ export interface operations {
             };
         };
     };
+    list_browser_machine_models_timeline_machines__device_id__providers__provider__models_get: {
+        parameters: {
+            query?: {
+                /** @description Max recent models to return */
+                limit?: number;
+                /** @description Lookback window for recent sessions */
+                days_back?: number;
+            };
+            header?: never;
+            path: {
+                device_id: string;
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentModelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     semantic_search_timeline_sessions_timeline_sessions_semantic_get: {
         parameters: {
             query: {
@@ -14938,6 +15062,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceSuggestionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_machine_models_agents_machines__device_id__providers__provider__models_get: {
+        parameters: {
+            query?: {
+                /** @description Max recent models to return */
+                limit?: number;
+                /** @description Lookback window for recent sessions */
+                days_back?: number;
+            };
+            header?: never;
+            path: {
+                device_id: string;
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentModelsResponse"];
                 };
             };
             /** @description Validation Error */

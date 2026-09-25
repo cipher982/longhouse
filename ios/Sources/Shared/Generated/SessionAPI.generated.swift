@@ -499,6 +499,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let inputReceipts: [APISessionInputReceiptResponse]?
     let lastTurn: APILastTurnResponse?
     let recap: APISessionRecapResponse?
+    let selectedModel: String?
     let usageLatest: APIUsageLatestResponse?
     let timelineCard: APITimelineCardPresentationResponse
     let userState: String?
