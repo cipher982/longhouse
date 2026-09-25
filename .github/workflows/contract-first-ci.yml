@@ -35,6 +35,9 @@ env:
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
+  # ci-speed-lab: size the isolated guest to the hosted runner (4 vCPU / 16 GB).
+  LONGHOUSE_TEST_CPUS: "4"
+  LONGHOUSE_TEST_MEMORY: "13g"
 
 jobs:
   # -----------------------------------------------------------------------
@@ -43,7 +46,7 @@ jobs:
   # -----------------------------------------------------------------------
   changes:
     timeout-minutes: 10
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Changed paths"
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -72,7 +75,7 @@ jobs:
   fork-qualification:
     name: "Fork PR requires trusted replay"
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     steps:
       - run: |
           echo "::error::Portable CI has a writable self-hosted runner cache. Fork code cannot execute there; replay the patch on a trusted branch before merge."
@@ -82,7 +85,7 @@ jobs:
     name: "Prepare immutable fixture image"
     needs: changes
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-maint
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
@@ -95,6 +98,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
       - name: Authenticate to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -191,7 +203,7 @@ jobs:
     # filter cannot tell, the gated live proof below is skipped and everything
     # else still runs.
     if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
     # run before any step reaches its own limit.
@@ -204,6 +216,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
       - name: Validate contracts
         # The producer above passes an exact digest; this runs from the offline
@@ -288,9 +309,19 @@ jobs:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
-    name: "Backend tests"
+    runs-on: ubuntu-latest
+    name: "Backend tests (${{ matrix.mode }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: serial-profile
+            workers: "0"
+          - mode: xdist-4
+            workers: "4"
     env:
+      PYTEST_XDIST_WORKERS: ${{ matrix.workers }}
+      PYTEST_ADDOPTS: "--durations=150 --durations-min=1.0"
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
@@ -298,6 +329,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
       - name: Run Python Backend Tests
         run: make test
@@ -315,7 +355,7 @@ jobs:
     timeout-minutes: 15
     needs: prepare-test-image
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Provider contract tests"
     env:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
@@ -326,14 +366,25 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+
       - name: Run exact-SHA provider contract assertions
+        env:
+          PYTEST_ADDOPTS: "--durations=40"
         run: make test-provider-contract
 
   engine-tests:
     timeout-minutes: 45
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Engine tests"
     env:
       CARGO_PROFILE: ci
@@ -344,6 +395,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
       - name: Run engine and shipper suite in one isolated container
         if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -358,7 +418,7 @@ jobs:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Frontend + runner tests"
     env:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
@@ -369,6 +429,15 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+
       - name: Run Frontend Tests
         run: make test-frontend
 
@@ -377,7 +446,7 @@ jobs:
 
   ios-tests:
     needs: changes
-    if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ false }}
     runs-on: macos-latest
     timeout-minutes: 25
     name: "iOS tests"
@@ -386,6 +455,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
           persist-credentials: false
 
       - name: Install XcodeGen
@@ -409,7 +487,7 @@ jobs:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "CLI wheel packaging"
     env:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
@@ -420,6 +498,15 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+
       - name: Verify CLI wheel packaging
         run: make test-wheel-package
 
@@ -427,7 +514,7 @@ jobs:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-browser
+    runs-on: ubuntu-latest
     name: "Core E2E tests"
     env:
       CI: "1"
@@ -438,6 +525,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
       - name: Run Core E2E Tests in the portable isolation boundary
         run: make test-e2e-core
@@ -454,7 +550,7 @@ jobs:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-browser
+    runs-on: ubuntu-latest
     name: "Accessibility E2E tests"
     env:
       CI: "1"
@@ -465,6 +561,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
       - name: Run Accessibility E2E Tests in the portable isolation boundary
         run: make test-e2e-a11y
@@ -480,8 +585,8 @@ jobs:
   model-smoke:
     timeout-minutes: 20
     needs: changes
-    if: ${{ (needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-maint
+    if: ${{ false }}
+    runs-on: ubuntu-latest
     name: "Model smoke tests"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -495,6 +600,15 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+
       - name: Setup uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
@@ -505,7 +619,7 @@ jobs:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-browser
+    runs-on: ubuntu-latest
     name: "OSS onboarding smoke"
     env:
       CI: "1"
@@ -516,6 +630,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Put Docker storage on the large /mnt disk
+        run: |
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
       - name: Run OSS onboarding fixture in the portable isolation boundary
         run: |

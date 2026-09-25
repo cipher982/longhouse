@@ -42,6 +42,7 @@ OPTIONS = {
     "CARGO_PROFILE",
     "VERBOSE",
     "PYTEST_XDIST_WORKERS",
+    "PYTEST_ADDOPTS",
     "PLAYWRIGHT_WORKERS",
     "IOS_TEST_SCHEMES",
     "PROJECT",
@@ -494,7 +495,7 @@ def test_environment(run_id: str, options: dict[str, str]) -> dict[str, str]:
         "CI": "1",
         "LONGHOUSE_HISTORICAL_MIN_FREE_BYTES": "0",
         "LONGHOUSE_HISTORICAL_MIN_FREE_RATIO": "0",
-        "CARGO_BUILD_JOBS": "2",
+        "CARGO_BUILD_JOBS": CONTAINER_CPUS,
         "LONGHOUSE_DEVICE_ID": f"longhouse-test-{run_id}",
     }
     env.update(options)
@@ -534,6 +535,10 @@ def load_credentials(path: Path) -> dict[str, str]:
 # is btrfs shared with every other CI job: fsync tails there reached the
 # catalog's 1 s RPC deadline and failed a few storage tests on most pushes.
 # These lanes test logic, not disk durability, and leave no artifacts in /tmp.
+# The runner that owns the Docker daemon sizes the guest; cube's shared DinD
+# pods keep the historical 2 CPU / 4 GiB default.
+CONTAINER_CPUS = os.environ.get("LONGHOUSE_TEST_CPUS", "2")
+CONTAINER_MEMORY = os.environ.get("LONGHOUSE_TEST_MEMORY", "4g")
 MEMORY_TMP_TARGETS = frozenset({"test", "test-backend-single"})
 
 
@@ -820,9 +825,9 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
             "--pids-limit",
             "1024",
             "--cpus",
-            "2",
+            CONTAINER_CPUS,
             "--memory",
-            "4g",
+            CONTAINER_MEMORY,
             *memory_backed_tmp(args.target),
             "--workdir",
             "/work",
