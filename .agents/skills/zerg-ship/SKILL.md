@@ -7,7 +7,7 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 ## Surfaces
 
-- **Public demo runtime** — `https://longhouse.ai` — Coolify app `longhouse-demo`
+- **Public demo runtime** — `https://longhouse.ai` — direct Docker Compose app `longhouse-demo` on zerg
 - **Control plane** — `https://control.longhouse.ai` — private repo/service; public deploys only health-check it
 - **Hosted tenant runtime** — `https://<subdomain>.longhouse.ai` — reprovisioned runtime container managed by the control plane
 
@@ -17,10 +17,10 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 Do not blur these lanes:
 
-- **Hosted deploy** — updates public Longhouse runtime surfaces running on the hosted runtime host:
-  public demo runtime and hosted tenant runtimes. The hosted control plane is
-  an external private service for this public repo; runtime deploys may check
-  it, but do not ship it.
+- **Hosted deploy** — qualifies the exact runtime image, then updates canary
+  and hosted tenants through the private deployment API. The public demo is a
+  separate direct-Compose app; its image must be promoted after canary proof.
+  The control plane itself is an external private service, not shipped here.
 - **CLI/package release** — updates the user-installed `longhouse` CLI from
   the GitHub release wheel used by `scripts/install.sh`. Existing users do not
   get this from a hosted deploy. They need a new install or upgrade:
@@ -79,10 +79,10 @@ Changed paths typically include `server/**`, `web/**`, `engine/**`, `config/**`,
 
 What ships:
 - GHCR runtime image tagged with the full source SHA (and `latest` only as a registry convenience)
-- Public demo, canary, cohort, and explicit dogfood mutations through the durable
-  private deployment API, using the exact immutable digest
-- Canary smoke/functional acceptance before demo or any later ring; personal
-  dogfood promotion is manual and names the selected verified release
+- Canary and hosted-tenant mutations through the durable private deployment API,
+  using the exact immutable digest
+- Canary smoke/functional acceptance before manual public-demo promotion;
+  personal dogfood promotion is separate and names the selected verified release
 
 Primary automation:
 
@@ -117,14 +117,14 @@ When the maintainer says `cowbell`, the agent owns the whole ship loop:
 - do not wrap `make ship` in a short outer shell timeout; the monitor already has its own timeout
 - cite exact SHAs, immutable image digests, deployment receipt IDs, and workflow run IDs
 
-`deploy-and-verify.yml` waits for exact-SHA image publication before it submits
-the canary candidate. The canary is functionally qualified before the public
-demo submission. The fast smoke is the release completion signal; broad
-`hosted-live-qa.yml` is dispatched asynchronously with the durable deployment
-receipt and observes that receipt without owning or cancelling it. Full CI
-remains an optional source gate (`DEPLOY_WAIT_FULL_CI=true`) rather than a
-post-deploy sleep/poll loop. Every rapid-push outcome is explicit: deployed,
-queued, superseded, rejected, or failed.
+`deploy-and-verify.yml` waits for exact-SHA image publication, reprovisions
+the hosted canary, and qualifies it with a fast smoke. Its “Deploy public demo
+runtime” job verifies the image and prints promotion instructions; it does
+**not** mutate the demo container. A green workflow with an old demo SHA
+correctly yields `live_drift` from `make ship`. Promote the demo from its
+own stack below, then run `make ship-watch` for the same SHA. Broad
+`hosted-live-qa.yml` runs asynchronously and must be checked before final QA.
+Full CI remains an optional source gate (`DEPLOY_WAIT_FULL_CI=true`).
 
 Before pushing, run `make affected-check BASE=<base-sha>` to see which CI
 filters match the committed and local diff. Run focused tests for the changed
@@ -140,11 +140,32 @@ ARGS=--json` observes an already-pushed SHA. Do not babysit branch-latest CI.
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
 When releasing a held push through `workflow_dispatch`, dispatch
-`runtime-image.yml` and `deploy-and-verify.yml` at the same exact SHA. Do not
-use direct Coolify, SSH, Docker Compose, or host reprovision commands as a
-deployment fallback; those bypass durable receipts and target fencing. If a
-deployment is pending, use the deployment receipt/API observer or
-`make ship-watch SHA="<full-sha>"`.
+`runtime-image.yml` and `deploy-and-verify.yml` at the same exact SHA.
+Never use direct SSH/Compose as an alternate hosted-tenant deploy: it bypasses
+the deployment receipt and target fencing. The demo's own Compose stack is
+the exception because it is not a control-plane tenant.
+
+### Public demo promotion
+
+After the exact-SHA workflow succeeds and `release-canary-a` serves that SHA,
+read the demo job's qualified immutable image digest. On `ssh zerg`, the
+Compose project is `/home/zerg/manual-apps/longhouse-demo`; its one-line
+`.env` holds `LONGHOUSE_DEMO_IMAGE`, and `/data` is bind-mounted at
+`/var/app-data/longhouse-demo-data`. Verify the current pin and mounts, persist
+only the new digest in that image pointer, then recreate **only** `longhouse-demo`:
+
+```bash
+ssh zerg 'docker compose --project-directory /home/zerg/manual-apps/longhouse-demo -f /home/zerg/manual-apps/longhouse-demo/docker-compose.yml up -d --no-deps --force-recreate --wait --wait-timeout 180 longhouse-demo'
+make deploy-status
+curl -fsS https://longhouse.ai/api/readyz
+make ship-watch SHA="<full-sha>" ARGS="--json"
+```
+
+Until the existing stack has a tracked `manual-app` manifest, do not run
+`manual-app deploy longhouse-demo`; none is declared currently. Never register
+the demo as a hosted tenant. A release is only
+`deployed` when the exact-SHA watch reports success and both demo and canary
+serve it. Keep the personal `david010` instance untouched.
 
 ### Hosted Control Plane
 
@@ -210,9 +231,9 @@ not deployment mutation.
 ssh <runtime-host> 'docker logs longhouse-<subdomain> --tail 50'
 ```
 
-SSH and provider log commands are read-only diagnostics. They are not an
-alternate release path; all canary, demo, cohort, and dogfood changes go
-through the private deployment API.
+SSH/container log commands are read-only diagnostics for hosted tenants.
+Canary, cohort, and dogfood mutations use the private deployment API; only
+the separate public demo uses its existing direct-Compose release path.
 
 ## Local Dogfood Refresh (MANDATORY for machine-side changes)
 
@@ -260,7 +281,7 @@ runtime mutation, do not claim the demo or canary changed.
 - [ ] Runtime/UI launch-surface changes had a matching client/fixture proof
 - [ ] Correct deploy lane(s) used
 - [ ] If local CLI/install behavior changed, a release/upgrade path was handled separately
-- [ ] Public demo runtime healthy if runtime lane changed
+- [ ] Public demo runtime healthy **and serving the exact SHA** if the runtime lane changed
 - [ ] Control plane healthy if control-plane lane changed
 - [ ] Hosted canary healthy if runtime lane changed
 - [ ] Fast deploy smoke passed after hosted runtime changes
