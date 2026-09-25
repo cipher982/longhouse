@@ -131,7 +131,13 @@ cleanup() {
 trap cleanup EXIT
 
 echo "🏗️  Building frontend dist from prepared dependencies..."
-(cd "$WORKDIR/web" && bun run build)
+if [[ "$RUN_UNIT" -eq 1 ]]; then
+  (cd "$WORKDIR/web" && bun run build)
+else
+  # The smoke needs a bundle, not a type-check: CI type-checks web/ in the
+  # frontend lane, and tsc here was ~12s of duplicate work.
+  (cd "$WORKDIR/web" && bunx vite build)
+fi
 
 if [[ "$RUN_UNIT" -eq 1 ]]; then
   echo "🧪 Running unit + onboarding-sqlite tests..."
