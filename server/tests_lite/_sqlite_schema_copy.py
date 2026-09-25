@@ -78,7 +78,12 @@ def _table_shape(table) -> tuple:
         ),
         tuple(
             sorted(
-                (index.name, index.unique, tuple(str(expression) for expression in index.expressions), repr(sorted(index.dialect_kwargs.items())))
+                (
+                    index.name,
+                    index.unique,
+                    tuple(str(expression) for expression in index.expressions),
+                    repr(sorted(index.dialect_kwargs.items())),
+                )
                 for index in table.indexes
             )
         ),
