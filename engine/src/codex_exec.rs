@@ -1188,7 +1188,11 @@ async fn await_pool_settle(
 }
 
 pub async fn shutdown_codex_console_worker_pool() {
-    let deadline = tokio::time::Instant::now() + CONSOLE_SHUTDOWN_BUDGET;
+    shutdown_codex_console_worker_pool_within(CONSOLE_SHUTDOWN_BUDGET).await;
+}
+
+async fn shutdown_codex_console_worker_pool_within(budget: Duration) {
+    let deadline = tokio::time::Instant::now() + budget;
     loop {
         let wait = {
             let mut pool = console_worker_pool().lock().await;
@@ -2191,18 +2195,19 @@ mod tests {
     /// a spawn that never notified left the engine running forever after
     /// SIGTERM: it broke its main loop, then blocked here and never exited.
     ///
-    /// Paused time means the budget elapses instantly, so a regression shows up
-    /// as a hung test rather than a slow one.
+    /// A short budget keeps this fast without paused time (tokio `test-util`
+    /// as a dev-dependency splits the build graph and recompiles the engine);
+    /// a regression still shows up as a hung test rather than a slow one.
     /// Only `spawning` is seeded. An active process group would make shutdown
     /// signal that group for real, and this pool is a process-wide global.
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn console_shutdown_returns_when_outstanding_work_never_reports() {
         {
             let mut pool = console_worker_pool().lock().await;
             pool.spawning = 1;
         }
 
-        shutdown_codex_console_worker_pool().await;
+        shutdown_codex_console_worker_pool_within(Duration::from_millis(50)).await;
 
         let mut pool = console_worker_pool().lock().await;
         assert!(pool.shutting_down, "shutdown must latch the pool closed");

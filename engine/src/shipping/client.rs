@@ -23,7 +23,12 @@ use crate::scheduler::SHIPPING_IN_FLIGHT_CAP;
 /// which needs cached capabilities and a renegotiation path so a cached tenant
 /// can never outlive the tenant it was issued for.
 pub(crate) const STARTUP_NEGOTIATION_ATTEMPTS: usize = 4;
+#[cfg(not(test))]
 pub(crate) const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_secs(5);
+/// Unit tests exercise the retry count and error surfacing, not the wall-clock
+/// spacing; 5 s here cost the engine suite a minute of real sleep.
+#[cfg(test)]
+pub(crate) const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_millis(10);
 pub(crate) const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 use crate::shipping::storage_v2::{

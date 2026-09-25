@@ -540,8 +540,24 @@ def load_credentials(path: Path) -> dict[str, str]:
 # pods keep the historical 2 CPU / 4 GiB default.
 CONTAINER_CPUS = os.environ.get("LONGHOUSE_TEST_CPUS", "2")
 CONTAINER_MEMORY = os.environ.get("LONGHOUSE_TEST_MEMORY", "4g")
+# The engine lanes are the same shape: ~1700 Rust tests plus the shipper E2E
+# open SQLite databases in tempdirs under /tmp, and on a disk-backed /tmp the
+# unit suite ran ~6x slower than the same guest locally. Their tempdirs are
+# small; the cap only bounds a runaway, and unused tmpfs costs no memory.
+# Provider contract tests start a real catalog daemon per test and hit the
+# same fsync stalls ("catalogd deadline exceeded").
 MEMORY_TMP_TARGETS = frozenset(
-    {"test", "test-backend-single", "test-provider-contract", "ci-backend"}
+    {
+        "test",
+        "test-backend-single",
+        "ci-backend",
+        "test-provider-contract",
+        "test-engine",
+        "test-engine-single",
+        "test-engine-projection-failure",
+        "test-shipper-e2e",
+        "test-shipper-premerge",
+    }
 )
 
 

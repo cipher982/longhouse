@@ -393,28 +393,20 @@ test-frontend: ## Frontend unit tests + type-check (~1min)
 
 test-engine: test-engine-projection-failure test-engine-omp-helm ## Rust engine tests (~20s)
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
-	@# --bin longhouse is load-bearing: engine/src/longhouse.rs is a second bin
+	@# --bins is load-bearing: engine/src/longhouse.rs is a second bin
 	@# target holding launch_managed_claude/opencode/codex, and every cargo test
 	@# in this repo passed only --bin longhouse-engine, so its tests -- including
 	@# the only coordination-token scoping assertion -- had never run in CI. The
 	@# identical iOS scheme drift is documented above; the Rust lane had the same
 	@# hole.
 	@# The main binary's tests mutate process-wide HOME/PATH/config variables in
-	@# several modules. Module-local locks cannot make those mutations safe
-	@# against one another, so run this binary serially instead of accepting a
-	@# timing-dependent CI gate.
-	@engine_test_log="$$(mktemp -t longhouse-engine-tests.XXXXXX)"; \
-	status=0; \
-	($(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- --test-threads=1) >"$$engine_test_log" 2>&1 || status=$$?; \
-	cat "$$engine_test_log"; \
-	if [ "$$status" -ne 0 ]; then rm -f "$$engine_test_log"; exit "$$status"; fi; \
-	if ! grep -q '^test result: ok\.' "$$engine_test_log"; then \
-		echo "ERROR: longhouse-engine test harness exited without a completion summary" >&2; \
-		rm -f "$$engine_test_log"; \
-		exit 1; \
-	fi; \
-	rm -f "$$engine_test_log"
-	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+	@# several modules, which is unsafe between threads of one harness.
+	@# nextest runs every test in its own process, so those mutations cannot
+	@# race and the suite runs in parallel instead of serially (--test-threads=1
+	@# took ~9 min on CI; engine/.config/nextest.toml bounds a hung test). A
+	@# harness that vanishes mid-run fails nextest outright, which the old
+	@# completion-summary grep existed to catch.
+	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(or $(CARGO_PROFILE),release) --bins --tests
 
 test-engine-omp-helm: ## OMP Helm extension contract tests
 	@cd engine && bun test assets/longhouse-omp-helm.test.ts

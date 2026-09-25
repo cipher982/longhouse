@@ -406,7 +406,8 @@ jobs:
     runs-on: ubuntu-latest
     name: "Engine tests"
     env:
-      CARGO_PROFILE: ci
+      # Unoptimized engine crate over opt-3 dependencies; see engine/Cargo.toml.
+      CARGO_PROFILE: ci-test
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
