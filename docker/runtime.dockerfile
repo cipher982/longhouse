@@ -11,10 +11,22 @@ ARG BUN_VERSION=1.2.20
 ARG BUN_SHA256_X64=4e9edc4cba0c7c1623a288be01e53bbde11a4d073f2cf339cab026627858b548
 ARG BUN_SHA256_AARCH64=98d2e0b2c09421569172b4d46b6f81378c2dbdd77480ebb27f3989dd4e72e18b
 
+# Every base is digest-pinned (literal FROM lines so Dependabot can bump them).
+# The production image is plain python:slim; uv is copied only into the stages
+# that build the virtual environment.
+FROM ghcr.io/astral-sh/uv:0.12.19@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 AS uv
+
+FROM python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e AS python-base
+
+FROM python-base AS python-uv
+COPY --from=uv /uv /uvx /usr/local/bin/
+# Build the venv on this image's interpreter, the one production runs.
+ENV UV_PYTHON_DOWNLOADS=never
+
 # =============================================================================
 # Stage 1: Build Frontend
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS frontend-builder
+FROM python-base AS frontend-builder
 
 ARG TARGETARCH
 ARG BUN_VERSION
@@ -48,9 +60,8 @@ COPY video/package.json ./video/package.json
 COPY e2e/package.json ./e2e/package.json
 COPY runner/package.json ./runner/package.json
 
-# Install dependencies (no --frozen-lockfile: the root lockfile is shared by
-# all workspaces and the image intentionally stages manifests before source.)
-RUN bun install
+# Every workspace manifest is staged above, so the root lockfile resolves as-is.
+RUN bun install --frozen-lockfile
 
 # Copy frontend source
 COPY web/ ./web/
@@ -65,10 +76,15 @@ RUN bun run build
 # =============================================================================
 # Stage 1.5: Build pysqlite3 wheel with pinned SQLite amalgamation
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS pysqlite-builder
+FROM python-base AS pysqlite-builder
 
 ARG SQLITE_VERSION=3510300
 ARG SQLITE_SHA3=581215771b32ea4c4062e6fb9842c4aa43d0a7fb2b6670ff6fa4ebb807781204
+ARG PYSQLITE3_VERSION=0.6.0
+ARG PYSQLITE3_SHA256=ecf5112b62a4e6c04438957e343fe9672707bd3191f789ecae6c95b226aa6bb6
+ARG PYSQLITE3_URL=https://files.pythonhosted.org/packages/fa/84/6e586bef5f6337dee60066eef752c73fa6fcb93c1e7997b550d3105ed4f9/pysqlite3-0.6.0.tar.gz
+# setuptools ships bdist_wheel itself and has no dependencies to hash-pin.
+ARG SETUPTOOLS_REQUIREMENT="setuptools==84.0.0 --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates curl openssl \
@@ -79,24 +95,22 @@ WORKDIR /tmp
 # compiles unoptimized: plain queries 204 vs 112 ms and FTS5 47 vs 19 ms on one
 # micro-benchmark, slower than Debian's stdlib 3.40.1. catalogd and searchd
 # both run on this module.
-RUN pip install --upgrade setuptools wheel \
+RUN echo "${SETUPTOOLS_REQUIREMENT}" > /tmp/build-requirements.txt \
+    && pip install --no-cache-dir --require-hashes -r /tmp/build-requirements.txt \
     && curl -fsSLO "https://sqlite.org/2026/sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
     && test "$(openssl dgst -sha3-256 "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" | awk '{print $2}')" = "${SQLITE_SHA3}" \
     && tar -xzf "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
-    && pip download --no-binary=:all: pysqlite3==0.6.0 \
-    && tar -xzf pysqlite3-0.6.0.tar.gz \
-    && cp "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.c" "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.h" pysqlite3-0.6.0/ \
-    && cd pysqlite3-0.6.0 && CFLAGS="-O2 -DSQLITE_ENABLE_DBSTAT_VTAB" python setup.py bdist_wheel \
+    && curl -fsSL -o "pysqlite3-${PYSQLITE3_VERSION}.tar.gz" "${PYSQLITE3_URL}" \
+    && echo "${PYSQLITE3_SHA256}  pysqlite3-${PYSQLITE3_VERSION}.tar.gz" | sha256sum -c - \
+    && tar -xzf "pysqlite3-${PYSQLITE3_VERSION}.tar.gz" \
+    && cp "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.c" "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.h" "pysqlite3-${PYSQLITE3_VERSION}/" \
+    && cd "pysqlite3-${PYSQLITE3_VERSION}" && CFLAGS="-O2 -DSQLITE_ENABLE_DBSTAT_VTAB" python setup.py bdist_wheel \
     && mkdir -p /dist && cp dist/*.whl /dist/
 
 # =============================================================================
 # Stage 2: Build Backend Dependencies
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS dependencies
-
-# Install git for cloning git-based dependencies (hatch-agent)
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+FROM python-uv AS dependencies
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
@@ -110,7 +124,7 @@ RUN uv sync --frozen --no-install-project --no-dev
 # =============================================================================
 # Stage 2.5: Fetch the checksum-pinned embedding model
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS embedding-model
+FROM python-base AS embedding-model
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -133,12 +147,7 @@ RUN MODELS_CONFIG_PATH=/config/models.json \
 # =============================================================================
 # Stage 3: Build Backend Application
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS backend-builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq5 \
-    && rm -rf /var/lib/apt/lists/*
+FROM python-uv AS backend-builder
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
@@ -183,15 +192,14 @@ conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat + progress handler
 # =============================================================================
 # Stage 4: Production Runtime
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS production
+FROM python-base AS production
 
-# Install runtime dependencies
+# curl serves the HEALTHCHECK. The server is SQLite-only and never shells out
+# to git or ssh, and nothing here runs uv or pip: the venv arrives prebuilt
+# (without pip).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    libpq5 \
     ca-certificates \
-    openssh-client \
-    git \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -224,16 +232,13 @@ COPY --from=backend-builder --chown=longhouse:longhouse /schemas /schemas
 # runtime startup verifies the copied bytes again before loading ONNX.
 COPY --from=embedding-model --chown=longhouse:longhouse /opt/longhouse/embedding-model /opt/longhouse/embedding-model
 
-# Bootstrap pip in the venv so job packs can pip-install their own deps at startup
-RUN /app/.venv/bin/python -m ensurepip --default-pip 2>/dev/null || true
-
 # Create the durable Runtime Host data root. User uploads live below this
 # volume; application source remains immutable and replaceable.
 RUN mkdir -p /data \
     && chown -R longhouse:longhouse /data \
     && chmod 755 /data
 
-# Entrypoint script (decodes SSH key from env var)
+# Entrypoint script (a plain exec wrapper)
 COPY --chown=root:root docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
