@@ -1,9 +1,8 @@
 """Response security headers.
 
 The runtime serves the SPA and the API from one origin, and that origin holds
-the ``longhouse_session`` cookie. Nothing else in the stack sets these — the
-only CSP in the repo belongs to a standalone nginx image the hosted runtime
-does not use.
+the ``longhouse_session`` cookie. Nothing else in the stack sets these, so
+this middleware is the only Content-Security-Policy the browser ever sees.
 
 The policy is deliberately narrow rather than exhaustive: ``frame-ancestors``
 is what stops a permission-gate approval being clickjacked, and ``script-src``
