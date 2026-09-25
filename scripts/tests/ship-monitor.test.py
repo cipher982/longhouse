@@ -529,17 +529,47 @@ def test_superseded_run_follows_the_main_head_that_contains_it() -> None:
         old: [_run("CI", "cancelled"), _run("Deploy and Verify", "success", run_id=2)],
         head: [_run("CI", "success", run_id=3), _run("Deploy and Verify", "success", run_id=4)],
     }
-    saved = (ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head, ship_monitor.contains_commit, ship_monitor.fetch_run_jobs)
+    saved = (ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head, ship_monitor.contains_commit, ship_monitor.fetch_run_jobs, ship_monitor.latest_runtime_affecting_sha)
     ship_monitor.wait_for_workflows = lambda args, sha: runs_by_sha[sha]
     ship_monitor.fetch_remote_head = lambda repo, branch="main": head
     ship_monitor.contains_commit = lambda root, descendant, ancestor: (descendant, ancestor) == (head, old)
     ship_monitor.fetch_run_jobs = lambda repo, run_id: []
+    ship_monitor.latest_runtime_affecting_sha = lambda root, target_sha: target_sha
     try:
         sha, runs = ship_monitor.wait_following_coverage(type("A", (), {"repo": "r"})(), Path("."), old)
     finally:
-        ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head, ship_monitor.contains_commit, ship_monitor.fetch_run_jobs = saved
+        ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head, ship_monitor.contains_commit, ship_monitor.fetch_run_jobs, ship_monitor.latest_runtime_affecting_sha = saved
     assert sha == head
     assert runs == runs_by_sha[head]
+
+
+def test_runtime_candidate_is_not_covered_by_docs_only_head() -> None:
+    old, head = "a" * 40, "b" * 40
+    runs_by_sha = {
+        old: [_run("CI", "cancelled"), _run("Deploy and Verify", "success", run_id=2)],
+        head: [_run("CI", "success", run_id=3)],
+    }
+    saved = (
+        ship_monitor.wait_for_workflows,
+        ship_monitor.fetch_remote_head,
+        ship_monitor.contains_commit,
+        ship_monitor.latest_runtime_affecting_sha,
+    )
+    ship_monitor.wait_for_workflows = lambda args, sha: runs_by_sha[sha]
+    ship_monitor.fetch_remote_head = lambda repo, branch="main": head
+    ship_monitor.contains_commit = lambda root, descendant, ancestor: (descendant, ancestor) == (head, old)
+    ship_monitor.latest_runtime_affecting_sha = lambda root, sha: old
+    try:
+        sha, runs = ship_monitor.wait_following_coverage(type("A", (), {"repo": "r"})(), Path("."), old)
+    finally:
+        (
+            ship_monitor.wait_for_workflows,
+            ship_monitor.fetch_remote_head,
+            ship_monitor.contains_commit,
+            ship_monitor.latest_runtime_affecting_sha,
+        ) = saved
+    assert sha == old, "a CI-only descendant cannot prove the runtime candidate deployed"
+    assert runs == runs_by_sha[old]
 
 
 def test_a_real_failure_on_main_head_is_not_treated_as_superseded() -> None:
@@ -588,6 +618,7 @@ if __name__ == "__main__":
     test_deploy_heartbeat_names_active_deploy_step()
     test_manual_deploy_recovery_supersedes_failed_push_deploy()
     test_superseded_run_follows_the_main_head_that_contains_it()
+    test_runtime_candidate_is_not_covered_by_docs_only_head()
     test_a_real_failure_on_main_head_is_not_treated_as_superseded()
     test_deploy_that_stood_down_counts_as_superseded()
     print("ship-monitor tests passed")

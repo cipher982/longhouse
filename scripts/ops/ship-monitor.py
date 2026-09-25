@@ -672,6 +672,12 @@ def wait_following_coverage(args: argparse.Namespace, root: Path, sha: str) -> t
         head = fetch_remote_head(args.repo)
         if not head or head == sha or not was_superseded(args.repo, runs) or not contains_commit(root, head, sha):
             return sha, runs
+        # A docs-only head cannot publish the runtime image skipped by this
+        # commit's cancelled CI. Refuse descendant coverage without a
+        # runtime-affecting successor; live verification checks this SHA.
+        if latest_runtime_affecting_sha(root, sha) == sha and latest_runtime_affecting_sha(root, head) != head:
+            print(f"{head[:10]} has no runtime artifact; cannot cover {sha[:10]}'s deploy.", file=sys.stderr)
+            return sha, runs
         print(
             f"{sha[:10]} was superseded: its queued runs were dropped because main moved to {head[:10]}, "
             f"which contains it. Following {head[:10]}; its deploy ships this change.",
