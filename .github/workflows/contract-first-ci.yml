@@ -154,9 +154,11 @@ jobs:
         with:
           context: ${{ steps.key.outputs.context }}
           file: ${{ steps.key.outputs.context }}/docker/test.dockerfile
-          push: true
           platforms: linux/amd64
           tags: ${{ steps.key.outputs.image }}
+          # zstd, not gzip: every consumer job unpacks ~8.6 GB, and gzip
+          # decompression was most of each job's ~95 s image preparation.
+          outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
           build-args: TEST_MANIFEST_SHA=${{ steps.key.outputs.manifest_sha }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=longhouse-test-deps
@@ -315,13 +317,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - mode: serial-profile
-            workers: "0"
           - mode: xdist-4
             workers: "4"
     env:
       PYTEST_XDIST_WORKERS: ${{ matrix.workers }}
-      PYTEST_ADDOPTS: "--durations=150 --durations-min=1.0"
+      PYTEST_ADDOPTS: "--durations=40 --durations-min=1.0"
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 

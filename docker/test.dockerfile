@@ -32,7 +32,9 @@ RUN bun install --frozen-lockfile \
     && node -e 'if (require("playwright/package.json").version !== process.env.PLAYWRIGHT_VERSION) throw new Error("Update PLAYWRIGHT_VERSION to match bun.lock")'
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 COPY server/pyproject.toml server/uv.lock server/
-RUN cd server && uv sync --frozen --extra dev --no-install-project \
+# Precompiled bytecode: the venv otherwise ships zero .pyc files and every
+# fresh container recompiles fastapi/pydantic/sqlalchemy on first import.
+RUN cd server && UV_COMPILE_BYTECODE=1 uv sync --frozen --extra dev --no-install-project \
     && uv venv /opt/build-deps \
     && uv pip install --python /opt/build-deps/bin/python hatchling editables \
     && uv pip install --python .venv/bin/python hatchling editables \
