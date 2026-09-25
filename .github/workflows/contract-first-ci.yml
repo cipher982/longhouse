@@ -35,6 +35,13 @@ env:
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
+  # Test jobs run on GitHub-hosted runners: free for this public repo, no queue,
+  # and a whole 4 vCPU / 16 GB VM per job, so the isolated guest gets all of it
+  # (test-isolation.py defaults to 2 CPU / 4 GiB for shared machines). Deploy,
+  # gate and image-publish work stays on cube. Profile of 2026-09-25: CI ~7 min
+  # here against a 27 min median on cube's contended pools.
+  LONGHOUSE_TEST_CPUS: "4"
+  LONGHOUSE_TEST_MEMORY: "13g"
 
 jobs:
   # -----------------------------------------------------------------------
@@ -43,7 +50,7 @@ jobs:
   # -----------------------------------------------------------------------
   changes:
     timeout-minutes: 10
-    runs-on: cube-gate
+    runs-on: ubuntu-latest
     name: "Changed paths"
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -72,7 +79,7 @@ jobs:
   fork-qualification:
     name: "Fork PR requires trusted replay"
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     steps:
       - run: |
           echo "::error::Portable CI has a writable self-hosted runner cache. Fork code cannot execute there; replay the patch on a trusted branch before merge."
@@ -82,7 +89,7 @@ jobs:
     name: "Prepare immutable fixture image"
     needs: changes
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-maint
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
@@ -95,6 +102,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - uses: ./.github/actions/hosted-docker-disk
       - name: Authenticate to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -142,9 +151,11 @@ jobs:
         with:
           context: ${{ steps.key.outputs.context }}
           file: ${{ steps.key.outputs.context }}/docker/test.dockerfile
-          push: true
           platforms: linux/amd64
           tags: ${{ steps.key.outputs.image }}
+          # zstd, not gzip: every consumer job unpacks ~8.6 GB, and gzip
+          # decompression was most of each job's ~95 s image preparation.
+          outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
           build-args: TEST_MANIFEST_SHA=${{ steps.key.outputs.manifest_sha }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=longhouse-test-deps
@@ -191,7 +202,7 @@ jobs:
     # filter cannot tell, the gated live proof below is skipped and everything
     # else still runs.
     if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
     # run before any step reaches its own limit.
@@ -204,6 +215,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Validate contracts
         # The producer above passes an exact digest; this runs from the offline
@@ -284,13 +297,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  backend-tests:
+  backend-shards:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
-    name: "Backend tests"
+    runs-on: ubuntu-latest
+    name: "Backend tests shard ${{ matrix.shard }}/3"
+    # A hosted runner's four vCPUs take ~5 min for the whole suite even under
+    # xdist; three runners take ~2. "Backend tests" below is the one name that
+    # Deploy and Verify and ship tooling wait on.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     env:
+      LONGHOUSE_TEST_SHARD: ${{ matrix.shard }}/3
+      PYTEST_XDIST_WORKERS: "4"
+      PYTEST_ADDOPTS: "--durations=25 --durations-min=2.0"
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
@@ -299,14 +322,33 @@ jobs:
         with:
           fetch-depth: 1
 
+      - uses: ./.github/actions/hosted-docker-disk
+
       - name: Run Python Backend Tests
         run: make test
 
       - name: Run Hosted-Instance Helper Tests
+        if: ${{ matrix.shard == 0 }}
         run: make test-hosted-instance
 
       - name: Run iOS simulator helper tests
+        if: ${{ matrix.shard == 0 }}
         run: make test-ios-helper
+
+  backend-tests:
+    name: "Backend tests"
+    needs: backend-shards
+    # Skipped shards (backend unchanged) leave this skipped too, as before.
+    if: ${{ !cancelled() && needs.backend-shards.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every backend shard passed
+        env:
+          SHARDS: ${{ needs.backend-shards.result }}
+        run: |
+          echo "backend shards: $SHARDS"
+          [[ "$SHARDS" == "success" ]]
 
   provider-contract-tests:
     # Always run: Loop 2 accepts an exact Longhouse SHA only after this job
@@ -315,7 +357,7 @@ jobs:
     timeout-minutes: 15
     needs: prepare-test-image
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Provider contract tests"
     env:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
@@ -326,17 +368,22 @@ jobs:
         with:
           fetch-depth: 1
 
+      - uses: ./.github/actions/hosted-docker-disk
+
       - name: Run exact-SHA provider contract assertions
+        env:
+          PYTEST_ADDOPTS: "--durations=40"
         run: make test-provider-contract
 
   engine-tests:
     timeout-minutes: 45
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Engine tests"
     env:
-      CARGO_PROFILE: ci
+      # Unoptimized engine crate over opt-3 dependencies; see engine/Cargo.toml.
+      CARGO_PROFILE: ci-test
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
@@ -344,6 +391,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run engine and shipper suite in one isolated container
         if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -358,7 +407,7 @@ jobs:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "Frontend + runner tests"
     env:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
@@ -369,11 +418,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Run Frontend Tests
-        run: make test-frontend
+      - uses: ./.github/actions/hosted-docker-disk
 
-      - name: Run Runner Unit Tests
-        run: make test-runner
+      - name: Run Frontend and Runner Tests in one isolated container
+        run: make test-frontend-runner
 
   ios-tests:
     needs: changes
@@ -386,6 +434,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
           persist-credentials: false
 
       - name: Install XcodeGen
@@ -409,7 +458,7 @@ jobs:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: ubuntu-latest
     name: "CLI wheel packaging"
     env:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
@@ -420,6 +469,8 @@ jobs:
         with:
           fetch-depth: 1
 
+      - uses: ./.github/actions/hosted-docker-disk
+
       - name: Verify CLI wheel packaging
         run: make test-wheel-package
 
@@ -427,7 +478,7 @@ jobs:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-browser
+    runs-on: ubuntu-latest
     name: "Core E2E tests"
     env:
       CI: "1"
@@ -438,6 +489,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run Core E2E Tests in the portable isolation boundary
         run: make test-e2e-core
@@ -450,38 +503,11 @@ jobs:
           path: artifacts/test-isolation
           retention-days: 1
 
-  e2e-a11y:
-    timeout-minutes: 30
-    needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-browser
-    name: "Accessibility E2E tests"
-    env:
-      CI: "1"
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 1
-
-      - name: Run Accessibility E2E Tests in the portable isolation boundary
-        run: make test-e2e-a11y
-
-      - name: Upload isolated E2E artifacts (on failure)
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: accessibility-e2e-artifacts
-          path: artifacts/test-isolation
-          retention-days: 1
-
   model-smoke:
     timeout-minutes: 20
     needs: changes
     if: ${{ (needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-maint
+    runs-on: ubuntu-latest
     name: "Model smoke tests"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -495,6 +521,7 @@ jobs:
         with:
           fetch-depth: 1
 
+
       - name: Setup uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
@@ -505,7 +532,7 @@ jobs:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-browser
+    runs-on: ubuntu-latest
     name: "OSS onboarding smoke"
     env:
       CI: "1"
@@ -516,6 +543,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run OSS onboarding fixture in the portable isolation boundary
         run: |

@@ -7789,9 +7789,10 @@ mod tests {
     /// dropping the `env_remove`, shaping the env before the overlay scrubs it,
     /// or a launcher setting the token back — fails here.
     ///
-    /// Mutating the process environment is why `make test-engine` pins
-    /// `--test-threads=1`; the previous value is restored before any assert so
-    /// a failure cannot leave it poisoned for the next test.
+    /// Mutating the process environment is why `make test-engine` runs each
+    /// test in its own process (cargo-nextest); the previous value is restored
+    /// before any assert so a failure cannot leave it poisoned under plain
+    /// `cargo test` either.
     #[tokio::test]
     async fn the_app_server_child_is_handed_no_device_token() {
         // Spawns a subprocess or reads the process table: hold the shared

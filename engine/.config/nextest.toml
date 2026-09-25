@@ -1,0 +1,12 @@
+# cargo-nextest settings for `make test-engine`.
+#
+# Every test runs in its own process, so tests that mutate process-wide
+# HOME/PATH/config variables can run concurrently. Most engine tests wait on
+# subprocesses, sockets, and SQLite rather than CPU, so run more tests than
+# there are cores.
+[profile.default]
+test-threads = 8
+fail-fast = false
+# Flag anything slower than 30 s, and kill a test after 5 min so a hang fails
+# the run with the test's name instead of stalling until the CI job timeout.
+slow-timeout = { period = "30s", terminate-after = 10 }

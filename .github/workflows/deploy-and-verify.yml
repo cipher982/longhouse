@@ -224,14 +224,14 @@ jobs:
           github_token: ${{ github.token }}
           event: ""
           # A deploy waits on the suites whose failure would make *this* image
-          # wrong. Browser E2E, accessibility, model smoke and onboarding smoke
+          # wrong. Browser E2E (core + accessibility), model smoke and onboarding smoke
           # verify after the fact -- hosted live QA is dispatched below -- and
           # must not hold a deploy: on 2026-09-24 an unrelated E2E red stalled
           # this gate for 30m41s and then failed it with no runtime mutation.
           # Path detection and fixture publication are prerequisites for every
           # filtered suite; a failed prerequisite cannot turn skipped tests green.
           required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Frontend + runner tests,Provider contract tests
-          ignored_failure_jobs: Core E2E tests,Accessibility E2E tests,Model smoke tests,OSS onboarding smoke
+          ignored_failure_jobs: Core E2E tests,Model smoke tests,OSS onboarding smoke
 
       - name: Wait for full CI gate (temporary opt-in)
         id: wait_full
@@ -243,7 +243,7 @@ jobs:
           superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           github_token: ${{ github.token }}
           event: ""
-          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging,Provider contract tests
+          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Core E2E tests,CLI wheel packaging,Provider contract tests
           ignored_failure_jobs: OSS onboarding smoke
 
       - name: Wait for exact runtime image publication

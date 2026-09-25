@@ -489,6 +489,8 @@ def test_finished_control_operation_cannot_be_rearmed(monkeypatch, daemon_paths)
 @pytest.mark.parametrize(
     ("adapter_connection_id", "lease_generation"),
     [(str(uuid4()), None), (None, str(uuid4()))],
+    # Stable ids: xdist workers must collect identical node ids.
+    ids=["connection-without-generation", "generation-without-connection"],
 )
 def test_control_grant_fails_closed_on_partial_adapter_identity(
     daemon_paths,
