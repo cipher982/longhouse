@@ -33,18 +33,18 @@ jobs:
             sudo dd if=/dev/zero of=$f bs=1M count=3072 oflag=direct 2>&1 | tail -1 | sed "s#^#write $d: #"
             sudo rm -f $f
           done
-          sudo mkdir -p /mnt/blobs && sudo chown "$USER" /mnt/blobs && rmdir /mnt/blobs
+          sudo mkdir -p /mnt/probe && sudo chown "$USER" /mnt/probe
           echo "${{ github.token }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
-          s=$(date +%s.%N); skopeo copy --quiet "docker://$IMAGE" "dir:/mnt/blobs"; e=$(date +%s.%N)
-          echo "download-only (skopeo, compressed blobs): $(echo "$e - $s" | bc) s, $(du -sh /mnt/blobs | cut -f1)"
+          s=$(date +%s.%N); skopeo copy --quiet "docker://$IMAGE" "dir:/mnt/probe/blobs"; e=$(date +%s.%N)
+          echo "download-only (skopeo, compressed blobs): $(echo "$e - $s" | bc) s, $(du -sh /mnt/probe/blobs | cut -f1)"
           # biggest layer unpack cost, isolated from docker
-          big=$(ls -S /mnt/blobs | head -1)
+          big=$(ls -S /mnt/probe/blobs | head -1)
           sudo mkdir -p /mnt/unpack /tmp/unpack
-          s=$(date +%s.%N); sudo tar -I zstd -xf /mnt/blobs/$big -C /mnt/unpack; e=$(date +%s.%N)
+          s=$(date +%s.%N); sudo tar -I zstd -xf /mnt/probe/blobs/$big -C /mnt/unpack; e=$(date +%s.%N)
           echo "unpack biggest layer to /mnt: $(echo "$e - $s" | bc) s ($(sudo du -sh /mnt/unpack | cut -f1), $(sudo find /mnt/unpack | wc -l) files)"
-          s=$(date +%s.%N); sudo tar -I zstd -xf /mnt/blobs/$big -C /tmp/unpack; e=$(date +%s.%N)
+          s=$(date +%s.%N); sudo tar -I zstd -xf /mnt/probe/blobs/$big -C /tmp/unpack; e=$(date +%s.%N)
           echo "unpack biggest layer to /: $(echo "$e - $s" | bc) s"
-          sudo rm -rf /mnt/blobs /mnt/unpack /tmp/unpack
+          sudo rm -rf /mnt/probe/blobs /mnt/unpack /tmp/unpack
       - name: Configure docker (${{ matrix.variant }})
         run: |
           case "${{ matrix.variant }}" in
