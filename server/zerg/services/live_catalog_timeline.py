@@ -60,6 +60,22 @@ def _primary_thread_facts(catalog_facts: Mapping[str, Any]) -> Mapping[str, Any]
     return thread if isinstance(thread, Mapping) else {}
 
 
+def _selected_model_from_thread(thread: Any) -> str | None:
+    """Return the configured model selected for future Console turns."""
+
+    if thread is None:
+        return None
+    provider_config_json = (
+        thread.get("provider_config_json") if isinstance(thread, Mapping) else getattr(thread, "provider_config_json", None)
+    )
+    try:
+        config = json.loads(str(provider_config_json or "{}"))
+    except (TypeError, ValueError):
+        return None
+    model = config.get("model") if isinstance(config, dict) else None
+    return model.strip() or None if isinstance(model, str) else None
+
+
 def _continued_from_session_id(catalog_facts: Mapping[str, Any]) -> str | None:
     """The session this one continues, from the live thread edge."""
 
@@ -440,6 +456,7 @@ def _pending_response_from_catalog(
             "active_tool": canonical_aliases["active_tool"],
             "confidence": canonical_aliases["confidence"],
             "summary": session.summary,
+            "selected_model": _selected_model_from_thread(_primary_thread_facts(catalog_facts)),
             "summary_title": card.summary_title or session.summary_title,
             "anchor_title": session.anchor_title,
             "timeline_title": title,
@@ -561,8 +578,6 @@ def _response_from_catalog(
         presence_updated_at=canonical_aliases["presence_updated_at"],
         last_live_at=canonical_aliases["last_live_at"],
         display_phase=canonical_aliases["display_phase"],
-        active_tool=canonical_aliases["active_tool"],
-        confidence=canonical_aliases["confidence"],
         summary=session.summary,
         summary_title=card.summary_title or session.summary_title,
         anchor_title=session.anchor_title,
@@ -576,6 +591,7 @@ def _response_from_catalog(
         first_user_message=card.first_user_message_preview or session.first_user_message_preview,
         thread_root_session_id=str(session.session_id),
         thread_head_session_id=str(session.session_id),
+        selected_model=_selected_model_from_thread(_primary_thread_facts(catalog_facts)),
         thread_continuation_count=1,
         # The live thread carries the edge from create time, which is the only
         # place a branch's parentage exists until its first ingest. The legacy

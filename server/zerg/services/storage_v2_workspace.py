@@ -264,6 +264,7 @@ def _workspace_envelope(
     session_json["input_receipts"] = receipts
     session_json["last_turn"] = last_turn(facts, turn_ends)
     session_json["recap"] = recap(facts)
+    session_json["selected_model"] = getattr(session, "selected_model", None)
     session_json["usage_latest"] = usage_latest(facts)
     storage_session = storage.get("session") if storage is not None else None
     return {

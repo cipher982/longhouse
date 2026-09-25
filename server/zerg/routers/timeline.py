@@ -42,12 +42,15 @@ from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
+from zerg.schemas.machines import RecentModel
+from zerg.schemas.machines import RecentModelsResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_heartbeats
+from zerg.services.catalog_read_gateway import machine_models
 from zerg.services.catalog_read_gateway import machine_workspaces
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
@@ -260,6 +263,34 @@ def list_browser_machine_workspaces(
     return WorkspaceSuggestionsResponse(
         device_id=device_id,
         workspaces=[WorkspaceSuggestion(**item) for item in payload.get("workspaces", [])],
+    )
+
+
+@router.get("/machines/{device_id}/providers/{provider}/models", response_model=RecentModelsResponse)
+def list_browser_machine_models(
+    device_id: str,
+    provider: str,
+    limit: int = Query(12, ge=1, le=50, description="Max recent models to return"),
+    days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
+    current_user=Depends(get_current_browser_caller),
+) -> RecentModelsResponse:
+    """Browser launch-picker models. Same body shape as the agents route."""
+    owner_id = int(current_user.owner_id)
+    try:
+        payload = machine_models(
+            owner_id=owner_id,
+            device_id=device_id,
+            provider=provider,
+            limit=limit,
+            days_back=days_back,
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    return RecentModelsResponse(
+        device_id=device_id,
+        provider=provider,
+        days_back=days_back,
+        models=[RecentModel(**item) for item in payload.get("models", [])],
     )
 
 

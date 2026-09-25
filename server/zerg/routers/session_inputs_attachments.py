@@ -176,6 +176,7 @@ async def _enqueue_console_input_with_attachments(
     owner_id: int,
     text: str,
     client_request_id: str,
+    model: str | None,
     upload_payloads: list[tuple[UploadFile, bytes]],
     record_outcome,
 ) -> SessionInputResponse:
@@ -249,15 +250,18 @@ async def _enqueue_console_input_with_attachments(
             record_outcome("store_failed")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to store attachments") from exc
     try:
-        turn = await enqueue_catalog_console_turn(
-            owner_id=owner_id,
-            session_id=uuid.UUID(str(source_session.id)),
-            message=text,
-            client_request_id=client_request_id,
-            attachments=stored_refs,
-            attachments_digest=digest,
-            receipt_id=group_id,
-        )
+        enqueue_kwargs = {
+            "owner_id": owner_id,
+            "session_id": uuid.UUID(str(source_session.id)),
+            "message": text,
+            "client_request_id": client_request_id,
+            "attachments": stored_refs,
+            "attachments_digest": digest,
+            "receipt_id": group_id,
+        }
+        if model is not None:
+            enqueue_kwargs["model"] = model
+        turn = await enqueue_catalog_console_turn(**enqueue_kwargs)
     except ConsoleTurnConflict as exc:
         await cleanup_stored_group()
         record_outcome("rejected_idempotency_conflict")
@@ -359,6 +363,7 @@ async def create_session_input_with_attachments(
     text: str = Form("", max_length=10000),
     intent: str = Form(INPUT_INTENT_AUTO),
     client_request_id: str = Form(..., min_length=1, max_length=64),
+    model: str | None = Form(None),
     attachments: List[UploadFile] = File(...),
     user_agent: str | None = Header(default=None),
     db: Session | None = Depends(no_request_db),
@@ -453,6 +458,7 @@ async def create_session_input_with_attachments(
             owner_id=int(current_user.id),
             text=text,
             client_request_id=request_id,
+            model=model,
             upload_payloads=upload_payloads,
             record_outcome=_record_outcome,
         )

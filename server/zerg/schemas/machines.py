@@ -134,6 +134,18 @@ class WorkspaceSuggestionsResponse(UTCBaseModel):
     workspaces: list[WorkspaceSuggestion] = Field(default_factory=list)
 
 
+class RecentModel(UTCBaseModel):
+    model: str = Field(..., description="Provider model id, preserving the provider's exact casing.")
+    last_used_at: datetime = Field(..., description="When this model was last reported by a completed turn.")
+
+
+class RecentModelsResponse(UTCBaseModel):
+    device_id: str = Field(..., description="Machine the models are scoped to.")
+    provider: str = Field(..., description="Provider whose usage facts supplied the models.")
+    days_back: int = Field(..., description="Lookback window used to select sessions.")
+    models: list[RecentModel] = Field(default_factory=list)
+
+
 class ProviderLiveProofRequest(UTCBaseModel):
     model_config = ConfigDict(extra="forbid")
 

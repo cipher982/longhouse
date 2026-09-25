@@ -197,6 +197,7 @@ async def enqueue_catalog_console_turn(
     session_id: UUID,
     message: str,
     client_request_id: str,
+    model: str | None = None,
     report_id: UUID | None = None,
     attachments: list[dict] | None = None,
     attachments_digest: str | None = None,
@@ -204,6 +205,9 @@ async def enqueue_catalog_console_turn(
     registry=None,
 ) -> CatalogConsoleTurn:
     """Live-catalog equivalent of enqueue + claim + machine dispatch.
+
+    ``model`` is an optional per-turn override. When omitted, catalogd resolves
+    the turn against the thread's selected model at enqueue time.
 
     ``attachments`` are engine-facing blob refs stored on the turn so a FIFO
     or reconnect dispatch after a restart still carries them;
@@ -237,6 +241,7 @@ async def enqueue_catalog_console_turn(
                 "report_id": str(report_id) if report_id is not None else None,
                 "attachments": list(attachments or []),
                 "attachments_digest": attachments_digest,
+                **({"model": model} if model is not None else {}),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         },

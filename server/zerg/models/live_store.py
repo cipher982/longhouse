@@ -852,6 +852,10 @@ class LiveConsoleTurn(LiveBase):
     provider = Column(String(64), nullable=False)
     device_id = Column(String(255), nullable=False)
     cwd = Column(Text, nullable=False)
+    # The model this turn runs with, resolved at enqueue and frozen thereafter.
+    # Turn-affecting state lives on the row because FIFO replay, reconnect
+    # dispatch and ambiguous-command retry rebuild the payload from it.
+    model = Column(String(255), nullable=True)
     resume_provider_thread_id = Column(String(1024), nullable=True)
     # Set on a branch's first turn only, and never alongside a resume. The two
     # mean opposite things to the adapter -- resume continues a thread, fork

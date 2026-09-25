@@ -1026,6 +1026,13 @@ class SessionResponse(UTCBaseModel):
         None,
         description="The provider's latest away recap for this session, when it wrote one.",
     )
+    selected_model: Optional[str] = Field(
+        None,
+        description=(
+            "Model selected for future Console turns from the session's provider configuration. "
+            "Distinct from usage_latest.model, which is the model the provider observed on the last completed turn."
+        ),
+    )
     usage_latest: Optional[UsageLatestResponse] = Field(
         None,
         description="Model, effort and context size from the provider's last turn-ending response.",

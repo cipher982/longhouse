@@ -57,8 +57,8 @@ _TITLE_HEALTH_ATTEMPT_SECONDS = 2.0
 _READ_BUDGETS = {
     "session.read.v2": (_SESSION_SNAPSHOT_DEADLINE_SECONDS, _SESSION_SNAPSHOT_ATTEMPT_SECONDS),
     "session.read.batch.v2": (_SESSION_SNAPSHOT_DEADLINE_SECONDS, _SESSION_SNAPSHOT_ATTEMPT_SECONDS),
-    "session.timeline.list.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "machine.workspace.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
+    "machine.models.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
     "session.shadow_state.read.v2": (_SHADOW_STATE_DEADLINE_SECONDS, _SHADOW_STATE_ATTEMPT_SECONDS),
     "session.shadow_state.read.batch.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "storage.session.title.dependency.health.v2": (_TITLE_HEALTH_DEADLINE_SECONDS, _TITLE_HEALTH_ATTEMPT_SECONDS),
@@ -196,6 +196,26 @@ def machine_workspaces(
     )
 
 
+def machine_models(
+    *,
+    owner_id: int,
+    device_id: str,
+    provider: str,
+    limit: int,
+    days_back: int,
+) -> dict[str, Any]:
+    return _call(
+        "machine.models.list.v2",
+        {
+            "owner_id": owner_id,
+            "device_id": device_id,
+            "provider": provider,
+            "limit": limit,
+            "days_back": days_back,
+        },
+    )
+
+
 def machine_operation(*, owner_id: int, operation_id: str) -> dict[str, Any]:
     return _call(
         "machine.operation.read.v2",
@@ -267,8 +287,8 @@ __all__ = [
     "enrolled_machines",
     "machine_operation",
     "machine_heartbeats",
+    "machine_models",
     "machine_workspaces",
-    "owned_session_ids",
     "internal_session_batch_snapshot",
     "recent_visible_web_presence",
     "rename_machine",

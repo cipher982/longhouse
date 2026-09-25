@@ -32,6 +32,8 @@ from zerg.schemas.machines import MachineRenameRequest
 from zerg.schemas.machines import MachineRenameResponse
 from zerg.schemas.machines import ProviderLiveProofAcceptedResponse
 from zerg.schemas.machines import ProviderLiveProofRequest
+from zerg.schemas.machines import RecentModel
+from zerg.schemas.machines import RecentModelsResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.schemas.observability import MachineHealthListResponse
@@ -42,6 +44,7 @@ from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import active_owner_id
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_heartbeats
+from zerg.services.catalog_read_gateway import machine_models
 from zerg.services.catalog_read_gateway import machine_operation
 from zerg.services.catalog_read_gateway import machine_workspaces
 from zerg.services.catalog_read_gateway import rename_machine
@@ -172,6 +175,36 @@ def list_machine_workspaces(
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     entries = [WorkspaceSuggestion(**item) for item in payload.get("workspaces", [])]
     return WorkspaceSuggestionsResponse(device_id=device_id, workspaces=entries)
+
+
+@router.get("/{device_id}/providers/{provider}/models", response_model=RecentModelsResponse)
+def list_machine_models(
+    device_id: str,
+    provider: str,
+    limit: int = Query(12, ge=1, le=50, description="Max recent models to return"),
+    days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
+    db: Session | None = Depends(no_request_db),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> RecentModelsResponse:
+    """Recent provider-reported model ids for one enrolled machine."""
+    try:
+        owner_id = _request_owner_id(db, device_token)
+        payload = machine_models(
+            owner_id=owner_id,
+            device_id=device_id,
+            provider=provider,
+            limit=limit,
+            days_back=days_back,
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    return RecentModelsResponse(
+        device_id=device_id,
+        provider=provider,
+        days_back=days_back,
+        models=[RecentModel(**item) for item in payload.get("models", [])],
+    )
 
 
 @router.get("/{device_id}/archive-backlog", response_model=ArchiveBacklogResponse)

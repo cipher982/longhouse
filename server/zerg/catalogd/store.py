@@ -658,9 +658,14 @@ def _live_console_turn_dto(
     message: str | None = None,
     client_request_id: str | None = None,
     provider_config: str | None = None,
+    model: str | None = None,
     resume_session_file: str | None = None,
     error_code: str | None = None,
 ) -> dict[str, Any]:
+    config = _decode_json_object(provider_config)
+    config.pop("model", None)
+    if model is not None:
+        config["model"] = model
     return {
         "turn_id": turn.id,
         "session_id": turn.session_id,
@@ -675,7 +680,7 @@ def _live_console_turn_dto(
         "cwd": turn.cwd,
         "message": message,
         "client_request_id": client_request_id,
-        "provider_config": json.loads(provider_config or "{}"),
+        "provider_config": config,
         "resume_provider_thread_id": turn.resume_provider_thread_id,
         "resume_session_file": resume_session_file,
         "fork_from_provider_thread_id": turn.fork_from_provider_thread_id,
@@ -4520,6 +4525,7 @@ class CatalogStore:
                         message=receipt.text,
                         client_request_id=receipt.client_request_id,
                         provider_config=child_thread.provider_config_json,
+                        model=turn.model,
                     )
                     orm.rollback()
                     return {
@@ -4560,6 +4566,7 @@ class CatalogStore:
 
                 child_session_id = str(data["session_id"])
                 child_thread_id = str(data["thread_id"])
+                parent_provider_config = _decode_json_object(parent_thread.provider_config_json)
                 shell = {
                     "session_id": child_session_id,
                     "thread_id": child_thread_id,
@@ -4623,6 +4630,7 @@ class CatalogStore:
                     provider=parent.provider,
                     device_id=parent_thread.device_id,
                     cwd=parent_thread.cwd,
+                    model=parent_provider_config.get("model") if isinstance(parent_provider_config.get("model"), str) else None,
                     # A branch's first turn forks and never resumes. The child
                     # owns no thread yet, so a resume identity here would be the
                     # parent's and would continue it instead of branching it.
@@ -4654,6 +4662,7 @@ class CatalogStore:
                         message=receipt.text,
                         client_request_id=client_request_id,
                         provider_config=json.dumps(shell["provider_config"], sort_keys=True),
+                        model=turn.model,
                     ),
                 }
             except BaseException:
@@ -4719,6 +4728,9 @@ class CatalogStore:
                     )
                     session.permission_mode = "provider_local"
                     session.permission_mode_source = "console_default"
+                thread_provider_config = _decode_json_object(thread.provider_config_json)
+                requested_model = data["model"] if "model" in data else thread_provider_config.get("model")
+                turn_model = requested_model if isinstance(requested_model, str) else None
                 existing_receipt = (
                     orm.query(LiveSessionInputReceipt)
                     .filter(
@@ -4732,12 +4744,14 @@ class CatalogStore:
                     turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == existing_receipt.id).one()
                     stored_digest = _console_turn_attachments(turn).get("digest") or None
                     digest_matches = stored_digest == attachments_digest
-                    exact = existing_receipt.text == data["message"] and turn.report_id == report_id and digest_matches
+                    model_matches = "model" not in data or turn.model == turn_model
+                    exact = existing_receipt.text == data["message"] and turn.report_id == report_id and digest_matches and model_matches
                     replay_turn = _live_console_turn_dto(
                         turn,
                         message=existing_receipt.text,
                         client_request_id=existing_receipt.client_request_id,
                         provider_config=thread.provider_config_json,
+                        model=turn.model,
                         resume_session_file=_live_thread_source_path(
                             orm,
                             thread_id=thread.id,
@@ -4772,6 +4786,7 @@ class CatalogStore:
                             message=existing_receipt.text if existing_receipt is not None else None,
                             client_request_id=existing_receipt.client_request_id if existing_receipt is not None else None,
                             provider_config=existing_thread.provider_config_json if existing_thread is not None else None,
+                            model=existing_report_turn.model,
                             resume_session_file=(
                                 _live_thread_source_path(
                                     orm,
@@ -4846,6 +4861,7 @@ class CatalogStore:
                     provider=session.provider,
                     device_id=thread.device_id,
                     cwd=thread.cwd,
+                    model=turn_model,
                     resume_provider_thread_id=resume_alias.alias_value if resume_alias is not None else None,
                     created_at=now,
                     updated_at=now,
@@ -4882,6 +4898,7 @@ class CatalogStore:
                     message=receipt.text,
                     client_request_id=receipt.client_request_id,
                     provider_config=thread.provider_config_json,
+                    model=turn.model,
                     resume_session_file=source_path,
                 )
             except BaseException:
@@ -4928,6 +4945,7 @@ class CatalogStore:
                         message=receipt.text if receipt is not None else None,
                         client_request_id=receipt.client_request_id if receipt is not None else None,
                         provider_config=thread.provider_config_json if thread is not None else None,
+                        model=turn.model,
                         error_code=_receipt_error_code(receipt),
                         resume_session_file=(
                             _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
@@ -4950,6 +4968,8 @@ class CatalogStore:
                         result = _live_console_turn_dto(
                             turn,
                             client_request_id=receipt.client_request_id if receipt is not None else None,
+                            provider_config=thread.provider_config_json if thread is not None else None,
+                            model=turn.model,
                             error_code=_receipt_error_code(receipt),
                             resume_session_file=(
                                 _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
@@ -4987,6 +5007,7 @@ class CatalogStore:
                             message=next_receipt.text if next_receipt is not None else None,
                             client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
                             provider_config=thread.provider_config_json if thread is not None else None,
+                            model=starting.model,
                             error_code=_receipt_error_code(next_receipt),
                             resume_session_file=(
                                 _live_thread_source_path(orm, thread_id=thread.id, provider=starting.provider)
@@ -4998,6 +5019,8 @@ class CatalogStore:
                     result = _live_console_turn_dto(
                         turn,
                         client_request_id=receipt.client_request_id if receipt is not None else None,
+                        provider_config=thread.provider_config_json if thread is not None else None,
+                        model=turn.model,
                         error_code=_receipt_error_code(receipt),
                         resume_session_file=(
                             _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
@@ -5113,6 +5136,7 @@ class CatalogStore:
                             message=next_receipt.text if next_receipt is not None else None,
                             client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
                             provider_config=thread.provider_config_json if thread is not None else None,
+                            model=next_turn.model,
                             error_code=_receipt_error_code(next_receipt),
                             resume_session_file=(
                                 _live_thread_source_path(orm, thread_id=thread.id, provider=next_turn.provider)
@@ -5125,6 +5149,8 @@ class CatalogStore:
                 result = _live_console_turn_dto(
                     turn,
                     client_request_id=receipt.client_request_id if receipt is not None else None,
+                    provider_config=thread.provider_config_json if thread is not None else None,
+                    model=turn.model,
                     error_code=_receipt_error_code(receipt),
                     resume_session_file=(
                         _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
@@ -5172,6 +5198,7 @@ class CatalogStore:
                             message=receipt.text,
                             client_request_id=receipt.client_request_id,
                             provider_config=thread.provider_config_json,
+                            model=turn.model,
                             resume_session_file=_live_thread_source_path(
                                 orm,
                                 thread_id=thread.id,
@@ -5215,6 +5242,7 @@ class CatalogStore:
                         message=receipt.text if receipt is not None else None,
                         client_request_id=receipt.client_request_id if receipt is not None else None,
                         provider_config=thread.provider_config_json if thread is not None else None,
+                        model=turn.model,
                         error_code=_receipt_error_code(receipt),
                         resume_session_file=(
                             _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
@@ -8094,6 +8122,94 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
                 "heartbeats": heartbeats,
+            }
+
+    def list_machine_models(
+        self,
+        *,
+        owner_id: int,
+        device_id: str,
+        provider: str,
+        limit: int,
+        days_back: int,
+    ) -> dict[str, Any]:
+        """Return recent provider-reported models for one enrolled machine."""
+
+        observed_at = datetime.now(UTC)
+        since = observed_at - timedelta(days=days_back)
+        token = LiveDeviceToken.__table__
+        catalog = LiveSessionCatalog.__table__
+        facts = SessionProviderFact.__table__
+        with _read_snapshot(self.engine) as connection:
+            enrolled = connection.execute(
+                select(token.c.id)
+                .where(
+                    token.c.owner_id == owner_id,
+                    token.c.device_id == device_id,
+                    token.c.revoked_at.is_(None),
+                )
+                .limit(1)
+            ).first()
+            models: list[dict[str, Any]] = []
+            if enrolled is not None:
+                session_rows = connection.execute(
+                    select(catalog.c.session_id)
+                    .where(
+                        catalog.c.device_id == device_id,
+                        catalog.c.provider == provider,
+                        or_(
+                            catalog.c.environment.is_(None),
+                            func.lower(catalog.c.environment).notin_(("test", "e2e")),
+                        ),
+                        func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
+                    )
+                    .order_by(
+                        func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),
+                        catalog.c.session_id.desc(),
+                    )
+                    .limit(min(max(limit * 4, limit), 200))
+                ).all()
+                session_ids = [str(row.session_id) for row in session_rows]
+                if session_ids:
+                    seen: set[str] = set()
+                    fact_rows = connection.execute(
+                        select(
+                            facts.c.at,
+                            facts.c.payload_json,
+                        )
+                        .where(
+                            facts.c.session_id.in_(session_ids),
+                            facts.c.kind == "turn.usage",
+                        )
+                        .order_by(facts.c.at.desc(), facts.c.source_position.desc(), facts.c.id.desc())
+                    ).all()
+                    for row in fact_rows:
+                        try:
+                            payload = json.loads(row.payload_json)
+                        except (TypeError, ValueError):
+                            continue
+                        model = payload.get("model") if isinstance(payload, dict) else None
+                        if not isinstance(model, str) or not model.strip():
+                            continue
+                        key = model.casefold()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        models.append(
+                            {
+                                "model": model,
+                                "last_used_at": _encode_datetime(_as_aware_utc(row.at)),
+                            }
+                        )
+                        if len(models) >= limit:
+                            break
+            return {
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+                "device_id": device_id,
+                "provider": provider,
+                "days_back": days_back,
+                "models": models,
             }
 
     def list_machine_workspaces(

@@ -682,6 +682,8 @@ class CatalogDaemon:
             return await self._rename_machine_enrollment(request)
         if request.method == "machine.workspace.list.v2":
             return await self._list_machine_workspaces(request)
+        if request.method == "machine.models.list.v2":
+            return await self._list_machine_models(request)
         if request.method == "backup.snapshot.create.v2":
             return await self._create_backup_snapshot(request)
         if request.method == "storage.source_epoch.open.v2":
@@ -1891,6 +1893,8 @@ class CatalogDaemon:
         required = {"session_id", "owner_id", "message", "client_request_id", "created_at"}
         if not required.issubset(data):
             return self._error(request, "invalid_request", "console turn is missing required fields")
+        if "model" in data and data["model"] is not None and (not isinstance(data["model"], str) or len(data["model"]) > 255):
+            return self._error(request, "invalid_request", "console turn model must be a string of at most 255 characters or null")
         try:
             uuid.UUID(str(data["session_id"]))
             data["created_at"] = _parse_datetime(data["created_at"], "console turn.created_at")
@@ -2781,6 +2785,25 @@ class CatalogDaemon:
             device_id=device_id,
             machine_name=machine_name,
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_machine_models(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "device_id", "provider", "limit", "days_back"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "machine.models.list.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(params["device_id"], str) or not 1 <= len(params["device_id"]) <= 255:
+            return self._error(request, "invalid_request", "device_id must contain 1 to 255 characters")
+        if not isinstance(params["provider"], str) or not 1 <= len(params["provider"]) <= 64:
+            return self._error(request, "invalid_request", "provider must contain 1 to 64 characters")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 50:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 50")
+        if type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 180:
+            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 180")
+        assert self._store is not None
+        result = await self._run_read_store(self._store.list_machine_models, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_workspaces(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

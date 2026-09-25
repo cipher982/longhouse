@@ -126,6 +126,7 @@ class ConsoleSessionCreateRequest(BaseModel):
     cwd: str = Field(..., min_length=1)
     project: str | None = None
     display_name: str | None = None
+    model: str | None = None
     launch_surface: str = "web"
     session_id: UUID | None = None
     thread_id: UUID | None = None
@@ -385,6 +386,7 @@ class SessionInputRequest(BaseModel):
         None,
         description="Optional immutable bug report to stage before a Console turn",
     )
+    model: str | None = None
 
 
 class QueuedInputSummary(BaseModel):
@@ -1259,6 +1261,10 @@ async def create_console_session_endpoint(
             cwd=body.cwd,
             project=body.project,
             display_name=body.display_name,
+            provider_config={
+                "permission_mode": "bypass",
+                **({"model": body.model.strip()} if body.model and body.model.strip() else {}),
+            },
             launch_surface=body.launch_surface,
             session_id=body.session_id,
             thread_id=body.thread_id,
@@ -1813,13 +1819,16 @@ async def _create_catalog_session_input_response(
     if getattr(source_session, "command_family", None) == "console_turn":
         client_request_id = body.client_request_id
         try:
-            turn = await enqueue_catalog_console_turn(
-                owner_id=owner_id,
-                session_id=uuid.UUID(str(source_session.id)),
-                message=body.text,
-                client_request_id=client_request_id,
-                report_id=body.report_id,
-            )
+            enqueue_kwargs = {
+                "owner_id": owner_id,
+                "session_id": uuid.UUID(str(source_session.id)),
+                "message": body.text,
+                "client_request_id": client_request_id,
+                "report_id": body.report_id,
+            }
+            if body.model is not None:
+                enqueue_kwargs["model"] = body.model
+            turn = await enqueue_catalog_console_turn(**enqueue_kwargs)
         except ConsoleTurnConflict as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

@@ -124,6 +124,7 @@ _DIRECTED_INPUT_MAX_CHARS = 4000
 class ConsoleTurnCreate(UTCBaseModel):
     message: str
     client_request_id: str
+    model: str | None = None
 
 
 class ConsoleTurnCreateResponse(UTCBaseModel):
@@ -935,12 +936,15 @@ async def create_console_turn(
 
     owner_id = _resolve_agents_owner_id(db, auth)
     try:
-        turn = await enqueue_catalog_console_turn(
-            owner_id=owner_id,
-            session_id=session_id,
-            message=body.message,
-            client_request_id=body.client_request_id,
-        )
+        enqueue_kwargs = {
+            "owner_id": owner_id,
+            "session_id": session_id,
+            "message": body.message,
+            "client_request_id": body.client_request_id,
+        }
+        if body.model is not None:
+            enqueue_kwargs["model"] = body.model
+        turn = await enqueue_catalog_console_turn(**enqueue_kwargs)
     except ConsoleTurnUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
