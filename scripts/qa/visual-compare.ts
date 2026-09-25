@@ -6,8 +6,11 @@
  *   bun run scripts/visual-compare.ts before.png after.png [--json] [--skip-llm]
  *   bun run scripts/visual-compare.ts --baseline-dir <dir> --current-dir <dir> [--json] [--skip-llm]
  *
- * Deps: pixelmatch, pngjs from e2e/node_modules; @google/genai for LLM triage.
- * Run `bun install` in e2e/ first.
+ * Deps: pixelmatch, pngjs from e2e/node_modules (run `bun install` first).
+ * LLM triage (GOOGLE_API_KEY set, no --skip-llm) also needs @google/genai,
+ * which is deliberately not a repo dependency. Install it ad hoc with
+ * `cd e2e && bun add --no-save @google/genai@1`; without it the script falls
+ * back to the pixel-ratio threshold and says so.
  *
  * Exit codes: 0 = pass, 1 = failures detected, 2 = error
  */
@@ -141,7 +144,26 @@ async function llmTriage(
     };
   }
 
-  const { GoogleGenAI } = await import("@google/genai");
+  // Minimal shape of the SDK surface used below; the package is optional.
+  type GenAIModule = {
+    GoogleGenAI: new (opts: { apiKey: string }) => {
+      models: { generateContent(req: unknown): Promise<{ text?: string }> };
+    };
+  };
+  let GoogleGenAI: GenAIModule["GoogleGenAI"];
+  try {
+    ({ GoogleGenAI } = (await import("@google/genai")) as GenAIModule);
+  } catch {
+    const isFail = diffRatio > DIFF_FALLBACK_FAIL;
+    return {
+      is_problem: isFail,
+      severity: isFail ? "major" : "none",
+      explanation:
+        "LLM triage skipped: @google/genai is not installed (install it with " +
+        "`cd e2e && bun add --no-save @google/genai@1`, or pass --skip-llm). " +
+        `Diff ratio ${(diffRatio * 100).toFixed(2)}% ${isFail ? "exceeds" : "within"} fallback threshold.`,
+    };
+  }
   const ai = new GoogleGenAI({ apiKey });
 
   const parts: Array<Record<string, unknown>> = [

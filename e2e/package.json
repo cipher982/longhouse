@@ -18,8 +18,5 @@
     "pngjs": "^7.0.0",
     "ws": "^8.21.3"
   },
-  "dependencies": {
-    "@google/genai": "^1.41.0"
-  },
   "type": "module"
 }
