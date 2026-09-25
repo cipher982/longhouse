@@ -73,6 +73,23 @@ final class LaunchProviderPickerTests: XCTestCase {
         )
     }
 
+    func testModelChooserRendersRecentRows() {
+        let app = launchLaunchSheet()
+        openModelChooser(in: app)
+
+        let recent = app.buttons["launch-model-row-gpt-5.6-luna"]
+        XCTAssertTrue(recent.waitForExistence(timeout: 5), "Model chooser did not list the recent model.")
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Last used '")).firstMatch.waitForExistence(timeout: 3),
+            "Recent model did not render a relative last-used label."
+        )
+        attach(app.screenshot(), name: "model-chooser")
+    }
+
+    private func openModelChooser(in app: XCUIApplication) {
+        open(picker: "launch-model-picker", pushed: "Choose Model", in: app)
+    }
+
     private func launchLaunchSheet() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.launchSessionFixture] = "1"

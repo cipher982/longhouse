@@ -984,6 +984,13 @@ struct ModelSelectionView: View {
         return value.isEmpty ? nil : value
     }
 
+    private func relativeLastUsed(_ value: String?) -> String? {
+        guard let value, let date = LonghouseDateParser.parse(value) else { return nil }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
     var body: some View {
         List {
             Button {
@@ -1022,9 +1029,16 @@ struct ModelSelectionView: View {
                             dismiss()
                         } label: {
                             HStack {
-                                Text(recent.model)
-                                    .foregroundStyle(Ember.text)
-                                    .lineLimit(1)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(recent.model)
+                                        .foregroundStyle(Ember.text)
+                                        .lineLimit(1)
+                                    if let lastUsed = relativeLastUsed(recent.lastUsedAt) {
+                                        Text("Last used \(lastUsed)")
+                                            .font(.caption)
+                                            .foregroundStyle(Ember.textMuted)
+                                    }
+                                }
                                 Spacer()
                                 if recent.model == selectedModel {
                                     Image(systemName: "checkmark")
@@ -1308,6 +1322,15 @@ private func previewMachine(
     .emberChrome()
 }
 
+private func previewRecentModels() -> [RecentModel] {
+    let formatter = ISO8601DateFormatter()
+    let now = Date()
+    return [
+        RecentModel(model: "gpt-5.6-luna", lastUsedAt: formatter.string(from: now.addingTimeInterval(-2 * 60 * 60))),
+        RecentModel(model: "gpt-5.5", lastUsedAt: formatter.string(from: now.addingTimeInterval(-26 * 60 * 60))),
+    ]
+}
+
 #Preview("Launch session · sign-in required") {
     LaunchSessionSheet(
         previewMachines: [
@@ -1351,10 +1374,7 @@ private func previewMachine(
                 sessionCount: 31
             ),
         ],
-        previewRecentModels: [
-            RecentModel(model: "gpt-5.6-luna", lastUsedAt: "2026-09-25T10:00:00Z"),
-            RecentModel(model: "gpt-5.5", lastUsedAt: "2026-09-24T10:00:00Z")
-        ]
+        previewRecentModels: previewRecentModels()
     ) { _ in }
     .environmentObject(AppState())
     .preferredColorScheme(.dark)
@@ -1397,6 +1417,7 @@ struct LaunchSessionUITestFixtureView: View {
                 WorkspaceSuggestion(path: "/Users/example/git/longhouse", label: "longhouse", score: 100, sessionCount: 20),
                 WorkspaceSuggestion(path: "/Users/example/git/g55", label: "g55", score: 90, sessionCount: 12),
             ],
+            previewRecentModels: previewRecentModels(),
             onLaunched: { _ in }
         )
     }
