@@ -78,6 +78,7 @@ const SCENES = [
   "timeline-card-stress",
   "launch-unavailable",
   "launch-model-picker",
+  "launch-model-picked",
   "session-detail-stress",
   "session-question",
   "session-attention",
@@ -92,6 +93,8 @@ type SceneName = (typeof SCENES)[number];
 
 /** Curated landing-page showcase data (scripts/ui-fixtures/landingShowcase.ts). */
 const LANDING_TIMELINE_SCENES: readonly SceneName[] = ["landing", "landing-search"];
+// Scenes that render the launch sheet with a machine that has run models.
+const LAUNCH_MODEL_SCENES: readonly SceneName[] = ["launch-model-picker", "launch-model-picked"];
 const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session"];
 
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
@@ -237,6 +240,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "timeline-card-stress" ||
     scene === "launch-unavailable" ||
     scene === "launch-model-picker" ||
+    scene === "launch-model-picked" ||
     LANDING_TIMELINE_SCENES.includes(scene) ||
     scene === "landing-session" ||
     scene === "session-detail-stress" ||
@@ -627,12 +631,12 @@ async function installSceneMocks(
       return;
     }
 
-    if (scene === "launch-model-picker" && pathname === "/api/timeline/machines") {
+    if (LAUNCH_MODEL_SCENES.includes(scene) && pathname === "/api/timeline/machines") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LAUNCH_MODEL_PICKER_MACHINES) });
       return;
     }
 
-    if (scene === "launch-model-picker" && pathname.startsWith("/api/timeline/machines/") && pathname.endsWith("/workspaces")) {
+    if (LAUNCH_MODEL_SCENES.includes(scene) && pathname.startsWith("/api/timeline/machines/") && pathname.endsWith("/workspaces")) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -644,7 +648,7 @@ async function installSceneMocks(
       return;
     }
 
-    if (scene === "launch-model-picker" && pathname.includes("/providers/") && pathname.endsWith("/models")) {
+    if (LAUNCH_MODEL_SCENES.includes(scene) && pathname.includes("/providers/") && pathname.endsWith("/models")) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -841,6 +845,15 @@ async function captureBundle(
     await page.waitForSelector("[data-testid='launch-model-select']", { timeout: 5000 });
     await page.click("[data-testid='launch-model-select'] summary");
     await page.waitForSelector("[data-testid='launch-model-select-input']", { timeout: 5000 });
+  }
+
+  // Same sheet with a model actually chosen, so the collapsed row's caption
+  // and value are both visible rather than assumed.
+  if (scene === "launch-model-picked") {
+    await page.click("[data-testid='sessions-start-session']");
+    await page.waitForSelector("[data-testid='launch-model-select']", { timeout: 5000 });
+    await page.click("[data-testid='launch-model-select'] summary");
+    await page.getByRole("button", { name: /gpt-5\.6-luna/ }).click();
   }
 
   // Inject CSS to kill animations for deterministic screenshots

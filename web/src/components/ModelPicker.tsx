@@ -51,6 +51,18 @@ export default function ModelPicker({
     refetchOnMount: "always",
   });
   const selectedModel = value.trim();
+  const providerLabel = getProviderLabel(provider);
+  // The provider is already named by the row above in the launch sheet and by
+  // the composer header, so a bare provider name here reads as a second value
+  // rather than as a caption -- "Default / Codex" directly under
+  // "Codex / Coding agent" looked like a duplicate row. Say what the row IS,
+  // and why no model name appears when one is not pinned: the agent's own
+  // config on that machine decides.
+  const caption = compact
+    ? "Model"
+    : selectedModel
+      ? "Model · set for this session"
+      : `Model · let ${providerLabel} on this machine choose`;
 
   const choose = (model: string) => {
     onChange(model);
@@ -65,7 +77,7 @@ export default function ModelPicker({
       <summary aria-haspopup="listbox">
         <span className="launch-choice-copy">
           <strong title={selectedModel || "Default"}>{selectedModel || "Default"}</strong>
-          <small>{getProviderLabel(provider)}</small>
+          <small>{caption}</small>
         </span>
       </summary>
       <div className="launch-choice-panel model-picker-panel">
@@ -76,7 +88,7 @@ export default function ModelPicker({
         >
           <span>
             <strong>Default</strong>
-            <small>let the CLI on this machine choose</small>
+            <small>let {providerLabel} on this machine choose</small>
           </span>
           <span>{!selectedModel ? "✓" : ""}</span>
         </button>
