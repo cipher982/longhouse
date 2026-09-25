@@ -11,9 +11,20 @@ failed on most pushes for a day with "catalogd deadline exceeded".
 So: freeze the import-time heap once, keep the cheap young-generation passes
 automatic, and run the full pass ourselves in teardown. Loaded for every run
 through pytest.ini, so local and CI behave the same.
+
+Each full pass then freezes what survived it. The survivors are modules
+imported lazily by tests, pytest's own reports and items, and module caches:
+the serial heap grew from 0.1M to 1.4M such objects, and rescanning them made
+every pass slower than the last (5 ms early, 600 ms by the end; 34 s of a
+265 s serial run). Freezing only stops the cyclic collector from revisiting
+them; reference counting still frees anything they release. Objects frozen
+while alive that later become *cyclic* garbage are never reclaimed, so the
+pass runs after the test's own fixtures are torn down.
 """
 
 import gc
+
+import pytest
 
 FULL_COLLECT_EVERY_TESTS = 50
 
@@ -31,8 +42,10 @@ def pytest_collection_finish(session):
     gc.set_threshold(young, middle, 1_000_000_000)
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_runtest_teardown(item, nextitem):
     global _finished
     _finished += 1
     if _finished % FULL_COLLECT_EVERY_TESTS == 0:
         gc.collect()
+        gc.freeze()
