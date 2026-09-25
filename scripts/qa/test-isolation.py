@@ -861,6 +861,10 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         except subprocess.TimeoutExpired:
             receipt["error"] = "test timeout"
             code = 124
+        # The guest's status is the step's verdict. 9e4b16bd0 dropped this
+        # return and every containerized CI step passed with failing tests.
+        receipt["exit_code"] = code
+        return code
     except KeyboardInterrupt:
         receipt["exit_code"] = 128 + (interrupted or signal.SIGINT)
         return receipt["exit_code"]
