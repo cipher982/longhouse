@@ -16,12 +16,6 @@
     "generate-sdk": "make generate-sdk",
     "validate:all": "make validate && cd web && bun run validate:contracts"
   },
-  "devDependencies": {
-    "@asyncapi/cli": "^3.1.0",
-    "@asyncapi/modelina": "^5.3.1",
-    "asyncapi-rust-ws-template": "^0.3.2",
-    "prettier": "3.7.4"
-  },
   "overrides": {
     "react": "19.2.1",
     "react-dom": "19.2.1",

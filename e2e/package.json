@@ -19,8 +19,7 @@
     "ws": "^8.20.0"
   },
   "dependencies": {
-    "@google/genai": "^1.41.0",
-    "openai": "^5.23.1"
+    "@google/genai": "^1.41.0"
   },
   "type": "module"
 }
