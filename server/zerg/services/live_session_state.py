@@ -8,15 +8,29 @@ from datetime import timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from zerg.models.live_store import LiveControlLease
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionLaunchAttempt
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 from zerg.utils.time import normalize_utc
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _latest_timestamp(*values: object) -> datetime | None:
+    """Newest aware-UTC value in the set, ignoring anything unparseable."""
+
+    parsed = [normalize_utc(value) for value in values]
+    return max((value for value in parsed if value is not None), default=None)
 
 
 def _normalized(value: object) -> str:
@@ -182,4 +196,162 @@ def mark_missing_live_sessions(
         session_id = _session_uuid(row.session_id)
         if session_id is not None:
             touched.add(session_id)
+    return touched
+
+
+# A wrapper killed before it could ship its terminal fact leaves a run row with
+# `ended_at IS NULL`, and the session it belonged to eventually stops being
+# enumerated by the machine. That omission is control-path evidence, not process
+# exit: it says the Machine Agent stopped reporting the session, which the
+# deliberate contract in tests_lite/test_heartbeat_endpoint.py forbids treating
+# as a terminal state. So this path waits for the omission to be old, requires
+# the same no-live-evidence predicate resume uses, and labels what it ends as
+# `unobserved_retired` rather than `process_gone`.
+#
+# 24h is the age at which a session the machine has not enumerated for a day,
+# with no attachment, runtime signal or launch attempt since, is not work in
+# progress by any reading of the evidence we hold.
+ABSENT_RUN_RETIRE_AGE = timedelta(hours=24)
+# The heartbeat runs inside catalogd's single writer, so convergence is bounded
+# per beat and drains over successive ones instead of holding the writer for a
+# backlog of thousands.
+ABSENT_RUN_RETIRE_BATCH = 256
+
+
+def retire_stale_absent_runs(
+    db: Session,
+    *,
+    device_id: str,
+    received_at: datetime | None = None,
+) -> set[UUID]:
+    """End long-absent managed runs the machine has certified it cannot see.
+
+    Only the half of the story the machine cannot supply: a run whose provider
+    exited unobserved *and* whose observation record is gone, so no per-process
+    exit fact can ever be produced for it. Resume already retires such a run
+    when someone tries to use the session; this converges the ones nobody has
+    tried yet, which is what keeps `ended_at IS NULL` meaning "executing".
+
+    Called from the certified-snapshot branch of the heartbeat, so the owning
+    device has just declared a complete enumeration that excludes the session --
+    the same statement `mark_missing_live_sessions` already trusts for the
+    session and lease rows.
+
+    Excluded by construction:
+
+    - Console runs: the Runtime Host dispatches those with no local process, so
+      a machine's enumeration says nothing about their execution.
+    - Runs younger than `ABSENT_RUN_RETIRE_AGE`.
+    - Runs that still show live evidence: a lease in an attached/degraded state
+      inside the control lease, a runtime state still being signalled or
+      asserted, or an unexpired pending launch attempt. The attachment's own
+      stamp is deliberately not read: accepting absence detaches it as a
+      consequence, so a fresh stamp there marks the session gone, not alive.
+    """
+
+    from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
+
+    normalized_device_id = _normalized(device_id)
+    if not normalized_device_id:
+        return set()
+    seen_at = normalize_utc(received_at) or _utc_now()
+    lease_floor = seen_at - timedelta(milliseconds=DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+    absent_before = seen_at - ABSENT_RUN_RETIRE_AGE
+
+    candidates = (
+        db.query(LiveSessionRun, LiveSessionCatalog)
+        .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
+        .join(LiveSession, LiveSession.session_id == LiveSessionThread.session_id)
+        .join(LiveSessionCatalog, LiveSessionCatalog.session_id == LiveSessionThread.session_id)
+        .filter(
+            LiveSessionRun.ended_at.is_(None),
+            LiveSessionRun.started_at <= absent_before,
+            LiveSession.device_id == normalized_device_id,
+            LiveSession.state == "missing",
+            LiveSession.updated_at <= absent_before,
+            LiveSessionThread.is_primary == 1,
+            LiveSessionThread.branch_kind == "root",
+            or_(LiveSessionCatalog.origin_kind.is_(None), LiveSessionCatalog.origin_kind != "console"),
+        )
+        .order_by(LiveSessionRun.started_at.asc(), LiveSessionRun.id.asc())
+        .all()
+    )
+    if not candidates:
+        return set()
+
+    session_ids = {str(catalog_session.session_id) for _, catalog_session in candidates}
+    run_ids = [str(run.id) for run, _ in candidates]
+    live_lease_session_ids = {
+        str(row[0])
+        for row in db.query(LiveControlLease.session_id)
+        .filter(
+            LiveControlLease.session_id.in_(session_ids),
+            LiveControlLease.device_id == normalized_device_id,
+            LiveControlLease.state.in_(("attached", "degraded")),
+            LiveControlLease.heartbeat_at.is_not(None),
+            LiveControlLease.heartbeat_at > lease_floor,
+        )
+        .all()
+    }
+    fresh_state_run_ids = {
+        str(row[0])
+        for row in db.query(LiveRuntimeState.run_id)
+        .filter(
+            LiveRuntimeState.run_id.in_(run_ids),
+            LiveRuntimeState.terminal_state.is_(None),
+            or_(
+                LiveRuntimeState.freshness_expires_at > seen_at,
+                LiveRuntimeState.last_runtime_signal_at > lease_floor,
+                LiveRuntimeState.last_asserted_at > lease_floor,
+                LiveRuntimeState.updated_at > lease_floor,
+            ),
+        )
+        .all()
+    }
+    pending_attempt_run_ids = {
+        str(row[0])
+        for row in db.query(LiveSessionLaunchAttempt.run_id)
+        .filter(
+            LiveSessionLaunchAttempt.run_id.in_(run_ids),
+            LiveSessionLaunchAttempt.state == "pending",
+            or_(
+                LiveSessionLaunchAttempt.expires_at.is_(None),
+                LiveSessionLaunchAttempt.expires_at > seen_at,
+            ),
+        )
+        .all()
+    }
+
+    touched: set[UUID] = set()
+    retired = 0
+    for run, catalog_session in candidates:
+        run_id = str(run.id)
+        if run_id in fresh_state_run_ids or run_id in pending_attempt_run_ids:
+            continue
+        if str(catalog_session.session_id) in live_lease_session_ids:
+            continue
+        run.ended_at = seen_at
+        run.exit_status = "unobserved_retired"
+        for connection in (
+            db.query(LiveSessionConnection)
+            .filter(
+                LiveSessionConnection.run_id == run_id,
+                LiveSessionConnection.released_at.is_(None),
+            )
+            .all()
+        ):
+            connection.state = "ended"
+            connection.released_at = seen_at
+            connection.last_health_at = seen_at
+            connection.can_send_input = 0
+            connection.can_interrupt = 0
+            connection.can_terminate = 0
+            connection.can_tail_output = 0
+            connection.can_resume = 0
+        session_id = _session_uuid(catalog_session.session_id)
+        if session_id is not None:
+            touched.add(session_id)
+        retired += 1
+        if retired >= ABSENT_RUN_RETIRE_BATCH:
+            break
     return touched

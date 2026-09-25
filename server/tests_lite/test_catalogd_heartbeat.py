@@ -37,8 +37,10 @@ from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionThread
 from zerg.routers.heartbeat import ManagedSessionLeaseIn
+from zerg.services.managed_provider_contracts import require_contract_for_provider
 
 
 @pytest.fixture
@@ -628,6 +630,315 @@ async def test_shadow_reducer_ends_exact_run_from_execution_owner_process_exit(d
     assert control["released_at"].replace(tzinfo=UTC) == observed_at
     assert control["last_health_at"].replace(tzinfo=UTC) == observed_at
     assert {control[key] for key in ("can_send_input", "can_interrupt", "can_terminate", "can_tail_output", "can_resume")} == {0}
+
+
+def _seed_open_managed_run(
+    connection,
+    *,
+    session_id: str,
+    thread_id: str,
+    run_id: str,
+    started_at: datetime,
+    origin_kind: str | None = None,
+    connection_state: str = "detached",
+    connection_health_at: datetime | None = None,
+) -> None:
+    """Seed one open managed run the way catalogd's launch transaction leaves it."""
+
+    connection.execute(
+        LiveSessionCatalog.__table__.insert().values(
+            session_id=session_id,
+            provider="claude",
+            environment="development",
+            device_id="cinder",
+            started_at=started_at,
+            primary_thread_id=thread_id,
+            origin_kind=origin_kind,
+        )
+    )
+    connection.execute(
+        LiveSessionThread.__table__.insert().values(
+            id=thread_id,
+            session_id=session_id,
+            provider="claude",
+            branch_kind="root",
+            is_primary=1,
+            created_at=started_at,
+            updated_at=started_at,
+        )
+    )
+    connection.execute(
+        LiveSessionRun.__table__.insert().values(
+            id=run_id,
+            thread_id=thread_id,
+            provider="claude",
+            host_id="cinder",
+            launch_origin="longhouse_spawned",
+            started_at=started_at,
+        )
+    )
+    connection.execute(
+        LiveSessionConnection.__table__.insert().values(
+            run_id=run_id,
+            # The provider's real control plane: guessing one makes an absent
+            # snapshot attach a second connection and stops testing the shape.
+            control_plane=require_contract_for_provider("claude").control_plane,
+            acquisition_kind="spawned_control",
+            state=connection_state,
+            device_id="cinder",
+            can_send_input=1,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+            acquired_at=started_at,
+            last_health_at=connection_health_at or started_at,
+        )
+    )
+    connection.execute(
+        LiveSession.__table__.insert().values(
+            session_id=session_id,
+            provider="claude",
+            device_id="cinder",
+            state="attached",
+            last_seen_at=started_at,
+            updated_at=started_at,
+        )
+    )
+    connection.execute(
+        LiveControlLease.__table__.insert().values(
+            session_id=session_id,
+            provider="claude",
+            device_id="cinder",
+            state="attached",
+            heartbeat_at=started_at,
+        )
+    )
+
+
+def _seed_long_absent_run(connection, *, session_id: str, run_id: str, thread_id: str, started_at, missing_since) -> None:
+    _seed_open_managed_run(
+        connection,
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        started_at=started_at,
+        origin_kind=None,
+    )
+    connection.execute(
+        LiveSession.__table__.update()
+        .where(LiveSession.__table__.c.session_id == session_id)
+        .values(state="missing", updated_at=missing_since)
+    )
+    connection.execute(
+        LiveControlLease.__table__.update().where(LiveControlLease.__table__.c.session_id == session_id).values(state="missing")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("shape", "expected_retired"),
+    [
+        ("long_absent", True),
+        ("recently_missing", False),
+        ("fresh_runtime_signal", False),
+        ("console_origin", False),
+    ],
+)
+async def test_heartbeat_retires_long_absent_run_without_live_evidence(daemon_paths, shape, expected_retired):
+    """A day of certified absence ends the run, labelled as unobserved.
+
+    Omission is not process exit, so this path never claims `process_gone`: it
+    waits for the omission to be old, requires the same no-live-evidence
+    predicate resume uses, and records `unobserved_retired`.
+    """
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    started_at = now - timedelta(days=2)
+    missing_since = now - timedelta(minutes=5) if shape == "recently_missing" else now - timedelta(hours=25)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    run_id = str(uuid4())
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        _seed_long_absent_run(
+            connection,
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            started_at=started_at,
+            missing_since=missing_since,
+        )
+        if shape == "console_origin":
+            connection.execute(
+                LiveSessionCatalog.__table__.update()
+                .where(LiveSessionCatalog.__table__.c.session_id == session_id)
+                .values(origin_kind="console")
+            )
+        if shape == "fresh_runtime_signal":
+            connection.execute(
+                LiveRuntimeState.__table__.insert().values(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    provider="claude",
+                    device_id="cinder",
+                    phase="thinking",
+                    phase_source="hook",
+                    last_runtime_signal_at=now,
+                    timeline_anchor_at=started_at,
+                    updated_at=now,
+                )
+            )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": _heartbeat(device_id="cinder", received_at=now, digest=f"absent-{shape}"),
+                "managed_leases": [],
+                "managed_leases_present": True,
+                "owner_id": 7,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        run = connection.execute(LiveSessionRun.__table__.select()).mappings().one()
+        control = connection.execute(LiveSessionConnection.__table__.select()).mappings().one()
+    engine.dispose()
+
+    if not expected_retired:
+        assert run["ended_at"] is None
+        assert run["exit_status"] is None
+        return
+    assert run["ended_at"].replace(tzinfo=UTC) == now
+    # Never `process_gone`: no process exit was observed.
+    assert run["exit_status"] == "unobserved_retired"
+    assert control["state"] == "ended"
+    assert {control[key] for key in ("can_send_input", "can_interrupt", "can_terminate", "can_tail_output", "can_resume")} == {0}
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_backfill_is_bounded_per_beat(daemon_paths, monkeypatch):
+    """Convergence must not hand one heartbeat an unbounded backlog."""
+
+    from zerg.services import live_session_state
+
+    monkeypatch.setattr(live_session_state, "ABSENT_RUN_RETIRE_BATCH", 1)
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    orphans = []
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        for offset in range(2):
+            session_id = str(uuid4())
+            thread_id = str(uuid4())
+            run_id = str(uuid4())
+            orphans.append(run_id)
+            _seed_long_absent_run(
+                connection,
+                session_id=session_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                started_at=now - timedelta(days=4 - offset),
+                missing_since=now - timedelta(hours=25),
+            )
+    engine.dispose()
+
+    def ended() -> set[str]:
+        engine = create_catalog_engine(database_path)
+        with engine.connect() as connection:
+            rows = connection.execute(LiveSessionRun.__table__.select()).mappings().all()
+        engine.dispose()
+        return {row["id"] for row in rows if row["ended_at"] is not None}
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": _heartbeat(device_id="cinder", received_at=now, digest="backfill-0"),
+                "managed_leases": [],
+                "managed_leases_present": True,
+                "owner_id": 7,
+            },
+        )
+        assert ended() == {orphans[0]}, "one beat retires at most its batch, oldest first"
+        await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": _heartbeat(device_id="cinder", received_at=now + timedelta(seconds=1), digest="backfill-1"),
+                "managed_leases": [],
+                "managed_leases_present": True,
+                "owner_id": 7,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert ended() == {orphans[0], orphans[1]}
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_does_not_retire_absent_run_from_a_partial_snapshot(daemon_paths):
+    """Only a certified complete enumeration may end an absent run."""
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    run_id = str(uuid4())
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        _seed_long_absent_run(
+            connection,
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            started_at=now - timedelta(days=2),
+            missing_since=now - timedelta(hours=25),
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": _heartbeat(device_id="cinder", received_at=now, digest="absent-partial"),
+                "managed_leases": [],
+                "managed_leases_present": False,
+                "owner_id": 7,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        run = connection.execute(LiveSessionRun.__table__.select()).mappings().one()
+    engine.dispose()
+    assert run["ended_at"] is None
 
 
 @pytest.mark.asyncio
