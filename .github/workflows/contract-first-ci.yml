@@ -438,11 +438,8 @@ jobs:
           sudo systemctl start docker
           docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
-      - name: Run Frontend Tests
-        run: make test-frontend
-
-      - name: Run Runner Unit Tests
-        run: make test-runner
+      - name: Run Frontend and Runner Tests in one isolated container
+        run: make test-frontend-runner
 
   ios-tests:
     needs: changes
