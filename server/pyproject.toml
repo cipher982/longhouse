@@ -42,10 +42,15 @@ dependencies = [
 # Dev/test tools — not shipped in production images
 dev = [
     "ruff",
-    "pytest",
+    # pytest 9 forces pytest-asyncio 1.x, whose per-test asyncio.Runner joins
+    # the default executor on teardown; tests that leave an executor thread
+    # parked then hang an xdist worker until the CI job times out. Held until
+    # those leaks are hunted down (pytest 9.0.3's fix is a /tmp/pytest-of-user
+    # issue that does not apply inside the single-user test container).
+    "pytest<9",
     "pytest-xdist>=3.6.1",
     "pytest-timeout>=2.3.1",
-    "pytest-asyncio>=0.25.3",
+    "pytest-asyncio>=0.25.3,<1",
     "vulture>=2.11",
     # tests/integration/test_shipper_e2e.py drives the live API with it.
     "requests>=2.33.0",
