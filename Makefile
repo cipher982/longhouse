@@ -492,9 +492,8 @@ test-cursor-helm-gate0-unit: ## Cursor Helm Gate 0 harness unit tests
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test
 
-test-e2e: ## Launch-surface E2E (core + a11y)
+test-e2e: ## Launch-surface E2E (core + a11y, one backend boot)
 	$(MAKE) test-e2e-core
-	$(MAKE) test-e2e-a11y
 
 qa-landing-live: ## Headless QA of the landing live demo (URL=... RUN=1 to execute an instruction)
 	cd e2e && node scripts/qa-landing-live-demo.mjs $(or $(URL),http://localhost:5173/landing) $(if $(RUN),--run,) $(if $(SHOTS),--shots $(SHOTS),) $(if $(SEED),--seed=$(SEED),) $(ARGS)
@@ -502,11 +501,14 @@ qa-landing-live: ## Headless QA of the landing live demo (URL=... RUN=1 to execu
 hero-frames: ## Render the landing hero demo frame by frame (STEP=1 VIEWPORT=desktop|mobile) to artifacts/hero-frames/
 	bun scripts/qa/hero-frames.ts $(if $(STEP),--step=$(STEP),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),)
 
-test-e2e-core: ## @internal Core E2E — no retries
+test-e2e-core: ## @internal Core E2E plus accessibility — no retries
+	@# The axe pages are read-only and cost seconds once the backend and
+	@# frontend are up; a separate lane paid a whole container and boot for them.
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
-		bunx playwright test --project=core --retries=0 --workers=1
+		bunx playwright test --project=core --project=chromium --retries=0 --workers=1 \
+		tests/core/ tests/accessibility.spec.ts
 
 test-e2e-a11y: ## @internal Accessibility checks
 	@$(MAKE) ensure-playwright-browser

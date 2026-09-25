@@ -546,42 +546,6 @@ jobs:
           path: artifacts/test-isolation
           retention-days: 1
 
-  e2e-a11y:
-    timeout-minutes: 30
-    needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-latest
-    name: "Accessibility E2E tests"
-    env:
-      CI: "1"
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
-      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 1
-
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
-
-      - name: Run Accessibility E2E Tests in the portable isolation boundary
-        run: make test-e2e-a11y
-
-      - name: Upload isolated E2E artifacts (on failure)
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: accessibility-e2e-artifacts
-          path: artifacts/test-isolation
-          retention-days: 1
-
   model-smoke:
     timeout-minutes: 20
     needs: changes
