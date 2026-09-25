@@ -665,9 +665,7 @@ def test_named_registry_larger_than_scalar_fact_budget_reaches_detail(live_catal
     assert state["delegation"]["state"] == "pending"
     assert state["delegation"]["count"] == 20
     assert state["delegation"]["kinds"] == {"subagent": 20}
-    assert {item["id"]: item["description"] for item in state["delegation"]["items"]} == {
-        item["id"]: item["description"] for item in items
-    }
+    assert {item["id"]: item["description"] for item in state["delegation"]["items"]} == {item["id"]: item["description"] for item in items}
 
 
 def test_over_budget_registry_preserves_prior_evidence_and_parent_activity(live_catalog, live_catalog_client):
