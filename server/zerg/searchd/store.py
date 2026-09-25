@@ -113,56 +113,6 @@ _ARCHIVE_SEARCH_WITHOUT_SNIPPETS_SQL = _ARCHIVE_SEARCH_SQL.replace(
 # recent candidate walk just like the published recent index. The response
 # reports when the walk saturated; callers never mistake a bounded ranking for
 # an exhaustive one.
-_ARCHIVE_BOUNDED_SEARCH_SQL = """
-    WITH candidates AS (
-        SELECT e.id AS search_event_id, bm25(events_fts) AS rank
-        FROM events_fts
-        JOIN events e ON e.id = events_fts.rowid
-        JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-        JOIN projection_membership m
-          ON m.session_id = e.session_id
-         AND m.generation_id = e.generation_id
-         AND m.desired_revision = s.indexed_through
-         AND m.object_id = e.source_object_id
-        WHERE events_fts MATCH ? AND s.owner_id = ?
-          AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0
-               OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
-          AND COALESCE(s.user_hidden_from_timeline, 0) = 0
-          AND COALESCE(s.user_state, 'active') NOT IN ('archived', 'snoozed', 'deleted')
-          AND COALESCE(s.tombstoned, 0) = 0
-          AND (? IS NULL OR s.project = ?)
-          AND (? IS NULL OR s.provider = ?)
-          AND (? IS NULL OR s.environment = ?)
-          AND (? IS NULL OR e.order_time_us >= ?)
-          AND (? IS NULL OR e.order_time_us < ?)
-          AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-          AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-          AND (e.role != 'user' OR (e.title_eligible = 1
-               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
-        ORDER BY events_fts.rowid DESC
-        LIMIT ?
-    ), top AS (
-        SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count
-        FROM candidates
-        ORDER BY rank ASC
-        LIMIT ?
-    )
-    SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
-           e.record_ordinal, e.event_id, e.order_time_us,
-           e.role, e.tool_name,
-            NULL AS content_snippet, NULL AS tool_output_snippet,
-           s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
-           s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
-           s.origin_kind, s.indexed_through, s.event_count,
-           t.rank AS rank, t.candidate_count AS candidate_count
-    FROM top t
-    JOIN events e ON e.id = t.search_event_id
-    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-    JOIN events_fts ON events_fts.rowid = t.search_event_id
-    WHERE events_fts MATCH ?
-    ORDER BY t.rank ASC
-"""
-
 _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
     WITH candidates AS (
         SELECT e.id AS search_event_id, bm25(events_fts) AS rank
@@ -210,6 +160,12 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
     ORDER BY t.rank ASC
 """
+# Snippets are hydrated from render objects after the query, so both variants
+# are one statement. The with-snippets one used to join events_fts back on
+# rowid WHERE events_fts MATCH ?, a leftover from snippet() in SQL: it ran the
+# full-text match a second time per search, the largest part of T5's recall
+# latency on the owner corpus.
+_ARCHIVE_BOUNDED_SEARCH_SQL = _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
 
 # Ranking the whole match set costs time linear in matches, not in results: a
 # term matching 2.2M rows spent 3.4s scoring rows nobody would ever see. FTS5
@@ -1844,7 +1800,7 @@ class SearchStore:
             params = filter_params + (candidate_ceiling, limit)
         else:
             sql = _ARCHIVE_BOUNDED_SEARCH_SQL if include_snippets else _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
-            params = filter_params + (candidate_ceiling, limit) + ((fts_query,) if include_snippets else ())
+            params = filter_params + (candidate_ceiling, limit)
         rows = self.connection.execute(sql, params).fetchall()
 
         # The bounded walk saturates only when more matches existed than it was
