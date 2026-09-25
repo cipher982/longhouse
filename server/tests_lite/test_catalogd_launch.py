@@ -403,10 +403,11 @@ async def test_catalogd_resume_retires_run_whose_owner_vanished(daemon_paths):
     """A provider exit nobody reported must not block resume forever.
 
     A wrapper killed before it could ship its terminal fact leaves `ended_at`
-    NULL with no live control attachment, no fresh runtime signal and no
-    unexpired launch attempt. Closing a Claude Helm terminal produces exactly
-    that: the session is archived as ended while its run row still reads as
-    current, and resume answered it with an opaque 409.
+    NULL with an attachment the machine stopped touching. Closing a Claude Helm
+    terminal produces exactly that: the session is archived as ended while its
+    run row still reads as current, and resume answered it with an opaque 409.
+    Ownership is recent attachment evidence, so this only applies once the
+    machine has been silent past the control lease.
     """
 
     database_path, socket_path = daemon_paths
@@ -422,6 +423,25 @@ async def test_catalogd_resume_retires_run_whose_owner_vanished(daemon_paths):
             managed_transport="claude_channel",
             attach_command=f"longhouse claude --resume {session_id}",
         )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    # The machine has not mentioned this attachment since it stopped reporting.
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        connection = db.query(LiveSessionConnection).filter_by(run_id=created["run_id"]).one()
+        connection.state = "detached"
+        connection.released_at = None
+        connection.last_health_at = datetime.now(UTC) - timedelta(hours=3)
+        db.commit()
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
+    try:
         resume = _resume_payload(session_id=session_id, provider_thread_id=provider_thread_id)
         resumed = await client.call("session.launch.local.resume.v2", {"resume": resume})
         assert resumed["created"] is True

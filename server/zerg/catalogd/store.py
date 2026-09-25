@@ -1486,11 +1486,17 @@ def _open_run_holds_live_ownership(orm: Session, *, run: LiveSessionRun, observe
     run row that nothing ever reconciles, and the run is then indistinguishable
     from a live one to any reader that only looks at the column. The product's
     own horizon is the control lease (`_CONTROL_LEASE_TTL`, the same one
-    `get_live_control_grant` fails closed on): an attachment whose health is
-    older than that is no longer current control, and a run that has published
-    no runtime signal inside it is an orphan, not a second execution owner.
-    Registration in flight is the remaining case that must still win: a pending,
-    unexpired launch attempt is a resume that has not reported yet.
+    `get_live_control_grant` fails closed on): a run whose attachment the machine
+    has not stamped inside that window -- and which has published no runtime
+    signal, asserted or otherwise, inside it -- is an orphan, not a second
+    execution owner. Registration in flight is the remaining case that must still
+    win: a pending, unexpired launch attempt is a resume that has not reported
+    yet.
+
+    The attachment's *state* does not decide this. A `detached` connection with a
+    current stamp is a wrapper still reporting on this thread (the channel is
+    only whether Longhouse holds the leash), while `attached` with a stale stamp
+    is a process that stopped talking. Freshness is the signal; state is not.
     """
 
     lease_floor = observed_at - _CONTROL_LEASE_TTL
@@ -1499,7 +1505,7 @@ def _open_run_holds_live_ownership(orm: Session, *, run: LiveSessionRun, observe
         .filter(
             LiveSessionConnection.run_id == str(run.id),
             LiveSessionConnection.released_at.is_(None),
-            LiveSessionConnection.state.in_(("attached", "degraded")),
+            LiveSessionConnection.state.in_(("attached", "detached", "degraded")),
             LiveSessionConnection.last_health_at.is_not(None),
             LiveSessionConnection.last_health_at > lease_floor,
         )
