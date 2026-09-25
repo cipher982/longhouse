@@ -677,7 +677,7 @@ private struct PreviewConnectionDrop: View {
                 activity: "executing",
                 tool: "Bash",
                 observedAt: isoDate(secondsAgo: 1),
-                validUntil: isoDate(secondsAgo: -30),
+                validUntil: isoDate(secondsAgo: -60),
                 primaryKey: "executing",
                 primaryLabel: "Using Bash",
                 primaryTone: "running"

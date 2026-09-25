@@ -21,7 +21,7 @@ shown to you. Use it.
 | iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | ~2 min | A fixture-driven frame the UI test attaches, exported to PNG |
 | iOS ingest/recovery without a phone | `make simlab-run` | six real-client journeys | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
 | Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
-| Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed side by side |
+| Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed, unknown side by side |
 
 Look at more than one when the change spans surfaces. The simulator shot
 proves the data path; the fixture shot proves the layout at a known state.

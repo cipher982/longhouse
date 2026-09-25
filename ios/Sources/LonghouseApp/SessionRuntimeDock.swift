@@ -536,14 +536,22 @@ struct SessionRuntimeDock: View {
     private var isExecuting: Bool { isOpen && detail.isSessionExecuting }
     private func ledger(asOf now: Date) -> SessionLedgerEvidence {
         guard isOpen else { return .quiet }
-        // A screen that has never seen a connected stream starts quiet, for the
-        // same window the transport subline already uses. The viewer socket is
-        // not provider evidence (`SessionRealtimeConnection`), so `connecting`
-        // is the ordinary first frame of every open and of every return from
-        // the background; scoring it as an exception opened each session with a
-        // red card and a claim ("no fresh provider evidence") that the served
-        // facts contradicted.
-        if !hasObservedConnection, !startupGraceExpired { return .quiet }
+        // A screen that has never seen a connected stream ignores the transport
+        // for the same 2s window the connection subline already uses. The viewer
+        // socket is not provider evidence (`SessionRealtimeConnection`), so
+        // `connecting` is the ordinary first frame of every open and of every
+        // return from the background; scoring it as an exception opened each
+        // session with a red card and a claim ("no fresh provider evidence")
+        // that the served facts contradicted.
+        //
+        // Only the transport is suppressed. An expired window still degrades on
+        // its own evidence: the grace must not re-assert work the reader's clock
+        // has already retired.
+        if !hasObservedConnection,
+           !startupGraceExpired,
+           detail.stateFacts.activityEvidenceIsLive(asOf: now) {
+            return .quiet
+        }
         return detail.ledgerEvidence(connection: realtimeConnection, asOf: now)
     }
 
@@ -703,7 +711,11 @@ struct SessionRuntimeDock: View {
             if let reason = exceptionReason(state) {
                 Text(reason)
                     .font(.caption)
-                    .foregroundStyle(TranscriptPalette.attention)
+                    // The sentence wears the state's tone: ember only when the
+                    // user owns the state, secondary for a missing observation.
+                    .foregroundStyle(
+                        state == .attention ? TranscriptPalette.attention : Ember.textSecondary
+                    )
                     .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
                     .transaction { $0.animation = nil }
             }
