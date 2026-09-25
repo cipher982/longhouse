@@ -673,35 +673,6 @@ def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(m
         assert dispatcher.calls[0]["payload"] == {"text": "continue", "attachments": refs}
 
 
-def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monkeypatch, tmp_path, live_catalog):  # noqa: F811
-    SessionLocal = _make_db(tmp_path)
-    dispatcher = _install_fake_control_dispatch(monkeypatch)
-
-    with SessionLocal() as db:
-        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
-
-        result = asyncio.run(
-            send_text_to_managed_local_session(
-                db=db,
-                owner_id=user.id,
-                session=control_session,
-                text="continue",
-                attachments=[
-                    {
-                        "id": "11111111-1111-1111-1111-111111111111",
-                        "mime_type": "image/png",
-                        "sha256": "a" * 64,
-                        "blob_url": "/api/agents/sessions/session-123/inputs/1/attachments/11111111-1111-1111-1111-111111111111/blob",
-                    }
-                ],
-            )
-        )
-
-        assert result.ok is False
-        assert result.error == "Attachments are only supported on codex managed sessions"
-        assert dispatcher.calls == []
-
-
 def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)

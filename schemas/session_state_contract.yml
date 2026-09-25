@@ -50,7 +50,7 @@ presentation:
     - executing
     - delegated_work
     - stalled
-    - blocked
+    - provider_auth_required
     - idle
     - ended
     - ready
