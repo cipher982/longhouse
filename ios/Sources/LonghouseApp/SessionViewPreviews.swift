@@ -627,7 +627,10 @@ private struct PreviewConnectionDrop: View {
                 activity: "executing",
                 tool: "Bash",
                 observedAt: isoDate(secondsAgo: 45),
-                validUntil: isoDate(secondsAgo: -45),
+                // `isoDate(secondsAgo:)` counts *back* from now, so a positive
+                // value is the past. This window expired 45s ago, which is what
+                // makes the card uncertain rather than a live claim.
+                validUntil: isoDate(secondsAgo: 45),
                 primaryKey: "executing",
                 primaryLabel: "Using Bash",
                 primaryTone: "running",
@@ -640,6 +643,34 @@ private struct PreviewConnectionDrop: View {
         ),
         activity: seededActivity([(2.0, .toolResult)]),
         transcript: ["The session was working when this viewer lost updates."]
+    )
+    .preferredColorScheme(.dark)
+    .emberChrome()
+}
+
+#Preview("Work claim survives a dropped viewer · Dark") {
+
+    PreviewConnectionDrop(
+        detail: .mock(
+            provider: "claude",
+            executing: true,
+            placeholder: "Queue for next turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 5),
+                // Still valid (-120 = 120s in the future). The viewer's socket
+                // says only that updates are not arriving, so the claim stands
+                // and the drop shows up on the connection line instead.
+                validUntil: isoDate(secondsAgo: -120),
+                primaryKey: "executing",
+                primaryLabel: "Using Bash",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: seededActivity([(2.0, .toolResult)]),
+        transcript: ["The viewer dropped while the restore was still running."]
     )
     .preferredColorScheme(.dark)
     .emberChrome()
