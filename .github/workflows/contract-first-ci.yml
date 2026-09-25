@@ -69,6 +69,13 @@ jobs:
       e2e: ${{ steps.filter.outputs.e2e }}
       models: ${{ steps.filter.outputs.models }}
       scripts: ${{ steps.filter.outputs.scripts }}
+      image_tag: ${{ steps.image.outputs.tag }}
+      image_manifest: ${{ steps.image.outputs.manifest_sha }}
+      image_exists: ${{ steps.image.outputs.exists }}
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -80,6 +87,33 @@ jobs:
           # A branch push qualifies that push, not every commit since main.
           # PRs still use GitHub's changed-file API against their base branch.
           base: ${{ github.ref_name }}
+      - name: Authenticate to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Is the fixture image for these manifests published for both arches?
+        # Here rather than in its own job: this answer gates the two native
+        # image builds, and every extra job in the chain costs a runner start.
+        id: image
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-test
+        run: |
+          set -euo pipefail
+          key="$(python3 scripts/qa/test-isolation.py --print-image-key)"
+          tag="$(jq -r '.tag' <<< "$key")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "manifest_sha=$(jq -r '.manifest_sha256' <<< "$key")" >> "$GITHUB_OUTPUT"
+          platforms="$(docker buildx imagetools inspect --raw "$IMAGE_NAME:$tag" 2>/dev/null \
+            | jq -r '[.manifests[]?.platform | select(.os == "linux") | .architecture] | sort | join(",")' || true)"
+          if [[ "$platforms" == "amd64,arm64" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Fixture image $IMAGE_NAME:$tag already published for amd64 and arm64"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Fixture image $IMAGE_NAME:$tag missing (platforms: ${platforms:-none}); building natively per arch"
+          fi
 
   fork-qualification:
     name: "Fork PR requires trusted replay"
@@ -90,24 +124,31 @@ jobs:
           echo "::error::Portable CI has a writable self-hosted runner cache. Fork code cannot execute there; replay the patch on a trusted branch before merge."
           exit 1
 
-  prepare-test-image:
-    name: "Prepare immutable fixture image"
+  test-image-build:
+    # Only when the manifests changed. Each arch builds on its own native
+    # runner (no QEMU: the image compiles Rust dependencies), pushes an
+    # arch-suffixed tag, and prepare-test-image joins them into one tag.
+    # CI tests run on arm64; cube's amd64 lanes (hosted-live-qa) pull amd64.
+    name: "Build fixture image (${{ matrix.arch }})"
     needs: changes
-    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-24.04-arm
+    if: ${{ needs.changes.outputs.image_exists != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write
-    outputs:
-      image_ref: ${{ steps.resolve.outputs.image_ref }}
-      cache_hit: ${{ steps.resolve.outputs.cache_hit }}
-      preparation_seconds: ${{ steps.resolve.outputs.preparation_seconds }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
       - uses: ./.github/actions/hosted-docker-disk
       - name: Authenticate to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -115,83 +156,67 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Identify dependency manifests and existing image
-        id: key
-        env:
-          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-test-arm64-lab
+      - name: Stage the dependency manifests as the build context
+        id: context
         run: |
           set -euo pipefail
-          key="$(python3 scripts/qa/test-isolation.py --print-image-key)"
-          tag="$(jq -r '.tag' <<< "$key")"
-          manifest_sha="$(jq -r '.manifest_sha256' <<< "$key")"
           context="$RUNNER_TEMP/longhouse-test-image-context"
           while IFS= read -r path; do
             mkdir -p "$context/$(dirname "$path")"
             cp -- "$path" "$context/$path"
-          done < <(jq -r '.manifests[]' <<< "$key")
-          image="${IMAGE_NAME}:${tag}"
-          {
-            echo "context=$context"
-            echo "image=$image"
-            echo "manifest_sha=$manifest_sha"
-            echo "started_at=$(date +%s)"
-          } >> "$GITHUB_OUTPUT"
-          if digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"; then
-            {
-              echo "exists=true"
-              echo "existing_digest=$digest"
-            } >> "$GITHUB_OUTPUT"
-            echo "Fixture dependency image already published: $image@$digest"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Fixture dependency image absent; building once for this manifest hash"
-          fi
-      - name: Set up Docker Buildx for a missing image
-        if: ${{ steps.key.outputs.exists != 'true' }}
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: Build and publish fixture dependency image
-        if: ${{ steps.key.outputs.exists != 'true' }}
+          done < <(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.manifests[]')
+          echo "context=$context" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build and push the ${{ matrix.arch }} image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: ${{ steps.key.outputs.context }}
-          file: ${{ steps.key.outputs.context }}/docker/test.dockerfile
-          platforms: linux/arm64
-          tags: ${{ steps.key.outputs.image }}
-          # zstd, not gzip: every consumer job unpacks ~8.6 GB, and gzip
-          # decompression was most of each job's ~95 s image preparation.
-          outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-          build-args: TEST_MANIFEST_SHA=${{ steps.key.outputs.manifest_sha }}
+          context: ${{ steps.context.outputs.context }}
+          file: ${{ steps.context.outputs.context }}/docker/test.dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: TEST_MANIFEST_SHA=${{ needs.changes.outputs.image_manifest }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha,scope=longhouse-test-deps-arm64
-          cache-to: type=gha,mode=max,scope=longhouse-test-deps-arm64
-      - name: Resolve exact image digest and preparation timing
+          # zstd, not gzip: every consumer job unpacks ~9 GB.
+          tags: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ needs.changes.outputs.image_tag }}-${{ matrix.arch }}
+          outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          cache-from: type=gha,scope=longhouse-test-deps-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=longhouse-test-deps-${{ matrix.arch }}
+
+  prepare-test-image:
+    name: "Prepare immutable fixture image"
+    needs: [changes, test-image-build]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.test-image-build.result != 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.resolve.outputs.image_ref }}
+      cache_hit: ${{ needs.changes.outputs.image_exists }}
+    steps:
+      - name: Authenticate to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish the multi-arch tag (when built) and resolve its digest
         id: resolve
         env:
-          IMAGE: ${{ steps.key.outputs.image }}
-          EXISTED: ${{ steps.key.outputs.exists }}
-          EXISTING_DIGEST: ${{ steps.key.outputs.existing_digest }}
-          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
-          STARTED_AT: ${{ steps.key.outputs.started_at }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ needs.changes.outputs.image_tag }}
+          BUILT: ${{ needs.test-image-build.result == 'success' }}
         run: |
           set -euo pipefail
-          digest="$BUILD_DIGEST"
-          if [[ "$EXISTED" == "true" ]]; then
-            digest="$EXISTING_DIGEST"
+          repo="${IMAGE%:*}"
+          if [[ "$BUILT" == "true" ]]; then
+            docker buildx imagetools create -t "$IMAGE" "$IMAGE-amd64" "$IMAGE-arm64"
           fi
-          # Both paths pin a manifest digest returned by their own registry
-          # operation. A concurrent tag update cannot change this run's input.
-          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
-            echo "Fixture image publisher returned no immutable digest" >&2
-            exit 1
-          }
-          elapsed=$(($(date +%s) - STARTED_AT))
-          {
-            echo "image_ref=${IMAGE%:*}@${digest}"
-            echo "cache_hit=$EXISTED"
-            echo "preparation_seconds=$elapsed"
-          } >> "$GITHUB_OUTPUT"
-          echo "Fixture image ${IMAGE%:*}@${digest}, existing=$EXISTED preparation=${elapsed}s"
+          # Pin the index digest: a concurrent tag update cannot change this
+          # run's input, and each runner pulls its own arch from the index.
+          digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"
+          echo "image_ref=$repo@$digest" >> "$GITHUB_OUTPUT"
+          echo "Fixture image $repo@$digest (built this run: $BUILT)"
 
   validate:
     # No path gate for `make validate` itself: it is cross-cutting by

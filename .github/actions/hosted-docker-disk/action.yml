@@ -1,17 +1,24 @@
 name: Hosted runner Docker disk
 description: >-
-  Move Docker's data root to the hosted runner's large /mnt disk. The fixture
-  image unpacks to ~9 GB and the root disk has ~20 GB free, so every job that
-  pulls it runs this first.
+  Put Docker's image store on the hosted runner's large /mnt disk and switch
+  it to the containerd image store. The fixture image unpacks to ~9 GB and the
+  root disk has ~20 GB free. Measured 2026-09-25: the containerd store pulls
+  the fixture image in 38-49 s against 75-97 s for the classic overlay2 store
+  (download alone is 9-20 s); only the first container start is slower, by
+  2-5 s.
 runs:
   using: composite
   steps:
-    - name: Put Docker storage on /mnt
+    - name: Containerd image store on /mnt
       shell: bash
       run: |
         set -euo pipefail
-        sudo systemctl stop docker docker.socket
-        echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
-        sudo mkdir -p /mnt/docker
-        sudo systemctl start docker
-        docker info --format 'docker root={{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+        sudo systemctl stop docker docker.socket containerd
+        sudo mkdir -p /mnt/docker /mnt/containerd
+        # The containerd store lives under containerd's root, not Docker's
+        # data-root, so move that root onto /mnt as well.
+        sudo mount --bind /mnt/containerd /var/lib/containerd
+        echo '{"data-root":"/mnt/docker","features":{"containerd-snapshotter":true}}' \
+          | sudo tee /etc/docker/daemon.json >/dev/null
+        sudo systemctl start containerd docker
+        docker info --format 'docker root={{.DockerRootDir}} driver={{.Driver}} cpus={{.NCPU}} mem={{.MemTotal}}'
