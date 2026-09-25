@@ -7,7 +7,7 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 ## Surfaces
 
-- **Public demo runtime** — `https://longhouse.ai` — direct Docker Compose app `longhouse-demo` on zerg
+- **Public demo runtime** — `https://longhouse.ai` — operator-managed Docker Compose app
 - **Control plane** — `https://control.longhouse.ai` — private repo/service; public deploys only health-check it
 - **Hosted tenant runtime** — `https://<subdomain>.longhouse.ai` — reprovisioned runtime container managed by the control plane
 
@@ -147,25 +147,22 @@ the exception because it is not a control-plane tenant.
 
 ### Public demo promotion
 
-After the exact-SHA workflow succeeds and `release-canary-a` serves that SHA,
-read the demo job's qualified immutable image digest. On `ssh zerg`, the
-Compose project is `/home/zerg/manual-apps/longhouse-demo`; its one-line
-`.env` holds `LONGHOUSE_DEMO_IMAGE`, and `/data` is bind-mounted at
-`/var/app-data/longhouse-demo-data`. Verify the current pin and mounts, persist
-only the new digest in that image pointer, then recreate **only** `longhouse-demo`:
+After the exact-SHA workflow succeeds and the hosted canary serves that SHA,
+read the demo job's qualified immutable image digest. The public demo is an
+operator-managed Compose stack, **not** a control-plane tenant: update its
+durable image pin and recreate only the demo service, preserving its data.
+Instance-specific hosts, credentials, and stack paths belong in private
+operator instructions, not this public skill. Verify the live surface:
 
 ```bash
-ssh zerg 'docker compose --project-directory /home/zerg/manual-apps/longhouse-demo -f /home/zerg/manual-apps/longhouse-demo/docker-compose.yml up -d --no-deps --force-recreate --wait --wait-timeout 180 longhouse-demo'
 make deploy-status
 curl -fsS https://longhouse.ai/api/readyz
 make ship-watch SHA="<full-sha>" ARGS="--json"
 ```
 
-Until the existing stack has a tracked `manual-app` manifest, do not run
-`manual-app deploy longhouse-demo`; none is declared currently. Never register
-the demo as a hosted tenant. A release is only
-`deployed` when the exact-SHA watch reports success and both demo and canary
-serve it. Keep the personal `david010` instance untouched.
+Only a successful exact-SHA watch with healthy demo and canary counts as
+`deployed`. Never register the demo as a hosted tenant or use its Compose
+mechanism to bypass hosted-tenant deployment receipts.
 
 ### Hosted Control Plane
 
