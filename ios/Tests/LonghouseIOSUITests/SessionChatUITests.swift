@@ -218,6 +218,37 @@ final class SessionChatUITests: XCTestCase {
         shot.lifetime = .keepAlways
         add(shot)
     }
+    func testBackgroundTaskSummaryLeavesParentHeadlinePrimary() {
+        let app = launchChatFixture(name: "background-tasks", eventCount: 0)
+        XCTAssertTrue(app.staticTexts["Idle"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+    }
+
+    func testBackgroundTaskExpiredPositiveEvidenceRemainsUnknown() {
+        let app = launchChatFixture(name: "background-tasks-expired-positive", eventCount: 0)
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.label.contains("unknown"))
+        summary.tap()
+        XCTAssertTrue(app.staticTexts["Background work status unknown"].waitForExistence(timeout: 5))
+    }
+
+    func testBackgroundTaskLocalExpiryOfExplicitEmptyHidesSummary() {
+        let app = launchChatFixture(name: "background-tasks-local-expired-empty", eventCount: 0)
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+    }
+
+    func testBackgroundTaskServerExpiredEmptyHidesSummary() {
+        let app = launchChatFixture(name: "background-tasks-expired-empty", eventCount: 0)
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+    }
+
+    func testUnobservedUnknownBackgroundWorkIsAbsent() {
+        let app = launchChatFixture(name: "background-tasks-unobserved-unknown", eventCount: 0)
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+    }
+
 
     func testBackgroundTaskEmptySnapshotRemovesSummaryLine() {
         let app = launchChatFixture(name: "background-tasks-transition", eventCount: 0)

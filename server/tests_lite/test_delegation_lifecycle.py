@@ -596,17 +596,47 @@ def test_hook_presence_serves_named_registry_without_overwriting_parent_activity
     assert state["delegation"]["kinds"] == {"subagent": 1}
     assert state["delegation"]["items"][0]["description"] == "Check the result"
     assert datetime.fromisoformat(state["delegation"]["observed_at"].replace("Z", "+00:00")) == observed
+    # A Stop retained beside newer activity arrives last. Its clearing
+    # registry must apply without rolling the parent's Read back to idle.
     response = live_catalog_client.post(
         "/agents/presence",
         headers=headers,
         json={
             **base,
             "state": "idle",
-            "occurred_at": (observed + timedelta(seconds=2)).isoformat(),
-            "delegation": {"items": [], "observed_at": (observed + timedelta(seconds=2)).isoformat()},
+            "occurred_at": (observed + timedelta(milliseconds=500)).isoformat(),
+            "delegation": {"items": [], "observed_at": (observed + timedelta(milliseconds=500)).isoformat()},
         },
     )
     assert response.status_code == 204, response.text
     cleared = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
     assert cleared["delegation"]["state"] == "none"
     assert cleared["delegation"]["items"] == []
+    assert cleared["activity"]["state"] == "executing"
+    assert cleared["activity"]["tool"] == "Read"
+
+
+def test_expired_empty_registry_remains_unknown_without_background_attention(live_catalog, live_catalog_client):
+    email = "delegation-expired-empty@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC) - timedelta(minutes=2)
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=observed,
+            snapshot_observed_at=observed,
+            dedupe_key="empty-old",
+            items=[],
+            freshness_ms=1_000,
+        ),
+    )
+    state = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert state["delegation"]["state"] == "unknown"
+    assert state["delegation"]["items"] == []
+    assert datetime.fromisoformat(state["delegation"]["observed_at"].replace("Z", "+00:00")) == observed

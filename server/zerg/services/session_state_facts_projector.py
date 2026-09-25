@@ -807,6 +807,9 @@ def _project_delegation(
     if valid_until <= now:
         return SessionDelegationFacts(
             state="unknown",
+            # Retain the last explicit empty registry for presentation only;
+            # unknown still forbids treating it as a current no-work claim.
+            items=[] if value.get("items") == [] else None,
             source=source,
             observed_at=observed_at,
             valid_until=valid_until,

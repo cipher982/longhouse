@@ -967,10 +967,13 @@ def _delegation_label(delegation: SessionDelegationFacts) -> str:
     parts = []
     for kind in ("subagent", "shell", "monitor", "workflow", "teammate", "cloud_session", "mcp_task", "other"):
         count = delegation.kinds.get(kind, 0)
+        if kind == "other":
+            count = sum(amount for name, amount in delegation.kinds.items() if name not in _DELEGATION_NOUNS)
         if count:
             noun = "command" if kind == "shell" else _DELEGATION_NOUNS.get(kind, "task")
             parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
-    return "Background · " + (" · ".join(parts) if parts else f"{delegation.count} tasks")
+    fallback = f"{delegation.count} {'task' if delegation.count == 1 else 'tasks'}"
+    return "Background · " + (" · ".join(parts) if parts else fallback)
 
 
 def _primary(

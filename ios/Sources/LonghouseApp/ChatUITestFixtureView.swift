@@ -1219,8 +1219,18 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Background Tasks"
         case "background-tasks-transition":
             return "Background Tasks"
+        case "background-tasks-empty":
+            return "Background Tasks (empty)"
+        case "background-tasks-local-expired-empty":
+            return "Background Tasks (local expired empty)"
         case "background-tasks-stale":
             return "Background Tasks (stale)"
+        case "background-tasks-expired-positive":
+            return "Background Tasks (expired positive)"
+        case "background-tasks-expired-empty":
+            return "Background Tasks (expired empty)"
+        case "background-tasks-unobserved-unknown":
+            return "Background Tasks (unobserved unknown)"
         default:
             return "Chat UI Fixture"
         }
@@ -1324,10 +1334,16 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             )
         )
         if title.hasPrefix("Background Tasks") {
-            let stale = title.contains("(stale)")
-            let empty = title.contains("(empty)")
-            let observedAt = Self.fixedTimestamp(offset: -20)
-            let validUntil = stale ? "2000-01-01T00:00:00Z" : "2099-01-01T00:00:00Z"
+            let positiveExpired = title.contains("(stale)") || title.contains("(expired positive)")
+            let serverEmptyExpired = title.contains("(expired empty)")
+            let localEmptyExpired = title.contains("(local expired empty)")
+            let unobservedUnknown = title.contains("(unobserved unknown)")
+            let emptyExpired = serverEmptyExpired || localEmptyExpired
+            let empty = title.contains("(empty)") || emptyExpired
+            let observedAt = unobservedUnknown ? nil : Self.fixedTimestamp(offset: -20)
+            let validUntil = positiveExpired || emptyExpired
+                ? "2000-01-01T00:00:00Z"
+                : "2099-01-01T00:00:00Z"
             let tasks: [SessionDelegationTask] = empty
                 ? []
                 : [
@@ -1352,14 +1368,15 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                         sessionId: nil
                     ),
                 ]
+            let serverUnknown = unobservedUnknown || positiveExpired || serverEmptyExpired
             detail.stateFacts.delegation = SessionDelegationFacts(
-                state: stale ? "unknown" : (empty ? "none" : "pending"),
-                count: stale ? nil : tasks.count,
-                kinds: stale ? nil : (empty ? [:] : ["subagent": 1, "shell": 1]),
+                state: serverUnknown ? "unknown" : (empty ? "none" : "pending"),
+                count: serverUnknown || localEmptyExpired ? nil : tasks.count,
+                kinds: serverUnknown || localEmptyExpired ? nil : (empty ? [:] : ["subagent": 1, "shell": 1]),
                 source: "ui_fixture",
                 observedAt: observedAt,
                 validUntil: validUntil,
-                items: stale ? nil : tasks
+                items: positiveExpired || unobservedUnknown ? nil : tasks
             )
         }
         return detail

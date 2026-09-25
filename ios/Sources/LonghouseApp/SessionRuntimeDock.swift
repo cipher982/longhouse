@@ -336,6 +336,7 @@ struct SessionRuntimeDock: View {
     @State private var evidenceNow = Date()
     @State private var evidenceDisclosure = false
     @State private var delegationSheetPresented = false
+    @State private var pendingChildSessionId: String?
     @State private var startupGraceExpired = false
     @State private var hasObservedConnection = false
 
@@ -451,13 +452,20 @@ struct SessionRuntimeDock: View {
                 evidenceNow = Date()
             }
         }
-        .sheet(isPresented: $delegationSheetPresented) {
+        .sheet(
+            isPresented: $delegationSheetPresented,
+            onDismiss: {
+                guard let childSessionId = pendingChildSessionId else { return }
+                pendingChildSessionId = nil
+                onOpenSubagent?(childSessionId)
+            }
+        ) {
             SessionDelegationTaskSheet(
                 facts: detail.stateFacts.delegation,
                 asOf: evidenceNow,
                 onOpenSubagent: { childSessionId in
+                    pendingChildSessionId = childSessionId
                     delegationSheetPresented = false
-                    onOpenSubagent?(childSessionId)
                 }
             )
         }
@@ -492,7 +500,15 @@ struct SessionRuntimeDock: View {
 
     private var delegationPresentation: DelegationPresentation {
         guard let facts = detail.stateFacts.delegation else { return .absent }
-        guard facts.isValid(asOf: evidenceNow), facts.state.lowercased() != "unknown" else {
+        let state = facts.state.lowercased()
+        if facts.items?.isEmpty == true {
+            return .absent
+        }
+        if state == "unknown" {
+            let hasObservation = facts.observedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            guard hasObservation else { return .absent }
+        }
+        guard facts.isValid(asOf: evidenceNow), state != "unknown" else {
             return .unknown
         }
         return .known(facts)
@@ -1265,14 +1281,9 @@ struct SessionDelegationTaskSheet: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Ember.border, lineWidth: 0.75)
         }
-        .accessibilityIdentifier("session-runtime-background-task-\(task.id)")
         if let sessionId {
             Button {
-                dismiss()
-                Task { @MainActor in
-                    await Task.yield()
-                    onOpenSubagent(sessionId)
-                }
+                onOpenSubagent(sessionId)
             } label: {
                 row
             }

@@ -1375,7 +1375,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     /// Detail and tail endpoints share the session identity but may carry
     /// different optional enrichments. A newer response can update state
     /// without proving that an absent optional field means "delete" — retain
-    /// the already accepted enrichment in that case.
+    /// same-run enrichment only; unknown run identity never resurrects it.
     func preservingOptionalEnrichment(from previous: SessionDetail) -> SessionDetail {
         var copy = self
         copy.transcriptPreview = transcriptPreview ?? previous.transcriptPreview
