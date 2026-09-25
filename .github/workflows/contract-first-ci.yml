@@ -35,7 +35,11 @@ env:
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
-  # ci-speed-lab: size the isolated guest to the hosted runner (4 vCPU / 16 GB).
+  # Test jobs run on GitHub-hosted runners: free for this public repo, no queue,
+  # and a whole 4 vCPU / 16 GB VM per job, so the isolated guest gets all of it
+  # (test-isolation.py defaults to 2 CPU / 4 GiB for shared machines). Deploy,
+  # gate and image-publish work stays on cube. Profile of 2026-09-25: CI ~7 min
+  # here against a 27 min median on cube's contended pools.
   LONGHOUSE_TEST_CPUS: "4"
   LONGHOUSE_TEST_MEMORY: "13g"
 
@@ -99,14 +103,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
       - name: Authenticate to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -219,14 +216,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Validate contracts
         # The producer above passes an exact digest; this runs from the offline
@@ -332,14 +322,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run Python Backend Tests
         run: make test
@@ -385,14 +368,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run exact-SHA provider contract assertions
         env:
@@ -416,14 +392,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run engine and shipper suite in one isolated container
         if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -449,21 +418,14 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run Frontend and Runner Tests in one isolated container
         run: make test-frontend-runner
 
   ios-tests:
     needs: changes
-    if: ${{ false }}
+    if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: macos-latest
     timeout-minutes: 25
     name: "iOS tests"
@@ -473,14 +435,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
           persist-credentials: false
 
       - name: Install XcodeGen
@@ -515,14 +469,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Verify CLI wheel packaging
         run: make test-wheel-package
@@ -543,14 +490,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run Core E2E Tests in the portable isolation boundary
         run: make test-e2e-core
@@ -566,7 +506,7 @@ jobs:
   model-smoke:
     timeout-minutes: 20
     needs: changes
-    if: ${{ false }}
+    if: ${{ (needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     name: "Model smoke tests"
     env:
@@ -581,14 +521,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
 
       - name: Setup uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
@@ -612,14 +544,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Put Docker storage on the large /mnt disk
-        run: |
-          df -h / /mnt
-          sudo systemctl stop docker docker.socket
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
-          sudo mkdir -p /mnt/docker
-          sudo systemctl start docker
-          docker info --format '{{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}}'
+      - uses: ./.github/actions/hosted-docker-disk
 
       - name: Run OSS onboarding fixture in the portable isolation boundary
         run: |
