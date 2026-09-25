@@ -24,15 +24,33 @@ def _shard() -> tuple[int, int] | None:
     return index_n, count_n
 
 
+def _keeps(path: str, shard: tuple[int, int]) -> bool:
+    index, count = shard
+    return zlib.crc32(path.encode()) % count == index
+
+
+def pytest_ignore_collect(collection_path, config):
+    # Skip other shards' test modules before importing them: collection
+    # imports every module in every xdist worker, and a worker that imports
+    # all of them to keep a third spends most of its collection on the rest.
+    shard = _shard()
+    if shard is None or not (collection_path.name.startswith("test_") and collection_path.suffix == ".py"):
+        return None
+    try:
+        path = collection_path.relative_to(config.rootpath).as_posix()
+    except ValueError:
+        return None
+    return True if not _keeps(path, shard) else None
+
+
 def pytest_collection_modifyitems(config, items):
     shard = _shard()
     if shard is None:
         return
-    index, count = shard
     keep, drop = [], []
     for item in items:
         path = item.nodeid.split("::", 1)[0]
-        (keep if zlib.crc32(path.encode()) % count == index else drop).append(item)
+        (keep if _keeps(path, shard) else drop).append(item)
     if drop:
         config.hook.pytest_deselected(items=drop)
         items[:] = keep

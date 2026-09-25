@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -575,9 +576,15 @@ def _create_declared_indexes(engine: Engine, metadata: MetaData) -> None:
     indexes now rather than leaving production silently unindexed.
     """
 
-    for table in metadata.sorted_tables:
-        for index in table.indexes:
-            index.create(bind=engine, checkfirst=True)
+    # One sqlite_master read, not ``checkfirst`` per index: that reflects every
+    # index of the table for each index it checks, which was most of catalog
+    # startup (~50 ms per open, paid by every daemon and test catalog).
+    with engine.begin() as connection:
+        existing = set(connection.exec_driver_sql("SELECT tbl_name, name FROM sqlite_master WHERE type = 'index'").all())
+        for table in metadata.sorted_tables:
+            for index in table.indexes:
+                if (table.name, index.name) not in existing:
+                    index.create(bind=connection)
 
 
 def _user_version(connection) -> int:
@@ -897,6 +904,60 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
             connection.exec_driver_sql(statement)
 
 
+def _create_declared_schema(engine: Engine) -> None:
+    LiveBase.metadata.create_all(bind=engine)
+    CatalogBase.metadata.create_all(bind=engine)
+    _catalog_metadata.create_all(bind=engine)
+
+
+def _database_is_empty(engine: Engine) -> bool:
+    with engine.connect() as connection:
+        return connection.exec_driver_sql("SELECT COUNT(*) FROM sqlite_master").scalar_one() == 0
+
+
+_declared_schema_template: Engine | None = None
+_declared_schema_template_lock = threading.Lock()
+
+
+def _forget_declared_schema_template() -> None:
+    # A forked child must not share the parent's connection or a lock some
+    # other parent thread held at fork time.
+    global _declared_schema_template, _declared_schema_template_lock
+    _declared_schema_template = None
+    _declared_schema_template_lock = threading.Lock()
+
+
+os.register_at_fork(after_in_child=_forget_declared_schema_template)
+
+
+def _copy_declared_schema_into(engine: Engine) -> None:
+    """Give an empty database the declared tables and indexes by page copy.
+
+    Emitting the ~300 CREATE statements costs ~20 ms per catalog, almost all of
+    it SQLAlchemy DDL compilation, and a fresh catalog is created per test
+    many hundreds of times a suite. So the DDL runs once per process into an
+    in-memory database created by ``create_catalog_engine`` like any other,
+    and each empty database receives a copy through SQLite's backup API. The
+    template holds schema only -- identity and counter rows are still
+    written per catalog below -- and the backup keeps the destination's WAL
+    mode.
+    """
+
+    global _declared_schema_template
+    with _declared_schema_template_lock:
+        if _declared_schema_template is None:
+            template = create_catalog_engine("sqlite://")
+            _create_declared_schema(template)
+            _declared_schema_template = template
+        source = _declared_schema_template.raw_connection()
+        target = engine.raw_connection()
+        try:
+            source.driver_connection.backup(target.driver_connection)
+        finally:
+            target.close()
+            source.close()
+
+
 def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     """Create or idempotently upgrade the v1 live catalog schema."""
 
@@ -934,15 +995,16 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     elif user_version != 0:
         raise CatalogSchemaMismatchError(f"PRAGMA user_version={user_version} is set but catalog_meta is missing")
 
-    LiveBase.metadata.create_all(bind=engine)
-    CatalogBase.metadata.create_all(bind=engine)
-    _catalog_metadata.create_all(bind=engine)
-    _safe_additive_columns(engine, LiveBase.metadata)
-    _safe_additive_columns(engine, CatalogBase.metadata)
-    _safe_additive_columns(engine, _catalog_metadata)
-    _create_declared_indexes(engine, LiveBase.metadata)
-    _create_declared_indexes(engine, CatalogBase.metadata)
-    _create_declared_indexes(engine, _catalog_metadata)
+    if not table_names and user_version == 0 and _database_is_empty(engine):
+        _copy_declared_schema_into(engine)
+    else:
+        _create_declared_schema(engine)
+        _safe_additive_columns(engine, LiveBase.metadata)
+        _safe_additive_columns(engine, CatalogBase.metadata)
+        _safe_additive_columns(engine, _catalog_metadata)
+        _create_declared_indexes(engine, LiveBase.metadata)
+        _create_declared_indexes(engine, CatalogBase.metadata)
+        _create_declared_indexes(engine, _catalog_metadata)
     _validate_fact_reducer_schema(engine)
 
     if not has_meta_table:
