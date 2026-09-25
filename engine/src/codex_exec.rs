@@ -373,12 +373,6 @@ pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
         args.push(OsString::from("-s"));
         args.push(OsString::from(sandbox));
     }
-    if let Some(model) = normalized_optional(&config.model) {
-        args.push(OsString::from("-c"));
-        args.push(OsString::from(crate::codex_config::string_override(
-            "model", &model,
-        )));
-    }
     args.push(OsString::from("app-server"));
     args.push(OsString::from("--listen"));
     args.push(OsString::from("stdio://"));
@@ -390,7 +384,6 @@ fn warm_pool_compatible(config: &CodexExecRunConfig) -> bool {
         && normalized_optional(&config.approval_policy).as_deref()
             == Some(DEFAULT_CONSOLE_APPROVAL_POLICY)
         && normalized_optional(&config.sandbox).as_deref() == Some(DEFAULT_CONSOLE_SANDBOX)
-        && normalized_optional(&config.model).is_none()
 }
 
 pub async fn prewarm_codex_console_workers() {
@@ -407,7 +400,6 @@ pub async fn prewarm_codex_console_workers() {
         DEFAULT_CODEX_BIN,
         Some(DEFAULT_CONSOLE_APPROVAL_POLICY),
         Some(DEFAULT_CONSOLE_SANDBOX),
-        None,
         &neutral_cwd,
         None,
         None,
@@ -490,7 +482,6 @@ async fn spawn_initialized_codex_worker(
     codex_bin: &str,
     approval_policy: Option<&str>,
     sandbox: Option<&str>,
-    model: Option<&str>,
     process_cwd: &std::path::Path,
     session_id: Option<&str>,
     launch_actor: Option<&str>,
@@ -508,7 +499,7 @@ async fn spawn_initialized_codex_worker(
         codex_bin: codex_bin.to_string(),
         approval_policy: approval_policy.map(str::to_string),
         sandbox: sandbox.map(str::to_string),
-        model: model.map(str::to_string),
+        model: None,
         prompt: String::new(),
         image_paths: Vec::new(),
         launch_actor: launch_actor.map(str::to_string),
@@ -655,7 +646,6 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 &config.codex_bin,
                 normalized_optional(&config.approval_policy).as_deref(),
                 normalized_optional(&config.sandbox).as_deref(),
-                normalized_optional(&config.model).as_deref(),
                 &config.cwd,
                 Some(&config.session_id),
                 normalized_optional(&config.launch_actor).as_deref(),
@@ -716,6 +706,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let cwd = config.cwd.clone();
     let approval_policy = config.approval_policy.clone();
     let sandbox = config.sandbox.clone();
+    let model = normalized_optional(&config.model);
     let resume_thread_id = config.resume_thread_id.clone();
     let fork_thread_id = config.fork_thread_id.clone();
     tokio::spawn(async move {
@@ -728,6 +719,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             &cwd,
             approval_policy.as_deref(),
             sandbox.as_deref(),
+            model.as_deref(),
             resume_thread_id.as_deref(),
             fork_thread_id.as_deref(),
             warm_hit,
@@ -1025,6 +1017,7 @@ async fn run_app_server_turn(
     cwd: &std::path::Path,
     approval_policy: Option<&str>,
     sandbox: Option<&str>,
+    model: Option<&str>,
     resume_thread_id: Option<&str>,
     fork_thread_id: Option<&str>,
     warm_hit: bool,
@@ -1038,6 +1031,10 @@ async fn run_app_server_turn(
         "approvalPolicy": approval_policy,
         "sandbox": sandbox,
     });
+    // Console's model contract is per-turn even though a thread belongs to a
+    // session. Keep it off thread/start and thread/resume so a resumed thread
+    // can receive a different model on each turn; turn/start is the boundary
+    // that applies this run's selected model.
     if let Some(thread_id) = fork_thread_id.or(resume_thread_id) {
         thread_params["threadId"] = Value::String(thread_id.to_string());
     }
@@ -1062,16 +1059,15 @@ async fn run_app_server_turn(
     )
     .await;
     let turn_write_started = std::time::Instant::now();
+    let mut turn_params = json!({
+        "threadId": provider_thread_id,
+        "input": crate::codex_attachments::build_user_input_items_from_paths(prompt, image_paths),
+    });
+    if let Some(model) = model {
+        turn_params["model"] = Value::String(model.to_string());
+    }
     let turn_response = rpc
-        .request(
-            "turn/start",
-            json!({
-                "threadId": provider_thread_id,
-                "input": crate::codex_attachments::build_user_input_items_from_paths(prompt, image_paths),
-            }),
-            sink,
-            &mut projection,
-        )
+        .request("turn/start", turn_params, sink, &mut projection)
         .await?;
     sink.post_latency_stage(
         "turn_start_ack",
@@ -1098,8 +1094,8 @@ async fn run_app_server_turn(
                 .await;
             if value.get("method").and_then(Value::as_str) == Some("turn/completed") {
                 let completed_turn_id = json_string(&value, &["params", "turn", "id"]);
-                let completed_turn_id = completed_turn_id
-                    .context("Codex turn/completed omitted params.turn.id")?;
+                let completed_turn_id =
+                    completed_turn_id.context("Codex turn/completed omitted params.turn.id")?;
                 if completed_turn_id != expected_turn_id {
                     anyhow::bail!(
                         "Codex completed unexpected turn {completed_turn_id}; expected {expected_turn_id}"
@@ -2255,7 +2251,6 @@ for line in sys.stdin:
             fake_codex.to_str().unwrap(),
             Some("never"),
             Some("workspace-write"),
-            Some("gpt-5.3-codex-low"),
             temp.path(),
             None,
             None,
@@ -2263,13 +2258,6 @@ for line in sys.stdin:
         )
         .await
         .unwrap();
-        assert!(
-            worker
-                .argv
-                .iter()
-                .any(|argument| argument == "model=\"gpt-5.3-codex-low\""),
-            "the selected Console model must reach the spawned provider process"
-        );
         worker.ready_at = std::time::Instant::now() - Duration::from_secs(5 * 60);
         assert!(
             warm_worker_is_alive(&mut worker),
@@ -2546,7 +2534,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn codex_app_server_args_are_noninteractive_and_bounded() {
+    fn codex_app_server_args_omit_model_and_keep_console_defaults() {
         let mut config = config();
         config.model = Some("gpt-5.3-codex-low".to_string());
         let args = codex_exec_args(&config)
@@ -2563,13 +2551,19 @@ for line in sys.stdin:
                 "approval_policy=\"never\"",
                 "-s",
                 "danger-full-access",
-                "-c",
-                "model=\"gpt-5.3-codex-low\"",
                 "app-server",
                 "--listen",
                 "stdio://",
             ]
         );
+    }
+
+    #[test]
+    fn warm_pool_accepts_a_protocol_model_override() {
+        let mut config = config();
+        config.model = Some("gpt-5.3-codex-low".to_string());
+
+        assert!(warm_pool_compatible(&config));
     }
 
     #[test]
@@ -2720,6 +2714,8 @@ for line in sys.stdin:
             sys.exit(8)
         emit({"id": msg["id"], "result": {"thread": {"id": "provider-thread", "path": "/tmp/rollout-provider-thread.jsonl"}}})
     elif method == "turn/start":
+        if msg.get("params", {}).get("model") != "gpt-5.3-codex-low":
+            sys.exit(9)
         emit({"id": msg["id"], "result": {"turn": {"id": "provider-turn", "status": "inProgress"}}})
         emit({"method": "turn/started", "params": {"turn": {"id": "provider-turn", "status": "inProgress"}}})
         emit({"method": "item/agentMessage/delta", "params": {"itemId": "msg-1", "delta": "Working now"}})
@@ -2741,7 +2737,15 @@ for line in sys.stdin:
         run_config.codex_bin = fake_codex.display().to_string();
         run_config.api_url = api_url;
         run_config.resume_thread_id = Some("provider-thread".to_string());
+        run_config.model = Some("gpt-5.3-codex-low".to_string());
         let summary = start_codex_exec_once(run_config).await.unwrap();
+        assert!(
+            summary
+                .argv
+                .iter()
+                .all(|argument| !argument.contains("model=")),
+            "the selected model must not reach the provider process argv"
+        );
 
         let mut events = Vec::new();
         tokio::time::timeout(Duration::from_secs(10), async {
