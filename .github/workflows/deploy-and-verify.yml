@@ -64,7 +64,7 @@ jobs:
       runtime_image: ${{ steps.decide.outputs.runtime_image }}
       no_runtime_change: ${{ steps.decide.outputs.no_runtime_change }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event_name == 'push' }}
         with:
           fetch-depth: 1
@@ -152,7 +152,7 @@ jobs:
       runtime_schema_min_reader: ${{ steps.artifact_schema.outputs.schema_min_reader }}
       runtime_schema_max_reader: ${{ steps.artifact_schema.outputs.schema_max_reader }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             .github/actions
@@ -436,7 +436,7 @@ jobs:
       REGISTRY_PASSWORD: ${{ github.token }}
       RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY: deploy-and-verify-${{ github.run_id }}-${{ github.run_attempt }}-demo
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
           fetch-depth: 1
@@ -516,7 +516,7 @@ jobs:
       REGISTRY_PASSWORD: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
           fetch-depth: 1
@@ -596,7 +596,7 @@ jobs:
       RUNTIME_SOURCE_ATTEMPT: ${{ needs.gate.outputs.runtime_source_attempt }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
           fetch-depth: 1
@@ -759,7 +759,7 @@ jobs:
     needs: [changes, deploy_demo, reprovision_canary, fast_smoke]
     if: ${{ always() && needs.changes.outputs.deploy_verify == 'true' }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: scripts/ops/ci-profile.py
