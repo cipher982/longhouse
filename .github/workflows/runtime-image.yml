@@ -38,15 +38,6 @@ concurrency:
   group: runtime-image-${{ github.repository }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'main' || github.sha }}
   cancel-in-progress: false
 
-env:
-  # The private runner provisions these ordinary environment values from its
-  # scoped archive authority. Public code never names a secret manager.
-  RUNTIME_ARTIFACT_S3_ENDPOINT: ${{ secrets.RUNTIME_ARTIFACT_S3_ENDPOINT }}
-  RUNTIME_ARTIFACT_S3_BUCKET: ${{ secrets.RUNTIME_ARTIFACT_S3_BUCKET }}
-  RUNTIME_ARTIFACT_S3_PREFIX: ${{ secrets.RUNTIME_ARTIFACT_S3_PREFIX }}
-  RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID: ${{ secrets.RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID }}
-  RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY }}
-
 permissions:
   contents: read
   packages: write
@@ -55,7 +46,7 @@ jobs:
   changes:
     timeout-minutes: 10
     name: "Detect runtime image scope"
-    runs-on: cube-fast
+    runs-on: ubuntu-24.04-arm
     outputs:
       runtime_image: ${{ steps.decide.outputs.runtime_image }}
     steps:
@@ -81,6 +72,14 @@ jobs:
     timeout-minutes: 45
     runs-on: cube-maint
     needs: changes
+    env:
+      # Only the publishing job receives the scoped archive authority, as
+      # ordinary environment values. Public code never names a secret manager.
+      RUNTIME_ARTIFACT_S3_ENDPOINT: ${{ secrets.RUNTIME_ARTIFACT_S3_ENDPOINT }}
+      RUNTIME_ARTIFACT_S3_BUCKET: ${{ secrets.RUNTIME_ARTIFACT_S3_BUCKET }}
+      RUNTIME_ARTIFACT_S3_PREFIX: ${{ secrets.RUNTIME_ARTIFACT_S3_PREFIX }}
+      RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID: ${{ secrets.RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID }}
+      RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY }}
     if: ${{ needs.changes.outputs.runtime_image == 'true' }}
     steps:
       - name: Checkout
@@ -143,8 +142,13 @@ jobs:
             org.longhouse.catalog-schema.version=${{ steps.schema.outputs.schema_version }}
             org.longhouse.catalog-schema.min-reader=${{ steps.schema.outputs.schema_min_reader }}
             org.longhouse.catalog-schema.max-reader=${{ steps.schema.outputs.schema_max_reader }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Keep the layer cache on cube's disk. type=gha shares GitHub's 10 GB
+          # per-repo cache with CI's fixture-image caches; once over the cap,
+          # LRU eviction kept dropping this image's layers (the 600 MB model
+          # re-downloaded on most builds) and the export itself took 55-216 s.
+          # ci-cache-gc.timer on cube bounds the directory.
+          cache-from: type=local,src=/ci-cache/buildkit/longhouse-runtime
+          cache-to: type=local,dest=/ci-cache/buildkit/longhouse-runtime,mode=max,ignore-error=true
 
       - name: Write immutable qualification metadata
         env:

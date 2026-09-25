@@ -38,7 +38,7 @@ def test_web_styling_does_not_select_backend_or_engine() -> None:
     assert "backend" not in result["categories"]
     assert "engine" not in result["categories"]
     assert "frontend" in result["categories"]
-    assert "cube-fast" in result["lanes"]
+    assert "ubuntu-24.04-arm" in result["lanes"]
 
 
 def test_shared_manifest_selects_every_relevant_filter() -> None:
@@ -88,7 +88,7 @@ def test_dirty_and_nonignored_untracked_paths_are_collected() -> None:
 def test_unknown_path_gets_conservative_lane() -> None:
     result = resolve("totally-new-surface/file.dat")
     assert result["unknown_paths"] == ["totally-new-surface/file.dat"]
-    assert result["lanes"] == ["cube-maint"]
+    assert result["lanes"] == ["ubuntu-24.04-arm"]
     assert result["commands"] == []
 
 
@@ -197,7 +197,7 @@ def test_cli_json_is_machine_readable() -> None:
         assert "Affected files (1;" in human.stdout
         assert "web/new-style.css" in human.stdout
         assert "CI lanes: " in human.stdout
-        assert "cube-fast" in human.stdout
+        assert "ubuntu-24.04-arm" in human.stdout
 
 
 if __name__ == "__main__":

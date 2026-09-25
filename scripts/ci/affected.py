@@ -3,7 +3,7 @@
 
 This is deliberately a small, local-only resolver.  The path filter file is the
 only source of path patterns; this module only describes what each existing
-filter means for local/ARC execution.  It never contacts GitHub and never
+filter means for local/CI execution.  It never contacts GitHub and never
 silently turns a failed git operation into an empty change set.
 """
 
@@ -44,40 +44,40 @@ class FilterPlan:
 # .github/path-filters.yml so this local view cannot drift from CI authority.
 FILTER_PLANS: dict[str, FilterPlan] = {
     "backend": FilterPlan(
-        ("cube-fast",),
+        ("ubuntu-24.04-arm",),
         ("make test",),
-        "Backend tests are a full suite (~7.5min), not a sub-2-minute check.",
+        "Backend tests are a full suite (~3.5min serial locally; CI runs three ~1.7min shards).",
     ),
-    "frontend": FilterPlan(("cube-fast",), ("make test-frontend",)),
-    "engine": FilterPlan(("cube-fast",), ("make test-engine",)),
+    "frontend": FilterPlan(("ubuntu-24.04-arm",), ("make test-frontend",)),
+    "engine": FilterPlan(("ubuntu-24.04-arm",), ("make test-engine",)),
     "schemas": FilterPlan(
-        ("cube-fast",),
+        ("ubuntu-24.04-arm",),
         ("make validate",),
         "Validation is cross-cutting; run it explicitly when schema contracts change.",
     ),
     "ci_plumbing": FilterPlan(
-        ("cube-maint",),
+        ("ubuntu-24.04-arm",),
         ("make validate",),
         "CI plumbing changes need the full contract validation path.",
     ),
-    "packaging": FilterPlan(("cube-fast",), ("make test-wheel-package",)),
-    "runner": FilterPlan(("cube-fast",), ("make test-runner",)),
+    "packaging": FilterPlan(("ubuntu-24.04-arm",), ("make test-wheel-package",)),
+    "runner": FilterPlan(("ubuntu-24.04-arm",), ("make test-runner",)),
     "ios": FilterPlan(
         (),
         ("make ios-unit",),
         "Host-only iOS unit target; the dispatched iOS merge gate is separate.",
         ("test-ios (separate iOS CI gate)",),
     ),
-    "e2e": FilterPlan(("cube-browser",), ("make test-e2e",)),
+    "e2e": FilterPlan(("ubuntu-24.04-arm",), ("make test-e2e",)),
     "models": FilterPlan(
-        ("cube-maint",),
+        ("ubuntu-24.04-arm",),
         (),
         "Model smoke is credentialed CI work; no local target is suggested.",
     ),
     "scripts": FilterPlan(
-        ("cube-fast",),
+        ("ubuntu-24.04-arm",),
         ("make test",),
-        "Script changes use the backend/helper CI coverage; the backend suite is ~7.5min.",
+        "Script changes use the backend/helper CI coverage (the full backend suite).",
     ),
     "runtime_image": FilterPlan(
         ("cube-maint",),
@@ -92,9 +92,9 @@ FILTER_PLANS: dict[str, FilterPlan] = {
 }
 
 UNKNOWN_PLAN = FilterPlan(
-    ("cube-maint",),
+    ("ubuntu-24.04-arm",),
     (),
-    "No path filter matched; conservative cube-maint review is required (no local target is run automatically).",
+    "No path filter matched; review which CI suite should cover it (no local target is run automatically).",
 )
 
 # The current authority uses ordinary repository-relative globs.  Rejecting
@@ -325,7 +325,7 @@ def _human(result: dict[str, Any], *, base: str, head: str) -> str:
     else:
         lines.append("  (none; CI-owned or credentialed work)")
     if result["unknown_paths"]:
-        lines.append("Unmatched paths (conservative cube-maint lane):")
+        lines.append("Unmatched paths (no filter; review coverage):")
         lines.extend(result["unknown_paths"])
     for gate in result["separate_gates"]:
         lines.append(f"Separate gate: {gate}")
@@ -377,7 +377,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ResolverError("--run cannot be combined with --json because target output is streamed")
             if result["unknown_paths"]:
                 raise ResolverError(
-                    "refusing --run for unmatched paths; review the conservative cube-maint lane first: "
+                    "refusing --run for unmatched paths; review which CI suite covers them first: "
                     + ", ".join(result["unknown_paths"])
                 )
             result["runs"] = _run_commands(root, result["commands"])
