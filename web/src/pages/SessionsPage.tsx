@@ -185,7 +185,11 @@ export default function SessionsPage() {
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const lastTimelineScrollAtRef = useRef(0);
   // Fetch dynamic filter options
-  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack, popoverOpen, includeHidden);
+  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(
+    daysBack ?? DEFAULT_DAYS_BACK,
+    popoverOpen,
+    includeHidden
+  );
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
   const machineOptions = filtersData?.machines || [];
@@ -202,7 +206,7 @@ export default function SessionsPage() {
     [updateFilterState]
   );
   const handleDaysBackChange = useCallback(
-    (value: number) => updateFilterState({ daysBack: value }),
+    (value: number | null) => updateFilterState({ daysBack: value }),
     [updateFilterState]
   );
   const handleHideAutonomousChange = useCallback(
@@ -244,7 +248,10 @@ export default function SessionsPage() {
       project: project || undefined,
       provider: provider || undefined,
       device_id: deviceId || undefined,
-      days_back: daysBack,
+      // null (no explicit range) is omitted here rather than defaulted: the
+      // server searches all indexed history for a query with no range named,
+      // and keeps its own recent-window default for a plain listing.
+      days_back: daysBack ?? undefined,
       query: debouncedQuery || undefined,
       limit,
       mode: aiSearch ? "hybrid" : undefined,
@@ -407,7 +414,7 @@ export default function SessionsPage() {
       deviceId: "",
       hideAutonomous: true,
       includeHidden: false,
-      daysBack: DEFAULT_DAYS_BACK,
+      daysBack: null,
       searchQuery: "",
       aiSearch: false,
       sortOrder: DEFAULT_SORT_ORDER,
@@ -416,7 +423,7 @@ export default function SessionsPage() {
     setPopoverOpen(false);
   }, [updateUrlState]);
 
-  const hasFilters = !!(project || provider || deviceId || daysBack !== DEFAULT_DAYS_BACK || searchQuery || includeHidden);
+  const hasFilters = !!(project || provider || deviceId || daysBack !== null || searchQuery || includeHidden);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
   // Count active non-default filters (for badge)
@@ -424,7 +431,7 @@ export default function SessionsPage() {
     project,
     provider,
     deviceId,
-    daysBack !== DEFAULT_DAYS_BACK ? "active" : "",
+    daysBack !== null ? "active" : "",
     !hideAutonomous ? "active" : "",
     includeHidden ? "active" : "",
   ].filter(Boolean).length;
@@ -664,12 +671,26 @@ export default function SessionsPage() {
           </div>
 
           {/* Active filter chips */}
-          {(provider || deviceId || project || daysBack !== DEFAULT_DAYS_BACK || !hideAutonomous || includeHidden) && (
+          {(provider || deviceId || project || daysBack !== null || debouncedQuery || !hideAutonomous || includeHidden) && (
             <div className="sessions-filter-chips">
               {provider && <FilterChip label={provider} onDismiss={() => handleProviderChange("")} />}
               {deviceId && <FilterChip label={deviceId} onDismiss={() => handleDeviceIdChange("")} />}
               {project && <FilterChip label={project} onDismiss={() => handleProjectChange("")} />}
-              {daysBack !== DEFAULT_DAYS_BACK && <FilterChip label={`${daysBack}d`} onDismiss={() => handleDaysBackChange(DEFAULT_DAYS_BACK)} />}
+              {/* With a query, scope is always visible: "All time" by default
+                  (nothing to clear back to — it already is the default), or
+                  the narrowed range if one was explicitly picked. Without a
+                  query this is the ordinary listing-window chip, shown only
+                  when it deviates from the server's own default. */}
+              {debouncedQuery ? (
+                <FilterChip
+                  label={daysBack !== null ? `${daysBack}d` : "All time"}
+                  onDismiss={daysBack !== null ? () => handleDaysBackChange(null) : undefined}
+                />
+              ) : (
+                daysBack !== null && (
+                  <FilterChip label={`${daysBack}d`} onDismiss={() => handleDaysBackChange(null)} />
+                )
+              )}
               {!hideAutonomous && <FilterChip label="show auto" onDismiss={() => handleHideAutonomousChange(true)} />}
               {includeHidden && <FilterChip label="view all" onDismiss={() => handleIncludeHiddenChange(false)} />}
             </div>

@@ -118,7 +118,8 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
     project: project || undefined,
     provider: provider || undefined,
     mode,
-    since_days: 90,
+    // No explicit range: search all indexed history, matching the panel's
+    // own "across all your sessions" copy below.
     max_results: 8,
   };
 

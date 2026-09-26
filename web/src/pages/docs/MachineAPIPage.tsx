@@ -54,7 +54,9 @@ export default function MachineAPIPage() {
 #   provider           - filter by provider id (claude, codex, cursor, opencode, pi, antigravity)
 #   environment        - filter by environment (production, development, test, e2e)
 #   device_id          - filter by device ID
-#   days_back          - look back N days (default 14, max 90)
+#   days_back          - look back N days; with a query, omit to search all
+#                         indexed history (default: 14-day window when listing
+#                         without a query)
 #   include_test       - include test/e2e sessions (default: false)
 #   hide_autonomous    - hide sub-agents (default: true)
 #   mode               - search mode: lexical|semantic|hybrid (default: lexical)

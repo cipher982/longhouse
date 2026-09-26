@@ -17,21 +17,32 @@ const DAYS_OPTIONS = [7, 14, 30, 60, 90] as const;
 // FilterChip
 // ---------------------------------------------------------------------------
 
-export function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void }) {
+export function FilterChip({
+  label,
+  onDismiss,
+}: {
+  label: string;
+  // Omitted for a chip that states current scope without offering to clear it
+  // back to something else — e.g. the "All time" scope chip, which is already
+  // the default and has nothing narrower to fall back to.
+  onDismiss?: () => void;
+}) {
   return (
     <div className="sessions-filter-chip">
       <span className="sessions-filter-chip-label">{label}</span>
-      <button
-        type="button"
-        className="sessions-filter-chip-dismiss"
-        onClick={onDismiss}
-        aria-label={`Remove ${label} filter`}
-      >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+      {onDismiss && (
+        <button
+          type="button"
+          className="sessions-filter-chip-dismiss"
+          onClick={onDismiss}
+          aria-label={`Remove ${label} filter`}
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -87,7 +98,7 @@ export function FilterSection({
 // DaysSection
 // ---------------------------------------------------------------------------
 
-export function DaysSection({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+export function DaysSection({ value, onChange }: { value: number | null; onChange: (v: number) => void }) {
   return (
     <div className="filter-section" data-filter-section="time">
       <div className="filter-section-label">Time window</div>
@@ -118,7 +129,7 @@ export interface FilterPopoverProps {
   project: string; setProject: (v: string) => void; projectOptions: string[];
   provider: string; setProvider: (v: string) => void; providerOptions: string[];
   deviceId: string; setDeviceId: (v: string) => void; machineOptions: string[];
-  daysBack: number; setDaysBack: (v: number) => void;
+  daysBack: number | null; setDaysBack: (v: number) => void;
   includeHidden: boolean; setIncludeHidden: (v: boolean) => void;
   filtersLoading: boolean;
 }

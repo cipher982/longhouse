@@ -340,7 +340,10 @@ export interface SessionsUrlState {
   deviceId: string;
   hideAutonomous: boolean;
   includeHidden: boolean;
-  daysBack: number;
+  // `null` means no explicit range was chosen: a search (searchQuery is set)
+  // then covers all indexed history, and a plain listing keeps the server's
+  // default recent window. An explicit value always narrows either one.
+  daysBack: number | null;
   searchQuery: string;
   aiSearch: boolean;
   sortOrder: SortOrder;
@@ -377,10 +380,12 @@ export function readSessionsUrlState(
     deviceId,
     hideAutonomous: searchParams.get("hide_autonomous") !== "false",
     includeHidden: searchParams.get("include_hidden") === "true",
-    daysBack: parsePositiveIntParam(
-      searchParams.get("days_back"),
-      DEFAULT_DAYS_BACK,
-    ),
+    // Absent from the URL means "no explicit range" (null), not the old
+    // recent-window default: the server now decides that default based on
+    // whether a query is present.
+    daysBack: searchParams.has("days_back")
+      ? parsePositiveIntParam(searchParams.get("days_back"), DEFAULT_DAYS_BACK)
+      : null,
     searchQuery: searchParams.get("query") || "",
     aiSearch,
     sortOrder:
@@ -402,8 +407,7 @@ export function buildSessionsSearchParams(
   if (state.project) params.set("project", state.project);
   if (state.provider) params.set("provider", state.provider);
   if (state.deviceId) params.set("device_id", state.deviceId);
-  if (state.daysBack !== DEFAULT_DAYS_BACK)
-    params.set("days_back", String(state.daysBack));
+  if (state.daysBack !== null) params.set("days_back", String(state.daysBack));
   if (state.searchQuery) params.set("query", state.searchQuery);
   if (state.aiSearch) params.set("mode", "hybrid");
   if (state.searchQuery && state.sortOrder !== DEFAULT_SORT_ORDER)

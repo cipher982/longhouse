@@ -1043,6 +1043,48 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("searches all indexed history by default when a query has no explicit date range", async () => {
+    renderSessionsPage("/timeline?query=fix%20bug");
+
+    await waitFor(() => {
+      // No days_back reaches the request at all: the server decides "all
+      // indexed history" for a query with no named range.
+      expect(latestFilters?.days_back).toBeUndefined();
+      expect(screen.getByText("All time")).toBeInTheDocument();
+      // The default-scope chip states scope; it has nothing narrower to fall
+      // back to, so it is not dismissible.
+      expect(screen.queryByLabelText("Remove All time filter")).not.toBeInTheDocument();
+    });
+  });
+
+  it("narrows the scope chip when an explicit range is chosen alongside a query", async () => {
+    renderSessionsPage("/timeline?query=fix%20bug&days_back=30");
+
+    await waitFor(() => {
+      expect(latestFilters?.days_back).toBe(30);
+      expect(screen.getByText("30d")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Remove 30d filter"));
+
+    await waitFor(() => {
+      // Clearing an explicit range while a query is active goes back to "all
+      // indexed history", not to the plain-listing 14-day default.
+      expect(latestFilters?.days_back).toBeUndefined();
+      expect(screen.getByText("All time")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps the plain listing window (no All-time chip) when there is no query", async () => {
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestFilters?.days_back).toBeUndefined();
+      expect(screen.queryByText("All time")).not.toBeInTheDocument();
+    });
+  });
+
 
 
 
