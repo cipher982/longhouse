@@ -224,8 +224,32 @@ def test_runtime_publish_requires_exact_live_sha() -> None:
 
     _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "ac77b06d72", runs)
 
-    assert "Demo runtime is on latest, expected ac77b06d72" in errors
+    # The demo moves on its own production ring (release-rings.md) and is no
+    # longer required to match the shipped SHA; only the canary is.
+    assert "Demo runtime is on latest, expected ac77b06d72" not in errors
     assert f"{ship_monitor.CANARY_SURFACE} is on latest, expected ac77b06d72" in errors
+
+
+def test_stale_demo_sha_does_not_block_ship() -> None:
+    with_fakes(
+        {
+            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+            2: {ship_monitor.RUNTIME_IMAGE_JOB: "success"},
+        },
+        latest_runtime_sha="7e917a42689f626ed83908f7ab0a6ab21c3aafc4",
+        deploy_status_output=deploy_status("stale0sha00", "ac77b06d72"),
+    )
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
+        run_info(ship_monitor.RUNTIME_IMAGE_WORKFLOW, 2),
+    ]
+
+    surfaces, errors, raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "ac77b06d72", runs)
+
+    assert errors == []
+    assert surfaces["Demo runtime"].sha == "stale0sha00"
+    # Still printed in the status table, just not enforced.
+    assert "Demo runtime" in raw
 
 
 def test_runtime_publish_accepts_deploy_stamped_target_sha() -> None:
@@ -607,6 +631,7 @@ if __name__ == "__main__":
     test_no_runtime_change_accepts_intermediate_deploy_sha()
     test_no_runtime_change_accepts_intermediate_sha_when_deploy_job_is_absent()
     test_runtime_publish_requires_exact_live_sha()
+    test_stale_demo_sha_does_not_block_ship()
     test_deploy_status_parses_component_identity()
     test_runtime_publish_accepts_deploy_stamped_target_sha()
     test_live_verify_accepts_degraded_runtime_health()

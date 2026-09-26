@@ -805,7 +805,7 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         expected_runtime_shas = runtime_reuse_accepted_shas(root, expected_runtime_sha, sha)
 
     def live_status_retryable(surfaces: dict[str, SurfaceInfo]) -> bool:
-        for surface_name in ("Demo runtime", CANARY_SURFACE):
+        for surface_name in (CANARY_SURFACE,):
             surface = surfaces.get(surface_name)
             if surface is None or surface.sha == "-" or surface.health == "unreachable":
                 return True
@@ -818,7 +818,10 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         surfaces, raw = read_deploy_status()
         errors = []
         if (deploy_run_completed or deploy_job_succeeded) and not no_runtime_change:
-            require_surface(errors, surfaces, "Demo runtime", RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
+            # The demo moves on its own production ring (release-rings.md) and
+            # is promoted well after the SHA that ships here; it is still
+            # printed in the status table below (deploy-status.sh's raw
+            # output), just no longer required to match this deploy.
             require_surface(errors, surfaces, CANARY_SURFACE, RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
         if not errors or not live_status_retryable(surfaces) or attempt == 2:
             break
