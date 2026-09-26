@@ -684,7 +684,7 @@ async def preview_timeline_session(
 @router.get("/filters", response_model=FiltersResponse)
 async def get_timeline_filters(
     response: Response,
-    days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
+    days_back: int = Query(90, ge=1, le=3650, description="Days to look back for distinct values"),
     include_hidden: bool = Query(False, description="Include hidden and automation sessions in filter values"),
     current_user=Depends(get_current_browser_caller),
 ):

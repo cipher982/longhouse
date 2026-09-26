@@ -13883,8 +13883,8 @@ export interface operations {
                 include_automation?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
-                /** @description Days to look back */
-                days_back?: number;
+                /** @description Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window. */
+                days_back?: number | null;
                 /** @description Search query for content */
                 query?: string | null;
                 /** @description Include user-hidden and automation-hidden sessions (View All mode) */
@@ -14072,8 +14072,8 @@ export interface operations {
                 environment?: string | null;
                 /** @description Include test/e2e sessions */
                 include_test?: boolean;
-                /** @description Days to look back */
-                days_back?: number;
+                /** @description Days to look back. Omit to search all indexed history. */
+                days_back?: number | null;
                 /** @description Max results */
                 limit?: number;
                 /** @description Context projection mode: forensic|active_context */
@@ -14152,8 +14152,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Include automation sessions in otherwise default-hidden results */
                 include_automation?: boolean;
-                /** @description Days to look back */
-                since_days?: number;
+                /** @description Days to look back. Omit to search all indexed history. */
+                since_days?: number | null;
                 /** @description Max search-result cards */
                 max_results?: number;
                 /** @description Recall lane: auto fuses lexical and semantic; lexical and semantic run one lane only. */
@@ -14204,8 +14204,8 @@ export interface operations {
                 include_hidden?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
-                /** @description Days to look back */
-                days_back?: number;
+                /** @description Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window. */
+                days_back?: number | null;
                 /** @description Search query for content */
                 query?: string | null;
                 /** @description Max results (server clamps to 100) */
@@ -14258,8 +14258,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
-                /** @description Days to look back */
-                days_back?: number;
+                /** @description Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window. */
+                days_back?: number | null;
                 /** @description Search query for content */
                 query?: string | null;
                 /** @description Max results (server clamps to 100) */
@@ -15341,8 +15341,8 @@ export interface operations {
                 environment?: string | null;
                 /** @description Include test/e2e sessions */
                 include_test?: boolean;
-                /** @description Days to look back */
-                days_back?: number;
+                /** @description Days to look back. Omit to search all indexed history. */
+                days_back?: number | null;
                 /** @description Max results */
                 limit?: number;
                 /** @description Context projection mode: forensic|active_context */
@@ -15422,8 +15422,8 @@ export interface operations {
                 provider?: string | null;
                 /** @description Include test/e2e sessions */
                 include_test?: boolean;
-                /** @description Days to look back */
-                since_days?: number;
+                /** @description Days to look back. Omit to search all indexed history. */
+                since_days?: number | null;
                 /** @description Max search-result cards */
                 max_results?: number;
                 /** @description Include Hatch automation sessions in recall results */
@@ -15544,8 +15544,8 @@ export interface operations {
                 include_automation?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
-                /** @description Days to look back */
-                days_back?: number;
+                /** @description Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window. */
+                days_back?: number | null;
                 /** @description Content search query. Omit or blank to list recent sessions ordered by last activity. */
                 query?: string | null;
                 /** @description Max results */
