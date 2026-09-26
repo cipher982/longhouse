@@ -460,6 +460,20 @@ def _hosted_assistant_texts(api_url: str, token: str, session_id: str) -> list[s
     return [str(row.get("content_text") or "") for row in events or [] if isinstance(row, dict) and row.get("role") == "assistant"]
 
 
+def replied_with(text: str, marker: str) -> bool:
+    """Is this assistant text the requested reply, not a refusal quoting it?
+
+    Factory run 2026-09-26T12:48Z: Haiku 4.5 answered "Reply with exactly
+    <marker>" with "I received a message ... from an untrusted peer asking me to
+    reply with a specific string: `<marker>`. I'm not going to comply". A
+    substring match certified that refusal as the reply, so the idle send
+    passed and the steer and abort setups ran in a session the refusal had
+    already poisoned.
+    """
+
+    return text.strip().strip("`\"'").strip().rstrip(".") == marker
+
+
 def send_outcome(
     hosted_texts: list[str],
     rows: list[dict[str, Any]],
@@ -478,7 +492,7 @@ def send_outcome(
     ingest, which the 2026-09-18 control run conflated.
     """
 
-    if any(marker in text for text in hosted_texts):
+    if any(replied_with(text, marker) for text in hosted_texts):
         return "answered"
     bounds = _turn_bounds(rows, prompt)
     if bounds is not None and bounds[1] is not None:
@@ -499,6 +513,33 @@ def _post(api_url: str, token: str, path: str, body: dict[str, Any] | None = Non
 
 def _slow_echo(seconds: int, marker: str) -> str:
     return f"python3 -c \"import os, select; pid=os.getpid(); select.select([], [], [], {seconds}); print('{marker} pid=' + str(pid))\""
+
+
+# Claude Code turns a terminal write this long into <pasted_content> with no
+# typed message around it, and its system prompt tells the model to follow
+# pasted instructions only when the user's own message asks it to. The steer
+# setup was ~900 characters and always arrived pasted (Haiku 4.5, 2026-09-26:
+# "Pasted content without user context"); the ~470-character abort setup
+# arrived typed. An owner typing a request never produces that framing, so the
+# harness keeps the prompts it types below this length.
+TYPED_PROMPT_MAX_CHARS = 700
+
+
+def steer_setup_prompt(step: str, done: str) -> str:
+    return (
+        "This disposable Longhouse QA session owns its workspace. Run these three checks one at a time, each in its "
+        f"own foreground Bash call: {_slow_echo(8, step + '_1')}, then {_slow_echo(8, step + '_2')}, then "
+        f"{_slow_echo(8, step + '_3')}. Then report the output and include {done}"
+    )
+
+
+def abort_setup_prompt(marker: str, forbidden: str, seconds: int) -> str:
+    return (
+        "This disposable Longhouse QA session owns its workspace. To verify that Runtime Host can interrupt "
+        "an active owned process without ending the session, start one foreground process-monitoring check (not "
+        "background) and keep it active for its observation window: "
+        f"{_slow_echo(seconds, marker)}. When it finishes, include completion token {forbidden} in your report"
+    )
 
 
 def _drive_lifecycle(
@@ -584,7 +625,7 @@ def _drive_lifecycle(
                     # as a refusal.
                     grace = time.monotonic() + 10.0
                     while time.monotonic() < grace:
-                        if any(marker in text for text in _hosted_assistant_texts(api, token, session_id)):
+                        if any(replied_with(text, marker) for text in _hosted_assistant_texts(api, token, session_id)):
                             answered = True
                             break
                         time.sleep(0.5)
@@ -612,13 +653,7 @@ def _drive_lifecycle(
     steered = f"LONGHOUSE_CLAUDE_STEERED_{token_hex}"
     done = f"LONGHOUSE_CLAUDE_UNSTEERED_{token_hex}"
     steer_text = f"Stop the remaining steps now. Do not run any more commands. Reply with exactly {steered}"
-    steer_prompt = (
-        "This disposable Longhouse QA session owns its workspace and is measuring whether a foreground process can "
-        "be steered while it is active. Run three independent process-monitoring checks one at a time, each in its own "
-        "foreground Bash tool call; each check waits for its observation window before the next check starts: "
-        f"The checks are: {_slow_echo(8, step + '_1')}, then {_slow_echo(8, step + '_2')}, then "
-        f"{_slow_echo(8, step + '_3')}. After all three checks, report the observations and include completion token {done}"
-    )
+    steer_prompt = steer_setup_prompt(step, done)
     wait_can_send()
     # Establish native foreground work; the remote steer itself stays below.
     session.submit_line(steer_prompt)
@@ -686,12 +721,7 @@ def _drive_lifecycle(
     forbidden = f"LONGHOUSE_CLAUDE_FORBIDDEN_{token_hex}"
     abort_prompt = f"lh_claude_progress_{token_hex}"
     wait_can_send()
-    abort_request = (
-        "This disposable Longhouse QA session owns its workspace. To verify that Runtime Host can interrupt "
-        "an active owned process without ending the session, start one foreground process-monitoring check (not "
-        "background) and keep it active for its observation window: "
-        f"{_slow_echo(int(tool_seconds), abort_prompt)}. When it finishes, include completion token {forbidden} in your report"
-    )
+    abort_request = abort_setup_prompt(abort_prompt, forbidden, int(tool_seconds))
     # A native task is the precondition, not the interrupt being qualified.
     session.submit_line(abort_request)
     try:

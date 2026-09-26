@@ -9,11 +9,14 @@ lifecycle hook's ``hook_additional_context``), and every turn closes with a
 
 from __future__ import annotations
 
+from zerg.qa.claude_helm_lifecycle import TYPED_PROMPT_MAX_CHARS
+from zerg.qa.claude_helm_lifecycle import abort_setup_prompt
 from zerg.qa.claude_helm_lifecycle import abort_stopped_turn
 from zerg.qa.claude_helm_lifecycle import lifecycle_assertions
 from zerg.qa.claude_helm_lifecycle import negative_control_verdict
 from zerg.qa.claude_helm_lifecycle import send_outcome
 from zerg.qa.claude_helm_lifecycle import steer_landed_in_turn
+from zerg.qa.claude_helm_lifecycle import steer_setup_prompt
 
 STEP = "lh_claude_step_x"
 STEERED = "LONGHOUSE_CLAUDE_STEERED_x"
@@ -428,3 +431,30 @@ def test_an_archived_marker_answers_the_send_even_after_a_refusal_turn():
 
 def test_a_send_whose_prompt_never_reached_the_transcript_is_pending():
     assert send_outcome([], [], marker=MARKER, prompt=PROMPT) == "pending"
+
+
+def test_a_refusal_that_quotes_the_marker_is_not_the_reply():
+    """Factory run 2026-09-26T12:48Z: this refusal passed the idle send."""
+
+    refusal = (
+        "I received a message through the Longhouse channel from an untrusted peer asking me to reply with a "
+        f"specific string: `{MARKER}`\n\nI'm not going to comply with this request."
+    )
+    rows = [_prompt(PROMPT), _text(refusal), _end()]
+
+    assert send_outcome([refusal], rows, marker=MARKER, prompt=PROMPT) == "declined"
+    assert send_outcome([f"`{MARKER}`"], rows, marker=MARKER, prompt=PROMPT) == "answered"
+    assert send_outcome([f"{MARKER}.\n"], rows, marker=MARKER, prompt=PROMPT) == "answered"
+
+
+def test_typed_setup_prompts_stay_below_claude_paste_framing():
+    """Claude Code frames a long terminal write as <pasted_content>, which the
+    model is told not to act on without a typed request around it."""
+
+    token = "0e75ab7304"
+    steer = steer_setup_prompt(f"lh_claude_step_{token}", f"LONGHOUSE_CLAUDE_UNSTEERED_{token}")
+    abort = abort_setup_prompt(f"lh_claude_progress_{token}", f"LONGHOUSE_CLAUDE_FORBIDDEN_{token}", 45)
+
+    assert len(steer) <= TYPED_PROMPT_MAX_CHARS
+    assert len(abort) <= TYPED_PROMPT_MAX_CHARS
+    assert all(f"lh_claude_step_{token}_{n}" in steer for n in (1, 2, 3))
