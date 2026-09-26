@@ -26,8 +26,8 @@ use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::managed_launch_lifecycle::{
     register_managed_launch_with_timeout, spawn_managed_registration_retry_with_hook,
-    DeferredNotices, ManagedLaunchResponse, ManagedLaunchTransaction,
-    FOREGROUND_REGISTRATION_TIMEOUT,
+    spawn_managed_resume_registration_retry, DeferredNotices, ManagedLaunchResponse,
+    ManagedLaunchTransaction, FOREGROUND_REGISTRATION_TIMEOUT,
 };
 use crate::managed_launch_payload::{
     ManagedLaunchProvenance, ManagedLaunchRegistration, PermissionMode,
@@ -761,7 +761,7 @@ impl OmpHelmServer {
         state.state.updated_at = Utc::now().to_rfc3339();
         drop(state);
         if let (Some(launch), Some(adoption)) = (adopted_from, adoption) {
-            self.finish_adoption(launch, adoption)?;
+            self.finish_adoption(connection_id, launch, adoption)?;
         }
         self.persist_state()?;
         self.publish_binding(Path::new(source), native_id, previous != native_id)?;
@@ -861,6 +861,11 @@ impl OmpHelmServer {
         state.state.session_id = target.session_id.clone();
         state.state.run_id = resume_run_id(&target.session_id, &adoption.resume_attempt_id);
         state.state.adopted_from_session_id = Some(launch.session_id.clone());
+        // The Runtime Host holds an adapter connection id to one run, and the
+        // launch's own run still holds this one, so the adopted run needs its
+        // own. The extension learns both from `extension_generation`.
+        state.state.connection_id = Uuid::new_v4().to_string();
+        state.state.lease_generation = Uuid::new_v4().to_string();
         state.state.title = target.title.clone();
         state.state.terminal_state = None;
         state.state.terminal_reason = None;
@@ -873,8 +878,17 @@ impl OmpHelmServer {
     /// run. The launch's session ends here: its run is over and its claim is
     /// released, but its state file stays with a pointer to the adopted session
     /// for the tools that still carry its id.
-    fn finish_adoption(&self, launch: OmpHelmStateFile, adoption: Adoption) -> Result<()> {
+    fn finish_adoption(
+        &self,
+        extension_connection: &str,
+        launch: OmpHelmStateFile,
+        adoption: Adoption,
+    ) -> Result<()> {
         let adopted = self.current_state();
+        self.send_extension_frame(
+            extension_connection,
+            json!({"kind": "extension_generation", "connection_id": adopted.connection_id, "lease_generation": adopted.lease_generation}),
+        );
         let dir = self
             .state_path()
             .parent()
@@ -2544,7 +2558,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
                 .unwrap_or_default()
                 .to_string();
             let recovered_server = server.clone();
-            let retry = spawn_managed_registration_retry_with_hook(
+            let retry = spawn_managed_resume_registration_retry(
                 &url,
                 &token,
                 "OMP",
@@ -4841,7 +4855,7 @@ mod tests {
         }
     }
 
-    fn start_adopting_launch(fixture: &AdoptionFixture) -> OmpHelmServer {
+    fn start_adopting_launch(fixture: &AdoptionFixture) -> (OmpHelmServer, mpsc::Receiver<Value>) {
         let mut launch = state();
         launch.session_id = "launch-session".into();
         launch.native_session_id = "stub-native".into();
@@ -4858,12 +4872,12 @@ mod tests {
             machine_name: "machine".into(),
             register: Arc::new(move |payload| registered.lock().unwrap().push(payload)),
         });
-        let (sender, _receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
         let mut shared = server.shared.lock().unwrap();
         shared.extension_sender = Some(sender);
         shared.extension_connection_id = Some("connection".into());
         drop(shared);
-        server
+        (server, receiver)
     }
 
     fn resume_old_conversation(server: &OmpHelmServer, fixture: &AdoptionFixture) {
@@ -4911,10 +4925,17 @@ mod tests {
                 Some("Thu Jan  1 00:00:00 1970".into()),
             )
             .unwrap();
-            let server = start_adopting_launch(&fixture);
+            let (server, extension) = start_adopting_launch(&fixture);
             resume_old_conversation(&server, &fixture);
 
             let adopted = server.current_state();
+            let told = extension
+                .try_iter()
+                .filter(|frame| frame["kind"] == "extension_generation")
+                .last()
+                .unwrap();
+            assert_eq!(told["connection_id"], adopted.connection_id.as_str());
+            assert_eq!(told["lease_generation"], adopted.lease_generation.as_str());
             assert_eq!(adopted.session_id, "old-session");
             assert_eq!(
                 adopted.adopted_from_session_id.as_deref(),
@@ -4924,6 +4945,7 @@ mod tests {
             assert_eq!(adopted.status, "ready");
             assert!(adopted.ready && !adopted.pending_transition);
             assert_ne!(adopted.run_id, "old-run");
+            assert_ne!(adopted.connection_id, "connection");
             assert_eq!(adopted.title.as_deref(), Some("the old conversation"));
 
             let on_disk: OmpHelmStateFile = serde_json::from_slice(
@@ -4956,6 +4978,10 @@ mod tests {
             assert_eq!(registered.len(), 1);
             assert_eq!(registered[0]["session_id"], "old-session");
             assert_eq!(registered[0]["run_id"], adopted.run_id.as_str());
+            assert_eq!(
+                registered[0]["connection_id"],
+                adopted.connection_id.as_str()
+            );
             assert_eq!(registered[0]["provider_thread_id"], "old-native");
             assert!(registered[0]["resume_attempt_id"].is_string());
 
@@ -4986,7 +5012,7 @@ mod tests {
             .clone();
         let fixture = adoption_fixture(pid, &birth);
         temp_env::with_var("LONGHOUSE_HOME", Some(&fixture.home), || {
-            let server = start_adopting_launch(&fixture);
+            let (server, _extension) = start_adopting_launch(&fixture);
             resume_old_conversation(&server, &fixture);
             let current = server.current_state();
             assert_eq!(current.session_id, "launch-session");

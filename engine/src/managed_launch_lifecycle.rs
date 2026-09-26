@@ -234,6 +234,13 @@ pub fn registration_failure_summary(error: &anyhow::Error, deadline: Duration) -
     format!("registration failed ({text})")
 }
 
+fn registration_failure_is_conflict(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ManagedRegistrationHttpError>())
+        .is_some_and(|http_error| http_error.status == reqwest::StatusCode::CONFLICT)
+}
+
 fn registration_failure_is_retryable(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -1100,6 +1107,26 @@ mod tests {
     }
 
     #[test]
+    fn a_conflict_is_final_for_a_launch_and_a_wait_for_a_resume() {
+        let refusal = |status| {
+            anyhow::Error::new(ManagedRegistrationHttpError {
+                provider_name: "OMP".to_string(),
+                status,
+                detail: None,
+            })
+        };
+        let conflict = refusal(reqwest::StatusCode::CONFLICT);
+        assert!(!registration_failure_is_retryable(&conflict));
+        assert!(registration_failure_is_conflict(&conflict));
+        assert!(!registration_failure_is_conflict(&refusal(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        )));
+        assert!(!registration_failure_is_conflict(&anyhow::anyhow!(
+            "offline"
+        )));
+    }
+
+    #[test]
     fn http_failure_summary_carries_the_hosts_structured_detail() {
         // A refusal the host explains must reach the user: a bare "Conflict" is
         // what made the 2026-09-25 resume failure undiagnosable from the CLI.
@@ -1708,6 +1735,59 @@ pub fn spawn_managed_registration_retry_with_hook(
     agent_dir: PathBuf,
     on_recovered: Option<Arc<dyn Fn(&ManagedLaunchResponse) + Send + Sync>>,
 ) -> ManagedRegistrationRetry {
+    spawn_registration_retry(
+        url,
+        token,
+        provider,
+        payload,
+        session_id,
+        notices,
+        agent_dir,
+        on_recovered,
+        false,
+    )
+}
+
+/// Register a run that resumes a session whose previous run died unobserved.
+///
+/// The Runtime Host refuses a second current run with 409 until the dead run's
+/// control lease lapses and a resume attempt retires it, so here a conflict is
+/// a wait, not a verdict. A fresh launch keeps treating it as final.
+pub fn spawn_managed_resume_registration_retry(
+    url: &str,
+    token: &str,
+    provider: &str,
+    payload: serde_json::Value,
+    session_id: &str,
+    notices: DeferredNotices,
+    agent_dir: PathBuf,
+    on_recovered: Option<Arc<dyn Fn(&ManagedLaunchResponse) + Send + Sync>>,
+) -> ManagedRegistrationRetry {
+    spawn_registration_retry(
+        url,
+        token,
+        provider,
+        payload,
+        session_id,
+        notices,
+        agent_dir,
+        on_recovered,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_registration_retry(
+    url: &str,
+    token: &str,
+    provider: &str,
+    payload: serde_json::Value,
+    session_id: &str,
+    notices: DeferredNotices,
+    agent_dir: PathBuf,
+    on_recovered: Option<Arc<dyn Fn(&ManagedLaunchResponse) + Send + Sync>>,
+    conflict_is_transient: bool,
+) -> ManagedRegistrationRetry {
     let url = url.to_string();
     let token = token.to_string();
     let provider = provider.to_string();
@@ -1868,7 +1948,10 @@ pub fn spawn_managed_registration_retry_with_hook(
                     }
                     return;
                 }
-                Err(error) if registration_failure_is_retryable(&error) => {
+                Err(error)
+                    if registration_failure_is_retryable(&error)
+                        || (conflict_is_transient && registration_failure_is_conflict(&error)) =>
+                {
                     let summary =
                         registration_failure_summary(&error, RECOVERY_REGISTRATION_TIMEOUT);
                     if let Ok(mut state) = state_for_thread.lock() {
