@@ -1,0 +1,4 @@
+# Labels and results derived from a private corpus. Never commit them: this repo is public.
+known_items.jsonl
+baselines/
+results/
