@@ -1081,9 +1081,7 @@ async def ingest_heartbeat(
         # Omission is authoritative only when the Machine Agent explicitly
         # says it enumerated the complete process scope. Legacy field
         # presence and partial/incremental scans fail open.
-        _unmanaged_bindings_present = _machine_process_snapshot_complete(
-            machine_evidence, "unmanaged_provider_processes", received_at=_now
-        )
+        _unmanaged_bindings_present = _machine_process_snapshot_complete(machine_evidence, "unmanaged_provider_processes", received_at=_now)
 
         incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
 
@@ -1131,8 +1129,7 @@ async def ingest_heartbeat(
                 "machine.heartbeat.apply.v2",
                 {
                     "heartbeat": {
-                        key: (value.isoformat() if isinstance(value, datetime) else value)
-                        for key, value in heartbeat_stamp_kwargs.items()
+                        key: (value.isoformat() if isinstance(value, datetime) else value) for key, value in heartbeat_stamp_kwargs.items()
                     },
                     "machine_evidence": machine_evidence,
                     "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
@@ -1193,9 +1190,7 @@ async def ingest_heartbeat(
                 status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
                 detail={
                     "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
-                    "message": (
-                        "Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog heartbeat mutation failed."
-                    ),
+                    "message": ("Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog heartbeat mutation failed."),
                 },
             ) from exc
         write_ms = round((time.monotonic() - write_started) * 1000, 1)
