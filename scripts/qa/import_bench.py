@@ -387,7 +387,6 @@ def main() -> int:
     engine_log = None
     probe: LiveProbe | None = None
     log_dir = scratch / "engine-logs"
-    bytes_out_start: int | None = None
     started = time.monotonic()
     result: dict[str, Any] = {"schema": "longhouse.import_bench.v1", "name": args.name, "image": args.image,
                               "image_commit": args.image_commit, "remote_url": args.remote_url,
@@ -470,7 +469,6 @@ def main() -> int:
                                     "--machine-name", DEVICE_ID, "--fallback-scan-secs", "1", "--spool-replay-secs", "1"], env=engine_env,
                                   stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
         import_started = time.monotonic()
-        bytes_out_start = process_bytes_out(engine.pid)
         probe = LiveProbe(home, base_url, token)
         probe.start()
         first, recent, complete = None, None, None
@@ -492,9 +490,11 @@ def main() -> int:
                 complete = elapsed
                 break
             time.sleep(1)
-        bytes_out_end = process_bytes_out(engine.pid)
-        if bytes_out_start is not None and bytes_out_end is not None:
-            sent = bytes_out_end - bytes_out_start
+        # The engine is fresh, so its lifetime socket bytes are the import (the
+        # probe's reads are the harness's, not the engine's). A start sample
+        # taken before its first socket opens reads as absent, not zero.
+        sent = process_bytes_out(engine.pid)
+        if sent is not None:
             result["engine_bytes_out"] = sent
             if complete:
                 result["engine_wire_mbit_s"] = round(sent * 8 / complete / 1e6, 2)
