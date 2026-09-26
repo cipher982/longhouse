@@ -71,7 +71,9 @@ def run(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    default_canary_subdomain = os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN") or "demo"
+    # The hosted canary ring, the same source deploy-status.sh reads. demo.longhouse.ai
+    # redirects to the public demo (production ring), so it can never stand in for it.
+    default_canary_subdomain = os.environ.get("HOSTED_CANARY_SUBDOMAIN") or "release-canary-a"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", help="Target commit SHA. Defaults to git HEAD.")
     parser.add_argument("--repo", default="cipher982/longhouse", help="GitHub repo in OWNER/REPO form.")

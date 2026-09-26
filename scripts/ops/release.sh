@@ -183,7 +183,8 @@ for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml; do
 done
 
 echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
-CANARY_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}"
+# The canary ring (same source as deploy-status.sh); the public demo is production.
+CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-release-canary-a}"
 CANARY_HEALTH_URL="https://${CANARY_SUBDOMAIN}.longhouse.ai/api/health"
 "$ROOT/scripts/ops/launch-readiness.py" \
   --sha "$BUMP_SHA" \
