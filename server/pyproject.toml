@@ -11,38 +11,29 @@ license = {text = "Apache-2.0"}
 
 # Core dependencies — what every Longhouse user needs
 dependencies = [
-    "python-dotenv>=1.0.0",
-    "fastapi>=0.110.0",
+    "python-dotenv>=1.2.2",
+    "fastapi>=0.141.1",
     "uvicorn>=0.24.0",
     "websockets>=12.0",
-    "openai>=2.14.0",
+    "openai>=2.14.0,<3",
     "sqlalchemy>=2.0.38",
-    "requests>=2.32.3",
-    "python-multipart>=0.0.20",
+    "python-multipart>=0.0.31",
     "prometheus-client>=0.19.0",
-    "cryptography>=44.0.3",
+    "cryptography>=50.0.0",
     "httpx[http2]>=0.27.0",
     "jsonschema>=4.23.0",
     "sse-starlette>=1.6.5",
-    "google-auth>=2.40.3",
-    "PyJWT[crypto]>=2.8.0",
-    "alembic>=1.13.0",
+    "PyJWT[crypto]>=2.13.0",
     "boto3>=1.35.0",
     "numpy>=2.4.1",
-    "anthropic>=0.40.0",
-    "click>=8.1.8,<8.2",
+    "click>=8.2",
     "typer>=0.9.0",
-    "rich>=13.0.0",
-    "watchdog>=6.0.0",
     "tiktoken>=0.7.0",
-    "mcp>=1.0",
+    "mcp>=1.28.1,<2",
     "pyyaml>=6.0",
     "zstandard>=0.23.0",
     "packaging>=24.2",
     "psutil>=5.9.0",
-    "opentelemetry-api>=1.41.0",
-    "opentelemetry-sdk>=1.41.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.41.0",
     "onnxruntime>=1.28.0",
     "tokenizers>=0.23.1",
 ]
@@ -50,17 +41,19 @@ dependencies = [
 [project.optional-dependencies]
 # Dev/test tools — not shipped in production images
 dev = [
-    "black",
     "ruff",
-    "pytest",
+    # pytest 9 forces pytest-asyncio 1.x, whose per-test asyncio.Runner joins
+    # the default executor on teardown; tests that leave an executor thread
+    # parked then hang an xdist worker until the CI job times out. Held until
+    # those leaks are hunted down (pytest 9.0.3's fix is a /tmp/pytest-of-user
+    # issue that does not apply inside the single-user test container).
+    "pytest<9",
     "pytest-xdist>=3.6.1",
     "pytest-timeout>=2.3.1",
-    "pytest-asyncio>=0.25.3",
-    "pexpect>=4.9",
+    "pytest-asyncio>=0.25.3,<1",
     "vulture>=2.11",
-    "hypothesis>=6.100",
-    "langchain-openai>=1.1.6",
-    "langchain-core>=1.2.5",
+    # tests/integration/test_shipper_e2e.py drives the live API with it.
+    "requests>=2.33.0",
 ]
 
 [project.scripts]
@@ -131,6 +124,13 @@ exclude = [
 [tool.uv]
 # Keep cache inside repo for hermetic test runs
 cache-dir = "./.uv_cache"
+# tokenizers declares huggingface-hub (which pulls hf-xet, a Rust network
+# client for HF storage, plus fsspec and filelock) for Tokenizer.from_pretrained.
+# The local embedder only calls Tokenizer.from_file on a checksum-pinned
+# artifact fetched by zerg/services/embedding_artifact.py, which works without
+# the hub. Applies to uv-built installs (the runtime image, dev); a plain
+# `uv tool install longhouse` from PyPI still resolves tokenizers' metadata.
+exclude-dependencies = ["huggingface-hub"]
 
 [tool.ruff]
 line-length = 140

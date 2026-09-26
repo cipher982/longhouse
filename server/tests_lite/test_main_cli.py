@@ -87,12 +87,10 @@ def test_longhouse_version_flag_json(monkeypatch):
 def test_longhouse_version_flag_missing_identity(monkeypatch):
     _install_resource(monkeypatch, None)
 
-    runner = CliRunner(mix_stderr=False)
-    result = runner.invoke(app, ["--version"])
+    result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 2, result.output
-    combined = (result.output or "") + (result.stderr or "")
-    assert "build identity missing" in combined
+    assert "build identity missing" in result.output
 
 
 def _make_db_diagnostics_fixture(tmp_path: Path) -> tuple[Path, str]:

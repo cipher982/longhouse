@@ -17,6 +17,7 @@ from datetime import timezone
 from threading import Lock
 from typing import Any
 
+import jwt
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -310,28 +311,47 @@ async def _verify_password_attempt(
         raise
 
 
+_GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+_GOOGLE_ISSUERS = ("accounts.google.com", "https://accounts.google.com")
+_google_jwks_client: jwt.PyJWKClient | None = None
+
+
+def _google_jwks() -> jwt.PyJWKClient:
+    global _google_jwks_client
+    if _google_jwks_client is None:
+        # Google rotates its signing keys on the order of days and serves them
+        # with a multi-hour max-age, so an hour of caching is conservative.
+        _google_jwks_client = jwt.PyJWKClient(_GOOGLE_JWKS_URL, cache_keys=True, lifespan=3600, timeout=5)
+    return _google_jwks_client
+
+
 def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
-    settings = get_settings()
-    valid_client_ids = [cid for cid in [settings.google_client_id, settings.google_ios_client_id] if cid]
-    if not valid_client_ids:
+    """Verify a Google Identity Services ID token: RS256 signature against
+    Google's JWKS, issuer, audience (our web OAuth client ID) and expiry."""
+    client_id = get_settings().google_client_id
+    if not client_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="GOOGLE_CLIENT_ID not set")
 
-    from google.auth.transport import requests as google_requests  # type: ignore
-    from google.oauth2 import id_token  # type: ignore
-
-    request = google_requests.Request()
-    last_exc: Exception | None = None
-    for client_id in valid_client_ids:
-        try:
-            return id_token.verify_oauth2_token(id_token_str, request, client_id)
-        except Exception as exc:
-            last_exc = exc
-            continue
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=f"Invalid Google token: {str(last_exc)}",
-    ) from last_exc
+    try:
+        signing_key = _google_jwks().get_signing_key_from_jwt(id_token_str)
+        return jwt.decode(
+            id_token_str,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=client_id,
+            issuer=_GOOGLE_ISSUERS,
+            options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+        )
+    except jwt.PyJWKClientConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google signing keys are temporarily unavailable",
+        ) from exc
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid Google token: {exc}",
+        ) from exc
 
 
 @router.post("/dev-login", response_model=TokenOut)
@@ -397,7 +417,7 @@ async def google_sign_in(request: Request, response: Response, body: dict[str, s
     if not raw_token or not isinstance(raw_token, str):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="id_token must be provided")
 
-    claims = _verify_google_id_token(raw_token)
+    claims = await asyncio.to_thread(_verify_google_id_token, raw_token)
     if claims.get("email_verified") is False:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google email not verified")
 

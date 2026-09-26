@@ -37,20 +37,28 @@ API_MOUNT_PATH = "/api"
 _DUMP_ROUTES = dedent(
     """
     import json
+    from fastapi.routing import iter_route_contexts
     from starlette.routing import Mount
     from zerg.main import api_app, app
 
+    # FastAPI >= 0.137 keeps included routers as a tree in .routes; walk the
+    # effective routes, not the top-level list.
+    outer_routes = list(iter_route_contexts(app.routes))
     mounts = [
-        {"path": r.path, "is_api_app": r.app is api_app}
-        for r in app.routes
-        if isinstance(r, Mount)
+        {"path": r.path, "is_api_app": r.original_route.app is api_app}
+        for r in outer_routes
+        if isinstance(r.original_route, Mount)
     ]
     outer = [
-        {"path": r.path, "kind": type(r).__name__, "is_api_app_mount": isinstance(r, Mount) and r.app is api_app}
-        for r in app.routes
-        if isinstance(getattr(r, "path", None), str)
+        {
+            "path": r.path,
+            "kind": type(r.original_route).__name__,
+            "is_api_app_mount": isinstance(r.original_route, Mount) and r.original_route.app is api_app,
+        }
+        for r in outer_routes
+        if isinstance(r.path, str)
     ]
-    inner = [r.path for r in api_app.routes if isinstance(getattr(r, "path", None), str)]
+    inner = [r.path for r in iter_route_contexts(api_app.routes) if isinstance(r.path, str)]
     print("ROUTES_JSON:" + json.dumps({"mounts": mounts, "outer": outer, "inner": inner}))
     """
 )

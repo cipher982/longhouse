@@ -16,6 +16,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from fastapi.routing import iter_route_contexts
+
 from tests_lite.live_catalog_harness import LiveCatalog  # noqa: E402
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402,F401
@@ -43,7 +45,7 @@ def _make_db(tmp_path):
 def test_remote_helm_continue_routes_are_not_registered():
     from zerg.main import api_app
 
-    routes = {(route.path, method) for route in api_app.routes for method in getattr(route, "methods", set())}
+    routes = {(route.path, method) for route in iter_route_contexts(api_app.routes) for method in getattr(route, "methods", None) or set()}
 
     assert ("/api/sessions/{session_id}/continue", "POST") not in routes
     assert ("/api/agents/sessions/{session_id}/continue", "POST") not in routes

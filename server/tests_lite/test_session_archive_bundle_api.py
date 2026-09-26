@@ -22,6 +22,8 @@ from uuid import uuid4
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from fastapi.routing import iter_route_contexts
+
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
 from zerg.dependencies.agents_auth import verify_agents_caller  # noqa: E402
@@ -119,7 +121,7 @@ def test_archive_bundle_is_stable_across_repeated_reads(live_catalog, live_catal
 def test_archive_bundle_route_requires_agents_token_dependency():
     route = next(
         candidate
-        for candidate in api_app.routes
+        for candidate in iter_route_contexts(api_app.routes)
         if str(getattr(candidate, "path", "") or "").endswith("/agents/sessions/{session_id}/archive-bundle")
     )
     dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
@@ -210,7 +212,9 @@ def test_archive_manifest_excludes_test_sessions_by_default(live_catalog, live_c
 
 def test_archive_manifest_route_requires_agents_token_dependency():
     route = next(
-        candidate for candidate in api_app.routes if str(getattr(candidate, "path", "") or "").endswith("/agents/sessions/archive-manifest")
+        candidate
+        for candidate in iter_route_contexts(api_app.routes)
+        if str(getattr(candidate, "path", "") or "").endswith("/agents/sessions/archive-manifest")
     )
     dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
     assert verify_agents_caller in dependency_calls

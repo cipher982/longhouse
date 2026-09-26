@@ -38,7 +38,7 @@ repos:
 
   # =========================================================================
   # Python: ruff for lint + format (fast, replaces black/isort/flake8)
-  # Only targets main source code, not alembic migrations or test scripts
+  # Only targets main source code, not test scripts
   # =========================================================================
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Must match the ruff in server/pyproject.toml's dev group. When these

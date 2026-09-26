@@ -27,7 +27,6 @@ class ModelProvider(str, Enum):
     OPENROUTER = "openrouter"
     XAI = "xai"
     GROQ = "groq"
-    ANTHROPIC = "anthropic"
 
 
 _PROVIDER_DEFAULT_API_KEY_ENVS = {
@@ -35,7 +34,6 @@ _PROVIDER_DEFAULT_API_KEY_ENVS = {
     ModelProvider.OPENAI: "OPENAI_API_KEY",
     ModelProvider.XAI: "XAI_API_KEY",
     ModelProvider.GROQ: "GROQ_API_KEY",
-    ModelProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
 }
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -431,12 +429,12 @@ def get_tier_model(tier: str) -> str:
 def get_llm_client_for_use_case(use_case: str) -> tuple:
     """Get an async LLM client + model string for a use case.
 
-    Resolves use case -> tier/model -> provider from models.json, then creates
-    the appropriate SDK client.
+    Resolves use case -> tier/model -> provider from models.json. Every
+    supported provider speaks the OpenAI chat-completions API.
 
     API key env var resolution:
       1) model.apiKeyEnvVar (if configured on that model)
-      2) provider default env var (OPENAI_API_KEY / GROQ_API_KEY / ANTHROPIC_API_KEY)
+      2) provider default env var (OPENROUTER_API_KEY / OPENAI_API_KEY / XAI_API_KEY / GROQ_API_KEY)
 
     Returns:
         (client, model_id, provider) tuple. Caller must close the client.
@@ -450,15 +448,6 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
     api_key = binding.credential
     base_url = binding.base_url
 
-    if provider == ModelProvider.ANTHROPIC:
-        from anthropic import AsyncAnthropic
-
-        kwargs = {"api_key": api_key}
-        if base_url:
-            kwargs["base_url"] = base_url
-        return AsyncAnthropic(**kwargs), model_id, provider
-
-    # OpenAI-compatible providers (openai, openrouter, xai, groq)
     from openai import AsyncOpenAI
 
     kwargs = build_openai_compatible_client_kwargs(provider=provider, api_key=api_key, base_url=base_url)

@@ -15,6 +15,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 import httpx
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import iter_route_contexts
 from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -1491,7 +1492,7 @@ def test_unknown_jwks_kid_forced_refresh_is_backed_off_per_issuer(monkeypatch):
 
 
 def test_bearer_refresh_route_is_not_registered():
-    assert all(route.path != "/auth/refresh-runtime-token" for route in auth_sso.router.routes)
+    assert all(route.path != "/auth/refresh-runtime-token" for route in iter_route_contexts(auth_sso.router.routes))
 
 
 def _native_request(*, headers: list[tuple[bytes, bytes]] | None = None):

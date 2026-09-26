@@ -28,9 +28,6 @@ from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
-from zerg.observability import get_tracer
-from zerg.observability import mark_span_error
-from zerg.observability import set_span_attributes
 from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
@@ -677,172 +674,130 @@ async def _release_managed_local_lock_after_terminal(
     db_bind,
     after_observation_id: int,
 ) -> None:
-    tracer = get_tracer(__name__)
     wait_started = time.monotonic()
-    with tracer.start_as_current_span("longhouse.turn.wait_terminal") as span:
-        wait_started_at = datetime.now(timezone.utc)
-        set_span_attributes(
-            span,
-            {
-                "longhouse.provider": provider,
-                "longhouse.managed": True,
-                "longhouse.session.id": session_id,
-                "longhouse.turn.request_id": request_id,
-                "longhouse.turn.after_observation_id": after_observation_id,
-                "longhouse.turn.timeout_secs": MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
-            },
+    wait_started_at = datetime.now(timezone.utc)
+    try:
+        terminal_result = await await_managed_local_turn_terminal(
+            db_bind=db_bind,
+            session_id=session_id,
+            after_observation_id=after_observation_id,
+            timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
         )
-        try:
-            terminal_result = await await_managed_local_turn_terminal(
-                db_bind=db_bind,
-                session_id=session_id,
-                after_observation_id=after_observation_id,
-                timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
-            )
-        except Exception as exc:
-            wait_seconds = max(0.0, time.monotonic() - wait_started)
-            managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="error").inc()
-            managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="error").observe(wait_seconds)
-            mark_span_error(span, exc)
-            logger.warning(
-                "[%s] Managed-local lock watcher crashed for %s",
-                request_id,
-                session_id,
-                exc_info=True,
-            )
-            return
-
-        if terminal_result is None:
-            terminal_result = _runtime_terminal_result_after(
-                db_bind=db_bind,
-                session_id=session_id,
-                after=wait_started_at,
-            )
-            if terminal_result is not None:
-                logger.info(
-                    "[%s] Managed-local lock watcher recovered terminal phase %s for %s from runtime state",
-                    request_id,
-                    terminal_result.phase,
-                    session_id,
-                )
-
-        if terminal_result is None:
-            wait_seconds = max(0.0, time.monotonic() - wait_started)
-            managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="timeout").inc()
-            managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="timeout").observe(wait_seconds)
-            set_span_attributes(span, {"longhouse.turn.outcome": "timeout"})
-            logger.warning(
-                "[%s] Managed-local lock watcher timed out for %s; leaving TTL lock in place",
-                request_id,
-                session_id,
-            )
-            return
-
-        set_span_attributes(
-            span,
-            {
-                "longhouse.turn.outcome": "terminal_observed",
-                "longhouse.turn.terminal_phase": terminal_result.phase,
-                "longhouse.turn.terminal_at": terminal_result.occurred_at,
-            },
-        )
+    except Exception:
         wait_seconds = max(0.0, time.monotonic() - wait_started)
-        managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="observed").inc()
-        managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="observed").observe(wait_seconds)
-
-        try:
-            with tracer.start_as_current_span("longhouse.turn.persist_terminal") as persist_span:
-                updated_session_turn = await execute_session_turn_write(
-                    db_bind=db_bind,
-                    label="session-turn-terminal",
-                    fn=lambda turn_db: mark_session_turn_terminal(
-                        turn_db,
-                        session_id=session_id,
-                        request_id=request_id,
-                        phase=terminal_result.phase,
-                        terminal_at=terminal_result.occurred_at,
-                    ),
-                )
-                set_span_attributes(
-                    persist_span,
-                    {
-                        "longhouse.session.id": session_id,
-                        "longhouse.turn.request_id": request_id,
-                        "longhouse.turn.updated": bool(updated_session_turn),
-                    },
-                )
-                if not updated_session_turn:
-                    logger.warning(
-                        "[%s] Managed-local terminal watcher saw %s for %s but canonical turn update did not apply",
-                        request_id,
-                        terminal_result.phase,
-                        session_id,
-                    )
-        except Exception as exc:
-            mark_span_error(span, exc)
-            logger.warning(
-                "[%s] Managed-local terminal watcher failed to persist terminal state for %s",
-                request_id,
-                session_id,
-                exc_info=True,
-            )
-
-        try:
-            from zerg.services.session_inputs import mark_delivery_attempt_completed
-
-            await execute_session_turn_write(
-                db_bind=db_bind,
-                label="session-input-attempt-completed",
-                fn=lambda attempt_db: mark_delivery_attempt_completed(
-                    attempt_db,
-                    session_id=session_id,
-                    request_id=request_id,
-                    completed_at=terminal_result.occurred_at,
-                ),
-            )
-        except Exception:
-            logger.warning(
-                "[%s] Managed-local terminal watcher failed to mark delivery attempt completed for %s",
-                request_id,
-                session_id,
-                exc_info=True,
-            )
-
-        with tracer.start_as_current_span("longhouse.turn.lock_release") as release_span:
-            released = await session_lock_manager.release(lock_scope_id, request_id)
-            set_span_attributes(
-                release_span,
-                {
-                    "longhouse.session.id": session_id,
-                    "longhouse.turn.request_id": request_id,
-                    "longhouse.turn.lock_released": released,
-                },
-            )
-        logger.info(
-            "[%s] Managed-local session reached terminal phase %s; lock release=%s",
+        managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="error").inc()
+        managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="error").observe(wait_seconds)
+        logger.warning(
+            "[%s] Managed-local lock watcher crashed for %s",
             request_id,
-            terminal_result.phase,
-            released,
+            session_id,
+            exc_info=True,
+        )
+        return
+
+    if terminal_result is None:
+        terminal_result = _runtime_terminal_result_after(
+            db_bind=db_bind,
+            session_id=session_id,
+            after=wait_started_at,
+        )
+        if terminal_result is not None:
+            logger.info(
+                "[%s] Managed-local lock watcher recovered terminal phase %s for %s from runtime state",
+                request_id,
+                terminal_result.phase,
+                session_id,
+            )
+
+    if terminal_result is None:
+        wait_seconds = max(0.0, time.monotonic() - wait_started)
+        managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="timeout").inc()
+        managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="timeout").observe(wait_seconds)
+        logger.warning(
+            "[%s] Managed-local lock watcher timed out for %s; leaving TTL lock in place",
+            request_id,
+            session_id,
+        )
+        return
+
+    wait_seconds = max(0.0, time.monotonic() - wait_started)
+    managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="observed").inc()
+    managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="observed").observe(wait_seconds)
+
+    try:
+        updated_session_turn = await execute_session_turn_write(
+            db_bind=db_bind,
+            label="session-turn-terminal",
+            fn=lambda turn_db: mark_session_turn_terminal(
+                turn_db,
+                session_id=session_id,
+                request_id=request_id,
+                phase=terminal_result.phase,
+                terminal_at=terminal_result.occurred_at,
+            ),
+        )
+        if not updated_session_turn:
+            logger.warning(
+                "[%s] Managed-local terminal watcher saw %s for %s but canonical turn update did not apply",
+                request_id,
+                terminal_result.phase,
+                session_id,
+            )
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local terminal watcher failed to persist terminal state for %s",
+            request_id,
+            session_id,
+            exc_info=True,
         )
 
-        # Drain the oldest queued SessionInput, if any. Runs in a fresh DB
-        # session bound to the same engine; reacquires the session lock via
-        # the normal send path so a racing user send can't double-dispatch.
-        try:
-            from zerg.services.session_input_queue import wake_session_input_queue
+    try:
+        from zerg.services.session_inputs import mark_delivery_attempt_completed
 
-            await wake_session_input_queue(
-                db_bind=db_bind,
+        await execute_session_turn_write(
+            db_bind=db_bind,
+            label="session-input-attempt-completed",
+            fn=lambda attempt_db: mark_delivery_attempt_completed(
+                attempt_db,
                 session_id=session_id,
-                reason="turn_terminal",
-                lock_scope_id=lock_scope_id,
-            )
-        except Exception:
-            logger.exception(
-                "[%s] Drain of queued SessionInput failed for %s (non-fatal)",
-                request_id,
-                session_id,
-            )
+                request_id=request_id,
+                completed_at=terminal_result.occurred_at,
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local terminal watcher failed to mark delivery attempt completed for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
+
+    released = await session_lock_manager.release(lock_scope_id, request_id)
+    logger.info(
+        "[%s] Managed-local session reached terminal phase %s; lock release=%s",
+        request_id,
+        terminal_result.phase,
+        released,
+    )
+
+    # Drain the oldest queued SessionInput, if any. Runs in a fresh DB
+    # session bound to the same engine; reacquires the session lock via
+    # the normal send path so a racing user send can't double-dispatch.
+    try:
+        from zerg.services.session_input_queue import wake_session_input_queue
+
+        await wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="turn_terminal",
+            lock_scope_id=lock_scope_id,
+        )
+    except Exception:
+        logger.exception(
+            "[%s] Drain of queued SessionInput failed for %s (non-fatal)",
+            request_id,
+            session_id,
+        )
 
 
 def _runtime_terminal_result_after(*, db_bind, session_id: UUID, after: datetime) -> ManagedLocalTerminalResult | None:
@@ -911,96 +866,62 @@ async def _observe_managed_local_turn_active_phase(
     db_bind,
     after_observation_id: int,
 ) -> None:
-    tracer = get_tracer(__name__)
     wait_started = time.monotonic()
-    with tracer.start_as_current_span("longhouse.turn.wait_active") as span:
-        set_span_attributes(
-            span,
-            {
-                "longhouse.provider": provider,
-                "longhouse.managed": True,
-                "longhouse.session.id": session_id,
-                "longhouse.turn.request_id": request_id,
-                "longhouse.turn.after_observation_id": after_observation_id,
-                "longhouse.turn.active_phases": tuple(sorted(_MANAGED_LOCAL_ACTIVE_PHASES)),
-                "longhouse.turn.timeout_secs": MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
-            },
+    try:
+        active_update = await await_managed_local_hook_phase_update(
+            db_bind=db_bind,
+            session_id=session_id,
+            after_observation_id=after_observation_id,
+            phases=set(_MANAGED_LOCAL_ACTIVE_PHASES),
+            timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+            poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
         )
-        try:
-            active_update = await await_managed_local_hook_phase_update(
-                db_bind=db_bind,
-                session_id=session_id,
-                after_observation_id=after_observation_id,
-                phases=set(_MANAGED_LOCAL_ACTIVE_PHASES),
-                timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
-                poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
-            )
-        except Exception as exc:
-            wait_seconds = max(0.0, time.monotonic() - wait_started)
-            managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="error").inc()
-            managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="error").observe(wait_seconds)
-            mark_span_error(span, exc)
-            logger.warning(
-                "[%s] Managed-local active watcher crashed for %s",
-                request_id,
-                session_id,
-                exc_info=True,
-            )
-            return
-
-        if active_update is None:
-            wait_seconds = max(0.0, time.monotonic() - wait_started)
-            managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="timeout").inc()
-            managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="timeout").observe(wait_seconds)
-            set_span_attributes(span, {"longhouse.turn.outcome": "timeout"})
-            return
-
-        set_span_attributes(
-            span,
-            {
-                "longhouse.turn.outcome": "active_observed",
-                "longhouse.turn.active_phase": active_update.phase,
-                "longhouse.turn.active_phase_observed_at": active_update.occurred_at,
-            },
-        )
+    except Exception:
         wait_seconds = max(0.0, time.monotonic() - wait_started)
-        managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="observed").inc()
-        managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="observed").observe(wait_seconds)
-        try:
-            with tracer.start_as_current_span("longhouse.turn.persist_active") as persist_span:
-                updated = await execute_session_turn_write(
-                    db_bind=db_bind,
-                    label="session-turn-active",
-                    fn=lambda turn_db: mark_session_turn_active(
-                        turn_db,
-                        session_id=session_id,
-                        request_id=request_id,
-                        observed_at=active_update.occurred_at,
-                    ),
-                )
-                set_span_attributes(
-                    persist_span,
-                    {
-                        "longhouse.session.id": session_id,
-                        "longhouse.turn.request_id": request_id,
-                        "longhouse.turn.updated": bool(updated),
-                    },
-                )
-                if not updated:
-                    logger.debug(
-                        "[%s] Managed-local active watcher saw %s for %s but no canonical update was needed",
-                        request_id,
-                        active_update.phase,
-                        session_id,
-                    )
-        except Exception as exc:
-            mark_span_error(span, exc)
-            logger.warning(
-                "[%s] Managed-local active watcher failed to persist active phase for %s",
+        managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="error").inc()
+        managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="error").observe(wait_seconds)
+        logger.warning(
+            "[%s] Managed-local active watcher crashed for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
+        return
+
+    if active_update is None:
+        wait_seconds = max(0.0, time.monotonic() - wait_started)
+        managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="timeout").inc()
+        managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="timeout").observe(wait_seconds)
+        return
+
+    wait_seconds = max(0.0, time.monotonic() - wait_started)
+    managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="observed").inc()
+    managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="observed").observe(wait_seconds)
+    try:
+        updated = await execute_session_turn_write(
+            db_bind=db_bind,
+            label="session-turn-active",
+            fn=lambda turn_db: mark_session_turn_active(
+                turn_db,
+                session_id=session_id,
+                request_id=request_id,
+                observed_at=active_update.occurred_at,
+            ),
+        )
+        if not updated:
+            logger.debug(
+                "[%s] Managed-local active watcher saw %s for %s but no canonical update was needed",
                 request_id,
+                active_update.phase,
                 session_id,
-                exc_info=True,
             )
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local active watcher failed to persist active phase for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
 
 
 def _schedule_managed_local_active_phase_observation(

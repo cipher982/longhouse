@@ -45,10 +45,8 @@ them. It is opt-in and separate from `make dev`, which stays lean.
 RUNTIME_METRICS_TARGET=host.docker.internal:47300 make observability-up
 ```
 
-## Traces (later)
+## Traces
 
-OTEL trace export is implemented on the server only
-(`server/zerg/observability.py`), opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`.
-The engine does not export OTLP: its telemetry path is the heartbeat it
-already sends to the server. A Tempo backend is intentionally not included
-yet.
+Neither the server nor the engine exports traces. The server's signal is the
+Prometheus `/metrics` endpoint above; the engine's telemetry path is the
+heartbeat it already sends to the server. No Tempo backend is included.

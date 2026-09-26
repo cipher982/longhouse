@@ -17,6 +17,8 @@ import zstandard
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from fastapi.routing import iter_route_contexts
+
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
 from zerg.dependencies.agents_auth import verify_agents_caller  # noqa: E402
@@ -150,7 +152,9 @@ def test_object_fetch_rejects_unknown_and_malformed_ids(live_catalog, live_catal
 
 def test_object_routes_require_agents_token_dependency():
     for suffix in ("/agents/sessions/{session_id}/objects/manifest", "/agents/sessions/{session_id}/objects/{envelope_id}"):
-        route = next(candidate for candidate in api_app.routes if str(getattr(candidate, "path", "") or "").endswith(suffix))
+        route = next(
+            candidate for candidate in iter_route_contexts(api_app.routes) if str(getattr(candidate, "path", "") or "").endswith(suffix)
+        )
         dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
         assert verify_agents_caller in dependency_calls
 

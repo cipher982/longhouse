@@ -194,7 +194,6 @@ class Settings:  # noqa: D401 – simple data container
     longhouse_password_hash: str  # Hashed password auth (LONGHOUSE_PASSWORD_HASH)
     internal_api_secret: str
     google_client_id: str | None
-    google_ios_client_id: str | None
     google_client_secret: str | None
     github_client_id: str | None
     github_client_secret: str | None
@@ -543,7 +542,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         longhouse_password_hash=os.getenv("LONGHOUSE_PASSWORD_HASH", ""),
         internal_api_secret=os.getenv("INTERNAL_API_SECRET", "dev-internal-secret"),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        google_ios_client_id=os.getenv("GOOGLE_IOS_CLIENT_ID"),
         google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
         github_client_id=os.getenv("GITHUB_CLIENT_ID"),
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),

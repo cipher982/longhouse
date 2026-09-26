@@ -15,8 +15,6 @@ from zerg.config import get_settings
 from zerg.database import initialize_live_database
 from zerg.database import live_store_configured
 from zerg.database import refresh_database_settings_from_env
-from zerg.observability import configure_observability
-from zerg.observability import shutdown_observability
 
 _settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -171,8 +169,6 @@ async def lifespan(app: FastAPI):
     e2e_catalog = _settings.testing and _settings.environment == "test:e2e"
     owns_test_catalog = factory_title_assurance or e2e_catalog
     try:
-        with _timed_startup_step("configure_observability"):
-            configure_observability()
         logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
         if not _settings.testing:
             with _timed_startup_step("catalogd_supervisor"):
@@ -463,7 +459,6 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop catalogd supervisor")
 
-        shutdown_observability()
         logger.info("Background services stopped")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
