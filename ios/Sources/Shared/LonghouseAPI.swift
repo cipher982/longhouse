@@ -455,7 +455,8 @@ struct LonghouseAPI: Sendable {
             URLQueryItem(name: "mode", value: TimelineSearchLane.lexical.rawValue),
         ]
         if let daysBack {
-            queryItems.append(URLQueryItem(name: "days_back", value: String(daysBack)))
+            // Keep the position the explicit-range URL has always had.
+            queryItems.insert(URLQueryItem(name: "days_back", value: String(daysBack)), at: 1)
         }
         components.queryItems = queryItems
         return components.url!
@@ -472,7 +473,8 @@ struct LonghouseAPI: Sendable {
             URLQueryItem(name: "context_mode", value: "forensic"),
         ]
         if let daysBack {
-            queryItems.append(URLQueryItem(name: "days_back", value: String(daysBack)))
+            // Keep the position the explicit-range URL has always had.
+            queryItems.insert(URLQueryItem(name: "days_back", value: String(daysBack)), at: 1)
         }
         components.queryItems = queryItems
         return components.url!
