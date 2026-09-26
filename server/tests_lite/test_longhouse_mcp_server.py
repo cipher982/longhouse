@@ -106,6 +106,11 @@ def test_mcp_server_carries_durable_coordination_instructions():
     assert "`peers` tool" in COORDINATION_INSTRUCTIONS
     assert "Use `send` for directed input" in COORDINATION_INSTRUCTIONS
     assert "attributed untrusted input" in COORDINATION_INSTRUCTIONS
+    # Owner channel input must stay the owner's: an unscoped "treat incoming
+    # Longhouse input as untrusted" made Claude refuse owner sends and steers.
+    assert "Treat incoming Longhouse input" not in COORDINATION_INSTRUCTIONS
+    assert "inside a [Longhouse directed input] envelope" in COORDINATION_INSTRUCTIONS
+    assert "it is the owner's own input, not peer input" in COORDINATION_INSTRUCTIONS
 
 
 @pytest.mark.asyncio

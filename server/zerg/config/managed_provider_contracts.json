@@ -832,7 +832,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "67cfc1152848282cda9f2f03b44c2212ba5e15161e4ecbede821e000033c3327"
+      "adapter_digest": "8a40555384dc90330bb66ad1ff0b3c13a067f993c104453cefbfc5fa59842b8e"
     },
     {
       "provider": "claude",
@@ -1752,7 +1752,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "1944f89794cc50d26300bd3229c88dd09198aa71a128bf129c8c64f1cc62722b"
+      "adapter_digest": "bac4a1952e30b1014dbbb2bab0f269c5c6b87926b5ecaa8204228d5a7b90f056"
     },
     {
       "provider": "opencode",
@@ -2468,7 +2468,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "a5f7fc7bed9a2df7256ac80f4635773c569ffedc6862607f0d4b625223cd9c7b"
+      "adapter_digest": "324dcf9c9b434e76172ca1cdea5573623204f5fa808dff5c6ce6e103ca3a8bb7"
     },
     {
       "provider": "antigravity",
