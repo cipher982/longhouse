@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use futures_util::stream::{self, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,18 @@ const PREVIEW_JPEG_QUALITY: u8 = 75;
 /// for a small JSON envelope; a multi-megabyte screenshot on a slow link would
 /// expire mid-upload and retry the whole body.
 const MIN_UPLOAD_BYTES_PER_SECOND: u64 = 256 * 1024;
+
+/// How many of one envelope's media objects upload at once.
+///
+/// Each is an independent claim + PUT round trip; shipping them one at a
+/// time left a high-RTT link (~280 ms observed) with only a handful of
+/// requests in flight out of the engine's whole backlog. Bounded, rather than
+/// unbounded, so a backlog full of concurrently-shipping envelopes (up to
+/// `BACKLOG_CAP` in `scheduler.rs`) does not multiply into a connection count
+/// that blows past the shared pool (`SHIPPING_IN_FLIGHT_CAP`,
+/// `shipping/client.rs`) and starts churning connections instead of reusing
+/// them.
+const MEDIA_UPLOAD_CONCURRENCY: usize = 6;
 
 /// The deadline a body of this size can actually be sent in.
 fn upload_timeout(base: Option<Duration>, byte_size: usize) -> Option<Duration> {
@@ -228,52 +241,81 @@ pub async fn ensure_storage_v2_media_uploaded(
     {
         bail!("storage-v2 media claim response is not an exact partition");
     }
-    for sha256 in &needed {
-        let media = by_sha
-            .get(sha256.as_str())
-            .with_context(|| format!("media claim requested unknown sha256 {sha256}"))?;
-        let lane_headers = vec![(STORAGE_V2_LANE_HEADER.to_string(), lane.to_string())];
-        // The preview is uploaded first: the object that points at it is only
-        // accepted with a link the store can already resolve.
-        let preview_hash =
-            upload_preview(client, capabilities, media, &lane_headers, request_timeout).await;
-        let path = capabilities
-            .media_upload_path_template
-            .replace("{sha256}", sha256);
-        let mut query: Vec<String> = Vec::new();
-        if let Some(preview_hash) = preview_hash {
-            query.push(format!("thumb_sha256={preview_hash}"));
+    // Every object in `needed` is independent (content-addressed, already
+    // deduplicated against what the Runtime Host reports it has), so they
+    // upload concurrently instead of one round trip at a time. All of them
+    // still have to land before the caller sends the envelope: the results
+    // are collected in full and the first error, if any, fails the whole
+    // call before that POST ever happens.
+    let results = stream::iter(needed.iter().map(|sha256| {
+        let media = by_sha.get(sha256.as_str());
+        async move {
+            let media =
+                media.with_context(|| format!("media claim requested unknown sha256 {sha256}"))?;
+            upload_one_media(client, capabilities, media, sha256, lane, request_timeout).await
         }
-        if media.mime_type.starts_with("image/") {
-            // The pixel size lets the timeline reserve the row's layout before
-            // the bytes arrive; the header carries it, so this costs a read of
-            // a few dozen bytes rather than a decode.
-            if let Some((width, height)) = image_dimensions(&media.bytes) {
-                query.push(format!("width={width}"));
-                query.push(format!("height={height}"));
-            }
-        }
-        let path = if query.is_empty() {
-            path
-        } else {
-            format!("{path}?{}", query.join("&"))
-        };
-        client
-            .put_bytes_with_timeout(
-                &path,
-                &media.mime_type,
-                lane_headers,
-                media.bytes.clone(),
-                upload_timeout(request_timeout, media.byte_size),
-            )
-            .await
-            .with_context(|| format!("uploading storage-v2 media {sha256}"))?;
+    }))
+    .buffer_unordered(MEDIA_UPLOAD_CONCURRENCY)
+    .collect::<Vec<Result<()>>>()
+    .await;
+    for result in results {
+        result?;
     }
     Ok(MediaUploadSummary {
         claimed: by_sha.len(),
         already_present: present.len(),
         uploaded: needed.len(),
     })
+}
+
+/// Upload one media object: its preview, if it gets one, then the original.
+///
+/// Self-contained on purpose — the caller runs a bounded number of these
+/// concurrently, so nothing here may assume it is the only upload in flight.
+async fn upload_one_media(
+    client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
+    media: &ParsedMediaObject,
+    sha256: &str,
+    lane: &str,
+    request_timeout: Option<Duration>,
+) -> Result<()> {
+    let lane_headers = vec![(STORAGE_V2_LANE_HEADER.to_string(), lane.to_string())];
+    // The preview is uploaded first: the object that points at it is only
+    // accepted with a link the store can already resolve.
+    let preview_hash =
+        upload_preview(client, capabilities, media, &lane_headers, request_timeout).await;
+    let path = capabilities
+        .media_upload_path_template
+        .replace("{sha256}", sha256);
+    let mut query: Vec<String> = Vec::new();
+    if let Some(preview_hash) = preview_hash {
+        query.push(format!("thumb_sha256={preview_hash}"));
+    }
+    if media.mime_type.starts_with("image/") {
+        // The pixel size lets the timeline reserve the row's layout before
+        // the bytes arrive; the header carries it, so this costs a read of
+        // a few dozen bytes rather than a decode.
+        if let Some((width, height)) = image_dimensions(&media.bytes) {
+            query.push(format!("width={width}"));
+            query.push(format!("height={height}"));
+        }
+    }
+    let path = if query.is_empty() {
+        path
+    } else {
+        format!("{path}?{}", query.join("&"))
+    };
+    client
+        .put_bytes_with_timeout(
+            &path,
+            &media.mime_type,
+            lane_headers,
+            media.bytes.clone(),
+            upload_timeout(request_timeout, media.byte_size),
+        )
+        .await
+        .with_context(|| format!("uploading storage-v2 media {sha256}"))
 }
 
 /// Upload this object's preview, if it is worth having one, and report its hash.
@@ -441,5 +483,255 @@ mod tests {
     #[tokio::test]
     async fn refuses_bytes_it_cannot_decode() {
         assert!(derive_preview(vec![0u8; 200_000]).await.is_none());
+    }
+
+    // -- Concurrent upload ordering/failure semantics -----------------------
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use crate::config::ShipperConfig;
+    use crate::pipeline::compressor::CompressionAlgo;
+
+    fn test_capabilities() -> StorageV2Capabilities {
+        StorageV2Capabilities {
+            protocol_version: 2,
+            cutover: true,
+            tenant_id: "tenant".to_string(),
+            machine_id: "machine".to_string(),
+            ingest_path: "/api/agents/storage/v2/envelopes".to_string(),
+            max_wire_body_bytes: 32 * 1024 * 1024,
+            max_raw_record_bytes: 1024 * 1024,
+            max_records: 1_000,
+            media_claim_path: "/api/agents/storage/v2/media/claims".to_string(),
+            media_upload_path_template: "/api/agents/storage/v2/media/{sha256}".to_string(),
+            max_media_bytes: 32 * 1024 * 1024,
+            max_media_claims: 512,
+            range_kinds: vec![],
+            lanes: vec!["live".to_string(), "repair".to_string()],
+            lane_header: STORAGE_V2_LANE_HEADER.to_string(),
+            envelope_content_encodings: vec![],
+        }
+    }
+
+    /// A distinct, non-image media object so `upload_preview` short-circuits
+    /// and each object costs exactly one PUT (the test cares about upload
+    /// concurrency, not the separate preview-derivation path).
+    fn test_media_object(index: usize) -> ParsedMediaObject {
+        let bytes = vec![index as u8; 128];
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        ParsedMediaObject {
+            source_offset: index as u64,
+            sha256,
+            mime_type: "application/octet-stream".to_string(),
+            byte_size: bytes.len(),
+            original_chars: 0,
+            original_line_sha256: "line".to_string(),
+            bytes,
+        }
+    }
+
+    /// A claims+PUT mock that accepts connections concurrently (unlike a
+    /// strict accept-in-order loop) so it can observe real overlap between
+    /// media uploads. Every requested sha256 is reported `needed`; every PUT
+    /// sleeps `put_delay` while counted as in-flight, then succeeds unless
+    /// its sha256 is `fail_sha`.
+    async fn spawn_media_mock_server(
+        fail_sha: Option<String>,
+        put_delay: Duration,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<()>,
+        Arc<Mutex<Vec<String>>>,
+        Arc<AtomicUsize>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_observed = Arc::new(AtomicUsize::new(0));
+
+        let log_outer = log.clone();
+        let in_flight_outer = in_flight.clone();
+        let max_observed_outer = max_observed.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let log = log_outer.clone();
+                let in_flight = in_flight_outer.clone();
+                let max_observed = max_observed_outer.clone();
+                let fail_sha = fail_sha.clone();
+                tokio::spawn(async move {
+                    let mut bytes = Vec::new();
+                    let mut buffer = [0_u8; 8192];
+                    let header_end = loop {
+                        let read = socket.read(&mut buffer).await.unwrap_or(0);
+                        if read == 0 {
+                            return;
+                        }
+                        bytes.extend_from_slice(&buffer[..read]);
+                        if let Some(offset) =
+                            bytes.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            break offset + 4;
+                        }
+                    };
+                    let headers = String::from_utf8_lossy(&bytes[..header_end]).to_string();
+                    let request_line = headers.lines().next().unwrap_or("").to_string();
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().unwrap_or("").to_string();
+                    let path = parts.next().unwrap_or("").to_string();
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    while bytes.len() - header_end < content_length {
+                        let read = socket.read(&mut buffer).await.unwrap_or(0);
+                        if read == 0 {
+                            break;
+                        }
+                        bytes.extend_from_slice(&buffer[..read]);
+                    }
+                    let body = bytes[header_end..].to_vec();
+
+                    let (status, resp_body) = if method == "POST" {
+                        let claim: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                        let shas: Vec<String> = claim["items"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|item| item["sha256"].as_str().unwrap().to_string())
+                            .collect();
+                        log.lock().unwrap().push("CLAIM".to_string());
+                        (
+                            "200 OK",
+                            serde_json::json!({"needed": shas, "present": [], "rejected": []})
+                                .to_string(),
+                        )
+                    } else {
+                        let sha = path.rsplit('/').next().unwrap_or("").to_string();
+                        let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_observed.fetch_max(current, Ordering::SeqCst);
+                        tokio::time::sleep(put_delay).await;
+                        in_flight.fetch_sub(1, Ordering::SeqCst);
+                        log.lock().unwrap().push(format!("PUT {sha}"));
+                        if fail_sha.as_deref() == Some(sha.as_str()) {
+                            ("503 Service Unavailable", "{}".to_string())
+                        } else {
+                            ("200 OK", String::new())
+                        }
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+                        resp_body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        (addr, handle, log, max_observed)
+    }
+
+    #[tokio::test]
+    async fn media_uploads_overlap_within_the_concurrency_bound() {
+        let put_delay = Duration::from_millis(60);
+        let (addr, server, _log, max_observed) = spawn_media_mock_server(None, put_delay).await;
+
+        let config = ShipperConfig {
+            api_url: format!("http://{addr}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+        let capabilities = test_capabilities();
+        let media_objects: Vec<ParsedMediaObject> = (0..12).map(test_media_object).collect();
+
+        let started = std::time::Instant::now();
+        let summary = ensure_storage_v2_media_uploaded(
+            &client,
+            &capabilities,
+            &media_objects,
+            "live",
+            Some(Duration::from_secs(5)),
+        )
+        .await
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(summary.uploaded, 12);
+        assert_eq!(summary.already_present, 0);
+
+        // Fully serial would take 12 * put_delay; bounded concurrency should
+        // clear it in a couple of waves.
+        assert!(
+            elapsed < put_delay * 12,
+            "uploads did not overlap: took {elapsed:?} for 12 objects at {put_delay:?} each"
+        );
+        let observed_max = max_observed.load(Ordering::SeqCst);
+        assert!(
+            observed_max > 1,
+            "expected overlapping uploads, observed max in-flight {observed_max}"
+        );
+        assert!(
+            observed_max <= MEDIA_UPLOAD_CONCURRENCY,
+            "concurrency bound violated: observed {observed_max} > bound {MEDIA_UPLOAD_CONCURRENCY}"
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn one_failing_media_upload_fails_the_whole_call() {
+        let media_objects: Vec<ParsedMediaObject> = (0..8).map(test_media_object).collect();
+        let failing_sha = media_objects[3].sha256.clone();
+        let (addr, server, log, _max_observed) =
+            spawn_media_mock_server(Some(failing_sha.clone()), Duration::from_millis(10)).await;
+
+        let config = ShipperConfig {
+            api_url: format!("http://{addr}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+        let capabilities = test_capabilities();
+
+        let result = ensure_storage_v2_media_uploaded(
+            &client,
+            &capabilities,
+            &media_objects,
+            "live",
+            Some(Duration::from_secs(5)),
+        )
+        .await;
+
+        let error = result.expect_err("one failing upload must fail the whole call");
+        assert!(
+            error.to_string().contains(&failing_sha),
+            "error should name the failing object: {error}"
+        );
+
+        // Every object still got its own upload attempt: content-addressed,
+        // claim-deduplicated storage means whatever already landed will not
+        // be re-sent on the next attempt, so trying every concurrent upload
+        // before failing wastes nothing.
+        let observed = log.lock().unwrap().clone();
+        let put_count = observed
+            .iter()
+            .filter(|line| line.starts_with("PUT"))
+            .count();
+        assert_eq!(put_count, media_objects.len());
+
+        server.abort();
     }
 }
