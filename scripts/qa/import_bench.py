@@ -126,27 +126,38 @@ def newest_corpus(source: Path, destination: Path, limit_bytes: int) -> dict[str
 
 
 def corpus_sessions(home: Path) -> tuple[set[str], set[str]]:
+    """Sessions the import must produce, keyed the way the engine keys them.
+
+    A Claude session is one top-level transcript file and its id is the file
+    stem. Counting every ``sessionId`` seen inside the lines also counts the
+    parents that subagent and resumed transcripts refer to, which never become
+    sessions of their own, so the "all imported" set could never be reached.
+    """
     all_ids: set[str] = set()
     recent_ids: set[str] = set()
     cutoff = datetime.now(UTC) - timedelta(days=7)
-    for path in (home / ".claude" / "projects").rglob("*.jsonl"):
+    for path in (home / ".claude" / "projects").glob("*/*.jsonl"):
+        has_message = False
+        is_recent = False
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 try:
                     item = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                session_id = item.get("sessionId")
-                if not isinstance(session_id, str) or not session_id:
+                if not isinstance(item, dict) or item.get("type") not in {"user", "assistant"}:
                     continue
-                all_ids.add(session_id)
+                has_message = True
                 stamp = item.get("timestamp")
                 if isinstance(stamp, str):
                     try:
-                        if datetime.fromisoformat(stamp.replace("Z", "+00:00")) >= cutoff:
-                            recent_ids.add(session_id)
+                        is_recent = is_recent or datetime.fromisoformat(stamp.replace("Z", "+00:00")) >= cutoff
                     except ValueError:
                         pass
+        if has_message:
+            all_ids.add(path.stem)
+            if is_recent:
+                recent_ids.add(path.stem)
     return all_ids, recent_ids
 
 
@@ -202,34 +213,33 @@ def all_readable(base_url: str, token: str, session_ids: set[str]) -> bool:
 
 
 def visible_sessions(base_url: str, token: str, status_counts: dict[int, int]) -> dict[str, str]:
-    """Paginate because the machine timeline intentionally caps a page at 100."""
+    """Every imported session, whatever its age.
+
+    The machine session list caps ``days_back`` at 90, so a corpus with older
+    history could never read as fully imported through it. The archive manifest
+    enumerates up to ten years and pages at 200. Imported unmanaged Claude
+    transcripts keep their native UUID as the Longhouse id.
+    """
     visible: dict[str, str] = {}
     offset = 0
     while True:
         status, listing, _headers = http(
-            "GET", f"{base_url}/api/agents/sessions?days_back=90&limit=100&offset={offset}&include_test=true&include_automation=true&hide_autonomous=false",
+            "GET",
+            f"{base_url}/api/agents/sessions/archive-manifest?days_back=3650&limit=200&offset={offset}&include_test=true&include_automation=true&hide_autonomous=false",
             token=token,
             timeout=30,
         )
         if status in status_counts:
             status_counts[status] += 1
         if status != 200:
-            return set()
+            return {}
         sessions = listing.get("sessions", [])
         if not isinstance(sessions, list):
             return {}
         for item in sessions:
-            if not isinstance(item, dict):
-                continue
-            provider_session_id = item.get("provider_session_id")
-            session_id = item.get("id")
-            if not isinstance(session_id, str) or not session_id:
-                continue
-            # Imported unmanaged Claude transcripts retain their native UUID as
-            # the Longhouse ID, so the provider alias is intentionally null.
-            visible[session_id] = session_id
-            if isinstance(provider_session_id, str) and provider_session_id:
-                visible[provider_session_id] = session_id
+            session_id = item.get("id") if isinstance(item, dict) else None
+            if isinstance(session_id, str) and session_id:
+                visible[session_id] = session_id
         offset += len(sessions)
         if offset >= int(listing.get("total", 0)) or not sessions:
             return visible
