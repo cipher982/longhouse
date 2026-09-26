@@ -548,7 +548,7 @@ struct TimelineSessionList: View {
             case .idle:
                 searchActionRow(
                     title: "Search all sessions",
-                    detail: "Last \(timelineSearchScopeDays) days, including sessions not loaded here",
+                    detail: "All indexed history, including sessions not loaded here",
                     systemImage: "magnifyingglass",
                     identifier: "timeline-search-all",
                     action: search.onSearchAll
@@ -574,7 +574,7 @@ struct TimelineSessionList: View {
                 .padding(.vertical, 4)
             case .empty:
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("No session in the last \(timelineSearchScopeDays) days matches “\(search.query)”.")
+                    Text("No session in your indexed history matches “\(search.query)”.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     if search.remoteLane == .lexical {
@@ -1038,7 +1038,7 @@ protocol TimelineSessionsClient: Sendable {
     func searchSessions(
         query: String,
         lane: TimelineSearchLane,
-        daysBack: Int,
+        daysBack: Int?,
         limit: Int
     ) async throws -> [SessionSummary]
 }
@@ -1107,10 +1107,10 @@ final class TimelineViewModel: ObservableObject {
     private let enableRealtime: Bool
     private let enableConnectivityClock: Bool
     private let limit = 40
-    // Search reaches the corpus the list does not hold. Bounded to the same
-    // window the timeline route allows, so the scope never silently widens past
-    // what the screen is showing.
-    private let searchDaysBack = timelineSearchScopeDays
+    // Search reaches the corpus the list does not hold. iOS has no
+    // date-range picker of its own, so this stays nil: the server searches
+    // all indexed history, the same default web and the machine API use.
+    private let searchDaysBack: Int? = nil
     private let searchLimit = 30
     private let reconcileIntervalNanoseconds: UInt64 = 120_000_000_000 // 120s safety net
     private let connectivityClockIntervalNanoseconds: UInt64 = 15_000_000_000 // 15s freshness tick

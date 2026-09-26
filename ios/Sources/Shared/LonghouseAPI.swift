@@ -7,8 +7,10 @@ enum TimelineSearchLane: String, Sendable, Equatable {
     case semantic
 }
 
-/// Search range shared by the app and widget targets.
-let timelineSearchScopeDays = 90
+/// Server search routes cover all indexed history when the caller names no
+/// explicit `days_back`. iOS has no date-range picker of its own, so every
+/// server-lane search omits it and lets the server search everything, the
+/// same default web and the machine API now use.
 
 /// Client-side realtime latency beacon.
 ///
@@ -389,10 +391,14 @@ struct LonghouseAPI: Sendable {
     }
 
     /// Search sessions on exactly one lane. See ``TimelineSearchLane``.
+    ///
+    /// `daysBack` is nil by default: with no date-range picker on iOS, a
+    /// search covers all indexed history unless a caller explicitly narrows
+    /// it, matching web and the machine API.
     func searchSessions(
         query: String,
         lane: TimelineSearchLane,
-        daysBack: Int = timelineSearchScopeDays,
+        daysBack: Int? = nil,
         limit: Int = 30
     ) async throws -> [SessionSummary] {
         switch lane {
@@ -408,7 +414,7 @@ struct LonghouseAPI: Sendable {
     /// Reads the same route the browser timeline reads, so the phone and the
     /// browser cannot answer one query with different lanes, and the same
     /// visibility policy applies to both.
-    func lexicalSearchSessions(query: String, daysBack: Int, limit: Int) async throws -> [SessionSummary] {
+    func lexicalSearchSessions(query: String, daysBack: Int?, limit: Int) async throws -> [SessionSummary] {
         let url = Self.lexicalSearchURL(baseURL: baseURL, query: query, daysBack: daysBack, limit: limit)
         var request = URLRequest(url: url)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
@@ -424,7 +430,7 @@ struct LonghouseAPI: Sendable {
 
     /// Dense paraphrase search. Slower, and the only lane that finds a session
     /// whose words the user did not type.
-    func semanticSearchSessions(query: String, daysBack: Int, limit: Int) async throws -> [SessionSummary] {
+    func semanticSearchSessions(query: String, daysBack: Int?, limit: Int) async throws -> [SessionSummary] {
         let url = Self.semanticSearchURL(baseURL: baseURL, query: query, daysBack: daysBack, limit: limit)
         var request = URLRequest(url: url)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
@@ -438,31 +444,37 @@ struct LonghouseAPI: Sendable {
         return decoded.sessions.map(\.searchSessionSummary)
     }
 
-    static func lexicalSearchURL(baseURL: URL, query: String, daysBack: Int, limit: Int) -> URL {
+    static func lexicalSearchURL(baseURL: URL, query: String, daysBack: Int?, limit: Int) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions"),
             resolvingAgainstBaseURL: false
         )!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "query", value: query),
-            URLQueryItem(name: "days_back", value: String(daysBack)),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "mode", value: TimelineSearchLane.lexical.rawValue),
         ]
+        if let daysBack {
+            queryItems.append(URLQueryItem(name: "days_back", value: String(daysBack)))
+        }
+        components.queryItems = queryItems
         return components.url!
     }
 
-    static func semanticSearchURL(baseURL: URL, query: String, daysBack: Int, limit: Int) -> URL {
+    static func semanticSearchURL(baseURL: URL, query: String, daysBack: Int?, limit: Int) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/semantic"),
             resolvingAgainstBaseURL: false
         )!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "query", value: query),
-            URLQueryItem(name: "days_back", value: String(daysBack)),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "context_mode", value: "forensic"),
         ]
+        if let daysBack {
+            queryItems.append(URLQueryItem(name: "days_back", value: String(daysBack)))
+        }
+        components.queryItems = queryItems
         return components.url!
     }
 

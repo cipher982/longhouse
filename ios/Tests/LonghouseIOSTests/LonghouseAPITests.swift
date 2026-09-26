@@ -75,6 +75,47 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func lexicalSearchOmitsDaysBackByDefaultToCoverAllIndexedHistory() throws {
+        // No date-range picker exists on iOS, so a search with no explicit
+        // `daysBack` must not silently narrow to a recent window: it omits
+        // the parameter entirely and lets the server search everything.
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
+
+        let url = LonghouseAPI.lexicalSearchURL(
+            baseURL: baseURL,
+            query: "provider channel",
+            daysBack: nil,
+            limit: 25
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.queryItems == [
+            URLQueryItem(name: "query", value: "provider channel"),
+            URLQueryItem(name: "limit", value: "25"),
+            URLQueryItem(name: "mode", value: "lexical"),
+        ])
+    }
+
+    @Test
+    func semanticSearchOmitsDaysBackByDefaultToCoverAllIndexedHistory() throws {
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
+
+        let url = LonghouseAPI.semanticSearchURL(
+            baseURL: baseURL,
+            query: "provider channel",
+            daysBack: nil,
+            limit: 25
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.queryItems == [
+            URLQueryItem(name: "query", value: "provider channel"),
+            URLQueryItem(name: "limit", value: "25"),
+            URLQueryItem(name: "context_mode", value: "forensic"),
+        ])
+    }
+
+    @Test
     func workspaceSuggestionsURLUsesCookieAuthTimelinePath() throws {
         // Regression guard: the launch sheet authenticates with the browser
         // cookie, so this MUST hit /api/timeline/*, NOT the device-token-gated

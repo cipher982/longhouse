@@ -362,7 +362,7 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     func searchSessions(
         query: String,
         lane: TimelineSearchLane,
-        daysBack: Int,
+        daysBack: Int?,
         limit: Int
     ) async throws -> [SessionSummary] {
         searchRequests += 1
