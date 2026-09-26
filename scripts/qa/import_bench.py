@@ -6,13 +6,18 @@ Machine Agent. Remote invocations use an existing disposable Runtime Host and a
 pre-minted device token. Results are JSON only; the scratch tree is removed in
 ``finally``.
 
+While the import runs, a live probe appends a marker to a fresh transcript every
+few seconds and times append-to-readable on the host, so the result shows what a
+live session experiences under import load (SLA: p95 under 10 s).
+
 Examples:
   python3 scripts/qa/import_bench.py --name baseline-shaped \
     --image ghcr.io/cipher982/longhouse-runtime:<baseline-sha> --shaped
   python3 scripts/qa/import_bench.py --name candidate-unshaped \
     --image ghcr.io/cipher982/longhouse-runtime:6b66fcddb
   python3 scripts/qa/import_bench.py --name hosted-rehearsal \
-    --remote-url https://w22-rehearsal.longhouse.ai --token-file /tmp/token
+    --remote-url https://w22-rehearsal.longhouse.ai --token-file /tmp/token \
+    --engine-bin "$(command -v longhouse-engine)"
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import hashlib
 import http.client as http_client
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -30,21 +36,24 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
-import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRATCH_PARENT = Path("/tmp/agents/w1-bench")
 RESULTS_PARENT = Path("/tmp/agents/w1-bench-results")
 TOXIPROXY_IMAGE = "ghcr.io/shopify/toxiproxy:2.12.0"
 DEVICE_ID = "8e447278-31b2-42e2-9518-3713dc9ef6cc"
+LIVE_PROBE_INTERVAL_SECONDS = 5.0
+LIVE_PROBE_TIMEOUT_SECONDS = 60.0
 
 
 def command(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
@@ -155,9 +164,11 @@ def corpus_sessions(home: Path) -> tuple[set[str], set[str]]:
                     except ValueError:
                         pass
         if has_message:
-            all_ids.add(path.stem)
+            # Session ids are UUIDs; the host returns them lowercased even when
+            # the transcript file name is uppercase.
+            all_ids.add(path.stem.lower())
             if is_recent:
-                recent_ids.add(path.stem)
+                recent_ids.add(path.stem.lower())
     return all_ids, recent_ids
 
 
@@ -239,10 +250,97 @@ def visible_sessions(base_url: str, token: str, status_counts: dict[int, int]) -
         for item in sessions:
             session_id = item.get("id") if isinstance(item, dict) else None
             if isinstance(session_id, str) and session_id:
-                visible[session_id] = session_id
+                visible[session_id.lower()] = session_id
         offset += len(sessions)
         if offset >= int(listing.get("total", 0)) or not sessions:
             return visible
+
+
+def engine_log_counts(log_dir: Path) -> dict[str, int]:
+    """Count backpressure the Machine Agent saw, from its own rolling log.
+
+    ``connect`` always logs through its daily file logger under ``--log-dir``,
+    never to stdout. Typed backpressure (envelope 429/503) is logged without a
+    status code, so it is counted as its own number; untyped failures carry
+    ``returned <status>``. Per-status truth lives in the host access log.
+    """
+    text = "".join(path.read_text(errors="replace") for path in sorted(log_dir.glob("engine.log*")))
+    return {
+        "429": len(re.findall(r"returned 429", text)),
+        "503": len(re.findall(r"returned 503", text)),
+        "typed_backpressure": text.count("archive backpressure observed"),
+        "storage_ship_failed": text.count("Storage-v2 ship failed"),
+    }
+
+
+def process_bytes_out(pid: int) -> int | None:
+    """Bytes the process has sent on all sockets (macOS ``nettop``), or None."""
+    if shutil.which("nettop") is None:
+        return None
+    try:
+        output = command("nettop", "-P", "-L", "1", "-x", "-p", str(pid), "-J", "bytes_out", timeout=15).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
+    for line in output.splitlines()[1:]:
+        fields = line.strip().strip(",").split(",")
+        if len(fields) >= 2 and fields[-1].isdigit():
+            return int(fields[-1])
+    return None
+
+
+class LiveProbe(threading.Thread):
+    """Append to one live transcript and time append-to-readable on the host."""
+
+    def __init__(self, home: Path, base_url: str, token: str) -> None:
+        super().__init__(daemon=True)
+        self.session_id = str(uuid.uuid4())
+        self.path = home / ".claude" / "projects" / "-tmp-import-bench-live-probe" / f"{self.session_id}.jsonl"
+        self.base_url, self.token = base_url, token
+        self.stop = threading.Event()
+        self.latencies: list[float] = []
+        self.timeouts = 0
+        self._parent: str | None = None
+
+    def _append(self, marker: str) -> None:
+        line_id = str(uuid.uuid4())
+        line = {"parentUuid": self._parent, "isSidechain": False, "type": "user", "userType": "external",
+                "message": {"role": "user", "content": marker}, "uuid": line_id,
+                "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "cwd": "/tmp/import-bench-live-probe",
+                "sessionId": self.session_id, "version": "2.1.283", "entrypoint": "cli"}
+        self._parent = line_id
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line) + "\n")
+
+    def run(self) -> None:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        sequence = 0
+        while not self.stop.is_set():
+            marker = f"import-bench-live-probe-{sequence}-{secrets.token_hex(4)}"
+            appended = time.monotonic()
+            self._append(marker)
+            deadline = appended + LIVE_PROBE_TIMEOUT_SECONDS
+            seen = False
+            while time.monotonic() < deadline and not self.stop.is_set():
+                status, page, _headers = http("GET", f"{self.base_url}/api/agents/storage/v2/sessions/{self.session_id}/events?anchor=tail&limit=20",
+                                              token=self.token, timeout=10)
+                if status == 200 and marker in json.dumps(page):
+                    self.latencies.append(round(time.monotonic() - appended, 3))
+                    seen = True
+                    break
+                time.sleep(0.25)
+            if not seen and not self.stop.is_set():
+                self.timeouts += 1
+            sequence += 1
+            self.stop.wait(max(0.0, LIVE_PROBE_INTERVAL_SECONDS - (time.monotonic() - appended)))
+
+    def summary(self) -> dict[str, Any]:
+        values = sorted(self.latencies)
+
+        def pick(fraction: float) -> float | None:
+            return values[min(len(values) - 1, int(len(values) * fraction))] if values else None
+
+        return {"session_id": self.session_id, "samples": len(values), "timeouts": self.timeouts,
+                "p50_s": pick(0.5), "p95_s": pick(0.95), "max_s": values[-1] if values else None}
 
 
 def stop_process(process: subprocess.Popen[Any] | None) -> None:
@@ -267,7 +365,8 @@ def main() -> int:
     parser.add_argument("--corpus-root", type=Path, default=Path.home() / ".claude" / "projects")
     parser.add_argument("--corpus-bytes", type=int, default=1_500_000_000)
     parser.add_argument("--timeout-secs", type=int, default=3_600)
-    parser.add_argument("--keep-logs", action="store_true", help="copy the engine log to /tmp/agents/w1-bench-results")
+    parser.add_argument("--keep-logs", action="store_true", help="copy the engine logs to /tmp/agents/w1-bench-results")
+    parser.add_argument("--engine-bin", type=Path, help="Machine Agent binary to run, e.g. the installed release; default builds from source")
     args = parser.parse_args()
 
     if bool(args.remote_url) != bool(args.token_file):
@@ -286,6 +385,9 @@ def main() -> int:
     network, runtime, proxy = f"{stamp}-net", f"{stamp}-runtime", f"{stamp}-proxy"
     engine: subprocess.Popen[Any] | None = None
     engine_log = None
+    probe: LiveProbe | None = None
+    log_dir = scratch / "engine-logs"
+    bytes_out_start: int | None = None
     started = time.monotonic()
     result: dict[str, Any] = {"schema": "longhouse.import_bench.v1", "name": args.name, "image": args.image,
                               "image_commit": args.image_commit, "remote_url": args.remote_url,
@@ -354,16 +456,23 @@ def main() -> int:
                       "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"), "CLAUDE_CONFIG_DIR": str(home / ".claude"), "RUST_LOG": "info"}
         engine_db = scratch / "engine.db"
         engine_log = (scratch / "engine.log").open("w")
-        engine_bin = command(sys.executable, "scripts/build/cargo.py", "artifact", "--profile", "release", "--bin", "longhouse-engine").stdout.strip()
+        if args.engine_bin:
+            engine_bin = str(args.engine_bin)
+        else:
+            engine_bin = command(sys.executable, "scripts/build/cargo.py", "artifact", "--profile", "release", "--bin", "longhouse-engine").stdout.strip()
         if not Path(engine_bin).is_file():
-            raise RuntimeError("release longhouse-engine is not built; run the documented build first")
+            raise RuntimeError(f"Machine Agent binary not found: {engine_bin}")
+        result["engine_version"] = command(engine_bin, "--version").stdout.strip()
         wire_start = interface_rx_bytes(runtime) if not args.remote_url else None
         engine_url = base_url if args.remote_url else f"http://127.0.0.1:{proxy_port}"
         engine = subprocess.Popen([engine_bin, "connect", "--url", engine_url, "--token", token, "--db", str(engine_db),
-                                    "--compression", "zstd",
+                                    "--compression", "zstd", "--log-dir", str(log_dir),
                                     "--machine-name", DEVICE_ID, "--fallback-scan-secs", "1", "--spool-replay-secs", "1"], env=engine_env,
                                   stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
         import_started = time.monotonic()
+        bytes_out_start = process_bytes_out(engine.pid)
+        probe = LiveProbe(home, base_url, token)
+        probe.start()
         first, recent, complete = None, None, None
         counts = {429: 0, 503: 0}
         deadline = import_started + args.timeout_secs
@@ -372,7 +481,7 @@ def main() -> int:
                 raise RuntimeError(f"Machine Agent exited early ({engine.returncode})")
             visible = visible_sessions(base_url, token, counts)
             elapsed = round(time.monotonic() - import_started, 3)
-            if first is None and visible:
+            if first is None and any(provider_id in visible for provider_id in all_ids):
                 first = elapsed
             recent_session_ids = {visible[provider_id] for provider_id in recent_ids if provider_id in visible}
             all_session_ids = {visible[provider_id] for provider_id in all_ids if provider_id in visible}
@@ -383,6 +492,12 @@ def main() -> int:
                 complete = elapsed
                 break
             time.sleep(1)
+        bytes_out_end = process_bytes_out(engine.pid)
+        if bytes_out_start is not None and bytes_out_end is not None:
+            sent = bytes_out_end - bytes_out_start
+            result["engine_bytes_out"] = sent
+            if complete:
+                result["engine_wire_mbit_s"] = round(sent * 8 / complete / 1e6, 2)
         result.update({"status": "ok" if complete is not None else "timeout", "wire_bytes_client_to_server": interface_rx_bytes(runtime) - wire_start if wire_start is not None else None,
                        "wire_bytes_note": "remote Runtime Host cannot expose a client wire counter; engine logs and local health retained" if args.remote_url else None,
                        "time_to_first_timeline_s": first, "time_to_recent_readable_s": recent, "time_to_fully_imported_s": complete,
@@ -392,17 +507,23 @@ def main() -> int:
     except Exception as exc:
         result.update({"error": f"{type(exc).__name__}: {exc}", "elapsed_s": round(time.monotonic() - started, 3)})
     finally:
+        if probe is not None:
+            probe.stop.set()
+            probe.join(timeout=15)
+            result["live_probe"] = probe.summary()
         stop_process(engine)
         if engine_log is not None:
             engine_log.close()
-            log_text = (scratch / "engine.log").read_text(errors="replace") if (scratch / "engine.log").exists() else ""
-            engine_counts = {"429": len(re.findall(r"(?:HTTP|returned) 429", log_text)), "503": len(re.findall(r"(?:HTTP|returned) 503", log_text))}
-            result.setdefault("engine_http_status_counts", engine_counts)
-            if args.keep_logs and (scratch / "engine.log").exists():
+            result.setdefault("engine_log_counts", engine_log_counts(log_dir))
+            if args.keep_logs:
                 RESULTS_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
-                log_path = RESULTS_PARENT / f"{args.name}.engine.log"
-                shutil.copy2(scratch / "engine.log", log_path)
-                result["engine_log"] = str(log_path)
+                kept = []
+                for source in [scratch / "engine.log", *sorted(log_dir.glob("engine.log*"))]:
+                    if source.exists():
+                        target = RESULTS_PARENT / f"{args.name}.{source.parent.name}.{source.name}"
+                        shutil.copy2(source, target)
+                        kept.append(str(target))
+                result["engine_logs"] = kept
             status_path = home / ".longhouse" / "agent" / "engine-status.json"
             if status_path.exists():
                 try:
