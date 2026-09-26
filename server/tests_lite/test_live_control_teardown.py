@@ -31,6 +31,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_catalog_launch import attach_live_catalog_control
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
+from zerg.services.managed_provider_contracts import require_contract_for_provider
 
 
 @pytest.fixture
@@ -94,6 +95,109 @@ def _seed_finished_helm_session(factory, *, provider: str = "cursor"):
 def _runs(factory, thread_id) -> list[LiveSessionRun]:
     with factory() as db:
         return db.query(LiveSessionRun).filter(LiveSessionRun.thread_id == str(thread_id)).all()
+
+
+def _seed_open_helm_session(factory, *, provider: str = "cursor"):
+    """A session whose run never reported an end (wrapper killed, machine gone)."""
+
+    started_at = datetime.now(timezone.utc) - timedelta(days=2)
+    session_id = uuid4()
+    thread_id = uuid4()
+    run_id = uuid4()
+    with factory() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider=provider,
+                environment="development",
+                device_id="cinder",
+                started_at=started_at,
+                primary_thread_id=str(thread_id),
+                created_at=started_at,
+                updated_at=started_at,
+            )
+        )
+        db.add(
+            LiveSessionThread(
+                id=str(thread_id),
+                session_id=str(session_id),
+                provider=provider,
+                branch_kind="root",
+                is_primary=1,
+                created_at=started_at,
+                updated_at=started_at,
+            )
+        )
+        db.add(
+            LiveSessionRun(
+                id=str(run_id),
+                thread_id=str(thread_id),
+                provider=provider,
+                host_id="cinder",
+                launch_origin="longhouse_spawned",
+                started_at=started_at,
+            )
+        )
+        db.commit()
+    return session_id, thread_id, run_id, started_at
+
+
+def test_observer_does_not_attach_to_a_run_without_a_current_claim(live_session_factory):
+    """An observer reports the owner's state; it never resurrects a dead row.
+
+    The run row is a record. A machine's detached observation used to stamp
+    fresh control and thread aliases onto an unterminated run whose lease,
+    activity window and launch attempt had all lapsed -- the shape that kept a
+    killed wrapper's session looking owned for days.
+    """
+
+    from zerg.models.live_store import LiveSessionConnection
+
+    session_id, thread_id, run_id, started_at = _seed_open_helm_session(live_session_factory)
+    observed_at = datetime.now(timezone.utc)
+
+    with live_session_factory() as db:
+        assert (
+            attach_live_catalog_control(
+                db,
+                session_id=session_id,
+                provider="cursor",
+                device_id="cinder",
+                state="detached",
+                observed_at=observed_at,
+            )
+            is None
+        )
+        db.commit()
+    with live_session_factory() as db:
+        assert db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == str(run_id)).count() == 0
+
+    # A current attachment stamp *is* a claim, so the same observation attaches.
+    with live_session_factory() as db:
+        db.add(
+            LiveSessionConnection(
+                run_id=str(run_id),
+                control_plane=require_contract_for_provider("cursor").control_plane,
+                acquisition_kind="spawned_control",
+                state="attached",
+                device_id="cinder",
+                acquired_at=observed_at - timedelta(minutes=1),
+                last_health_at=observed_at - timedelta(minutes=1),
+            )
+        )
+        db.commit()
+    with live_session_factory() as db:
+        connection = attach_live_catalog_control(
+            db,
+            session_id=session_id,
+            provider="cursor",
+            device_id="cinder",
+            state="detached",
+            observed_at=observed_at,
+        )
+        db.commit()
+        assert connection is not None
+        assert connection.state == "detached"
 
 
 def test_missing_lease_does_not_mint_a_run(live_session_factory):

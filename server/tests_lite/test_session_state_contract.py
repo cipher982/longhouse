@@ -402,7 +402,11 @@ def test_no_reply_turn_convergence_is_independent_of_run_outcome(end_reason, ren
     )
 
     assert facts.run is not None
-    assert facts.run.lifecycle == ("ended" if end_reason is not None else "running")
+    # An unterminated Console run with no in-flight turn is not "running": Console
+    # ownership is its turn state, and an expired/absent turn is an unknown
+    # outcome, never a run end. The convergence assertions below are the subject
+    # of this test and are independent of that axis.
+    assert facts.run.lifecycle == ("ended" if end_reason is not None else "unknown")
     assert facts.run.end_reason == end_reason
     assert facts.activity.state == "unknown"
     assert facts.transcript.convergence == expected_convergence

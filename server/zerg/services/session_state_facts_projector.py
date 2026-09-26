@@ -197,15 +197,19 @@ def project_shadow_session_state_facts(
         if (diagnostic := _head_diagnostic(family, winner)) is not None
     }
     launch = _project_launch(catalog_facts)
+    activity = _project_activity(activity_head, now=normalized_now)
+    control = _project_control(control_head, supported_operations=set(supported_operations))
     return ShadowSessionStateProjection(
         commit_seq=commit_seq,
         mode=_project_mode(catalog_facts),
         disposition=_project_disposition(catalog_facts),
         launch=launch,
-        run=_project_run(catalog_facts, launch=launch),
-        activity=_project_activity(activity_head, now=normalized_now),
+        # The run axis summarises the other evidence axes, so it is projected
+        # from them rather than from `ended_at` alone.
+        run=_project_run(catalog_facts, launch=launch, control=control, activity=activity, now=normalized_now),
+        activity=activity,
         delegation=_project_delegation(delegation_head, now=normalized_now, children=_mapping(catalog_facts.get("delegation_children"))),
-        control=_project_control(control_head, supported_operations=set(supported_operations)),
+        control=control,
         control_run_id=_control_run_id(control_head),
         fact_sources=fact_sources,
         rejected_heads=rejected_activity + rejected_delegation + rejected_control,
@@ -621,10 +625,45 @@ def _project_launch(catalog_facts: Mapping[str, Any]) -> SessionLaunchFacts | No
     )
 
 
+def _run_evidence_is_current(
+    *,
+    control: SessionControlFacts | None,
+    activity: SessionActivityFacts | None,
+    launch: SessionLaunchFacts | None,
+    now: datetime,
+) -> bool:
+    """Whether any evidence axis still claims this run is executing.
+
+    The run row is a record; this is the claim. `ended_at` says a run was
+    observed to end, and absence of it says only that no end was observed -- a
+    run whose attachment lease, activity window and launch attempt have all
+    lapsed is `unknown`, not `running`.
+    """
+
+    if (
+        control is not None
+        and control.valid_until is not None
+        and control.valid_until > now
+        and control.connection in {"connected", "degraded"}
+    ):
+        return True
+    if (
+        activity is not None
+        and activity.valid_until is not None
+        and activity.valid_until > now
+        and activity.state in {"thinking", "executing", "blocked"}
+    ):
+        return True
+    return launch is not None and launch.state in {"pending", "dispatched"}
+
+
 def _project_run(
     catalog_facts: Mapping[str, Any],
     *,
     launch: SessionLaunchFacts | None,
+    control: SessionControlFacts | None = None,
+    activity: SessionActivityFacts | None = None,
+    now: datetime | None = None,
 ) -> SessionRunFacts | None:
     run = _mapping(catalog_facts.get("latest_run"))
     run_id = _text(run.get("id"))
@@ -639,15 +678,23 @@ def _project_run(
     started_at = _optional_wire_datetime(run.get("started_at"), "latest_run.started_at")
     ended_at = _optional_wire_datetime(run.get("ended_at"), "latest_run.ended_at")
     console_turn_state = _text(_mapping(catalog_facts.get("console_control")).get("turn_state"))
-    if ended_at is None and _project_mode(catalog_facts) == "console":
+    if ended_at is not None:
+        lifecycle = "ended"
+    elif _project_mode(catalog_facts) == "console":
+        # Console has no local process, so a machine's process snapshot can never
+        # judge it: its ownership horizon is the dispatch's own turn state. An
+        # expired turn is an unknown outcome, never an ended run -- Console runs
+        # end through a terminal turn result.
         if console_turn_state in {"queued", "starting"}:
             lifecycle = "starting"
         elif console_turn_state in {"active", "draining"}:
             lifecycle = "running"
         else:
-            lifecycle = "running"
+            lifecycle = "unknown"
+    elif now is not None and _run_evidence_is_current(control=control, activity=activity, launch=launch, now=now):
+        lifecycle = "running"
     else:
-        lifecycle = "ended" if ended_at is not None else "running"
+        lifecycle = "unknown"
     return SessionRunFacts(
         id=run_id,
         lifecycle=lifecycle,

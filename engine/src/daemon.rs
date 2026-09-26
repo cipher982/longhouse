@@ -415,10 +415,27 @@ struct OpenHistoryReconciliation {
     remaining_paths: HashSet<PathBuf>,
 }
 
-#[derive(Clone)]
+/// What one managed scan pass may claim to the Runtime Host.
+///
+/// `partial` is diagnostic; `complete` is the certificate. A pass certifies only
+/// what it actually enumerated in this generation -- pass kind is irrelevant,
+/// and an unresolved provider directory or an entry carried forward unaccounted
+/// for is a failure to enumerate, not a quiet empty result.
+fn managed_scan_certificate(result: &ManagedObservationScanResult) -> (bool, bool) {
+    (result.retained_stale_rows > 0, result.enumeration_complete)
+}
+
+#[derive(Clone, Default)]
 struct ManagedObservationScanResult {
     reason: &'static str,
     full_reconciliation: bool,
+    /// Whether this pass enumerated every managed provider state directory and
+    /// accounted for every entry in it. This -- not the pass kind -- is what the
+    /// Runtime Host needs before it may act on absence: a certificate is a claim
+    /// about a moment, not a standing property of the machine.
+    enumeration_complete: bool,
+    /// Wall clock of the enumeration itself, carried into the evidence scope.
+    captured_at: String,
     process_inventory_valid: bool,
     process_inventory: Vec<unmanaged_bindings::ProcessInfo>,
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
@@ -463,6 +480,10 @@ struct ProjectionBuildInput {
     managed_observation_generation: u64,
     managed_scan_partial: bool,
     managed_snapshot_complete: bool,
+    /// Wall clock of the enumeration the managed observations came from. The
+    /// evidence scope carries it so the Runtime Host can tell how old the claim
+    /// is: a certificate says "as of this moment", not "always".
+    managed_captured_at: String,
     unmanaged_snapshot_complete: bool,
     db_path: PathBuf,
     parse_tracker: RecentIssueTracker,
@@ -1256,6 +1277,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
     let mut last_projected_managed_scan_partial = false;
     let mut last_projected_managed_snapshot_complete = false;
+    let mut last_managed_captured_at = String::new();
     let mut last_projected_unmanaged_snapshot_complete = false;
     let mut unmanaged_binding_refresh_failed = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
@@ -1611,6 +1633,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         managed_scan_partial: last_projected_managed_scan_partial,
                                         managed_snapshot_complete:
                                             last_projected_managed_snapshot_complete,
+                                        managed_captured_at: last_managed_captured_at.clone(),
                                         unmanaged_snapshot_complete:
                                             last_projected_unmanaged_snapshot_complete,
                                         db_path: projection_db_path.clone(),
@@ -2258,6 +2281,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 managed_scan_partial: last_projected_managed_scan_partial,
                                 managed_snapshot_complete:
                                     last_projected_managed_snapshot_complete,
+                                managed_captured_at: last_managed_captured_at.clone(),
                                 unmanaged_snapshot_complete:
                                     last_projected_unmanaged_snapshot_complete,
                                 db_path: projection_db_path.clone(),
@@ -2491,9 +2515,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             ManagedObservationSnapshot::from_result(&result).current_only();
                         let managed_observations_changed = !next_managed_observations
                             .projection_equivalent(&last_managed_observations);
-                        let managed_scan_partial = result.retained_stale_rows > 0;
-                        let managed_snapshot_complete =
-                            result.full_reconciliation && !managed_scan_partial;
+                        let (managed_scan_partial, managed_snapshot_complete) =
+                            managed_scan_certificate(&result);
                         let managed_evidence_changed = managed_observations_changed
                             || result.full_reconciliation
                             || managed_scan_partial != last_projected_managed_scan_partial;
@@ -2535,7 +2558,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 managed_observation_generation,
                                 last_managed_observations.clone(),
                                 managed_scan_partial,
-                                result.full_reconciliation && result.retained_stale_rows == 0,
+                                managed_scan_certificate(&result).1,
                             );
                         if paired_refresh_started {
                             projection_generation = paired_generation;
@@ -2560,6 +2583,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // incomplete evidence; the refresh result can replace
                         // this projection later without blocking managed truth.
                         last_projected_managed_observations = last_managed_observations.clone();
+                        last_managed_captured_at = result.captured_at.clone();
                         last_projected_managed_scan_partial = managed_scan_partial;
                         last_projected_managed_snapshot_complete = managed_snapshot_complete;
                         last_projected_unmanaged_snapshot_complete = false;
@@ -2569,6 +2593,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             managed_scan_partial: last_projected_managed_scan_partial,
                             managed_snapshot_complete:
                                 last_projected_managed_snapshot_complete,
+                            managed_captured_at: last_managed_captured_at.clone(),
                             unmanaged_snapshot_complete:
                                 last_projected_unmanaged_snapshot_complete,
                             db_path: projection_db_path.clone(),
@@ -2818,6 +2843,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         managed_scan_partial: last_projected_managed_scan_partial,
                         managed_snapshot_complete:
                             last_projected_managed_snapshot_complete,
+                        managed_captured_at: last_managed_captured_at.clone(),
                         unmanaged_snapshot_complete:
                             last_projected_unmanaged_snapshot_complete,
                         db_path: projection_db_path.clone(),
@@ -2856,6 +2882,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         managed_scan_partial: last_projected_managed_scan_partial,
                         managed_snapshot_complete:
                             last_projected_managed_snapshot_complete,
+                        managed_captured_at: last_managed_captured_at.clone(),
                         unmanaged_snapshot_complete:
                             last_projected_unmanaged_snapshot_complete,
                         db_path: projection_db_path.clone(),
@@ -3635,6 +3662,7 @@ fn maybe_start_projection_build(
         managed_observation_generation,
         managed_scan_partial,
         managed_snapshot_complete,
+        managed_captured_at,
         unmanaged_snapshot_complete,
         db_path,
         parse_tracker,
@@ -3678,6 +3706,7 @@ fn maybe_start_projection_build(
                     &unmanaged,
                     &continuation,
                     managed_snapshot_complete,
+                    &managed_captured_at,
                     unmanaged_snapshot_complete,
                     Some(limiter),
                     Some(scheduler),
@@ -3721,6 +3750,7 @@ fn build_local_status_projection(
     pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
     managed_snapshot_complete: bool,
+    managed_captured_at: &str,
     unmanaged_snapshot_complete: bool,
     limiter_snapshot: Option<crate::scheduler::LimiterSnapshot>,
     scheduler_snapshot: Option<crate::scheduler::SchedulerSnapshot>,
@@ -3744,6 +3774,7 @@ fn build_local_status_projection(
         unmanaged_session_bindings,
         &[],
         managed_snapshot_complete,
+        managed_captured_at,
         unmanaged_snapshot_complete,
         limiter_snapshot,
         scheduler_snapshot,
@@ -3770,6 +3801,7 @@ fn build_local_status_projection_with_omp(
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
     continuation: &[managed_resume_scan::ResumeContractObservation],
     managed_snapshot_complete: bool,
+    managed_captured_at: &str,
     unmanaged_snapshot_complete: bool,
     limiter_snapshot: Option<crate::scheduler::LimiterSnapshot>,
     scheduler_snapshot: Option<crate::scheduler::SchedulerSnapshot>,
@@ -3911,6 +3943,11 @@ fn build_local_status_projection_with_omp(
         Some(continuation),
         current_evidence_rotation(),
     ));
+    if let Some(evidence) = payload.machine_evidence.as_mut() {
+        // The scope says *when* it was enumerated; the envelope only says when
+        // it was sent.
+        heartbeat::stamp_scope_capture_time(evidence, &managed_captured_at);
+    }
     payload.sessions = heartbeat::resolved_sessions_from_observations_with_omp(
         &payload.managed_sessions,
         resolved_unmanaged_bindings,
@@ -4612,6 +4649,11 @@ fn maybe_start_managed_observation_scan(
         } else {
             previous.current_only()
         };
+        // The enumeration's own clock. The evidence envelope is stamped when it
+        // is built, which can be later than the scan it describes, and a stale
+        // claim that reads as fresh is worse than no claim.
+        let captured_at = chrono::Utc::now().to_rfc3339();
+        let mut unresolved_state_dirs = 0_usize;
         let started = Instant::now();
         let process_started = Instant::now();
         let process_inventory = crate::process_identity::try_collect_process_facts_by_pid();
@@ -4630,20 +4672,14 @@ fn maybe_start_managed_observation_scan(
             .collect();
         let process_inventory_ms = process_started.elapsed().as_millis() as u64;
         let codex_started = Instant::now();
-        let mut codex_observations = if full_reconciliation {
-            managed_bridge_scan::default_codex_bridge_state_dir()
-                .map(|state_dir| {
-                    managed_bridge_scan::collect_observations_from(&state_dir, &process_facts)
-                })
-                .unwrap_or_default()
-        } else {
-            let paths = previous
-                .codex
-                .iter()
-                .map(|row| row.state_file.clone())
-                .collect::<Vec<_>>();
-            managed_bridge_scan::collect_observations_from_paths(&paths, &process_facts)
+        let (mut codex_observations, unresolved) = match managed_bridge_scan::default_codex_bridge_state_dir() {
+            Some(state_dir) => (
+                managed_bridge_scan::collect_observations_from(&state_dir, &process_facts),
+                false,
+            ),
+            None => (Vec::new(), true),
         };
+        unresolved_state_dirs += usize::from(unresolved);
         let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
 
         // Republish terminal events that committed durably but never reached
@@ -4676,18 +4712,11 @@ fn maybe_start_managed_observation_scan(
         }
 
         let antigravity_started = Instant::now();
-        let mut antigravity_observations = if full_reconciliation {
-            managed_antigravity_scan::default_antigravity_state_dir()
-                .map(|state_dir| managed_antigravity_scan::collect_observations_from(&state_dir))
-                .unwrap_or_default()
-        } else {
-            let paths = previous
-                .antigravity
-                .iter()
-                .map(|row| row.state_file.clone())
-                .collect::<Vec<_>>();
-            managed_antigravity_scan::collect_observations_from_paths(&paths)
+        let (mut antigravity_observations, unresolved) = match managed_antigravity_scan::default_antigravity_state_dir() {
+            Some(state_dir) => (managed_antigravity_scan::collect_observations_from(&state_dir), false),
+            None => (Vec::new(), true),
         };
+        unresolved_state_dirs += usize::from(unresolved);
         let retained_antigravity = retain_existing_observations(
             &mut antigravity_observations,
             &previous.antigravity,
@@ -4696,23 +4725,14 @@ fn maybe_start_managed_observation_scan(
         let antigravity_elapsed_ms = antigravity_started.elapsed().as_millis() as u64;
 
         let claude_started = Instant::now();
-        let mut claude_observations = if full_reconciliation {
-            managed_claude_scan::default_claude_channel_state_dir()
-                .map(|state_dir| {
-                    managed_claude_scan::collect_observations_from_processes(
-                        &state_dir,
-                        &process_facts,
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            let paths = previous
-                .claude
-                .iter()
-                .map(|row| row.state_file.clone())
-                .collect::<Vec<_>>();
-            managed_claude_scan::collect_observations_from_paths(&paths, &process_facts)
+        let (mut claude_observations, unresolved) = match managed_claude_scan::default_claude_channel_state_dir() {
+            Some(state_dir) => (
+                managed_claude_scan::collect_observations_from_processes(&state_dir, &process_facts),
+                false,
+            ),
+            None => (Vec::new(), true),
         };
+        unresolved_state_dirs += usize::from(unresolved);
         let retained_codex =
             retain_existing_observations(&mut codex_observations, &previous.codex, |observation| {
                 &observation.state_file
@@ -4725,43 +4745,25 @@ fn maybe_start_managed_observation_scan(
         let claude_elapsed_ms = claude_started.elapsed().as_millis() as u64;
 
         let opencode_started = Instant::now();
-        let mut opencode_observations = if full_reconciliation {
-            managed_opencode_scan::default_opencode_server_state_dir()
-                .map(|state_dir| {
-                    managed_opencode_scan::collect_observations_from_processes(
-                        &state_dir,
-                        &process_facts,
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            let paths = previous
-                .opencode
-                .iter()
-                .map(|row| row.state_file.clone())
-                .collect::<Vec<_>>();
-            managed_opencode_scan::collect_observations_from_paths(&paths, &process_facts)
+        let (mut opencode_observations, unresolved) = match managed_opencode_scan::default_opencode_server_state_dir() {
+            Some(state_dir) => (
+                managed_opencode_scan::collect_observations_from_processes(&state_dir, &process_facts),
+                false,
+            ),
+            None => (Vec::new(), true),
         };
+        unresolved_state_dirs += usize::from(unresolved);
         let opencode_elapsed_ms = opencode_started.elapsed().as_millis() as u64;
 
         let cursor_started = Instant::now();
-        let mut cursor_observations = if full_reconciliation {
-            managed_cursor_helm_scan::default_cursor_helm_state_dir()
-                .map(|state_dir| {
-                    managed_cursor_helm_scan::collect_observations_from_processes(
-                        &state_dir,
-                        &process_facts,
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            let paths = previous
-                .cursor
-                .iter()
-                .map(|row| row.state_file.clone())
-                .collect::<Vec<_>>();
-            managed_cursor_helm_scan::collect_observations_from_paths(&paths, &process_facts)
+        let (mut cursor_observations, unresolved) = match managed_cursor_helm_scan::default_cursor_helm_state_dir() {
+            Some(state_dir) => (
+                managed_cursor_helm_scan::collect_observations_from_processes(&state_dir, &process_facts),
+                false,
+            ),
+            None => (Vec::new(), true),
         };
+        unresolved_state_dirs += usize::from(unresolved);
         let retained_opencode = retain_existing_observations(
             &mut opencode_observations,
             &previous.opencode,
@@ -4774,46 +4776,28 @@ fn maybe_start_managed_observation_scan(
         );
         let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
         let pi_started = Instant::now();
-        let mut pi_observations = if full_reconciliation {
-            managed_pi_helm_scan::default_pi_helm_state_dir()
-                .map(|state_dir| {
-                    managed_pi_helm_scan::collect_observations_from_processes(
-                        &state_dir,
-                        &process_facts,
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            let paths = previous
-                .pi
-                .iter()
-                .map(|row| row.state_file.clone())
-                .collect::<Vec<_>>();
-            managed_pi_helm_scan::collect_observations_from_paths(&paths, &process_facts)
+        let (mut pi_observations, unresolved) = match managed_pi_helm_scan::default_pi_helm_state_dir() {
+            Some(state_dir) => (
+                managed_pi_helm_scan::collect_observations_from_processes(&state_dir, &process_facts),
+                false,
+            ),
+            None => (Vec::new(), true),
         };
+        unresolved_state_dirs += usize::from(unresolved);
         let pi_elapsed_ms = pi_started.elapsed().as_millis() as u64;
         let retained_pi =
             retain_existing_observations(&mut pi_observations, &previous.pi, |observation| {
                 &observation.state_file
             });
         let omp_started = Instant::now();
-        let mut omp_observations = if full_reconciliation {
-            managed_omp_helm_scan::default_omp_helm_state_dir()
-                .map(|state_dir| {
-                    managed_omp_helm_scan::collect_observations_from_processes(
-                        &state_dir,
-                        &process_facts,
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            let paths = previous
-                .omp
-                .iter()
-                .map(|row| row.state_file.clone())
-                .collect::<Vec<_>>();
-            managed_omp_helm_scan::collect_observations_from_paths(&paths, &process_facts)
+        let (mut omp_observations, unresolved) = match managed_omp_helm_scan::default_omp_helm_state_dir() {
+            Some(state_dir) => (
+                managed_omp_helm_scan::collect_observations_from_processes(&state_dir, &process_facts),
+                false,
+            ),
+            None => (Vec::new(), true),
         };
+        unresolved_state_dirs += usize::from(unresolved);
         let retained_omp =
             retain_existing_observations(&mut omp_observations, &previous.omp, |observation| {
                 &observation.state_file
@@ -4963,6 +4947,21 @@ fn maybe_start_managed_observation_scan(
                 + retained_cursor.len()
                 + retained_pi.len()
                 + retained_omp.len(),
+            // Every pass enumerates the provider directories now, so a complete
+            // certificate means: the process inventory was valid (identity
+            // checks are meaningless without it), every provider directory
+            // resolved, and no entry was carried forward unaccounted for -- a
+            // state file that vanished mid-pass or failed to parse.
+            enumeration_complete: process_inventory_valid
+                && unresolved_state_dirs == 0
+                && retained_codex.is_empty()
+                && retained_antigravity.is_empty()
+                && retained_claude.is_empty()
+                && retained_opencode.is_empty()
+                && retained_cursor.is_empty()
+                && retained_pi.is_empty()
+                && retained_omp.is_empty(),
+            captured_at,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
@@ -6721,6 +6720,33 @@ mod tests {
         }
     }
 
+    fn scan_result_fixture(enumeration_complete: bool, retained: usize) -> ManagedObservationScanResult {
+        ManagedObservationScanResult {
+            enumeration_complete,
+            retained_stale_rows: retained,
+            ..ManagedObservationScanResult::default()
+        }
+    }
+
+    #[test]
+    fn managed_scan_certifies_every_pass_that_actually_enumerated() {
+        // The certificate describes this generation's enumeration, so a pass
+        // that is not a "full reconciliation" may still certify -- that is the
+        // whole point of enumerating every pass.
+        let mut incremental = scan_result_fixture(true, 0);
+        incremental.full_reconciliation = false;
+        assert_eq!(managed_scan_certificate(&incremental), (false, true));
+
+        // An entry carried forward unaccounted for is a failure to enumerate.
+        let partial = scan_result_fixture(false, 1);
+        assert_eq!(managed_scan_certificate(&partial), (true, false));
+
+        // An unresolved provider directory is the same failure, even with no
+        // retained rows: "no sessions" and "no directory" are different claims.
+        let unresolved = scan_result_fixture(false, 0);
+        assert_eq!(managed_scan_certificate(&unresolved), (false, false));
+    }
+
     #[test]
     fn current_only_retains_dead_provider_run_for_terminal_evidence() {
         // A run whose owner died abruptly can only be closed by the exact
@@ -7172,6 +7198,7 @@ mod tests {
             &[],
             &cached,
             true,
+            "2026-09-25T12:00:00Z",
             false,
             None,
             None,

@@ -149,6 +149,72 @@ def _control(*, observed_at: datetime, state: str = "attached", grants: list[str
     )
 
 
+def _run_projection(*, heads: list[dict], now: datetime, catalog_facts: dict | None = None):
+    return project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=7,
+        catalog_facts=catalog_facts or RUN_CATALOG_FACTS,
+        heads=heads,
+        now=now,
+    )
+
+
+def test_run_lifecycle_follows_current_evidence_not_the_open_row():
+    """An unterminated run is `running` only while an evidence axis claims it.
+
+    The row records that an execution attempt happened; the claim is the lease,
+    activity window or launch attempt. Reporting `running` from `ended_at IS
+    NULL` alone is what made a wrapper killed in the night look like work in
+    progress for two days, and is why the run axis now summarises the others.
+    """
+
+    current = _run_projection(
+        heads=[_control(observed_at=NOW)],
+        now=NOW + timedelta(seconds=2),
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+    )
+    assert current.run is not None
+    assert current.run.lifecycle == "running"
+
+    lapsed = _run_projection(
+        heads=[_control(observed_at=NOW - timedelta(minutes=5))],
+        now=NOW,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+    )
+    assert lapsed.run is not None
+    assert lapsed.run.lifecycle == "unknown"
+    # Absence of evidence is not an end: nothing here observed the run stop.
+    assert lapsed.run.ended_at is None
+    assert lapsed.run.end_reason is None
+
+    silent = _run_projection(heads=[], now=NOW)
+    assert silent.run is not None
+    assert silent.run.lifecycle == "unknown"
+
+    executing = _run_projection(
+        heads=[_activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=5))],
+        now=NOW + timedelta(seconds=2),
+    )
+    assert executing.run is not None
+    assert executing.run.lifecycle == "running"
+
+
+def test_run_lifecycle_stays_ended_and_outranks_current_evidence():
+    ended = {
+        **RUN_CATALOG_FACTS,
+        "latest_run": {
+            "id": "run-1",
+            "started_at": (NOW - timedelta(minutes=5)).isoformat(),
+            "ended_at": NOW.isoformat(),
+            "exit_status": "process_gone",
+        },
+    }
+    projection = _run_projection(heads=[_control(observed_at=NOW)], now=NOW + timedelta(seconds=2), catalog_facts={**ended, "connections": BOUND_CONTROL_CATALOG_FACTS["connections"]})
+    assert projection.run is not None
+    assert projection.run.lifecycle == "ended"
+    assert projection.run.end_reason == "process_gone"
+
+
 def test_projector_selects_newest_unexpired_head_without_commit_or_receive_ranking():
     older = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=5), source="z-source")
     newer = _activity(

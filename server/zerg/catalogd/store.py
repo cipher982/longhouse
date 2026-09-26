@@ -3141,7 +3141,6 @@ class CatalogStore:
         """
 
         from zerg.services.live_session_state import mark_missing_live_sessions
-        from zerg.services.live_session_state import retire_stale_absent_runs
         from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
         from zerg.services.managed_control_state import mark_missing_live_control_leases
         from zerg.services.managed_control_state import upsert_live_control_leases
@@ -3233,16 +3232,6 @@ class CatalogStore:
                         mark_missing_live_sessions(
                             orm,
                             missing_session_ids,
-                            device_id=device_id,
-                            received_at=received_at,
-                        )
-                    )
-                    # Certifying this snapshot is also what makes it evidence
-                    # about absence: a run the machine has not enumerated for a
-                    # day, with no live evidence since, is not work in progress.
-                    touched.update(
-                        retire_stale_absent_runs(
-                            orm,
                             device_id=device_id,
                             received_at=received_at,
                         )

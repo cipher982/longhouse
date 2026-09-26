@@ -1545,6 +1545,21 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations_with_omp(
 /// Build the additive v1 evidence envelope directly from scanner/ledger facts.
 /// This must not consume `ManagedSessionLease` or `ResolvedLocalSession`: both
 /// are compatibility projections that already mix independent authorities.
+/// Stamp the enumeration time onto every process-snapshot scope.
+///
+/// The envelope carries when the evidence was *sent*; a scope carries when the
+/// machine state was *observed*. Absence authority lasts only as long as that
+/// observation is current, so the two cannot share one timestamp.
+pub(crate) fn stamp_scope_capture_time(evidence: &mut MachineEvidence, captured_at: &str) {
+    let captured_at = captured_at.trim();
+    if captured_at.is_empty() {
+        return;
+    }
+    for scope in evidence.process_snapshot_scopes.iter_mut() {
+        scope.captured_at = captured_at.to_string();
+    }
+}
+
 pub(crate) fn machine_evidence_from_observations(
     machine_id: &str,
     codex_observations: &[CodexBridgeObservation],

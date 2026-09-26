@@ -5,14 +5,17 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+from sqlalchemy import or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
@@ -224,6 +227,47 @@ def _upsert_live_thread_alias(
         )
 
 
+def _run_holds_current_claim(db: Session, *, run: LiveSessionRun, observed_at: datetime) -> bool:
+    """Whether an unterminated run still holds a current ownership claim.
+
+    The claim is evidence with a horizon, never the row: an attachment stamped
+    inside the control lease, or a runtime state still being signalled or
+    asserted. Same rule the resume transaction and the served run axis use.
+    """
+
+    from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
+
+    lease_floor = observed_at - timedelta(milliseconds=DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+    live_attachment = (
+        db.query(LiveSessionConnection.id)
+        .filter(
+            LiveSessionConnection.run_id == str(run.id),
+            LiveSessionConnection.released_at.is_(None),
+            LiveSessionConnection.state.in_(("attached", "degraded")),
+            LiveSessionConnection.last_health_at.is_not(None),
+            LiveSessionConnection.last_health_at > lease_floor,
+        )
+        .first()
+    )
+    if live_attachment is not None:
+        return True
+    fresh_state = (
+        db.query(LiveRuntimeState.runtime_key)
+        .filter(
+            LiveRuntimeState.run_id == str(run.id),
+            LiveRuntimeState.terminal_state.is_(None),
+            or_(
+                LiveRuntimeState.freshness_expires_at > observed_at,
+                LiveRuntimeState.last_runtime_signal_at > lease_floor,
+                LiveRuntimeState.last_asserted_at > lease_floor,
+                LiveRuntimeState.updated_at > lease_floor,
+            ),
+        )
+        .first()
+    )
+    return fresh_state is not None
+
+
 def attach_live_catalog_control(
     db: Session,
     *,
@@ -260,6 +304,7 @@ def attach_live_catalog_control(
     run = None
     if run_id is not None:
         run = db.get(LiveSessionRun, str(run_id))
+    observing_request = run_id is None and not force_new_run
     if run is None and not force_new_run:
         run = (
             db.query(LiveSessionRun)
@@ -267,7 +312,23 @@ def attach_live_catalog_control(
             .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
             .first()
         )
-    if run is None and run_id is None and not force_new_run:
+        if run is not None and observing_request and run.host_id not in (None, "", device_id):
+            # Ownership check first: a device that does not own the current run
+            # never learns anything about it, not even that its claim lapsed.
+            raise PermissionError("observer device does not own the current run")
+        # An observer reports the owner's state; it may not resurrect a row that
+        # holds no current claim. Without this, a machine's detached/missing
+        # observation stamped fresh control and thread aliases onto an
+        # unterminated run whose lease, activity window and launch attempt had
+        # all lapsed, which is exactly how a dead row kept looking owned.
+        if (
+            run is not None
+            and observing_request
+            and state not in {"attached", "degraded"}
+            and not _run_holds_current_claim(db, run=run, observed_at=now)
+        ):
+            return None
+    if run is None and observing_request:
         return None
     if run is None:
         if force_new_run:
