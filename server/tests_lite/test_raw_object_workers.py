@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sys
 import time
 from uuid import uuid4
 
@@ -213,7 +214,27 @@ async def test_failed_operation_cleanup_is_bounded_and_next_operation_recovers(
                 stopped.join(3.0)
 
 
+def _wait_until_stopped(pid: int) -> None:
+    """Block until the kernel reports ``pid`` stopped, not merely sent SIGSTOP.
+
+    While both are pending, Linux dequeues SIGTERM (15) before SIGSTOP (19), so
+    the stdlib's broken-pool ``terminate()`` could kill a child that had not yet
+    stopped, and this test raced it.
+    """
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            if handle.read().rsplit(")", 1)[1].split()[0] in {"T", "t"}:
+                return
+        time.sleep(0.01)
+    raise AssertionError(f"process {pid} never stopped")
+
+
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Darwin delivers SIGTERM to a stopped process, so the stdlib's broken-pool terminate() cannot be held off",
+)
 @pytest.mark.parametrize("pool_type", [RawObjectWorkerPool, RenderObjectWorkerPool])
 async def test_broken_pool_cleanup_terminates_surviving_owned_child(tmp_path, monkeypatch, pool_type):
     pool = pool_type(tmp_path, live_workers=1, repair_workers=2, user_read_workers=1, queue_multiplier=1)
@@ -240,6 +261,7 @@ async def test_broken_pool_cleanup_terminates_surviving_owned_child(tmp_path, mo
         broken, survivor = children[:2]
         assert survivor.is_alive()
         os.kill(survivor.pid, signal.SIGSTOP)
+        _wait_until_stopped(survivor.pid)
         os.kill(broken.pid, signal.SIGKILL)
         monkeypatch.setattr(worker_module, "_terminate_owned_executor", lambda *_: False)
         worker_busy = RawObjectWorkerBusy if pool_type is RawObjectWorkerPool else RenderObjectWorkerBusy
