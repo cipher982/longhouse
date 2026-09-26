@@ -32,9 +32,18 @@ def test_pre_release_gate_precedes_github_release_and_skips_only_release_evidenc
         assert f"--required-workflow {workflow}" in gate
     assert '--required-workflow "Hosted Live QA"' not in gate
     assert "--timeout 7200" in gate
-    for skipped_check in ("--skip-release", "--skip-public-package", "--skip-runtime-artifacts"):
+    for skipped_check in ("--skip-release", "--skip-public-package", "--skip-runtime-artifacts", "--skip-demo"):
         assert skipped_check in gate
     assert "--skip-live" not in gate
+
+
+def test_final_launch_readiness_also_skips_only_the_demo() -> None:
+    readiness = SOURCE.index('echo "Verifying launch readiness for $BUMP_SHA')
+    shipped = SOURCE.index('echo ""\necho "Release $VERSION shipped')
+    final_check = SOURCE[readiness:shipped]
+
+    assert "--skip-demo" in final_check
+    assert "--skip-live" not in final_check
 
 
 def test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha() -> None:
@@ -66,6 +75,7 @@ def test_release_fetches_remote_branch_before_building_changelog() -> None:
 if __name__ == "__main__":
     test_full_validation_gates_candidate_push()
     test_pre_release_gate_precedes_github_release_and_skips_only_release_evidence()
+    test_final_launch_readiness_also_skips_only_the_demo()
     test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha()
     test_same_version_resumes_a_pushed_candidate()
     test_release_fetches_remote_branch_before_building_changelog()

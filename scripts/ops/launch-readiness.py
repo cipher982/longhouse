@@ -88,6 +88,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--skip-workflows", action="store_true")
     parser.add_argument("--skip-live", action="store_true")
+    parser.add_argument(
+        "--skip-demo",
+        action="store_true",
+        help="Skip only the public demo live check; the canary live check still runs. "
+        "The demo now moves on its own production ring (release-rings.md) and no "
+        "longer has to match the release candidate.",
+    )
     parser.add_argument("--skip-release", action="store_true")
     parser.add_argument("--skip-public-package", action="store_true")
     parser.add_argument("--skip-runtime-artifacts", action="store_true")
@@ -378,7 +385,8 @@ def run_checks(
     if not args.skip_workflows:
         checks.extend(check_workflows(args.repo, sha, required))
     if not args.skip_live:
-        checks.append(check_live_surface("demo", args.demo_url, sha))
+        if not args.skip_demo:
+            checks.append(check_live_surface("demo", args.demo_url, sha))
         checks.append(check_live_surface("canary", args.canary_url, sha))
     release_tag: str | None = None
     if not args.skip_release:

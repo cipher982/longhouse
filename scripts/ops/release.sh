@@ -194,6 +194,7 @@ CANARY_HEALTH_URL="https://${CANARY_SUBDOMAIN}.longhouse.ai/api/health"
   --skip-release \
   --skip-public-package \
   --skip-runtime-artifacts \
+  --skip-demo \
   --wait --timeout 7200 --discovery-grace 1800 --poll 30
 
 echo "Creating GitHub release $VERSION (this triggers publish.yml + local-runtime-release.yml)..."
@@ -315,6 +316,7 @@ echo "Verifying launch readiness for $BUMP_SHA..."
 "$ROOT/scripts/ops/launch-readiness.py" \
   --sha "$BUMP_SHA" \
   --canary-url "$CANARY_HEALTH_URL" \
+  --skip-demo \
   --wait --timeout 1800 --poll 30
 
 echo ""
