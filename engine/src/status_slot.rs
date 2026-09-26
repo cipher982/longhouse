@@ -610,6 +610,14 @@ impl StatusPublisher {
         guard.preview = None;
         retire(&self.dir, session_id);
     }
+
+    /// Remove one session's slot while this publisher keeps running. A launch
+    /// that adopts another session goes on publishing under the adopted id, so
+    /// the slot it leaves behind must go without retiring the publisher.
+    pub fn remove_slot(&self, session_id: &str) {
+        let _guard = self.state.lock().expect("status publisher mutex poisoned");
+        retire(&self.dir, session_id);
+    }
 }
 
 #[cfg(test)]

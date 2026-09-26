@@ -41,6 +41,8 @@ const SOCKET_TIMEOUT: Duration = Duration::from_secs(8);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const NATIVE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
+/// Why a launch's own session ended when its provider resumed another one.
+const ADOPTED_TERMINAL_REASON: &str = "resumed_another_session";
 const MAX_FRAME_BYTES: usize = 512 * 1024;
 const MAX_PENDING_COMMANDS: usize = 64;
 const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
@@ -127,6 +129,17 @@ struct OmpHelmStateFile {
     exit_code: Option<i32>,
     started_at: String,
     updated_at: String,
+    /// Set on a launch whose provider resumed another managed session's
+    /// transcript, and so became that session's run. The provider's
+    /// environment still names this launch's id, so tools running inside it
+    /// follow this pointer to the session that holds the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    superseded_by_session_id: Option<String>,
+    /// On a session adopted by a running launch: the launch's original id,
+    /// which its extension still sends because it read it from the
+    /// environment at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adopted_from_session_id: Option<String>,
 }
 
 struct SharedState {
@@ -154,11 +167,32 @@ struct SharedState {
     identity_retry_after: Option<Instant>,
 }
 
+/// What a running launch needs to become another session's run: the machine
+/// it registers from and how to register, both owned by the launcher that holds
+/// the Runtime Host credentials.
+#[derive(Clone)]
+struct AdoptionContext {
+    machine_name: String,
+    register: Arc<dyn Fn(Value) + Send + Sync>,
+}
+
+/// A verified takeover of the managed session that owns a native identity.
+struct Adoption {
+    target: OmpHelmStateFile,
+    /// The adopted session's launch lock, held for the rest of this launch so a
+    /// cold Resume of the same session cannot start a second owner.
+    lock: File,
+    resume_attempt_id: String,
+}
+
 #[derive(Clone)]
 struct OmpHelmServer {
     shared: Arc<Mutex<SharedState>>,
     socket_path: PathBuf,
-    state_path: PathBuf,
+    /// Keyed by session id, so it moves when this launch adopts a session.
+    state_path: Arc<Mutex<PathBuf>>,
+    adoption: Arc<Mutex<Option<AdoptionContext>>>,
+    adopted_lock: Arc<Mutex<Option<File>>>,
     persist_lock: Arc<Mutex<()>>,
     socket_dir: PathBuf,
     stop: Arc<AtomicBool>,
@@ -193,7 +227,9 @@ impl OmpHelmServer {
                 identity_retry_after: None,
             })),
             socket_path,
-            state_path,
+            state_path: Arc::new(Mutex::new(state_path)),
+            adoption: Arc::new(Mutex::new(None)),
+            adopted_lock: Arc::new(Mutex::new(None)),
             persist_lock: Arc::new(Mutex::new(())),
             socket_dir,
             stop: Arc::new(AtomicBool::new(false)),
@@ -230,7 +266,18 @@ impl OmpHelmServer {
             .expect("OMP state mutex poisoned")
             .state
             .clone();
-        write_json_private(&self.state_path, &state)
+        write_json_private(&self.state_path(), &state)
+    }
+
+    fn state_path(&self) -> PathBuf {
+        self.state_path
+            .lock()
+            .expect("OMP state path mutex poisoned")
+            .clone()
+    }
+
+    fn enable_adoption(&self, context: AdoptionContext) {
+        *self.adoption.lock().expect("OMP adoption mutex poisoned") = Some(context);
     }
 
     fn handle_connection(&self, stream: std::os::unix::net::UnixStream) {
@@ -330,8 +377,7 @@ impl OmpHelmServer {
     fn base_authority_matches(&self, frame: &Value) -> bool {
         let state = self.shared.lock().expect("OMP state mutex poisoned");
         frame.get("auth_token").and_then(Value::as_str) == Some(state.state.channel_token.as_str())
-            && frame.get("session_id").and_then(Value::as_str)
-                == Some(state.state.session_id.as_str())
+            && frame_names_this_launch_locked(&state, frame)
     }
     fn extension_base_authority_matches(&self, connection_id: &str, frame: &Value) -> bool {
         let state = self.shared.lock().expect("OMP state mutex poisoned");
@@ -605,6 +651,11 @@ impl OmpHelmServer {
                 );
             }
         }
+        let adoption = self.adoption_target(&session_id, Path::new(source), native_id)?;
+        let bind_session = adoption
+            .as_ref()
+            .map(|adoption| adoption.target.session_id.clone())
+            .unwrap_or_else(|| session_id.clone());
         // Claim the exact replacement path before waiting for OMP to finish
         // materializing its header. Discovery then sees it claimed instead of
         // minting a Shadow session in this transition window. This is a local
@@ -620,7 +671,7 @@ impl OmpHelmServer {
         }
         let snapshot = self.current_state();
         crate::managed_source_claim::reserve(
-            &session_id,
+            &bind_session,
             "omp",
             Path::new(source),
             Path::new(&snapshot.cwd),
@@ -661,13 +712,24 @@ impl OmpHelmServer {
         // `state` is held here, so read the fields directly rather than taking
         // the lock again (a std mutex is not reentrant).
         crate::managed_source_claim::confirm_identity(
-            &session_id,
+            &bind_session,
             "omp",
             Path::new(source),
             native_id,
             state.state.provider_pid,
             state.state.provider_process_start_time.clone(),
         )?;
+        let adopted_from = adoption.as_ref().map(|adoption| {
+            let launch = Self::adopt_locked(&mut state, adoption);
+            // Move the state file with the identity, under the same lock, so no
+            // concurrent persist writes the adopted session under the old name.
+            let mut path = self
+                .state_path
+                .lock()
+                .expect("OMP state path mutex poisoned");
+            *path = path.with_file_name(format!("{}.json", adoption.target.session_id));
+            launch
+        });
         // A late reconcile repairs the degradation it recovered from:
         // `mark_degraded` left the bind error in `terminal_reason`, and a
         // session that is ready again must not keep advertising it.
@@ -698,6 +760,9 @@ impl OmpHelmServer {
         }
         state.state.updated_at = Utc::now().to_rfc3339();
         drop(state);
+        if let (Some(launch), Some(adoption)) = (adopted_from, adoption) {
+            self.finish_adoption(launch, adoption)?;
+        }
         self.persist_state()?;
         self.publish_binding(Path::new(source), native_id, previous != native_id)?;
         Ok(())
@@ -717,6 +782,178 @@ impl OmpHelmServer {
         state.extension_connection_id.as_deref() == Some(connection_id)
             && state.state.lease_generation == expected_generation
             && state.state.pending_transition == replacement
+    }
+
+    /// The managed OMP session that already owns `native_id`, when this launch
+    /// may become its run.
+    ///
+    /// A user who relaunches after a crash and picks the old conversation in
+    /// OMP's own resume menu is resuming that session's transcript, and the
+    /// identity kernel says the same transcript is the same session with a new
+    /// run. Binding it to this launch instead split the conversation: the old
+    /// launcher's claim refused the path, the transition timed out, and the
+    /// live process sat `degraded` under an empty session while its transcript
+    /// kept landing in the old one.
+    ///
+    /// Adoption requires the old session's launcher and provider to be gone, so
+    /// one session still has one execution owner, and its launch lock, so a
+    /// concurrent cold Resume cannot start a second one.
+    fn adoption_target(
+        &self,
+        own_session: &str,
+        source: &Path,
+        native_id: &str,
+    ) -> Result<Option<Adoption>> {
+        if self
+            .adoption
+            .lock()
+            .expect("OMP adoption mutex poisoned")
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let state_path = self.state_path();
+        let dir = state_path.parent().context("OMP state has no parent")?;
+        let Some(target) = owner_of_native_session(dir, own_session, native_id) else {
+            return Ok(None);
+        };
+        let stable = crate::storage_v2_shipper::stable_source_path;
+        anyhow::ensure!(
+            stable(Path::new(&target.session_file)) == stable(source),
+            "OMP native session {native_id} belongs to managed session {} under a different source",
+            target.session_id
+        );
+        let own_cwd = self.current_state().cwd;
+        anyhow::ensure!(
+            fs::canonicalize(&target.cwd).ok() == fs::canonicalize(&own_cwd).ok(),
+            "OMP native session {native_id} belongs to managed session {} in another workspace",
+            target.session_id
+        );
+        let facts = crate::process_identity::try_collect_process_facts_by_pid()
+            .context("OMP cannot verify the previous owner of a resumed session")?;
+        verify_resume_owner(
+            &facts,
+            "launcher",
+            Some(target.launcher_pid),
+            target.launcher_process_start_time.as_deref(),
+            true,
+        )?;
+        verify_resume_owner(
+            &facts,
+            "provider",
+            target.provider_pid,
+            target.provider_process_start_time.as_deref(),
+            false,
+        )?;
+        let lock = launch_lock_in(dir, &target.session_id)?;
+        Ok(Some(Adoption {
+            target,
+            lock,
+            resume_attempt_id: Uuid::new_v4().to_string(),
+        }))
+    }
+
+    /// Become the adopted session's run. Runs inside the identity commit, under
+    /// the state lock, and returns the launch's own state as it was.
+    fn adopt_locked(state: &mut SharedState, adoption: &Adoption) -> OmpHelmStateFile {
+        let launch = state.state.clone();
+        let target = &adoption.target;
+        state.state.session_id = target.session_id.clone();
+        state.state.run_id = resume_run_id(&target.session_id, &adoption.resume_attempt_id);
+        state.state.adopted_from_session_id = Some(launch.session_id.clone());
+        state.state.title = target.title.clone();
+        state.state.terminal_state = None;
+        state.state.terminal_reason = None;
+        state.state.exit_code = None;
+        state.state.started_at = Utc::now().to_rfc3339();
+        launch
+    }
+
+    /// Settle everything the launch's own session held, then register the new
+    /// run. The launch's session ends here: its run is over and its claim is
+    /// released, but its state file stays with a pointer to the adopted session
+    /// for the tools that still carry its id.
+    fn finish_adoption(&self, launch: OmpHelmStateFile, adoption: Adoption) -> Result<()> {
+        let adopted = self.current_state();
+        let dir = self
+            .state_path()
+            .parent()
+            .context("OMP state has no parent")?
+            .to_path_buf();
+        *self
+            .adopted_lock
+            .lock()
+            .expect("OMP adoption mutex poisoned") = Some(adoption.lock);
+
+        let mut ended = launch;
+        ended.status = "stopped".into();
+        ended.ready = false;
+        ended.pending_transition = false;
+        ended.phase = "idle".into();
+        ended.terminal_state = Some("session_ended".into());
+        ended.terminal_reason = Some(ADOPTED_TERMINAL_REASON.into());
+        ended.superseded_by_session_id = Some(adopted.session_id.clone());
+        ended.updated_at = Utc::now().to_rfc3339();
+        write_json_private(&dir.join(format!("{}.json", ended.session_id)), &ended)?;
+        if let Err(error) = crate::managed_source_claim::release(&ended.session_id) {
+            tracing::warn!(
+                session_id = %ended.session_id,
+                error = %format!("{error:#}"),
+                "releasing the adopting launch's source claim failed"
+            );
+        }
+
+        let Some(context) = self
+            .adoption
+            .lock()
+            .expect("OMP adoption mutex poisoned")
+            .clone()
+        else {
+            return Ok(());
+        };
+        let runtime_key = format!("omp:{}", ended.session_id);
+        let event = ManagedTerminalEvent {
+            runtime_key: &runtime_key,
+            session_id: &ended.session_id,
+            run_id: &ended.run_id,
+            provider: "omp",
+            managed_transport: OMP_HELM_TRANSPORT,
+            provider_session_id: (!ended.native_session_id.is_empty())
+                .then_some(ended.native_session_id.as_str()),
+            device_id: Some(&context.machine_name),
+            source: "omp_helm_launcher",
+            dedupe_prefix: "omp-helm-terminal",
+            terminal_state: "session_ended",
+            terminal_reason: ADOPTED_TERMINAL_REASON,
+            exit_code: None,
+        }
+        .to_json();
+        match crate::managed_terminal::enqueue(
+            &home_state()?.join("agent/runtime-events-outbox"),
+            &event,
+        ) {
+            Ok(()) => self.status.remove_slot(&ended.session_id),
+            Err(error) => eprintln!(
+                "[omp-helm] terminal record enqueue failed for adopted-from {}: {error}",
+                ended.session_id
+            ),
+        }
+        (context.register)(launch_registration(
+            Path::new(&adopted.cwd),
+            &context.machine_name,
+            &adopted.session_id,
+            &adopted.run_id,
+            &adopted.connection_id,
+            &adopted.lease_generation,
+            &adopted.native_session_id,
+            json!({"session_dir": adopted.session_dir, "session_file": adopted.session_file, "profile": adopted.profile, "model": adopted.model, "native_session_id": adopted.native_session_id}),
+            Some(&adoption.resume_attempt_id),
+        ));
+        eprintln!(
+            "Longhouse: OMP resumed managed session {}; this terminal is now its run",
+            adopted.session_id
+        );
+        Ok(())
     }
 
     fn mark_degraded(&self, error: &anyhow::Error) {
@@ -1085,7 +1322,7 @@ impl OmpHelmServer {
         let live_message_seq = state.live_message_seq;
         let turn_id = live_turn_id(&current.run_id, live_turn_seq, live_message_seq);
         let publish_live = live_delta.is_some() || (turn_completed && !live_text.is_empty());
-        if let Err(error) = write_json_private(&self.state_path, &current) {
+        if let Err(error) = write_json_private(&self.state_path(), &current) {
             eprintln!(
                 "[omp-helm] state persistence failed for {}: {error}",
                 current.session_id
@@ -1169,7 +1406,7 @@ impl OmpHelmServer {
             };
             shared.state.updated_at = Utc::now().to_rfc3339();
             let snapshot = shared.state.clone();
-            if let Err(error) = write_json_private(&self.state_path, &snapshot) {
+            if let Err(error) = write_json_private(&self.state_path(), &snapshot) {
                 eprintln!(
                     "[omp-helm] state persistence failed for {}: {error}",
                     snapshot.session_id
@@ -1426,7 +1663,7 @@ impl OmpHelmServer {
                 "releasing the OMP source claim failed"
             );
         }
-        write_json_private(&self.state_path, &snapshot)
+        write_json_private(&self.state_path(), &snapshot)
     }
 
     fn shutdown(&self) {
@@ -1464,11 +1701,22 @@ fn extension_base_authority_matches_locked(
     state.extension_connection_id.as_deref() == Some(connection_id)
         && frame.get("auth_token").and_then(Value::as_str)
             == Some(state.state.channel_token.as_str())
-        && frame.get("session_id").and_then(Value::as_str) == Some(state.state.session_id.as_str())
+        && frame_names_this_launch_locked(state, frame)
         && frame.get("connection_id").and_then(Value::as_str)
             == Some(state.state.connection_id.as_str())
         && frame.get("lease_generation").and_then(Value::as_str)
             == Some(state.state.lease_generation.as_str())
+}
+
+/// The extension reads its session id from the environment once, so after this
+/// launch adopts another session it keeps sending the launch's original id.
+/// Either names this launch; the channel token, connection and lease generation
+/// carry the authority.
+fn frame_names_this_launch_locked(state: &SharedState, frame: &Value) -> bool {
+    let Some(named) = frame.get("session_id").and_then(Value::as_str) else {
+        return false;
+    };
+    named == state.state.session_id || state.state.adopted_from_session_id.as_deref() == Some(named)
 }
 
 fn extension_identity_matches_locked(state: &SharedState, frame: &Value) -> bool {
@@ -1707,7 +1955,11 @@ fn socket_path(session_id: &str) -> Result<(PathBuf, PathBuf)> {
 }
 
 fn launch_lock(session_id: &str) -> Result<File> {
-    let path = state_dir()?.join(format!("{session_id}.lock"));
+    launch_lock_in(&state_dir()?, session_id)
+}
+
+fn launch_lock_in(state_root: &Path, session_id: &str) -> Result<File> {
+    let path = state_root.join(format!("{session_id}.lock"));
     fs::create_dir_all(path.parent().context("OMP Helm lock has no parent")?)?;
     let file = OpenOptions::new()
         .read(true)
@@ -1722,6 +1974,29 @@ fn launch_lock(session_id: &str) -> Result<File> {
         }
     }
     Ok(file)
+}
+
+/// The most recent managed OMP session, other than `own_session`, whose launch
+/// bound `native_id`. A launch that already handed its session on is skipped:
+/// its native identity is its own abandoned file, never the one it adopted.
+fn owner_of_native_session(
+    state_root: &Path,
+    own_session: &str,
+    native_id: &str,
+) -> Option<OmpHelmStateFile> {
+    fs::read_dir(state_root)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+        .filter_map(|entry| fs::read(entry.path()).ok())
+        .filter_map(|bytes| serde_json::from_slice::<OmpHelmStateFile>(&bytes).ok())
+        .filter(|state| {
+            state.provider == "omp"
+                && state.session_id != own_session
+                && state.native_session_id == native_id
+                && state.superseded_by_session_id.is_none()
+        })
+        .max_by(|left, right| left.updated_at.cmp(&right.updated_at))
 }
 
 fn process_start_time(pid: Option<u32>) -> Option<String> {
@@ -2033,6 +2308,54 @@ fn run_provider(
     Ok(exit)
 }
 
+/// The Runtime Host registration for one OMP Helm run, fresh or resumed. A
+/// resumed run names its native thread so the host binds it to the session's
+/// existing conversation.
+#[allow(clippy::too_many_arguments)]
+fn launch_registration(
+    cwd: &Path,
+    machine_name: &str,
+    session_id: &str,
+    run_id: &str,
+    connection_id: &str,
+    lease_generation: &str,
+    native_id: &str,
+    provider_config: Value,
+    resume_attempt_id: Option<&str>,
+) -> Value {
+    let mut registration = ManagedLaunchRegistration {
+        provider: "omp",
+        cwd,
+        project: None,
+        display_name: None,
+        machine_name,
+        permission_mode: PermissionMode::ProviderLocal,
+        provenance: ManagedLaunchProvenance::interactive_helm(),
+        extra: vec![
+            ("session_id", json!(session_id)),
+            ("run_id", json!(run_id)),
+            ("connection_id", json!(connection_id)),
+            ("lease_generation", json!(lease_generation)),
+            ("managed_transport", json!(OMP_HELM_TRANSPORT)),
+            (
+                "provider_session_id",
+                json!(if native_id.is_empty() {
+                    Value::Null
+                } else {
+                    json!(native_id)
+                }),
+            ),
+            ("provider_config", provider_config),
+        ],
+    }
+    .to_json();
+    if let Some(resume_attempt_id) = resume_attempt_id {
+        registration["resume_attempt_id"] = json!(resume_attempt_id);
+        registration["provider_thread_id"] = json!(native_id);
+    }
+    registration
+}
+
 pub fn launch(config: LaunchConfig) -> Result<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         anyhow::bail!(
@@ -2087,37 +2410,17 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     let lease_generation = Uuid::new_v4().to_string();
     let channel_token = Uuid::new_v4().to_string();
     let provider_config = json!({"session_dir": session_dir, "session_file": session_file, "profile": profile, "model": model, "native_session_id": native_id});
-    let registration = ManagedLaunchRegistration {
-        provider: "omp",
-        cwd: &cwd,
-        project: None,
-        display_name: None,
-        machine_name: &machine_name,
-        permission_mode: PermissionMode::ProviderLocal,
-        provenance: ManagedLaunchProvenance::interactive_helm(),
-        extra: vec![
-            ("session_id", json!(session_id)),
-            ("run_id", json!(run_id)),
-            ("connection_id", json!(connection_id)),
-            ("lease_generation", json!(lease_generation)),
-            ("managed_transport", json!(OMP_HELM_TRANSPORT)),
-            (
-                "provider_session_id",
-                json!(if native_id.is_empty() {
-                    Value::Null
-                } else {
-                    json!(native_id)
-                }),
-            ),
-            ("provider_config", provider_config),
-        ],
-    }
-    .to_json();
-    let mut registration = registration;
-    if let Some(resume_attempt_id) = resume_attempt_id.as_deref() {
-        registration["resume_attempt_id"] = json!(resume_attempt_id);
-        registration["provider_thread_id"] = json!(native_id);
-    }
+    let registration = launch_registration(
+        &cwd,
+        &machine_name,
+        &session_id,
+        &run_id,
+        &connection_id,
+        &lease_generation,
+        &native_id,
+        provider_config,
+        resume_attempt_id.as_deref(),
+    );
     let runtime = tokio::runtime::Runtime::new()?;
     let response = match register_managed_launch_with_timeout(
         &runtime,
@@ -2201,6 +2504,8 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         exit_code: None,
         started_at: now.clone(),
         updated_at: now,
+        superseded_by_session_id: None,
+        adopted_from_session_id: None,
     };
     let server = OmpHelmServer::start(
         state,
@@ -2224,6 +2529,45 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
                 }
             })),
         )
+    });
+    // Adopting a session happens on the extension's reader thread, inside a
+    // five-second transition window, so its registration runs on the same
+    // background retry a degraded launch uses rather than blocking the bind.
+    let adoption_retries = Arc::new(Mutex::new(Vec::new()));
+    let register_adoption = {
+        let (url, token, deferred) = (url.clone(), token.clone(), deferred.clone());
+        let server = server.clone();
+        let retries = Arc::clone(&adoption_retries);
+        move |payload: Value| {
+            let session_id = payload["session_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let recovered_server = server.clone();
+            let retry = spawn_managed_registration_retry_with_hook(
+                &url,
+                &token,
+                "OMP",
+                payload,
+                &session_id,
+                deferred.clone(),
+                crate::config::get_agent_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                Some(Arc::new(move |response: &ManagedLaunchResponse| {
+                    if let Some(token) = response.coordination_token() {
+                        recovered_server.set_coordination_token(token);
+                    }
+                })),
+            );
+            retry.provider_alive.store(true, Ordering::Release);
+            retries
+                .lock()
+                .expect("OMP adoption retry mutex poisoned")
+                .push(retry);
+        }
+    };
+    server.enable_adoption(AdoptionContext {
+        machine_name: machine_name.clone(),
+        register: Arc::new(register_adoption),
     });
     let extension = write_extension_file(&state_root.join("extensions").join(&session_id))?;
     let mut command = Command::new(&binary);
@@ -2480,6 +2824,8 @@ mod tests {
             exit_code: None,
             started_at: "now".into(),
             updated_at: "now".into(),
+            superseded_by_session_id: None,
+            adopted_from_session_id: None,
         }
     }
 
@@ -4454,5 +4800,224 @@ mod tests {
         // The deadline must be comfortably longer than the extension's own
         // interval, or a healthy channel would be reconnected on a timer.
         assert!(EXTENSION_SILENCE_DEADLINE >= Duration::from_secs(60));
+    }
+
+    /// A launch whose OMP resumes the transcript of a crashed managed session,
+    /// as a user does from OMP's own resume menu after relaunching.
+    struct AdoptionFixture {
+        _temp: tempfile::TempDir,
+        home: PathBuf,
+        state_root: PathBuf,
+        old_source: PathBuf,
+        registered: Arc<Mutex<Vec<Value>>>,
+    }
+
+    fn adoption_fixture(owner_pid: u32, owner_birth: &str) -> AdoptionFixture {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let state_root = temp.path().join("omp-helm");
+        fs::create_dir_all(&state_root).unwrap();
+        let old_source = temp.path().join("old.jsonl");
+        fs::write(
+            &old_source,
+            b"{\"type\":\"session\",\"id\":\"old-native\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let mut owner = state();
+        owner.session_id = "old-session".into();
+        owner.run_id = "old-run".into();
+        owner.native_session_id = "old-native".into();
+        owner.session_file = old_source.display().to_string();
+        owner.title = Some("the old conversation".into());
+        owner.launcher_pid = owner_pid;
+        owner.launcher_process_start_time = Some(owner_birth.into());
+        write_json_private(&state_root.join("old-session.json"), &owner).unwrap();
+        AdoptionFixture {
+            _temp: temp,
+            home,
+            state_root,
+            old_source,
+            registered: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn start_adopting_launch(fixture: &AdoptionFixture) -> OmpHelmServer {
+        let mut launch = state();
+        launch.session_id = "launch-session".into();
+        launch.native_session_id = "stub-native".into();
+        let socket_dir = fixture.state_root.join("socket");
+        let server = OmpHelmServer::start(
+            launch,
+            socket_dir.join("channel.sock"),
+            socket_dir,
+            fixture.state_root.join("launch-session.json"),
+        )
+        .unwrap();
+        let registered = Arc::clone(&fixture.registered);
+        server.enable_adoption(AdoptionContext {
+            machine_name: "machine".into(),
+            register: Arc::new(move |payload| registered.lock().unwrap().push(payload)),
+        });
+        let (sender, _receiver) = mpsc::channel();
+        let mut shared = server.shared.lock().unwrap();
+        shared.extension_sender = Some(sender);
+        shared.extension_connection_id = Some("connection".into());
+        drop(shared);
+        server
+    }
+
+    fn resume_old_conversation(server: &OmpHelmServer, fixture: &AdoptionFixture) {
+        // OMP fences a switch with the identity it is leaving, then names the
+        // one it switched to.
+        let launch = server.current_state();
+        server.handle_extension_frame(
+            "connection",
+            json!({
+                "kind": "session_before_switch",
+                "auth_token": "token",
+                "session_id": "launch-session",
+                "native_session_id": launch.native_session_id,
+                "session_file": launch.session_file,
+                "connection_id": "connection",
+                "lease_generation": launch.lease_generation
+            }),
+        );
+        let generation = server.current_state().lease_generation;
+        server.handle_extension_frame(
+            "connection",
+            json!({
+                "kind": "session_switch",
+                "auth_token": "token",
+                "session_id": "launch-session",
+                "native_session_id": "old-native",
+                "session_file": fixture.old_source,
+                "connection_id": "connection",
+                "lease_generation": generation
+            }),
+        );
+    }
+
+    #[test]
+    fn resuming_a_dead_launchs_transcript_adopts_its_session() {
+        let fixture = adoption_fixture(999_999, "Thu Jan  1 00:00:00 1970");
+        temp_env::with_var("LONGHOUSE_HOME", Some(&fixture.home), || {
+            // The crashed launcher never released its claim on the transcript.
+            crate::managed_source_claim::reserve(
+                "old-session",
+                "omp",
+                &fixture.old_source,
+                Path::new("/tmp"),
+                Some(999_999),
+                Some("Thu Jan  1 00:00:00 1970".into()),
+            )
+            .unwrap();
+            let server = start_adopting_launch(&fixture);
+            resume_old_conversation(&server, &fixture);
+
+            let adopted = server.current_state();
+            assert_eq!(adopted.session_id, "old-session");
+            assert_eq!(
+                adopted.adopted_from_session_id.as_deref(),
+                Some("launch-session")
+            );
+            assert_eq!(adopted.native_session_id, "old-native");
+            assert_eq!(adopted.status, "ready");
+            assert!(adopted.ready && !adopted.pending_transition);
+            assert_ne!(adopted.run_id, "old-run");
+            assert_eq!(adopted.title.as_deref(), Some("the old conversation"));
+
+            let on_disk: OmpHelmStateFile = serde_json::from_slice(
+                &fs::read(fixture.state_root.join("old-session.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(on_disk.run_id, adopted.run_id);
+
+            let launch: OmpHelmStateFile = serde_json::from_slice(
+                &fs::read(fixture.state_root.join("launch-session.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(launch.status, "stopped");
+            assert_eq!(
+                launch.superseded_by_session_id.as_deref(),
+                Some("old-session")
+            );
+            assert_eq!(
+                launch.terminal_reason.as_deref(),
+                Some(ADOPTED_TERMINAL_REASON)
+            );
+            assert_eq!(launch.native_session_id, "stub-native");
+
+            let claim = crate::managed_source_claim::read_claim("old-session")
+                .unwrap()
+                .unwrap();
+            assert_eq!(claim.native_session_id.as_deref(), Some("old-native"));
+
+            let registered = fixture.registered.lock().unwrap();
+            assert_eq!(registered.len(), 1);
+            assert_eq!(registered[0]["session_id"], "old-session");
+            assert_eq!(registered[0]["run_id"], adopted.run_id.as_str());
+            assert_eq!(registered[0]["provider_thread_id"], "old-native");
+            assert!(registered[0]["resume_attempt_id"].is_string());
+
+            // The extension keeps sending the launch's id from its environment.
+            let shared = server.shared.lock().unwrap();
+            assert!(frame_names_this_launch_locked(
+                &shared,
+                &json!({"session_id": "launch-session"})
+            ));
+            assert!(frame_names_this_launch_locked(
+                &shared,
+                &json!({"session_id": "old-session"})
+            ));
+            assert!(!frame_names_this_launch_locked(
+                &shared,
+                &json!({"session_id": "other"})
+            ));
+            drop(shared);
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn a_live_owner_keeps_its_session() {
+        let pid = std::process::id();
+        let birth = crate::process_identity::try_collect_process_facts_by_pid().unwrap()[&pid]
+            .lstart
+            .clone();
+        let fixture = adoption_fixture(pid, &birth);
+        temp_env::with_var("LONGHOUSE_HOME", Some(&fixture.home), || {
+            let server = start_adopting_launch(&fixture);
+            resume_old_conversation(&server, &fixture);
+            let current = server.current_state();
+            assert_eq!(current.session_id, "launch-session");
+            assert_eq!(current.status, "degraded");
+            assert!(fixture.registered.lock().unwrap().is_empty());
+            let owner: OmpHelmStateFile = serde_json::from_slice(
+                &fs::read(fixture.state_root.join("old-session.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(owner.run_id, "old-run");
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn native_owner_lookup_skips_this_launch_and_handed_on_launches() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut handed_on = state();
+        handed_on.session_id = "handed-on".into();
+        handed_on.superseded_by_session_id = Some("elsewhere".into());
+        write_json_private(&temp.path().join("handed-on.json"), &handed_on).unwrap();
+        assert!(owner_of_native_session(temp.path(), "own", "native").is_none());
+
+        let mut owner = state();
+        owner.session_id = "owner".into();
+        write_json_private(&temp.path().join("owner.json"), &owner).unwrap();
+        assert!(owner_of_native_session(temp.path(), "owner", "native").is_none());
+        assert_eq!(
+            owner_of_native_session(temp.path(), "own", "native").map(|state| state.session_id),
+            Some("owner".into())
+        );
+        assert!(owner_of_native_session(temp.path(), "own", "other-native").is_none());
     }
 }
