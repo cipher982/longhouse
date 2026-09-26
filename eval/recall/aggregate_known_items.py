@@ -1,12 +1,24 @@
-import json, sys, collections
+"""Summarize run_known_items.py reports: recall by category, errors and latency."""
+
+import collections
+import json
+import sys
+
 for path in sys.argv[1:]:
-    d = json.load(open(path))
+    report = json.load(open(path))
     for phase in ("cold", "warm"):
-        c = d[phase]; cat = collections.Counter(); hit = collections.Counter()
-        for key, v in c["by_provider_category"].items():
-            k = key.split("/", 1)[1]; cat[k] += v["total"]; hit[k] += v["hits"]
-        tot, hits = sum(cat.values()), sum(hit.values())
-        lat = c.get("latency_seconds", {})
-        print(f"{path.split('/')[-2]:>11} {path.split('_')[-1][:-5]:>7} {phase}: {hits}/{tot} = {hits/max(tot,1):.3f} errors={c['errors']} p50={lat.get('p50',0):.3f} p95={lat.get('p95',0):.3f} p99={lat.get('p99',0):.3f}")
+        block = report[phase]
+        totals = collections.Counter()
+        hits = collections.Counter()
+        for key, value in block["by_provider_category"].items():
+            category = key.split("/", 1)[1]
+            totals[category] += value["total"]
+            hits[category] += value["hits"]
+        total, hit = sum(totals.values()), sum(hits.values())
+        latency = block.get("latency_seconds", {})
+        print(
+            f"{path} {phase}: {hit}/{total} = {hit / max(total, 1):.3f} errors={block['errors']} "
+            f"p50={latency.get('p50', 0):.3f} p95={latency.get('p95', 0):.3f} p99={latency.get('p99', 0):.3f}"
+        )
         if phase == "cold":
-            print("      ", {k: f"{hit[k]}/{cat[k]}" for k in cat})
+            print("  ", {category: f"{hits[category]}/{totals[category]}" for category in totals})
