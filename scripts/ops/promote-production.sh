@@ -104,7 +104,9 @@ with open(path, encoding="utf-8") as handle:
 
 
 def parse(ts: str) -> datetime:
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    # The control plane stores UTC without an offset (e.g. 2026-09-26T18:07:12.123456).
+    value = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 rows = [

@@ -26,7 +26,8 @@ DEMO_HEALTH_URL = "https://fixture-demo.test/api/health"
 
 
 def _iso(hours_ago: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # The control plane's real shape: UTC with no offset, microseconds included.
+    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).replace(tzinfo=None).isoformat()
 
 
 def _deployments_json(rows: list[dict]) -> str:
