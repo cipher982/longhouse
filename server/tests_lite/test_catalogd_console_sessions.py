@@ -1008,3 +1008,132 @@ def test_branch_create_refuses_another_owners_session(tmp_path):
     result = CatalogStore(engine).create_branch_session(data=_branch_request(parent_id, now=now, owner_id=42))
 
     assert result == {"found": False}
+
+
+def test_console_run_terminal_settles_turn_run_and_fifo_in_one_runtime_transaction(tmp_path, monkeypatch):
+    """The adapter's terminal_signal is the Console turn's only result.
+
+    Before, the runtime batch ended the run in one catalog transaction and the
+    HTTP route settled the turn in a second call, so a failure between them left
+    an ended run under an `active` turn that also blocked the thread's FIFO.
+    """
+
+    engine = create_catalog_engine(tmp_path / "console-terminal.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    session_id = uuid4()
+    thread_id = uuid4()
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.commit()
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "omp",
+            "device_id": "cinder",
+            "cwd": "/tmp/longhouse",
+            "project": "longhouse",
+            "started_at": datetime.now(UTC),
+        }
+    )
+    first = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "first",
+            "client_request_id": "terminal-1",
+            "created_at": datetime.now(UTC),
+        }
+    )["turn"]
+    second = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "second",
+            "client_request_id": "terminal-2",
+            "created_at": datetime.now(UTC),
+        }
+    )["turn"]
+    store.update_console_turn(
+        data={
+            "owner_id": 1,
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "provider": "omp",
+            "device_id": "cinder",
+            "turn_id": first["turn_id"],
+            "run_id": first["run_id"],
+            "state": "active",
+            "expected_state": "starting",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    ended_at = datetime.now(UTC) + timedelta(seconds=1)
+    terminal = RuntimeEventIngest(
+        runtime_key=f"omp:{session_id}",
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=first["run_id"],
+        provider="omp",
+        device_id="cinder",
+        source="omp_print",
+        kind="terminal_signal",
+        occurred_at=ended_at,
+        dedupe_key=f"omp-print:{session_id}:{first['run_id']}:terminal",
+        payload={"terminal_state": "run_completed", "exit_code": 0},
+    )
+
+    # A failure anywhere in the batch commits none of the three.
+    import zerg.catalogd.store as store_module
+
+    real_settle = store_module._settle_console_turn
+
+    def _crash(*args, **kwargs):
+        raise RuntimeError("simulated catalog failure mid-settlement")
+
+    monkeypatch.setattr(store_module, "_settle_console_turn", _crash)
+    with pytest.raises(RuntimeError):
+        store.apply_session_runtime(events=[terminal])
+    with Session(engine) as db:
+        assert db.get(LiveConsoleTurn, first["turn_id"]).state == "active"
+        assert db.get(LiveSessionRun, first["run_id"]).ended_at is None
+    monkeypatch.setattr(store_module, "_settle_console_turn", real_settle)
+
+    applied = store.apply_session_runtime(events=[terminal])
+    [claimed] = applied["console_next_turns"]
+    assert claimed["owner_id"] == 1
+    assert claimed["turn"]["turn_id"] == second["turn_id"]
+    assert claimed["turn"]["state"] == "starting"
+    with Session(engine) as db:
+        turn = db.get(LiveConsoleTurn, first["turn_id"])
+        run = db.get(LiveSessionRun, first["run_id"])
+        catalog = db.get(LiveSessionCatalog, str(session_id))
+        assert turn.state == "completed"
+        assert run.ended_at is not None and run.exit_status == "completed"
+        assert catalog.last_console_result_outcome == "completed"
+        assert db.get(LiveConsoleTurn, second["turn_id"]).run_id == claimed["turn"]["run_id"]
+
+    read = store.read_shadow_session_state(session_id=str(session_id), owner_id=1)
+    served = project_catalog_session_facts(
+        read["legacy_facts"],
+        observed_at=datetime.fromisoformat(read["observed_at"]),
+        canonical_heads=read["heads"],
+        commit_seq=int(read["commit_seq"]),
+    ).session_state
+    # The served run is the claimed next run; the settled one is history.
+    assert served.run is not None and served.run.id == claimed["turn"]["run_id"]
+    assert served.run.lifecycle == "starting"
+
+    # Redelivery of the same terminal (the dispatch crashed) redispatches the
+    # durable claim by its idempotent run_id instead of claiming a second one.
+    replayed = store.apply_session_runtime(events=[terminal])
+    assert [item["turn"]["run_id"] for item in replayed["console_next_turns"]] == [claimed["turn"]["run_id"]]
+
+    # A conflicting outcome for a settled turn changes nothing.
+    conflicting = terminal.model_copy(update={"payload": {"terminal_state": "run_failed"}, "dedupe_key": f"conflict:{first['run_id']}"})
+    assert store.apply_session_runtime(events=[conflicting])["console_next_turns"] == []
+    with Session(engine) as db:
+        assert db.get(LiveConsoleTurn, first["turn_id"]).state == "completed"
+        assert db.get(LiveSessionRun, first["run_id"]).exit_status == "completed"

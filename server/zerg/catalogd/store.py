@@ -729,6 +729,206 @@ def _live_thread_source_path(orm: Session, *, thread_id: str, provider: str) -> 
     return str(row[0]).strip() if row and str(row[0] or "").strip() else None
 
 
+CONSOLE_TURN_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
+# A provider adapter's terminal_signal is the Console turn's result. The same
+# mapping used to live in the runtime HTTP route, which settled the turn in a
+# second catalog call after the runtime batch had already ended the run.
+CONSOLE_TURN_OUTCOME_BY_RUN_TERMINAL = {
+    "run_completed": "completed",
+    "run_failed": "failed",
+    "run_cancelled": "cancelled",
+}
+
+
+def _console_turn_dispatch_dto(orm: Session, turn: LiveConsoleTurn) -> dict[str, Any]:
+    receipt = orm.get(LiveSessionInputReceipt, turn.receipt_id)
+    thread = orm.get(LiveSessionThread, turn.thread_id)
+    return _live_console_turn_dto(
+        turn,
+        message=receipt.text if receipt is not None else None,
+        client_request_id=receipt.client_request_id if receipt is not None else None,
+        provider_config=thread.provider_config_json if thread is not None else None,
+        model=turn.model,
+        error_code=_receipt_error_code(receipt),
+        resume_session_file=(_live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None),
+    )
+
+
+def _starting_console_turn_dto(orm: Session, *, thread_id: str) -> dict[str, Any] | None:
+    """Return the thread's durable `starting` owner, for exact-replay redispatch.
+
+    A process can die after a terminal transition claimed the next turn but
+    before its machine command was sent. Its run_id is also the idempotent
+    machine command_id, so returning it on replay is safe.
+    """
+
+    starting = (
+        orm.query(LiveConsoleTurn)
+        .filter(LiveConsoleTurn.thread_id == thread_id, LiveConsoleTurn.state == "starting")
+        .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
+        .first()
+    )
+    return _console_turn_dispatch_dto(orm, starting) if starting is not None else None
+
+
+def _settle_console_turn(
+    orm: Session,
+    turn: LiveConsoleTurn,
+    receipt: LiveSessionInputReceipt | None,
+    *,
+    next_state: str,
+    error: str | None,
+    error_code: str | None,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """Write one Console turn transition and everything that derives from it.
+
+    For a terminal state this is the single place the turn result, the session's
+    unread stamp, the run's end, the released control connections and the next
+    FIFO claim are written, inside the caller's transaction. Returns the claimed
+    next turn, if any, for the caller to dispatch.
+    """
+
+    turn.state = next_state
+    turn.updated_at = now
+    turn.error = error
+    if receipt is not None:
+        if next_state in {"active", "completed"}:
+            receipt.status = "delivered"
+        elif next_state in {"failed", "cancelled"}:
+            receipt.status = "failed"
+        receipt.error_json = json.dumps({"code": error_code, "message": error}, sort_keys=True, separators=(",", ":")) if error else None
+        receipt.updated_at = now
+    if next_state not in CONSOLE_TURN_TERMINAL_STATES:
+        return None
+    turn.terminal_at = now
+    # Console unread acknowledgement: denormalize the terminal result onto the
+    # catalog row so unread derives from two session-row columns (spec:
+    # console-unread-acknowledgement.md).
+    catalog_row = orm.get(LiveSessionCatalog, turn.session_id)
+    if catalog_row is not None:
+        catalog_row.last_console_result_at = now
+        catalog_row.last_console_result_outcome = next_state
+        catalog_row.updated_at = now
+    run = orm.get(LiveSessionRun, turn.run_id)
+    if run is not None:
+        # The turn result is the Console run's terminal evidence. Keep an end
+        # time the runtime reducer already wrote for the same signal.
+        if run.ended_at is None:
+            run.ended_at = now
+        run.exit_status = error_code or next_state
+        for connection_row in (
+            orm.query(LiveSessionConnection)
+            .filter(LiveSessionConnection.run_id == turn.run_id, LiveSessionConnection.released_at.is_(None))
+            .all()
+        ):
+            connection_row.state = "ended"
+            connection_row.released_at = now
+            connection_row.last_health_at = now
+            connection_row.can_send_input = False
+            connection_row.can_interrupt = False
+            connection_row.can_terminate = False
+            connection_row.can_tail_output = False
+            connection_row.can_resume = False
+    next_turn = (
+        orm.query(LiveConsoleTurn)
+        .filter(LiveConsoleTurn.thread_id == turn.thread_id, LiveConsoleTurn.state == "queued")
+        .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
+        .first()
+    )
+    if next_turn is None:
+        return None
+    next_receipt = orm.get(LiveSessionInputReceipt, next_turn.receipt_id)
+    resume_alias = (
+        orm.query(LiveSessionThreadAlias)
+        .filter(
+            LiveSessionThreadAlias.thread_id == next_turn.thread_id,
+            LiveSessionThreadAlias.provider == next_turn.provider,
+            LiveSessionThreadAlias.alias_kind == "provider_session_id",
+        )
+        .order_by(
+            LiveSessionThreadAlias.last_seen_at.desc(),
+            LiveSessionThreadAlias.first_seen_at.desc(),
+            LiveSessionThreadAlias.id.desc(),
+        )
+        .first()
+    )
+    next_run_id = str(uuid4())
+    next_turn.run_id = next_run_id
+    next_turn.state = "starting"
+    next_turn.resume_provider_thread_id = resume_alias.alias_value if resume_alias is not None else None
+    next_turn.updated_at = now
+    if next_receipt is not None:
+        next_receipt.status = "delivering"
+        next_receipt.delivery_request_id = next_run_id
+        next_receipt.updated_at = now
+    orm.add(
+        LiveSessionRun(
+            id=next_run_id,
+            thread_id=next_turn.thread_id,
+            provider=next_turn.provider,
+            host_id=next_turn.device_id,
+            cwd=next_turn.cwd,
+            launch_origin="longhouse_spawned",
+            started_at=now,
+        )
+    )
+    return _console_turn_dispatch_dto(orm, next_turn)
+
+
+def _settle_console_turns_from_runtime(orm: Session, events: list[Any], *, observed_at: datetime) -> list[dict[str, Any]]:
+    """Settle each Console turn whose adapter reported a run terminal in this batch.
+
+    Runs inside the runtime batch's transaction, so the turn result, the run end
+    and the served facts commit together or not at all. Returns the next turns
+    to dispatch: freshly claimed ones, plus -- on an exact replay of a terminal
+    already applied -- the durable `starting` owner a crashed dispatch left.
+    """
+
+    dispatch: list[dict[str, Any]] = []
+    for event in events:
+        outcome = CONSOLE_TURN_OUTCOME_BY_RUN_TERMINAL.get(str((event.payload or {}).get("terminal_state") or ""))
+        if (
+            event.kind != "terminal_signal"
+            or outcome is None
+            or event.run_id is None
+            or event.session_id is None
+            or event.thread_id is None
+            or event.device_id is None
+        ):
+            continue
+        turn = (
+            orm.query(LiveConsoleTurn)
+            .filter(
+                LiveConsoleTurn.run_id == str(event.run_id),
+                LiveConsoleTurn.session_id == str(event.session_id),
+                LiveConsoleTurn.thread_id == str(event.thread_id),
+                LiveConsoleTurn.provider == event.provider,
+                LiveConsoleTurn.device_id == event.device_id,
+            )
+            .one_or_none()
+        )
+        if turn is None:
+            continue
+        receipt = orm.get(LiveSessionInputReceipt, turn.receipt_id)
+        owner_id = receipt.owner_id if receipt is not None else None
+        if turn.state in CONSOLE_TURN_TERMINAL_STATES:
+            next_turn = _starting_console_turn_dto(orm, thread_id=turn.thread_id) if turn.state == outcome else None
+        else:
+            next_turn = _settle_console_turn(
+                orm,
+                turn,
+                receipt,
+                next_state=outcome,
+                error=None if outcome == "completed" else str(event.payload["terminal_state"]),
+                error_code=None,
+                now=_as_aware_utc(event.occurred_at) or observed_at,
+            )
+        if next_turn is not None and owner_id is not None:
+            dispatch.append({"owner_id": int(owner_id), "turn": next_turn})
+    return dispatch
+
+
 def _canonical_outbox_value(value: Any) -> Any:
     if isinstance(value, datetime):
         return {"__longhouse_datetime__": (_as_aware_utc(value) or value).isoformat()}
@@ -3388,6 +3588,7 @@ class CatalogStore:
                                     )
                                 else:
                                     source_alias.last_seen_at = event.occurred_at or observed_at
+                console_next_turns = _settle_console_turns_from_runtime(orm, events, observed_at=observed_at)
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -3425,6 +3626,7 @@ class CatalogStore:
             return {
                 **result.model_dump(mode="json"),
                 "commit_seq": str(commit_seq),
+                "console_next_turns": console_next_turns,
                 "activity_facts": {
                     "changed_heads": reduced.changed_heads,
                     "duplicates": reduced.duplicates,
@@ -5076,8 +5278,7 @@ class CatalogStore:
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
                 next_state = data["state"]
-                terminal_states = {"completed", "failed", "cancelled"}
-                if turn.state in terminal_states:
+                if turn.state in CONSOLE_TURN_TERMINAL_STATES:
                     if next_state != turn.state:
                         thread = orm.get(LiveSessionThread, turn.thread_id)
                         result = _live_console_turn_dto(
@@ -5100,36 +5301,7 @@ class CatalogStore:
                             "next_turn": None,
                             "commit_seq": str(_current_commit_seq(connection)),
                         }
-                    # A process can die after the terminal transition claimed
-                    # the next turn but before its machine command was sent.
-                    # Return that durable starting owner on exact replay; its
-                    # run_id is also the idempotent machine command_id.
-                    starting = (
-                        orm.query(LiveConsoleTurn)
-                        .filter(
-                            LiveConsoleTurn.thread_id == turn.thread_id,
-                            LiveConsoleTurn.state == "starting",
-                        )
-                        .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
-                        .first()
-                    )
-                    next_turn_result = None
-                    if starting is not None:
-                        next_receipt = orm.get(LiveSessionInputReceipt, starting.receipt_id)
-                        thread = orm.get(LiveSessionThread, starting.thread_id)
-                        next_turn_result = _live_console_turn_dto(
-                            starting,
-                            message=next_receipt.text if next_receipt is not None else None,
-                            client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
-                            provider_config=thread.provider_config_json if thread is not None else None,
-                            model=starting.model,
-                            error_code=_receipt_error_code(next_receipt),
-                            resume_session_file=(
-                                _live_thread_source_path(orm, thread_id=thread.id, provider=starting.provider)
-                                if thread is not None
-                                else None
-                            ),
-                        )
+                    next_turn_result = _starting_console_turn_dto(orm, thread_id=turn.thread_id)
                     thread = orm.get(LiveSessionThread, turn.thread_id)
                     result = _live_console_turn_dto(
                         turn,
@@ -5151,114 +5323,15 @@ class CatalogStore:
                         "next_turn": next_turn_result,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                turn.state = next_state
-                turn.updated_at = now
-                turn.error = data.get("error")
-                if receipt is not None:
-                    if next_state in {"active", "completed"}:
-                        receipt.status = "delivered"
-                    elif next_state in {"failed", "cancelled"}:
-                        receipt.status = "failed"
-                    receipt.error_json = (
-                        json.dumps(
-                            {
-                                "code": data.get("error_code"),
-                                "message": data["error"],
-                            },
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        )
-                        if data.get("error")
-                        else None
-                    )
-                    receipt.updated_at = now
-                next_turn_result = None
-                if next_state in terminal_states:
-                    turn.terminal_at = now
-                    # Console unread acknowledgement: denormalize the terminal
-                    # result onto the catalog row so unread derives from two
-                    # session-row columns (spec: console-unread-acknowledgement.md).
-                    catalog_row = orm.get(LiveSessionCatalog, turn.session_id)
-                    if catalog_row is not None:
-                        catalog_row.last_console_result_at = now
-                        catalog_row.last_console_result_outcome = next_state
-                        catalog_row.updated_at = now
-                    run = orm.get(LiveSessionRun, turn.run_id)
-                    if run is not None:
-                        run.ended_at = now
-                        run.exit_status = data.get("error_code") or next_state
-                        for connection_row in (
-                            orm.query(LiveSessionConnection)
-                            .filter(
-                                LiveSessionConnection.run_id == turn.run_id,
-                                LiveSessionConnection.released_at.is_(None),
-                            )
-                            .all()
-                        ):
-                            connection_row.state = "ended"
-                            connection_row.released_at = now
-                            connection_row.last_health_at = now
-                            connection_row.can_send_input = False
-                            connection_row.can_interrupt = False
-                            connection_row.can_terminate = False
-                            connection_row.can_tail_output = False
-                            connection_row.can_resume = False
-                    next_turn = (
-                        orm.query(LiveConsoleTurn)
-                        .filter(LiveConsoleTurn.thread_id == turn.thread_id, LiveConsoleTurn.state == "queued")
-                        .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
-                        .first()
-                    )
-                    if next_turn is not None:
-                        next_receipt = orm.get(LiveSessionInputReceipt, next_turn.receipt_id)
-                        thread = orm.get(LiveSessionThread, next_turn.thread_id)
-                        resume_alias = (
-                            orm.query(LiveSessionThreadAlias)
-                            .filter(
-                                LiveSessionThreadAlias.thread_id == next_turn.thread_id,
-                                LiveSessionThreadAlias.provider == next_turn.provider,
-                                LiveSessionThreadAlias.alias_kind == "provider_session_id",
-                            )
-                            .order_by(
-                                LiveSessionThreadAlias.last_seen_at.desc(),
-                                LiveSessionThreadAlias.first_seen_at.desc(),
-                                LiveSessionThreadAlias.id.desc(),
-                            )
-                            .first()
-                        )
-                        next_run_id = str(uuid4())
-                        next_turn.run_id = next_run_id
-                        next_turn.state = "starting"
-                        next_turn.resume_provider_thread_id = resume_alias.alias_value if resume_alias is not None else None
-                        next_turn.updated_at = now
-                        if next_receipt is not None:
-                            next_receipt.status = "delivering"
-                            next_receipt.delivery_request_id = next_run_id
-                            next_receipt.updated_at = now
-                        orm.add(
-                            LiveSessionRun(
-                                id=next_run_id,
-                                thread_id=next_turn.thread_id,
-                                provider=next_turn.provider,
-                                host_id=next_turn.device_id,
-                                cwd=next_turn.cwd,
-                                launch_origin="longhouse_spawned",
-                                started_at=now,
-                            )
-                        )
-                        next_turn_result = _live_console_turn_dto(
-                            next_turn,
-                            message=next_receipt.text if next_receipt is not None else None,
-                            client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
-                            provider_config=thread.provider_config_json if thread is not None else None,
-                            model=next_turn.model,
-                            error_code=_receipt_error_code(next_receipt),
-                            resume_session_file=(
-                                _live_thread_source_path(orm, thread_id=thread.id, provider=next_turn.provider)
-                                if thread is not None
-                                else None
-                            ),
-                        )
+                next_turn_result = _settle_console_turn(
+                    orm,
+                    turn,
+                    receipt,
+                    next_state=next_state,
+                    error=data.get("error"),
+                    error_code=data.get("error_code"),
+                    now=now,
+                )
                 orm.commit()
                 thread = orm.get(LiveSessionThread, turn.thread_id)
                 result = _live_console_turn_dto(

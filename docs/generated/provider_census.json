@@ -919,6 +919,7 @@
       "providers": [
         "claude",
         "codex",
+        "omp",
         "pi"
       ]
     },
