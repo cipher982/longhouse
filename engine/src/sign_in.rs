@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::Stdio;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -39,6 +39,12 @@ fn err(code: &'static str, message: impl Into<String>) -> SignInError {
 struct Attempt {
     provider: String,
     stdin: Option<ChildStdin>,
+    // Woken by cancel()/cancel_provider() so the watcher below kills the
+    // login process immediately instead of leaving it running until it
+    // exits on its own or the 15-minute ATTEMPT_TTL elapses. A device-code
+    // flow never reads stdin, so dropping it (the old cancel path) never
+    // signalled a still-polling `codex login --device-auth`.
+    cancel: Arc<Notify>,
 }
 
 fn attempts() -> &'static Mutex<HashMap<String, Attempt>> {
@@ -164,11 +170,13 @@ pub async fn start(contract: &Value, binary: OsString) -> Result<Value, SignInEr
 
     let attempt_id = uuid::Uuid::new_v4().to_string();
     let stdin = child.stdin.take();
+    let cancel_notify = Arc::new(Notify::new());
     attempts().lock().expect("sign-in attempts lock").insert(
         attempt_id.clone(),
         Attempt {
             provider: provider.clone(),
             stdin,
+            cancel: cancel_notify.clone(),
         },
     );
 
@@ -176,10 +184,13 @@ pub async fn start(contract: &Value, binary: OsString) -> Result<Value, SignInEr
     tokio::spawn(async move {
         // Keep draining output so the CLI never blocks on a full pipe.
         let drain = async { while line_rx.recv().await.is_some() {} };
-        let _ = tokio::time::timeout(ATTEMPT_TTL, async {
-            tokio::join!(child.wait(), drain);
-        })
-        .await;
+        tokio::select! {
+            _ = async { tokio::join!(child.wait(), drain); } => {}
+            _ = tokio::time::sleep(ATTEMPT_TTL) => {}
+            // An explicit cancel wakes this immediately rather than waiting
+            // on the CLI to exit by itself or the TTL to elapse.
+            _ = cancel_notify.notified() => {}
+        }
         let _ = child.kill().await;
         attempts()
             .lock()
@@ -227,21 +238,39 @@ pub async fn submit_code(attempt_id: &str, code: &str) -> Result<Value, SignInEr
 }
 
 pub fn cancel(attempt_id: &str) -> Value {
-    // Dropping the entry closes stdin; the waiter's TTL or the CLI's own exit
-    // then ends the process.
-    let removed = attempts()
+    // Removing the entry also closes stdin, which ends a paste-back flow
+    // waiting on it; the cancel notify is what stops a device-code flow that
+    // never reads stdin and would otherwise keep polling until it exits on
+    // its own or the 15-minute ATTEMPT_TTL elapses.
+    let notify = attempts()
         .lock()
         .expect("sign-in attempts lock")
         .remove(attempt_id)
-        .is_some();
-    json!({"attempt_id": attempt_id, "cancelled": removed})
+        .map(|attempt| attempt.cancel);
+    let cancelled = notify.is_some();
+    if let Some(notify) = notify {
+        notify.notify_one();
+    }
+    json!({"attempt_id": attempt_id, "cancelled": cancelled})
 }
 
 fn cancel_provider(provider: &str) {
-    attempts()
-        .lock()
-        .expect("sign-in attempts lock")
-        .retain(|_, attempt| attempt.provider != provider);
+    let mut guard = attempts().lock().expect("sign-in attempts lock");
+    let mut superseded = Vec::new();
+    guard.retain(|_, attempt| {
+        if attempt.provider == provider {
+            superseded.push(attempt.cancel.clone());
+            false
+        } else {
+            true
+        }
+    });
+    drop(guard);
+    // A second start for the same provider must not orphan the first
+    // attempt's still-running login process.
+    for notify in superseded {
+        notify.notify_one();
+    }
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -352,5 +381,84 @@ mod tests {
     async fn submitting_to_an_unknown_attempt_is_a_typed_error() {
         let error = submit_code("missing", "abc").await.err().expect("error");
         assert_eq!(error.code, "sign_in_attempt_missing");
+    }
+
+    fn process_alive(pid: i32) -> bool {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    /// A device-code login (codex) never reads stdin after printing its
+    /// prompt, so the old cancel path -- which only dropped the stdin handle
+    /// -- never signalled it; the process kept polling until it exited on
+    /// its own or the 15-minute ATTEMPT_TTL elapsed. Live-proved on
+    /// 2026-09-26: `codex login --device-auth` was still running two minutes
+    /// after a real `cancel` call. cancel() must kill the process directly.
+    #[tokio::test]
+    async fn cancel_kills_a_login_process_that_never_reads_stdin() {
+        let pid_file = std::env::temp_dir().join(format!(
+            "longhouse-sign-in-cancel-test-{}-{}.pid",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let contract = json!({
+            "provider": "cancel-test",
+            "sign_in": {
+                "disposition": "implemented",
+                "flow": "device_code",
+                "argv": [
+                    "-c",
+                    format!(
+                        "echo $$ > {path}; echo https://example.com/device; echo AAAA-BBBB; sleep 30",
+                        path = pid_file.display(),
+                    ),
+                ],
+            },
+        });
+
+        let result = match start(&contract, OsString::from("/bin/sh")).await {
+            Ok(result) => result,
+            Err(error) => panic!(
+                "start should observe the printed prompt: {} {}",
+                error.code, error.message
+            ),
+        };
+        let attempt_id = result["attempt_id"]
+            .as_str()
+            .expect("attempt_id")
+            .to_string();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let pid: i32 = loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_file) {
+                if let Ok(pid) = text.trim().parse() {
+                    break pid;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never wrote its pid"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(process_alive(pid), "child should be running before cancel");
+
+        let response = cancel(&attempt_id);
+        assert_eq!(response["cancelled"], true);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while process_alive(pid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cancel should kill a device-code login promptly instead of leaving it to the 15-minute TTL"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let _ = std::fs::remove_file(&pid_file);
     }
 }
