@@ -123,3 +123,63 @@ def test_presence_live_store_delegates_to_runtime_batch_without_archive_wait(mon
         assert event.dedupe_key == "presence-live-route-fixture"
 
     asyncio.run(run_test())
+
+
+def test_runtime_batch_dispatches_exactly_the_console_turns_catalogd_claimed(monkeypatch):
+    """catalogd settles the Console turn; the route only dispatches its claims."""
+
+    import zerg.routers.runtime as runtime_router
+    import zerg.services.console_turns as console_turns
+
+    claimed_turn = {"turn_id": "turn-2", "run_id": "run-2", "state": "starting"}
+
+    async def run_test(console_next_turns):
+        dispatched = []
+
+        class CatalogClient:
+            async def call(self, method, params, *, timeout_seconds):
+                assert method == "session.runtime.apply.v2"
+                return {
+                    "accepted": 1,
+                    "duplicates": 0,
+                    "updated_runtime_keys": ["omp:session-1"],
+                    "console_next_turns": console_next_turns,
+                    "commit_seq": "7",
+                }
+
+        catalog = CatalogClient()
+
+        async def fake_dispatch(**kwargs):
+            dispatched.append(kwargs)
+
+        monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: catalog)
+        monkeypatch.setattr(console_turns, "dispatch_catalog_claimed_turn", fake_dispatch)
+        payload = RuntimeEventBatchIngest(
+            events=[
+                {
+                    "runtime_key": "omp:session-1",
+                    "provider": "omp",
+                    "device_id": "cinder",
+                    "source": "omp_print",
+                    "kind": "terminal_signal",
+                    "occurred_at": "2026-07-12T07:00:00Z",
+                    "dedupe_key": "omp-print:terminal",
+                    "payload": {"terminal_state": "run_completed"},
+                }
+            ]
+        )
+        result = await runtime_router.ingest_runtime_observation_batch(
+            payload,
+            Response(),
+            None,
+            SimpleNamespace(device_id="cinder", id="token-1", owner_id=1),
+            None,
+        )
+        assert result.accepted == 1
+        return dispatched, catalog
+
+    dispatched, catalog = asyncio.run(run_test([{"owner_id": 3, "turn": claimed_turn}]))
+    assert dispatched == [{"owner_id": 3, "turn": claimed_turn, "client": catalog}]
+
+    dispatched, _catalog = asyncio.run(run_test([]))
+    assert dispatched == []

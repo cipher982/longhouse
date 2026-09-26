@@ -1111,7 +1111,9 @@ def test_console_run_terminal_settles_turn_run_and_fifo_in_one_runtime_transacti
         run = db.get(LiveSessionRun, first["run_id"])
         catalog = db.get(LiveSessionCatalog, str(session_id))
         assert turn.state == "completed"
-        assert run.ended_at is not None and run.exit_status == "completed"
+        # The reducer's exit status for the same signal is kept, not replaced
+        # by the generic turn outcome.
+        assert run.ended_at is not None and run.exit_status == "exit_0"
         assert catalog.last_console_result_outcome == "completed"
         assert db.get(LiveConsoleTurn, second["turn_id"]).run_id == claimed["turn"]["run_id"]
 
@@ -1136,4 +1138,4 @@ def test_console_run_terminal_settles_turn_run_and_fifo_in_one_runtime_transacti
     assert store.apply_session_runtime(events=[conflicting])["console_next_turns"] == []
     with Session(engine) as db:
         assert db.get(LiveConsoleTurn, first["turn_id"]).state == "completed"
-        assert db.get(LiveSessionRun, first["run_id"]).exit_status == "completed"
+        assert db.get(LiveSessionRun, first["run_id"]).exit_status == "exit_0"

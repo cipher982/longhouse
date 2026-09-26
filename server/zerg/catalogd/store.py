@@ -812,11 +812,15 @@ def _settle_console_turn(
         catalog_row.updated_at = now
     run = orm.get(LiveSessionRun, turn.run_id)
     if run is not None:
-        # The turn result is the Console run's terminal evidence. Keep an end
-        # time the runtime reducer already wrote for the same signal.
+        # The turn result is the Console run's terminal evidence. Keep the end
+        # time and exit status the runtime reducer already wrote for the same
+        # signal: its `exit_0` or explicit exit_status is richer than the turn
+        # outcome.
         if run.ended_at is None:
             run.ended_at = now
-        run.exit_status = error_code or next_state
+            run.exit_status = error_code or next_state
+        elif not run.exit_status:
+            run.exit_status = error_code or next_state
         for connection_row in (
             orm.query(LiveSessionConnection)
             .filter(LiveSessionConnection.run_id == turn.run_id, LiveSessionConnection.released_at.is_(None))
