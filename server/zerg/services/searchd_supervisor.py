@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,13 @@ from zerg.searchd.store import SCHEMA_VERSION
 logger = logging.getLogger(__name__)
 SEARCHD_QUERY_RPC_TIMEOUT_SECONDS = 5.0
 SEARCHD_PROJECTOR_RPC_TIMEOUT_SECONDS = 240.0
+# A crashing searchd (e.g. a schema DDL the host's sqlite3 build rejects)
+# prints its traceback to its own stdout/stderr, which the supervisor never
+# read. The only thing that reached the status file was `last_exit_code`, so
+# a caller three layers away saw a bare "catalogd unavailable for
+# search.query.v2" with nothing to grep for. This tail is diagnostic only; a
+# few KB is plenty for a Python traceback and keeps the status file small.
+_CHILD_OUTPUT_TAIL_BYTES = 4096
 
 
 def searchd_paths() -> tuple[Path, Path]:
@@ -66,6 +74,8 @@ class SearchdSupervisor:
         self._stopping = False
         self._restart_count = 0
         self._last_logged_status: tuple[object, ...] | None = None
+        self._child_output_tail = bytearray()
+        self._child_output_task: asyncio.Task | None = None
 
     async def start(self, *, readiness_timeout_seconds: float = 2.0) -> dict[str, Any] | None:
         """Start supervision and return readiness if it arrives within the soft deadline.
@@ -140,6 +150,8 @@ class SearchdSupervisor:
             try:
                 process = await self._spawn_process()
                 self._process = process
+                self._child_output_tail = bytearray()
+                self._child_output_task = asyncio.create_task(self._drain_child_output(process), name="searchd-child-output")
                 self._write_status("starting", ownership="owned", pid=process.pid)
                 returncode = await self._monitor_owned_process(process)
                 if self._stopping:
@@ -150,6 +162,7 @@ class SearchdSupervisor:
                     ownership="none",
                     last_exit_code=returncode,
                     restart_count=self._restart_count,
+                    **self._child_error_fields(returncode),
                 )
             except asyncio.CancelledError:
                 await self._terminate_owned_process()
@@ -163,6 +176,7 @@ class SearchdSupervisor:
                     restart_count=self._restart_count,
                 )
             finally:
+                await self._stop_draining_child_output()
                 if self._process is not None and self._process.returncode is not None:
                     self._process = None
                 await self.client.close()
@@ -180,7 +194,49 @@ class SearchdSupervisor:
             str(self.database_path),
             "--socket",
             str(self.socket_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
+
+    async def _drain_child_output(self, process: asyncio.subprocess.Process) -> None:
+        """Keep a bounded tail of the child's combined stdout/stderr.
+
+        A pipe nobody reads fills its OS buffer and can wedge the child, so
+        this has to run for the process's whole life, not just after it
+        exits. Only the last `_CHILD_OUTPUT_TAIL_BYTES` are kept.
+        """
+
+        stream = process.stdout
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    return
+                self._child_output_tail += chunk
+                overflow = len(self._child_output_tail) - _CHILD_OUTPUT_TAIL_BYTES
+                if overflow > 0:
+                    del self._child_output_tail[:overflow]
+        except (asyncio.CancelledError, ValueError):
+            raise
+        except Exception:
+            logger.debug("searchd child output drain stopped unexpectedly", exc_info=True)
+
+    async def _stop_draining_child_output(self) -> None:
+        task, self._child_output_task = self._child_output_task, None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    def _child_error_fields(self, returncode: int) -> dict[str, Any]:
+        if returncode == 0 or not self._child_output_tail:
+            return {}
+        tail = bytes(self._child_output_tail).decode("utf-8", errors="replace").strip()
+        return {"child_output_tail": tail} if tail else {}
 
     async def _monitor_owned_process(self, process: asyncio.subprocess.Process) -> int:
         while process.returncode is None and not self._stopping:

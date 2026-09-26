@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -137,3 +139,45 @@ async def test_interactive_search_budget_survives_one_second_read_contention(sup
     assert await supervisor.client.call("search.query.v2") == {"method": "search.query.v2"}
     with pytest.raises(CatalogUnavailable, match="deadline exceeded"):
         await supervisor.health_client.call("search.ping.v2")
+
+
+@pytest.mark.asyncio
+async def test_degraded_status_captures_the_crashing_child_traceback(supervisor_paths, monkeypatch):
+    """A searchd that dies on startup (e.g. a sqlite3 build too old for a DDL
+    option) used to leave only `last_exit_code` behind -- the actual reason
+    only ever existed in the child's own stdout/stderr, which nothing read.
+    The supervisor must drain and retain enough of it to be diagnosable from
+    the status file alone.
+    """
+
+    database_path, socket_path = supervisor_paths
+    supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
+
+    marker = 'sqlite3.OperationalError: unrecognized option: "contentless_delete"'
+
+    async def crash_immediately() -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            f"import sys; print({marker!r}, file=sys.stderr); sys.exit(1)",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+    monkeypatch.setattr(supervisor, "_spawn_process", crash_immediately)
+    ping = await supervisor.start(readiness_timeout_seconds=2.0)
+    assert ping is None
+
+    deadline = asyncio.get_running_loop().time() + 5.0
+    status: dict[str, object] = {}
+    while asyncio.get_running_loop().time() < deadline:
+        if supervisor.status_path.exists():
+            status = json.loads(supervisor.status_path.read_text())
+            if status.get("status") == "degraded" and "child_output_tail" in status:
+                break
+        await asyncio.sleep(0.05)
+
+    await supervisor.stop()
+
+    assert status.get("last_exit_code") == 1
+    assert marker in status.get("child_output_tail", "")
