@@ -414,14 +414,20 @@ mod tests {
 
         let output = (|| -> std::io::Result<std::process::Output> {
             use std::io::Write as _;
-            let mut child = std::process::Command::new(&hook_script)
+            let mut command = std::process::Command::new(&hook_script);
+            command
                 .arg("PreInvocation")
-                .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
-                .env("LONGHOUSE_MANAGED_PROVIDER", "antigravity")
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()?;
+                .stderr(std::process::Stdio::piped());
+            // The hook resolves its inbox from the same identity a real launch
+            // carries, so claim it the way every launch site does.
+            crate::managed_identity::ManagedIdentity::new(
+                crate::managed_identity_contract::ManagedProvider::Antigravity,
+                &session_id,
+            )
+            .apply(&mut command, &[]);
+            let mut child = command.spawn()?;
             child
                 .stdin
                 .take()
