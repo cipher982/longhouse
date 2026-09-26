@@ -17,10 +17,13 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 Do not blur these lanes:
 
-- **Hosted deploy** — qualifies the exact runtime image, then updates canary
-  and hosted tenants through the private deployment API. The public demo is a
-  separate direct-Compose app; its image must be promoted after canary proof.
-  The control plane itself is an external private service, not shipped here.
+- **Hosted deploy** — qualifies the exact runtime image and updates the
+  canary automatically. Dogfood and production are separate rings, not this
+  lane (`control-plane/docs/specs/release-rings.md`): `make promote-dogfood`
+  moves the maintainer's personal dogfood instance on demand; `make
+  promote-production VERSION=` moves every other hosted tenant and the
+  public demo, only after that exact SHA has soaked on dogfood for 24h. The
+  control plane itself is an external private service, not shipped here.
 - **CLI/package release** — updates the user-installed `longhouse` CLI from
   the GitHub release wheel used by `scripts/install.sh`. Existing users do not
   get this from a hosted deploy. They need a new install or upgrade:
@@ -81,8 +84,9 @@ What ships:
 - GHCR runtime image tagged with the full source SHA (and `latest` only as a registry convenience)
 - Canary and hosted-tenant mutations through the durable private deployment API,
   using the exact immutable digest
-- Canary smoke/functional acceptance before manual public-demo promotion;
-  personal dogfood promotion is separate and names the selected verified release
+- Canary smoke/functional acceptance. Dogfood and production promotion are
+  separate rings (`make promote-dogfood`, then `make promote-production
+  VERSION=` after a 24h soak), and both name the selected verified release
 
 Primary automation:
 
@@ -120,9 +124,11 @@ When the maintainer says `cowbell`, the agent owns the whole ship loop:
 `deploy-and-verify.yml` waits for exact-SHA image publication, reprovisions
 the hosted canary, and qualifies it with a fast smoke. Its “Deploy public demo
 runtime” job verifies the image and prints promotion instructions; it does
-**not** mutate the demo container. A green workflow with an old demo SHA
-correctly yields `live_drift` from `make ship`. Promote the demo from its
-own stack below, then run `make ship-watch` for the same SHA. Broad
+**not** mutate the demo container. The demo moves on the production ring
+(`make promote-production VERSION=`, only after a dogfood soak), not on every
+push, so `make ship`/`ship-monitor` no longer require it to match the pushed
+SHA — a stale demo SHA there is expected, not `live_drift`; it is still
+printed in `make deploy-status`/`ship-watch` output. Broad
 `hosted-live-qa.yml` runs asynchronously and must be checked before final QA.
 Full CI remains an optional source gate (`DEPLOY_WAIT_FULL_CI=true`).
 
@@ -147,22 +153,25 @@ the exception because it is not a control-plane tenant.
 
 ### Public demo promotion
 
-After the exact-SHA workflow succeeds and the hosted canary serves that SHA,
-read the demo job's qualified immutable image digest. The public demo is an
-operator-managed Compose stack, **not** a control-plane tenant: update its
-durable image pin and recreate only the demo service, preserving its data.
-Instance-specific hosts, credentials, and stack paths belong in private
-operator instructions, not this public skill. Verify the live surface:
+The demo is on the production ring, not the per-push hosted-deploy lane
+(`control-plane/docs/specs/release-rings.md`): it moves only via
+`make promote-production VERSION=vX.Y.Z`, which requires that exact SHA to
+have already soaked on dogfood (`make promote-dogfood`) for 24h, then pins
+the demo's Compose stack to the same qualified digest and verifies it. The
+public demo is an operator-managed Compose stack, **not** a control-plane
+tenant — `promote-production.sh` updates its durable image pin over SSH and
+recreates only the demo service, preserving its data. Never register the
+demo as a hosted tenant or use its Compose mechanism to bypass hosted-tenant
+deployment receipts. Verify the live surface:
 
 ```bash
 make deploy-status
 curl -fsS https://longhouse.ai/api/readyz
-make ship-watch SHA="<full-sha>" ARGS="--json"
 ```
 
-Only a successful exact-SHA watch with healthy demo and canary counts as
-`deployed`. Never register the demo as a hosted tenant or use its Compose
-mechanism to bypass hosted-tenant deployment receipts.
+A successful exact-SHA `make ship-watch` no longer implies the demo moved;
+it is only deployed once `make promote-production VERSION=` reports
+`demo_verified=true` for that release.
 
 ### Hosted Control Plane
 
@@ -229,8 +238,9 @@ ssh <runtime-host> 'docker logs longhouse-<subdomain> --tail 50'
 ```
 
 SSH/container log commands are read-only diagnostics for hosted tenants.
-Canary, cohort, and dogfood mutations use the private deployment API; only
-the separate public demo uses its existing direct-Compose release path.
+Canary, cohort, and dogfood mutations use the private deployment API; the
+public demo moves only via `make promote-production` (release-rings.md),
+which pins its own Compose stack over SSH rather than a hand-run command.
 
 ## Local Dogfood Refresh (MANDATORY for machine-side changes)
 
