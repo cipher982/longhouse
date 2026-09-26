@@ -540,6 +540,42 @@ def test_run_coordination_dispatches_by_variant_and_uses_pass_not_passed(tmp_pat
     assert on_disk == result
 
 
+def test_run_coordination_crash_before_observation_still_yields_typed_observation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crash/timeout raised from inside _run_directed_input (e.g. the bridge
+    never comes up, or the send/poll loop blows its deadline) propagates before
+    that helper ever returns an observation dict, so the caller's local
+    `result` stays {} with no "observation" key at all. The assurance
+    validator (provider_factory/assurance.py) requires `observation` to be a
+    Mapping and otherwise reports the whole result as a malformed shape
+    ("observation is not an object"), which misclassifies a real producer
+    crash as a harness defect. The producer must always persist a typed,
+    dict-shaped observation describing the crash so the failure is judged on
+    its merits instead of shape-rejected."""
+
+    args = _args(tmp_path)
+    args.evidence_root = tmp_path / "evidence-crash"
+    args.variant = next(variant for variant, cell in m._CELL_BY_VARIANT.items() if cell[0] == "provider_input_receipt_linked")
+
+    def boom(_args: object, _root: Path) -> tuple[dict[str, object], dict[str, bool]]:
+        raise TimeoutError("timed out waiting for target session to observe the directed input")
+
+    monkeypatch.setattr(m, "_run_directed_input", boom)
+    monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
+
+    result = m.run_coordination(args)
+
+    assert result["status"] == "fail"
+    assert isinstance(result["observation"], dict)
+    assert result["observation"]["producer_crashed"] is True
+    assert "timed out waiting for target session" in result["observation"]["crash_reason"]
+    assert result["assertions"] == {"provider_input_receipt_linked": False}
+    assert result["failure_code"] == "codex_coordination_scenario_failed"
+
+    on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
+    assert isinstance(on_disk["observation"], dict)
+    assert on_disk == result
+
+
 def test_run_coordination_mixed_scenario_status_matches_complete_assertion_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     args.evidence_root = tmp_path / "evidence-mixed"
