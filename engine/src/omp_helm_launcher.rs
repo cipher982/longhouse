@@ -193,6 +193,11 @@ struct OmpHelmServer {
     state_path: Arc<Mutex<PathBuf>>,
     adoption: Arc<Mutex<Option<AdoptionContext>>>,
     adopted_lock: Arc<Mutex<Option<File>>>,
+    /// The launch's own degraded-registration retry, held here so adoption can
+    /// stop it: a late success would re-register the ended session and hand
+    /// this process that session's coordination token.
+    launch_registration_retry:
+        Arc<Mutex<Option<crate::managed_launch_lifecycle::ManagedRegistrationRetry>>>,
     persist_lock: Arc<Mutex<()>>,
     socket_dir: PathBuf,
     stop: Arc<AtomicBool>,
@@ -230,6 +235,7 @@ impl OmpHelmServer {
             state_path: Arc::new(Mutex::new(state_path)),
             adoption: Arc::new(Mutex::new(None)),
             adopted_lock: Arc::new(Mutex::new(None)),
+            launch_registration_retry: Arc::new(Mutex::new(None)),
             persist_lock: Arc::new(Mutex::new(())),
             socket_dir,
             stop: Arc::new(AtomicBool::new(false)),
@@ -274,6 +280,15 @@ impl OmpHelmServer {
             .lock()
             .expect("OMP state path mutex poisoned")
             .clone()
+    }
+
+    fn take_launch_registration_retry(
+        &self,
+    ) -> Option<crate::managed_launch_lifecycle::ManagedRegistrationRetry> {
+        self.launch_registration_retry
+            .lock()
+            .expect("OMP registration retry mutex poisoned")
+            .take()
     }
 
     fn enable_adoption(&self, context: AdoptionContext) {
@@ -898,6 +913,7 @@ impl OmpHelmServer {
             .adopted_lock
             .lock()
             .expect("OMP adoption mutex poisoned") = Some(adoption.lock);
+        drop(self.take_launch_registration_retry());
 
         let mut ended = launch;
         ended.status = "stopped".into();
@@ -2544,6 +2560,10 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             })),
         )
     });
+    *server
+        .launch_registration_retry
+        .lock()
+        .expect("OMP registration retry mutex poisoned") = degraded;
     // Adopting a session happens on the extension's reader thread, inside a
     // five-second transition window, so its registration runs on the same
     // background retry a degraded launch uses rather than blocking the bind.
@@ -2649,7 +2669,12 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         if let Some(transaction) = transaction.as_mut() {
             transaction.confirm_or_degrade("OMP", &crate::config::get_agent_dir()?, &deferred);
         }
-        if let Some(registration) = degraded.as_ref() {
+        if let Some(registration) = server_for_spawn
+            .launch_registration_retry
+            .lock()
+            .expect("OMP registration retry mutex poisoned")
+            .as_ref()
+        {
             registration.provider_alive.store(true, Ordering::Release);
         }
         let current = server_for_spawn.current_state();
@@ -2713,7 +2738,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     }
     server.shutdown();
     stop_result?;
-    drop(degraded);
+    drop(server.take_launch_registration_retry());
     for notice in deferred.drain() {
         eprintln!("{notice}");
     }
