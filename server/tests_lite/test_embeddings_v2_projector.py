@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import numpy as np
 import pytest
 
+from zerg.services.embeddings_v2_projector import IMPORT_YIELD_RECHECK_SECONDS
 from zerg.services.embeddings_v2_projector import PROJECTOR_CLAIM_BATCH
 from zerg.services.embeddings_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
 from zerg.services.embeddings_v2_projector import PROJECTOR_LEASE_SECONDS
@@ -28,6 +30,8 @@ class FakeClient:
         self.calls.append((method, parsed))
         if method == "projector.coverage.certify.v2" and method not in self.responses:
             return {"certified": False, "created": False, "lag_count": 1, "commit_seq": "1"}
+        if method == "auth.owner.get.v2" and method not in self.responses:
+            return {"found": False}
         response = self.responses[method]
         return response(parsed) if callable(response) else response
 
@@ -607,3 +611,83 @@ async def test_embeddings_projector_completes_cleanly_for_never_rendered_session
 
     assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
     assert not any(method == "projector.state.fail.v2" for method, _ in catalog.calls)
+
+
+def _heartbeat(state, *, received_at, device_id="laptop", is_offline=0):
+    inventory = (
+        '{"schema_version":1,"generation":1,"content_sha256":"' + "a" * 64 + '",'
+        '"observed_at":"2026-09-24T12:00:00Z","scan_duration_ms":0,"scan_error_count":0,'
+        '"source_count":0,"source_bytes":0,"wal_bytes":0,"footprint_bytes":0,"providers":[]}'
+    )
+    return {
+        "device_id": device_id,
+        "received_at": received_at.isoformat(),
+        "is_offline": is_offline,
+        "raw_json": '{"history_import":{"state":"' + state + '","inventory":' + inventory + "}}",
+    }
+
+
+def _import_catalog(heartbeats):
+    return FakeClient(
+        {
+            "auth.owner.get.v2": {"found": True, "owner_id": 1},
+            "machine.health.list.v2": {"heartbeats": heartbeats},
+            "projector.state.claim.v2": {"claimed": []},
+            "projector.store.bind.v2": {"bound": True},
+        }
+    )
+
+
+def _search():
+    return FakeClient({"search.ping.v2": {"store_id": str(uuid4()), "schema_generation": "g1"}})
+
+
+@pytest.mark.asyncio
+async def test_embedding_projection_waits_while_a_machine_imports_history():
+    now = datetime.now(UTC)
+    catalog = _import_catalog([_heartbeat("importing", received_at=now - timedelta(seconds=10))])
+    projector = EmbeddingsV2Projector(catalog=catalog, search=_search())
+
+    assert await projector.run_once(now=now) == 0
+    assert [method for method, _ in catalog.calls] == ["auth.owner.get.v2", "machine.health.list.v2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "age_seconds", "is_offline"),
+    [
+        ("complete", 10, 0),
+        # Not moving data: waiting on these would hold semantic search back forever.
+        ("paused", 10, 0),
+        ("blocked_source", 10, 0),
+        ("importing", 10, 1),
+        # A machine that vanished mid-import still reports its last state.
+        ("importing", 3600, 0),
+    ],
+)
+async def test_embedding_projection_runs_when_no_import_is_moving(state, age_seconds, is_offline):
+    now = datetime.now(UTC)
+    catalog = _import_catalog([_heartbeat(state, received_at=now - timedelta(seconds=age_seconds), is_offline=is_offline)])
+    projector = EmbeddingsV2Projector(catalog=catalog, search=_search())
+
+    await projector.run_once(now=now)
+
+    assert "projector.state.claim.v2" in [method for method, _ in catalog.calls]
+
+
+@pytest.mark.asyncio
+async def test_embedding_projection_rechecks_import_state_on_a_bounded_cadence():
+    now = datetime.now(UTC)
+    heartbeats = [_heartbeat("importing", received_at=now)]
+    catalog = _import_catalog(heartbeats)
+    projector = EmbeddingsV2Projector(catalog=catalog, search=_search())
+
+    assert await projector.run_once(now=now) == 0
+    heartbeats[0] = _heartbeat("complete", received_at=now)
+    assert await projector.run_once(now=now + timedelta(seconds=1)) == 0
+    assert sum(1 for method, _ in catalog.calls if method == "machine.health.list.v2") == 1
+
+    later = now + timedelta(seconds=IMPORT_YIELD_RECHECK_SECONDS)
+    await projector.run_once(now=later)
+    assert sum(1 for method, _ in catalog.calls if method == "machine.health.list.v2") == 2
+    assert "projector.state.claim.v2" in [method for method, _ in catalog.calls]

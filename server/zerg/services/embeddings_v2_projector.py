@@ -15,6 +15,8 @@ from uuid import uuid4
 from zerg.catalogd.client import CatalogClient
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.runtime_boot import RUNTIME_BOOT_ID
+from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
+from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
 from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.local_embedder import get_local_embedder
@@ -39,6 +41,14 @@ PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS"
 PROJECTOR_CLAIM_BATCH = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_CLAIM_BATCH", "4")))
 PROJECTOR_IDLE_POLL_SECONDS = 5.0
 PROJECTOR_LEASE_SECONDS = max(300, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_LEASE_SECONDS", "900")))
+# Embeddings derive from transcripts and can be rebuilt at any time; the
+# transcripts are the only copy. One document pass holds four threads for about
+# 1.4 s, which on a 6-CPU tenant is most of the box, so while a machine is
+# actively moving its history in, the projector waits rather than compete with
+# the import. A paused, blocked or offline import is not moving data and does
+# not hold semantic search back.
+IMPORT_YIELD_STATES = frozenset({"importing", "backpressured"})
+IMPORT_YIELD_RECHECK_SECONDS = 15.0
 # Projects whose sessions are machine-generated load-test fixtures rather than
 # work anyone will ever recall. Matching on project name is weaker than a flag on
 # the session record would be; it is what the bench harness actually distinguishes
@@ -62,9 +72,13 @@ class EmbeddingsV2Projector:
         self.search = search
         self.worker_id = worker_id or f"embeddings-v2:{RUNTIME_BOOT_ID}"
         self._bound_store_id: str | None = None
+        self._import_checked_at: datetime | None = None
+        self._import_active = False
 
     async def run_once(self, *, limit: int = 4, now: datetime | None = None) -> int:
         observed_at = now or datetime.now(UTC)
+        if await self._history_import_active(observed_at):
+            return 0
         await self._ensure_store_binding(observed_at)
         claim_token = str(uuid4())
         claim = await self.catalog.call(
@@ -83,6 +97,35 @@ class EmbeddingsV2Projector:
             raise ValueError("catalog returned invalid embedding claims")
         await asyncio.gather(*(self._run_claim(state, claim_token) for state in states))
         return len(states)
+
+    async def _history_import_active(self, observed_at: datetime) -> bool:
+        checked_at = self._import_checked_at
+        if checked_at is not None and (observed_at - checked_at).total_seconds() < IMPORT_YIELD_RECHECK_SECONDS:
+            return self._import_active
+        owner = await self.catalog.call("auth.owner.get.v2", {})
+        importing: list[str] = []
+        if owner.get("found") is True and owner.get("owner_id") is not None:
+            payload = await self.catalog.call(
+                "machine.health.list.v2",
+                {"owner_id": int(owner["owner_id"]), "device_id": None, "recent_after": None, "limit": 100},
+            )
+            summaries, _total = machine_transport_health_from_catalog_rows(payload.get("heartbeats", []), limit=100)
+            importing = [
+                summary.device_id
+                for summary in summaries
+                if summary.history_import.state in IMPORT_YIELD_STATES
+                and not summary.is_offline
+                and (observed_at - summary.last_heartbeat_at).total_seconds() <= DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
+            ]
+        active = bool(importing)
+        if active != self._import_active:
+            if active:
+                logger.info("Embedding projection waiting for history import on %s", ", ".join(sorted(importing)))
+            else:
+                logger.info("Embedding projection resuming: no history import in progress")
+        self._import_checked_at = observed_at
+        self._import_active = active
+        return active
 
     async def _ensure_store_binding(self, observed_at: datetime) -> None:
         ping = await self.search.call("search.ping.v2")
