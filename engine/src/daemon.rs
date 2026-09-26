@@ -139,6 +139,14 @@ const LOCAL_STATUS_BUDGET_MS: u64 = LOCAL_STATUS_INTERVAL_SECS * 1000 / 4;
 /// removes the spam; reporting every tick did the opposite of both.
 const LOCAL_STATUS_BUDGET_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
+/// How long a managed-enumeration certificate stays usable on the wire.
+///
+/// The Runtime Host refuses a certificate older than its own bound, so a
+/// projection that is only rebuilt when observations change would ship a stale
+/// claim on every quiet beat -- the machine would look un-enumerated exactly
+/// when it is idle. Re-enumerate well inside the host's window so every shipped
+/// beat carries a claim that is still true.
+const MANAGED_CERTIFICATE_KEEPALIVE_SECS: u64 = 45;
 pub(crate) const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
 const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
@@ -1278,6 +1286,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_projected_managed_scan_partial = false;
     let mut last_projected_managed_snapshot_complete = false;
     let mut last_managed_captured_at = String::new();
+    let mut last_certified_at: Option<Instant> = None;
+    let mut certificate_keepalive_warned = false;
     let mut last_projected_unmanaged_snapshot_complete = false;
     let mut unmanaged_binding_refresh_failed = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
@@ -2360,7 +2370,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             chrono::Utc::now().to_rfc3339(),
                         );
                     } else if managed_full_reconciliation_ready(
-                        pending_full_reconciliation,
+                        pending_full_reconciliation || certificate_needs_refresh(last_certified_at, Instant::now()),
                         managed_observation_scan_tasks.is_empty(),
                         Instant::now(),
                         managed_full_reconciliation_not_before,
@@ -2479,7 +2489,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     pending_wake_reconciliation = false;
                                 }
                             } else if managed_full_reconciliation_ready(
-                                pending_full_reconciliation,
+                                pending_full_reconciliation
+                                    || certificate_needs_refresh(last_certified_at, Instant::now()),
                                 managed_observation_scan_tasks.is_empty(),
                                 Instant::now(),
                                 managed_full_reconciliation_not_before,
@@ -2517,6 +2528,24 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             .projection_equivalent(&last_managed_observations);
                         let (managed_scan_partial, managed_snapshot_complete) =
                             managed_scan_certificate(&result);
+                        if managed_snapshot_complete {
+                            last_certified_at = Some(Instant::now());
+                            certificate_keepalive_warned = false;
+                        } else if let Some(refreshed_at) = last_certified_at {
+                            // Keep the last claim only while it is still inside
+                            // the keepalive; past that the beat ships without
+                            // absence authority, which fails closed.
+                            if refreshed_at.elapsed() > Duration::from_secs(MANAGED_CERTIFICATE_KEEPALIVE_SECS)
+                                && !certificate_keepalive_warned
+                            {
+                                certificate_keepalive_warned = true;
+                                tracing::warn!(
+                                    reason = result.reason,
+                                    retained_stale_rows = result.retained_stale_rows,
+                                    "Managed enumeration has not certified within the keepalive window; beats ship without absence authority"
+                                );
+                            }
+                        }
                         let managed_evidence_changed = managed_observations_changed
                             || result.full_reconciliation
                             || managed_scan_partial != last_projected_managed_scan_partial;
@@ -4463,6 +4492,21 @@ fn managed_state_changes_require_full_reconciliation(
     paths
         .iter()
         .any(|path| !observations.contains_state_file(path))
+}
+
+/// Whether the certificate the next beat would carry is about to age out.
+///
+/// A certificate is per-generation, and the Runtime Host enforces its own age
+/// bound, so an idle machine must still re-enumerate inside that bound or its
+/// beats stop carrying absence authority.
+fn certificate_needs_refresh(certified_at: Option<Instant>, now: Instant) -> bool {
+    match certified_at {
+        None => true,
+        Some(certified_at) => {
+            now.saturating_duration_since(certified_at)
+                > Duration::from_secs(MANAGED_CERTIFICATE_KEEPALIVE_SECS)
+        }
+    }
 }
 
 fn managed_full_reconciliation_ready(
@@ -6726,6 +6770,22 @@ mod tests {
             retained_stale_rows: retained,
             ..ManagedObservationScanResult::default()
         }
+    }
+
+    #[test]
+    fn certificate_keepalive_refreshes_before_the_host_would_refuse_it() {
+        let now = Instant::now();
+        // Never certified: the first beat must go and get one.
+        assert!(certificate_needs_refresh(None, now));
+        // Fresh: do not rescan on every beat.
+        assert!(!certificate_needs_refresh(Some(now), now));
+        // Aged past the keepalive: re-enumerate, or the next beats ship a claim
+        // the Runtime Host will refuse.
+        let stale = now - Duration::from_secs(MANAGED_CERTIFICATE_KEEPALIVE_SECS + 1);
+        assert!(certificate_needs_refresh(Some(stale), now));
+        // Inside the host's own bound, so the refreshed claim is still true on
+        // arrival.
+        assert!(MANAGED_CERTIFICATE_KEEPALIVE_SECS < 90);
     }
 
     #[test]
