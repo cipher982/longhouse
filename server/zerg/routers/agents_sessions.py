@@ -65,6 +65,7 @@ from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_coordination import project_storage_v2_wall
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
+from zerg.services.session_listing import resolve_search_days_back
 from zerg.services.session_listing import validate_managed_hook_scope
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
@@ -369,7 +370,14 @@ async def list_sessions(
         description="Include Hatch automation sessions in otherwise default-hidden lists",
     ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
-    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
+    days_back: Optional[int] = Query(
+        None,
+        ge=1,
+        le=3650,
+        description=(
+            "Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window."
+        ),
+    ),
     query: Optional[str] = Query(
         None,
         description="Content search query. Omit or blank to list recent sessions ordered by last activity.",
@@ -392,6 +400,10 @@ async def list_sessions(
     # what a query-less caller actually wants.
     if query is not None and not query.strip():
         query = None
+    # An explicit days_back always narrows; an absent one searches all
+    # indexed history when a query is present, and keeps the ordinary recent
+    # window for a query-less listing.
+    days_back = resolve_search_days_back(days_back, has_query=query is not None)
     try:
         params = SessionListParams(
             project=project,

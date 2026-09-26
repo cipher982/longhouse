@@ -2,11 +2,20 @@
 
 from zerg.auth.caller import caller_principal
 from zerg.auth.managed_session_tokens import ManagedSessionToken
+from zerg.services.session_listing_types import DEFAULT_LIST_DAYS_BACK
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams
 from zerg.services.session_listing_types import SessionListResult
+from zerg.services.session_listing_types import resolve_search_days_back
 
-__all__ = ["SessionListingError", "SessionListParams", "SessionListResult", "validate_managed_hook_scope"]
+__all__ = [
+    "DEFAULT_LIST_DAYS_BACK",
+    "SessionListingError",
+    "SessionListParams",
+    "SessionListResult",
+    "resolve_search_days_back",
+    "validate_managed_hook_scope",
+]
 
 
 def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None:
@@ -28,6 +37,7 @@ def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None
         or params.query is not None
         or params.offset != 0
         or params.limit > 5
+        or params.days_back is None
         or params.days_back > 7
         or params.sort not in {None, "recency"}
         or params.mode != "lexical"

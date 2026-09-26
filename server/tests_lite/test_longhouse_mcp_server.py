@@ -441,7 +441,9 @@ async def test_search_sessions_without_query_lists_recent_sessions():
     """Omitting the query is a listing call, not an error.
 
     The tool forwards to /api/agents/sessions without a query param, which
-    returns recent sessions ordered by last activity.
+    returns recent sessions ordered by last activity. `days_back` is also
+    omitted: the route itself defaults a query-less listing to its usual
+    recent window, so the tool does not need to name one.
     """
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["search_sessions"]
@@ -464,7 +466,6 @@ async def test_search_sessions_without_query_lists_recent_sessions():
     mock_get.assert_awaited_once_with(
         "/api/agents/sessions",
         params={
-            "days_back": 14,
             "limit": 5,
             "context_mode": "forensic",
             "project": "zerg",

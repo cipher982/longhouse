@@ -60,6 +60,7 @@ from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.session_listing import SessionListingError
+from zerg.services.session_listing import resolve_search_days_back
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_views import FiltersResponse
@@ -313,7 +314,7 @@ async def semantic_search_timeline_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
-    days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
+    days_back: Optional[int] = Query(None, ge=1, le=3650, description="Days to look back. Omit to search all indexed history."),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     current_user=Depends(get_current_browser_caller),
@@ -372,7 +373,7 @@ async def recall_timeline_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
     include_automation: bool = Query(False, description="Include automation sessions in otherwise default-hidden results"),
-    since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
+    since_days: Optional[int] = Query(None, ge=1, le=3650, description="Days to look back. Omit to search all indexed history."),
     max_results: int = Query(5, ge=1, le=10, description="Max search-result cards"),
     mode: Literal["auto", "lexical", "semantic"] = Query(
         "auto",
@@ -421,7 +422,14 @@ async def list_timeline_sessions(
         description="Include user-hidden and automation-hidden sessions (View All mode)",
     ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
-    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
+    days_back: Optional[int] = Query(
+        None,
+        ge=1,
+        le=3650,
+        description=(
+            "Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window."
+        ),
+    ),
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, description="Max results (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -445,7 +453,7 @@ async def list_timeline_sessions(
         include_automation=include_automation,
         device_id=device_id,
         include_hidden=include_hidden,
-        days_back=days_back,
+        days_back=resolve_search_days_back(days_back, has_query=bool(query)),
         query=query,
         limit=effective_limit,
         offset=offset,
@@ -502,7 +510,14 @@ async def stream_timeline_sessions(
         description="Include Hatch automation sessions in otherwise default-hidden streams",
     ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
-    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
+    days_back: Optional[int] = Query(
+        None,
+        ge=1,
+        le=3650,
+        description=(
+            "Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window."
+        ),
+    ),
     query: Optional[str] = Query(None, description="Search query for content"),
     include_hidden: bool = Query(
         False,
@@ -536,7 +551,7 @@ async def stream_timeline_sessions(
         hide_autonomous=hide_autonomous,
         include_automation=include_automation,
         device_id=device_id,
-        days_back=days_back,
+        days_back=resolve_search_days_back(days_back, has_query=bool(query)),
         query=query,
         limit=effective_limit,
         offset=offset,
@@ -565,7 +580,14 @@ async def list_timeline_session_summaries(
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
-    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
+    days_back: Optional[int] = Query(
+        None,
+        ge=1,
+        le=3650,
+        description=(
+            "Days to look back. Omit with a query to search all indexed history; omit without a query for the default recent window."
+        ),
+    ),
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, description="Max results (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -589,7 +611,7 @@ async def list_timeline_session_summaries(
         hide_autonomous=hide_autonomous,
         include_automation=include_automation,
         device_id=device_id,
-        days_back=days_back,
+        days_back=resolve_search_days_back(days_back, has_query=bool(query)),
         query=query,
         limit=effective_limit,
         offset=offset,

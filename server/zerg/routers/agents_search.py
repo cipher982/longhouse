@@ -363,14 +363,20 @@ async def search_storage_v2_rows(
     project: str | None,
     provider: str | None,
     environment: str | None,
-    days_back: int,
+    days_back: int | None,
     limit: int,
     timeout_seconds: float | None = None,
     include_snippets: bool = True,
     include_origin_hidden: bool = False,
     include_test: bool = False,
 ) -> list[dict[str, object]]:
-    """Search the disposable v2 index without opening the retired archive DB."""
+    """Search the disposable v2 index without opening the retired archive DB.
+
+    ``days_back=None`` means no explicit range was named: the archive FTS
+    already answers an unbounded query with a bounded, newest-first candidate
+    walk (``store.py``'s ``_ARCHIVE_BOUNDED_SEARCH_SQL``), so this passes
+    ``window_start_us=None`` straight through rather than inventing a cutoff.
+    """
 
     search = get_searchd_client()
     if search is None:
@@ -379,6 +385,7 @@ async def search_storage_v2_rows(
             detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
         )
     now = datetime.now(timezone.utc)
+    window_start_us = None if days_back is None else int((now - timedelta(days=days_back)).timestamp() * 1_000_000)
     try:
         params = {
             "owner_id": str(owner_id),
@@ -386,7 +393,7 @@ async def search_storage_v2_rows(
             "project": project,
             "provider": provider,
             "environment": environment,
-            "window_start_us": int((now - timedelta(days=days_back)).timestamp() * 1_000_000),
+            "window_start_us": window_start_us,
             "window_end_us": None,
             "limit": min(200, max(1, limit)),
             "include_snippets": include_snippets,
@@ -586,7 +593,7 @@ async def search_storage_v2_sessions(
     project: str | None,
     provider: str | None,
     environment: str | None,
-    days_back: int,
+    days_back: int | None,
     limit: int,
     include_test: bool,
     hide_autonomous: bool = False,
@@ -745,7 +752,7 @@ async def _semantic_recall(
     query: str,
     project: Optional[str],
     provider: Optional[str],
-    since_days: int,
+    since_days: int | None,
     include_test: bool,
     include_automation: bool,
     max_results: int,
@@ -801,7 +808,11 @@ async def _semantic_recall(
             exclude_environments.extend(["test", "e2e"])
         if not include_automation:
             exclude_environments.append("automation")
-        since_iso = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+        # None means no explicit range: the resident index's own `search`
+        # already skips the `started_ats >= since_iso` mask entirely when this
+        # is None, scanning the same in-memory snapshot it always scans rather
+        # than doing extra work for the wider query.
+        since_iso = None if since_days is None else (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
         dense_payload = await search_storage_v2_episode_embeddings(
             model=config.model,
             owner_id=owner_id,
@@ -927,7 +938,7 @@ async def _semantic_recall_matches(
     query: str,
     project: Optional[str],
     provider: Optional[str],
-    since_days: int,
+    since_days: int | None,
     include_test: bool,
     include_automation: bool,
     max_results: int,
@@ -957,7 +968,7 @@ async def search_storage_v2_semantic_sessions(
     project: str | None,
     provider: str | None,
     environment: str | None,
-    days_back: int,
+    days_back: int | None,
     limit: int,
     include_test: bool,
 ) -> list[SessionResponse]:
@@ -1097,7 +1108,7 @@ async def _lexical_recall_matches(
     query: str,
     project: Optional[str],
     provider: Optional[str],
-    since_days: int,
+    since_days: int | None,
     include_test: bool,
     include_automation: bool,
     candidate_depth: int,
@@ -1619,7 +1630,7 @@ async def search_session_matches(
     project: Optional[str],
     provider: Optional[str],
     environment: Optional[str],
-    days_back: int,
+    days_back: int | None,
     include_test: bool,
     include_automation: bool,
     mode: str,
@@ -1702,7 +1713,7 @@ async def semantic_search_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
-    days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
+    days_back: Optional[int] = Query(None, ge=1, le=3650, description="Days to look back. Omit to search all indexed history."),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     _auth: object = Depends(verify_agents_caller),
@@ -1822,7 +1833,7 @@ async def recall_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
-    since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
+    since_days: Optional[int] = Query(None, ge=1, le=3650, description="Days to look back. Omit to search all indexed history."),
     max_results: int = Query(5, ge=1, le=RECALL_SEARCH_RESULT_LIMIT, description="Max search-result cards"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in recall results"),
     mode: Literal["auto", "lexical", "semantic"] = "auto",

@@ -51,7 +51,7 @@ class TimelineSessionListParams:
     include_test: bool
     hide_autonomous: bool
     device_id: str | None
-    days_back: int
+    days_back: int | None
     query: str | None
     limit: int
     offset: int

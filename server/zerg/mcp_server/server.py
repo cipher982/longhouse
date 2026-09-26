@@ -228,7 +228,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         query: str | None = None,
         project: str | None = None,
         provider: str | None = None,
-        days_back: int = 14,
+        days_back: int | None = None,
         limit: int = 10,
         semantic: bool = False,
         context_mode: str = "forensic",
@@ -248,7 +248,9 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             query: Text to search for in session content. Omit to list recent sessions.
             project: Filter by project name (optional).
             provider: Filter by provider, e.g. claude, codex, antigravity, opencode (optional).
-            days_back: Number of days to look back (default 14).
+            days_back: Days to look back. With a query, omitting this searches all
+                indexed history; without a query, omitting it lists the recent
+                window (14 days). Pass a number to narrow either one.
             limit: Maximum results to return (default 10).
             semantic: Use semantic (embedding) search instead of text search (default False).
                 Requires a query.
@@ -261,10 +263,11 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": "semantic=true requires a query; omit semantic to list recent sessions without one"})
 
         params: dict = {
-            "days_back": days_back,
             "limit": limit,
             "context_mode": context_mode,
         }
+        if days_back is not None:
+            params["days_back"] = days_back
         if has_query:
             params["query"] = query
         if project:
@@ -373,7 +376,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         query: str,
         project: str | None = None,
         provider: str | None = None,
-        since_days: int = 90,
+        since_days: int | None = None,
         max_results: int = 5,
         mode: str = "auto",
     ) -> str:
@@ -395,7 +398,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             query: Natural language description of what you are looking for.
             project: Filter by project name (optional).
             provider: Filter by provider, e.g. claude, codex, antigravity, opencode (optional).
-            since_days: Days to look back (default 90).
+            since_days: Days to look back. Omit to search all indexed history (default).
             max_results: Max result cards to return (default 5, max 10).
             mode: Which lanes to search — auto (both, default), lexical (keyword
                 only), or semantic (meaning only). Prefer auto: it fuses both and
@@ -406,10 +409,11 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
 
         params: dict = {
             "query": query,
-            "since_days": max(1, min(since_days, 365)),
             "max_results": max(1, min(max_results, 10)),
             "mode": mode,
         }
+        if since_days is not None:
+            params["since_days"] = max(1, min(since_days, 3650))
         if project:
             params["project"] = project
         if provider:
