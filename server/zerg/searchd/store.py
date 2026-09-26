@@ -357,7 +357,53 @@ class _WorklogSnapshot:
     expires_mono: float
 
 
+# events_fts/searchable_fts use FTS5's contentless_delete=1 (45cfa8cdf/
+# b438d9bdd, 2026-09-24). SQLite parses that option but rejects it before
+# 3.43 with `OperationalError: unrecognized option: "contentless_delete"` --
+# confirmed live on a candidate qualification host still linking Debian
+# bookworm's stdlib build (3.40.1). Both fts5 tables share this floor, so one
+# constant covers searchd's whole schema. The runtime image's pinned
+# pysqlite3 build (docker/runtime.dockerfile, stage pysqlite-builder) is the
+# remedy; zerg.bootstrap_sqlite aliases sqlite3 to it when present.
+MIN_SQLITE_VERSION = (3, 43, 0)
+
+
+class SearchdSqliteTooOld(RuntimeError):
+    """The process's sqlite3 predates the version searchd's schema requires."""
+
+
+def check_sqlite_version() -> tuple[bool, str]:
+    """Return (is_compatible, version_str) against MIN_SQLITE_VERSION."""
+
+    version_str = sqlite3.sqlite_version
+    version_tuple = tuple(int(part) for part in version_str.split("."))
+    return version_tuple >= MIN_SQLITE_VERSION, version_str
+
+
+def _require_sqlite_version() -> None:
+    """Fail fast and clearly rather than let a version-gated DDL crash cryptically.
+
+    Without this, an old sqlite3 build fails deep inside `_initialize_schema`
+    (or on first access to an already-created fts5 table) with a bare
+    `OperationalError: unrecognized option`, which is what let the 2026-09-26
+    factory incident masquerade as "catalogd unavailable" three layers away.
+    """
+
+    is_compatible, version_str = check_sqlite_version()
+    if is_compatible:
+        return
+    required = ".".join(str(part) for part in MIN_SQLITE_VERSION)
+    raise SearchdSqliteTooOld(
+        f"searchd requires SQLite >= {required} (found {version_str}). "
+        "Install the pinned pysqlite3 build from docker/runtime.dockerfile "
+        "(stage pysqlite-builder) so zerg.bootstrap_sqlite can alias sqlite3 "
+        "to it, or run searchd on a Python whose stdlib sqlite3 already links "
+        f">= {required}."
+    )
+
+
 def open_search_database(path: Path) -> sqlite3.Connection:
+    _require_sqlite_version()
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise RuntimeError("searchd database path must not be a symlink")
@@ -454,6 +500,7 @@ def _carry_over_embeddings(connection: sqlite3.Connection, previous: Path) -> in
 def open_search_read_database(path: Path) -> sqlite3.Connection:
     """Open one read-only WAL connection after the writer has initialized schema."""
 
+    _require_sqlite_version()
     if path.is_symlink():
         raise RuntimeError("searchd database path must not be a symlink")
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=5.0, isolation_level=None, check_same_thread=False)

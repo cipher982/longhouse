@@ -176,18 +176,27 @@ COPY --from=frontend-builder /app/web/dist /repo/web/dist
 
 # Install the project + pysqlite3 wheel (statically links modern SQLite)
 COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
+# The version floor comes from zerg.searchd.store.MIN_SQLITE_VERSION (not a
+# number copied in here) so this smoke test can never drift stale against the
+# schema that actually needs it -- which is exactly how the 2026-09-24
+# contentless_delete change silently outran this assert's old (3, 35, 0)
+# floor until a candidate host crash-looped on it two days later. The probe
+# table below exercises contentless_delete itself, not a plain fts5 table.
 RUN uv sync --frozen --no-dev \
     && uv pip install /tmp/pysqlite3-dist/*.whl \
     && PYTHONPATH=/repo/server ./.venv/bin/python -c "\
-import pysqlite3; v = pysqlite3.sqlite_version; \
+import pysqlite3, sys; sys.modules['sqlite3'] = pysqlite3; \
+from zerg.searchd.store import MIN_SQLITE_VERSION; \
+v = pysqlite3.sqlite_version; \
 parts = tuple(int(x) for x in v.split('.')); \
-assert parts >= (3, 35, 0), f'SQLite {v} < 3.35.0'; \
+required = '.'.join(str(p) for p in MIN_SQLITE_VERSION); \
+assert parts >= MIN_SQLITE_VERSION, f'SQLite {v} < {required}'; \
 conn = pysqlite3.connect(':memory:'); \
-conn.execute('create virtual table t using fts5(x)'); \
+conn.execute(\"create virtual table t using fts5(x, content='', contentless_delete=1)\"); \
 conn.execute('select count(*) from dbstat').fetchone(); \
 assert hasattr(conn, 'set_progress_handler'), 'set_progress_handler unavailable'; \
 assert hasattr(conn, 'interrupt'), 'interrupt unavailable'; \
-conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat + progress handler available')"
+conn.close(); print(f'pysqlite3 OK: SQLite {v} >= {required}, FTS5 contentless_delete + dbstat + progress handler available')"
 
 # =============================================================================
 # Stage 4: Production Runtime

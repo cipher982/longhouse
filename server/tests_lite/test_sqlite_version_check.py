@@ -15,6 +15,7 @@ from zerg.database import SQLITE_MIN_VERSION
 from zerg.database import check_sqlite_version
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.searchd import store as searchd_store
 
 
 def test_check_sqlite_version_compatible(tmp_path):
@@ -71,3 +72,78 @@ def test_initialize_database_rejects_old_sqlite(monkeypatch, tmp_path):
         assert min_ver in str(exc)
     else:
         raise AssertionError("Expected initialize_database to raise on old SQLite")
+
+
+def test_searchd_min_version_constant():
+    """searchd requires 3.43+: events_fts/searchable_fts set contentless_delete=1
+    (45cfa8cdf/b438d9bdd, 2026-09-24), an FTS5 option unsupported before then."""
+    assert searchd_store.MIN_SQLITE_VERSION == (3, 43, 0)
+
+
+def test_searchd_check_sqlite_version_compatible():
+    """This environment's SQLite meets searchd's floor.
+
+    Modern Python distributions (including uv-managed python-build-standalone
+    interpreters) bundle SQLite well past 3.43; this is a sanity check, not a
+    version-specific assertion.
+    """
+    is_compatible, version_str = searchd_store.check_sqlite_version()
+
+    assert is_compatible is True
+    assert version_str == sqlite3.sqlite_version
+
+
+def test_searchd_check_sqlite_version_rejects_old(monkeypatch):
+    """3.40.1 -- the exact version that crash-looped the 2026-09-26 factory
+    candidate host -- is reported incompatible."""
+    monkeypatch.setattr(sqlite3, "sqlite_version", "3.40.1")
+
+    is_compatible, version_str = searchd_store.check_sqlite_version()
+
+    assert is_compatible is False
+    assert version_str == "3.40.1"
+
+
+def test_open_search_database_rejects_old_sqlite_with_clear_message(monkeypatch, tmp_path):
+    """No silent stdlib fallback: open_search_database names found/required/remedy up front.
+
+    Before this check, an old SQLite instead failed deep inside
+    `_initialize_schema` with a bare `OperationalError: unrecognized option:
+    "contentless_delete"` -- exactly what made the 2026-09-26 factory incident
+    take so long to place (every caller three layers up just saw "catalogd
+    unavailable").
+    """
+    monkeypatch.setattr(sqlite3, "sqlite_version", "3.40.1")
+
+    try:
+        searchd_store.open_search_database(tmp_path / "search.db")
+    except searchd_store.SearchdSqliteTooOld as exc:
+        message = str(exc)
+        assert "3.43.0" in message
+        assert "3.40.1" in message
+        assert "pysqlite3" in message
+    else:
+        raise AssertionError("Expected open_search_database to reject SQLite 3.40.1")
+
+    # The rejected attempt must not leave a half-initialized store file behind.
+    assert not (tmp_path / "search.db").exists()
+
+
+def test_open_search_read_database_rejects_old_sqlite(monkeypatch, tmp_path):
+    """The read-only path is guarded too.
+
+    An old reader can still crash on an already-created contentless_delete
+    table's stored module arguments, not just on the writer's own DDL.
+    """
+    db_path = tmp_path / "search.db"
+    connection = searchd_store.open_search_database(db_path)
+    connection.close()
+
+    monkeypatch.setattr(sqlite3, "sqlite_version", "3.40.1")
+
+    try:
+        searchd_store.open_search_read_database(db_path)
+    except searchd_store.SearchdSqliteTooOld as exc:
+        assert "3.43.0" in str(exc)
+    else:
+        raise AssertionError("Expected open_search_read_database to reject SQLite 3.40.1")

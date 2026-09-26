@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import os
 import signal
+import sys
 from contextlib import suppress
 from pathlib import Path
 
@@ -44,10 +45,17 @@ def main() -> int:
     from zerg.logging_config import configure_logging
 
     configure_logging(os.getenv("LOG_LEVEL", "INFO"))
+    from zerg.searchd.store import SearchdSqliteTooOld
+
     try:
         asyncio.run(_run(args.database, args.socket))
     except KeyboardInterrupt:
         return 0
+    except SearchdSqliteTooOld as exc:
+        # A single clear line, not a traceback: the supervisor's child-output
+        # tail is what a caller three layers away actually gets to read.
+        print(f"searchd: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
