@@ -600,15 +600,63 @@ def _validation_reason(exc: ValidationError) -> str:
     return f"{location}: {message}" if location else message
 
 
-def _machine_process_snapshot_complete(machine_evidence: dict | None, scope_name: str) -> bool:
-    """Whether this heartbeat's evidence vouches for a complete process scope."""
+# How old a certified enumeration may be before the Runtime Host stops treating
+# it as authority about absence. The engine's heartbeat cadence is 60s, so 90s is
+# a heartbeat and a half: ordinary scheduling jitter stays valid, while a claim
+# carried along by a replay or a stalled scan does not.
+MACHINE_SCOPE_MAX_AGE = timedelta(seconds=90)
+# Clock skew tolerated between the scanning machine and the host. A capture time
+# ahead of receipt by more than this is not a capture time.
+MACHINE_SCOPE_CLOCK_SKEW = timedelta(seconds=10)
+
+
+def _machine_process_snapshot_complete(
+    machine_evidence: dict | None,
+    scope_name: str,
+    *,
+    received_at: datetime | None = None,
+) -> bool:
+    """Whether this heartbeat's evidence vouches for a complete process scope.
+
+    A scope is a claim about a moment: `captured_at` is the scan that produced
+    it, and absence authority only holds while that observation is current.
+    Without the age check, a replayed or stalled projection certifies a snapshot
+    of a machine state that no longer exists, and the host acts on absence it
+    cannot see. The boot identity must also be single-valued across the
+    envelope: two scopes from different boots describe no single machine state.
+    """
 
     if not isinstance(machine_evidence, dict):
         return False
     scopes = machine_evidence.get("process_snapshot_scopes")
     if not isinstance(scopes, list):
         return False
-    return any(isinstance(scope, dict) and scope.get("scope") == scope_name and scope.get("complete") for scope in scopes)
+    boots = {
+        str(scope.get("machine_boot_id")) for scope in scopes if isinstance(scope, dict) and str(scope.get("machine_boot_id") or "").strip()
+    }
+    if len(boots) > 1:
+        return False
+    for scope in scopes:
+        if not isinstance(scope, dict) or scope.get("scope") != scope_name or not scope.get("complete"):
+            continue
+        if not str(scope.get("machine_boot_id") or "").strip():
+            continue
+        captured_raw = str(scope.get("captured_at") or "").strip()
+        if not captured_raw:
+            continue
+        try:
+            captured_at = datetime.fromisoformat(captured_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if captured_at.tzinfo is None:
+            captured_at = captured_at.replace(tzinfo=timezone.utc)
+        if received_at is not None:
+            if captured_at > received_at + MACHINE_SCOPE_CLOCK_SKEW:
+                continue
+            if received_at - captured_at > MACHINE_SCOPE_MAX_AGE:
+                continue
+        return True
+    return False
 
 
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
@@ -1055,7 +1103,7 @@ async def ingest_heartbeat(
             # evidence that an unobserved owner has lost control.
             _managed_leases_present = (
                 _resolved_sessions_present or "managed_sessions" in payload.model_fields_set
-            ) and _machine_process_snapshot_complete(machine_evidence, "managed_state_files")
+            ) and _machine_process_snapshot_complete(machine_evidence, "managed_state_files", received_at=_now)
             _unmanaged_bindings = (
                 _unmanaged_bindings_from_resolved_sessions(
                     _resolved_sessions,
@@ -1068,7 +1116,9 @@ async def ingest_heartbeat(
             # Omission is authoritative only when the Machine Agent explicitly
             # says it enumerated the complete process scope. Legacy field
             # presence and partial/incremental scans fail open.
-            _unmanaged_bindings_present = _machine_process_snapshot_complete(machine_evidence, "unmanaged_provider_processes")
+            _unmanaged_bindings_present = _machine_process_snapshot_complete(
+                machine_evidence, "unmanaged_provider_processes", received_at=_now
+            )
 
             incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
 

@@ -171,6 +171,9 @@ def _managed_snapshot_evidence(*, complete: bool) -> dict[str, Any]:
                 "complete": complete,
                 "captured_at": captured_at,
                 "source": "managed_provider_scan",
+                # A certificate is only about a boot: without the identity the
+                # host cannot tie the enumeration to the machine state it saw.
+                "machine_boot_id": "macos:test-boot:1",
             }
         ],
     }
@@ -1361,6 +1364,63 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(live_catalo
     # the retained lease. The whole ``managed_sessions`` array is now dropped
     # from the forensic copy, which satisfies that property outright.
     assert "managed_sessions" not in json.loads(_one_stamp()["raw_json"])
+
+
+def _scope(
+    *,
+    captured_at: datetime,
+    complete: bool = True,
+    boot: str | None = "macos:test-boot:1",
+    scope: str = "managed_state_files",
+) -> dict:
+    scope_value = {
+        "scope": scope,
+        "complete": complete,
+        "captured_at": captured_at.isoformat(),
+        "source": "managed_provider_scan",
+    }
+    if boot is not None:
+        scope_value["machine_boot_id"] = boot
+    return scope_value
+
+
+def test_machine_scope_certificate_requires_a_current_single_boot_enumeration():
+    """Absence authority is a claim about a moment, not a standing fact.
+
+    A replayed or stalled projection must not certify a machine state that no
+    longer exists, and two scopes from different boots describe no single
+    machine state, so neither may authorise acting on absence.
+    """
+
+    from zerg.routers.heartbeat import MACHINE_SCOPE_MAX_AGE
+    from zerg.routers.heartbeat import _machine_process_snapshot_complete
+
+    now = datetime.now(UTC)
+    fresh = {"process_snapshot_scopes": [_scope(captured_at=now - timedelta(seconds=5))]}
+    assert _machine_process_snapshot_complete(fresh, "managed_state_files", received_at=now) is True
+
+    stale = {"process_snapshot_scopes": [_scope(captured_at=now - MACHINE_SCOPE_MAX_AGE - timedelta(seconds=1))]}
+    assert _machine_process_snapshot_complete(stale, "managed_state_files", received_at=now) is False
+
+    undated = {"process_snapshot_scopes": [{**_scope(captured_at=now), "captured_at": ""}]}
+    assert _machine_process_snapshot_complete(undated, "managed_state_files", received_at=now) is False
+
+    ahead = {"process_snapshot_scopes": [_scope(captured_at=now + timedelta(minutes=5))]}
+    assert _machine_process_snapshot_complete(ahead, "managed_state_files", received_at=now) is False
+
+    bootless = {"process_snapshot_scopes": [_scope(captured_at=now, boot=None)]}
+    assert _machine_process_snapshot_complete(bootless, "managed_state_files", received_at=now) is False
+
+    mixed_boots = {
+        "process_snapshot_scopes": [
+            _scope(captured_at=now),
+            _scope(captured_at=now, boot="macos:other-boot:9", scope="unmanaged_provider_processes"),
+        ]
+    }
+    assert _machine_process_snapshot_complete(mixed_boots, "managed_state_files", received_at=now) is False
+
+    partial = {"process_snapshot_scopes": [_scope(captured_at=now, complete=False)]}
+    assert _machine_process_snapshot_complete(partial, "managed_state_files", received_at=now) is False
 
 
 @pytest.mark.parametrize("scope_present", [False, True])

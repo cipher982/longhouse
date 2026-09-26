@@ -134,6 +134,9 @@ def _machine_heartbeat(*, managed_sessions: list[dict]) -> dict:
                     "scope": "managed_state_files",
                     "complete": True,
                     "captured_at": captured_at,
+                    # A certificate is only about a boot, and the host refuses a
+                    # claim without one: absence authority is not a standing fact.
+                    "machine_boot_id": "macos:test-boot:1",
                     "source": "managed_provider_scan",
                 }
             ],
