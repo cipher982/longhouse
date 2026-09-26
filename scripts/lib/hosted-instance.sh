@@ -376,11 +376,12 @@ _lh_hosted_reprovision_payload() {
     "${LH_DEPLOYMENT_SCHEMA_VERSION}" \
     "${LH_DEPLOYMENT_SCHEMA_MIN_READER}" \
     "${LH_DEPLOYMENT_SCHEMA_MAX_READER}" \
-    "${LH_DEPLOYMENT_REASON:-hosted release}" <<'PY'
+    "${LH_DEPLOYMENT_REASON:-hosted release}" \
+    "${LH_DEPLOYMENT_PRODUCTION_PROMOTION:-0}" <<'PY'
 import json
 import sys
 
-instance_id, image, source_sha, build_identity, workflow, source_order, qualification_id, schema, minimum, maximum, reason = sys.argv[1:]
+instance_id, image, source_sha, build_identity, workflow, source_order, qualification_id, schema, minimum, maximum, reason, production = sys.argv[1:]
 payload = {
     "image": image,
     "target_instance_ids": [int(instance_id)],
@@ -394,6 +395,8 @@ payload = {
     "schema_min_reader": int(minimum),
     "schema_max_reader": int(maximum),
     "reason": reason,
+    # Only an explicit operator promotion advances the new-tenant default image.
+    "production_promotion": production == "1",
 }
 print(json.dumps(payload, separators=(",", ":")), end="")
 PY

@@ -136,5 +136,9 @@ export LH_DEPLOYMENT_SCHEMA_MIN_READER="$schema_min_reader"
 export LH_DEPLOYMENT_SCHEMA_MAX_READER="$schema_max_reader"
 export LH_DEPLOYMENT_IDEMPOTENCY_KEY="promote-dogfood-${SUBDOMAIN}-${SHA}"
 export LH_DEPLOYMENT_REASON="manual dogfood promotion of canary-qualified source ${SHA} (${canary_deployment_id})"
+# Pre-launch the owner's instance is production: the image it is promoted to is
+# the image a new tenant gets. Without this the new-tenant default stayed on
+# whatever the first tenant captured, and every Starter ran stale code.
+export LH_DEPLOYMENT_PRODUCTION_PROMOTION=1
 lh_hosted_reprovision "$LH_INSTANCE_ID" "$IMAGE_REPO@$digest"
 echo "Promoted $SUBDOMAIN to exact digest $digest (source $SHA, workflow run $run_number, canary $canary_deployment_id)."
