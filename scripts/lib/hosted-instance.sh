@@ -362,12 +362,15 @@ lh_hosted_wait_for_deployment() {
   return 2
 }
 
-_lh_hosted_reprovision_payload() {
-  local instance_id="$1"
-  local image="$2"
+_lh_hosted_deployment_payload() {
+  local image="$1"
+  local target_ids_json="$2"
+  local production="$3"
+  local max_parallel="${4:-}"
+  local failure_threshold="${5:-}"
   local python_bin
   python_bin="$(_lh_hosted_python_bin)" || return 1
-  "$python_bin" - "$instance_id" "$image" \
+  "$python_bin" - "$image" "$target_ids_json" "$production" "$max_parallel" "$failure_threshold" \
     "${LH_DEPLOYMENT_SOURCE_SHA}" \
     "${LH_DEPLOYMENT_BUILD_IDENTITY}" \
     "${LH_DEPLOYMENT_SOURCE_WORKFLOW}" \
@@ -376,15 +379,17 @@ _lh_hosted_reprovision_payload() {
     "${LH_DEPLOYMENT_SCHEMA_VERSION}" \
     "${LH_DEPLOYMENT_SCHEMA_MIN_READER}" \
     "${LH_DEPLOYMENT_SCHEMA_MAX_READER}" \
-    "${LH_DEPLOYMENT_REASON:-hosted release}" \
-    "${LH_DEPLOYMENT_PRODUCTION_PROMOTION:-0}" <<'PY'
+    "${LH_DEPLOYMENT_REASON:-hosted release}" <<'PY'
 import json
 import sys
 
-instance_id, image, source_sha, build_identity, workflow, source_order, qualification_id, schema, minimum, maximum, reason, production = sys.argv[1:]
+image, target_ids_json, production, max_parallel, failure_threshold, source_sha, build_identity, workflow, source_order, qualification_id, schema, minimum, maximum, reason = sys.argv[1:]
 payload = {
     "image": image,
-    "target_instance_ids": [int(instance_id)],
+    # A JSON array, possibly empty. An explicit empty list (not an omitted
+    # field) is what tells the control plane a production promotion has zero
+    # targets and is a pointer-only promotion (release-rings.md change 3).
+    "target_instance_ids": json.loads(target_ids_json),
     "source_sha": source_sha,
     "build_identity": build_identity,
     "source_workflow": workflow,
@@ -398,8 +403,18 @@ payload = {
     # Only an explicit operator promotion advances the new-tenant default image.
     "production_promotion": production == "1",
 }
+if max_parallel:
+    payload["max_parallel"] = int(max_parallel)
+if failure_threshold:
+    payload["failure_threshold"] = int(failure_threshold)
 print(json.dumps(payload, separators=(",", ":")), end="")
 PY
+}
+
+_lh_hosted_reprovision_payload() {
+  local instance_id="$1"
+  local image="$2"
+  _lh_hosted_deployment_payload "$image" "[$instance_id]" "${LH_DEPLOYMENT_PRODUCTION_PROMOTION:-0}"
 }
 
 
@@ -1068,6 +1083,41 @@ lh_hosted_reprovision() {
   lh_hosted_submit_deployment "$payload" "$key" || return 1
   echo "Submitted durable deployment ${LH_DEPLOYMENT_ID} for instance ${instance_id}." >&2
   lh_hosted_wait_for_deployment "$LH_DEPLOYMENT_ID" "${LH_HOSTED_REPROVISION_TIMEOUT:-900}" "$image" "$instance_id"
+}
+
+# Production promotion (release-rings.md change 2): unlike lh_hosted_reprovision,
+# the target set is zero-to-many explicit instance ids (a JSON array, possibly
+# "[]" for a pointer-only promotion) rather than exactly one, so there is no
+# single expected_target to verify against -- callers rely on the deployment's
+# own aggregate status instead. Provenance (source_sha, schema, build identity)
+# is resolved the same way lh_hosted_reprovision resolves it: by inspecting the
+# selected image directly, never by trusting caller-supplied claims about it.
+lh_hosted_reprovision_production() {
+  local image="${1:-}"
+  local target_ids_json="${2:-}"
+  local timeout="${3:-${LH_HOSTED_REPROVISION_TIMEOUT:-1800}}"
+  local payload=""
+  local key="${LH_DEPLOYMENT_IDEMPOTENCY_KEY:-}"
+  if [[ -z "$image" || -z "$target_ids_json" ]]; then
+    echo "Usage: lh_hosted_reprovision_production <immutable-image> <target-ids-json> [timeout]" >&2
+    return 1
+  fi
+  if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    echo "Refusing non-immutable deployment image; resolve a sha256 digest first." >&2
+    return 1
+  fi
+  if [[ -z "$key" ]]; then
+    echo "Missing deployment idempotency key; refusing an untracked deployment submission." >&2
+    return 1
+  fi
+  _lh_hosted_resolve_image_metadata "$image" || return 1
+  _lh_hosted_require_schema_metadata || return 1
+  _lh_hosted_resolve_build_identity "$image" || return 1
+  _lh_hosted_require_deployment_provenance || return 1
+  payload="$(_lh_hosted_deployment_payload "$image" "$target_ids_json" 1 1 1)" || return 1
+  lh_hosted_submit_deployment "$payload" "$key" || return 1
+  echo "Submitted durable production deployment ${LH_DEPLOYMENT_ID}." >&2
+  lh_hosted_wait_for_deployment "$LH_DEPLOYMENT_ID" "$timeout" "$image" ""
 }
 
 lh_hosted_deprovision() {
