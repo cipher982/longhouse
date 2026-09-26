@@ -87,7 +87,6 @@ const CONSOLE_DEFAULT_PERMISSION_MODE: &str = "bypass";
 // advertised supports[] and server-side contracts cannot drift silently.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
     include_str!("../../server/zerg/config/managed_provider_contracts.json");
-const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const REPORT_STAGE_DEADLINE_SECS: u64 = 8;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
@@ -1425,12 +1424,18 @@ async fn execute_command(
             }
             if provider == "antigravity" {
                 // stage_helm_attachments already refused attachments here.
-                return run_antigravity_channel_command(
-                    antigravity_channel_args(COMMAND_SEND_TEXT, &session_id, Some(text))?,
-                    LAUNCH_START_TIMEOUT_SECS,
-                )
-                .await
-                .map(|output| cli_output_result(output, "antigravity", "antigravity_hook_inbox"));
+                let outcome = crate::antigravity_channel_control::send_text(&session_id, &text)
+                    .await
+                    .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "antigravity",
+                    "transport": crate::antigravity_channel_control::ANTIGRAVITY_HOOK_INBOX_TRANSPORT,
+                    "message_id": outcome.message_id,
+                    "claimed_at": outcome.claimed_at,
+                }));
             }
             if provider == "cursor" {
                 let summary = crate::cursor_helm_control::send_text(&session_id, &path_text, None)
@@ -2841,30 +2846,6 @@ fn claude_pause_answer_values(value: &Value) -> Vec<String> {
     }
 }
 
-fn antigravity_channel_args(
-    command_type: &str,
-    session_id: &str,
-    text: Option<String>,
-) -> std::result::Result<Vec<String>, CommandError> {
-    match command_type {
-        COMMAND_SEND_TEXT => Ok(vec![
-            "antigravity-channel".to_string(),
-            "send".to_string(),
-            "--session-id".to_string(),
-            session_id.to_string(),
-            "--text".to_string(),
-            text.ok_or_else(|| CommandError {
-                code: "invalid_command".to_string(),
-                message: "text is required".to_string(),
-            })?,
-        ]),
-        _ => Err(CommandError {
-            code: "unsupported_command".to_string(),
-            message: format!("unsupported Antigravity channel command {command_type}"),
-        }),
-    }
-}
-
 struct CliCommandOutput {
     exit_code: i32,
     stdout: String,
@@ -2923,20 +2904,6 @@ async fn run_longhouse_command(
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
-}
-
-async fn run_antigravity_channel_command(
-    args: Vec<String>,
-    timeout_secs: u64,
-) -> std::result::Result<CliCommandOutput, CommandError> {
-    let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
-    if output.exit_code != 0 {
-        return Err(CommandError {
-            code: "command_failed".to_string(),
-            message: nonempty_cli_error(&output),
-        });
-    }
-    Ok(output)
 }
 
 async fn run_provider_sign_in_command(
@@ -3173,28 +3140,6 @@ fn normalize_provider_version(raw: &str) -> Option<String> {
         );
     }
     Some(value.trim_start_matches('v').to_ascii_lowercase())
-}
-
-fn cli_output_result(output: CliCommandOutput, provider: &str, transport: &str) -> Value {
-    json!({
-        "exit_code": output.exit_code,
-        "stdout": output.stdout,
-        "stderr": output.stderr,
-        "provider": provider,
-        "transport": transport,
-    })
-}
-
-fn nonempty_cli_error(output: &CliCommandOutput) -> String {
-    let stderr = output.stderr.trim();
-    if !stderr.is_empty() {
-        return stderr.to_string();
-    }
-    let stdout = output.stdout.trim();
-    if !stdout.is_empty() {
-        return stdout.to_string();
-    }
-    format!("longhouse command exited {}", output.exit_code)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -5106,33 +5051,66 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_antigravity_send_through_the_hook_inbox() {
+        // Antigravity Helm send no longer subprocesses to the (nonexistent)
+        // `longhouse antigravity-channel send` CLI. The engine writes the
+        // hook-inbox message file directly (see antigravity_channel_control.rs)
+        // and waits for the shipped hook to claim it. This test plays the
+        // hook's part: it watches for the queued message and drops a claim
+        // receipt, then asserts the command surfaces that claim.
         let _guard = crate::console_adapter::agent_state_guard();
-        let unique = format!(
-            "lh-antigravity-send-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let dir = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&dir).unwrap();
-        let args_path = dir.join("args.txt");
-        write_test_executable(
-            &dir.join("longhouse"),
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LONGHOUSE_ARGS_OUT\"\nexit 0\n",
-        );
+        let temp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var_os("LONGHOUSE_HOME");
+        std::env::set_var("LONGHOUSE_HOME", temp.path());
 
-        let old_path = std::env::var_os("PATH");
-        let old_args_out = std::env::var_os("LONGHOUSE_ARGS_OUT");
-        std::env::set_var("PATH", dir.as_os_str());
-        std::env::set_var("LONGHOUSE_ARGS_OUT", args_path.as_os_str());
+        let session_id = "session-1";
+        let inbox_dir = temp
+            .path()
+            .join("managed-local")
+            .join("antigravity")
+            .join("inbox")
+            .join(session_id);
+
+        let claimer = tokio::spawn({
+            let inbox_dir = inbox_dir.clone();
+            async move {
+                let message_path = loop {
+                    if let Ok(entries) = std::fs::read_dir(&inbox_dir) {
+                        if let Some(entry) = entries
+                            .filter_map(|entry| entry.ok())
+                            .find(|entry| entry.file_name().to_string_lossy().starts_with("msg-"))
+                        {
+                            break entry.path();
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                };
+                let message_id = message_path
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .strip_prefix("msg-")
+                    .unwrap()
+                    .to_string();
+                let claimed_dir = inbox_dir.join("claimed");
+                std::fs::create_dir_all(&claimed_dir).unwrap();
+                std::fs::write(
+                    claimed_dir.join(format!("claimed-msg-{message_id}.json")),
+                    serde_json::to_vec(&json!({
+                        "id": message_id,
+                        "claimed_at": "2026-01-01T00:00:00.000000Z",
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+        });
+
         let mut cache = command_cache();
         let result = handle_command_frame(
             json!({
                 "type": "command",
                 "command_id": "cmd-antigravity-send",
-                "session_id": "session-1",
+                "session_id": session_id,
                 "command_type": COMMAND_SEND_TEXT,
                 "payload": {"provider": "antigravity", "text": "hello"},
             }),
@@ -5140,23 +5118,20 @@ mod tests {
             &test_config(),
         )
         .await;
-        if let Some(value) = old_path {
-            std::env::set_var("PATH", value);
+        claimer.await.unwrap();
+
+        if let Some(value) = old_home {
+            std::env::set_var("LONGHOUSE_HOME", value);
         } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(value) = old_args_out {
-            std::env::set_var("LONGHOUSE_ARGS_OUT", value);
-        } else {
-            std::env::remove_var("LONGHOUSE_ARGS_OUT");
+            std::env::remove_var("LONGHOUSE_HOME");
         }
 
         assert_eq!(result["ok"], true, "{result}");
         assert_eq!(result["result"]["transport"], "antigravity_hook_inbox");
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert!(args.contains("antigravity-channel"), "{args}");
-        assert!(args.contains("send"), "{args}");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            result["result"]["claimed_at"], "2026-01-01T00:00:00.000000Z",
+            "{result}"
+        );
     }
 
     #[tokio::test]
@@ -6356,46 +6331,6 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
         assert_eq!(
             claude_pause_response_text(&payload).unwrap(),
             "success_metric: Real users + feedback; timeline: Two weeks, Show HN"
-        );
-    }
-
-    #[test]
-    fn antigravity_channel_args_route_send_only() {
-        assert_eq!(
-            antigravity_channel_args(
-                COMMAND_SEND_TEXT,
-                "11111111-1111-4111-8111-111111111111",
-                Some("hello".to_string())
-            )
-            .unwrap(),
-            vec![
-                "antigravity-channel",
-                "send",
-                "--session-id",
-                "11111111-1111-4111-8111-111111111111",
-                "--text",
-                "hello",
-            ]
-        );
-        assert_eq!(
-            antigravity_channel_args(
-                COMMAND_INTERRUPT,
-                "11111111-1111-4111-8111-111111111111",
-                None
-            )
-            .unwrap_err()
-            .code,
-            "unsupported_command"
-        );
-        assert_eq!(
-            antigravity_channel_args(
-                COMMAND_STEER_TEXT,
-                "11111111-1111-4111-8111-111111111111",
-                Some("course correct".to_string())
-            )
-            .unwrap_err()
-            .code,
-            "unsupported_command"
         );
     }
 

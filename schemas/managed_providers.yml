@@ -1477,6 +1477,7 @@ providers:
   - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs
   - engine/src/antigravity_print.rs
+  - engine/src/antigravity_channel_control.rs
   - server/zerg/services/antigravity_hook_inbox.py
   - engine/src/discovery.rs
   - engine/src/daemon.rs

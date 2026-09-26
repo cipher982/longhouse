@@ -2489,6 +2489,7 @@
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs",
         "engine/src/antigravity_print.rs",
+        "engine/src/antigravity_channel_control.rs",
         "server/zerg/services/antigravity_hook_inbox.py",
         "engine/src/discovery.rs",
         "engine/src/daemon.rs",
@@ -2892,7 +2893,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "fc753b931aa09f02ae2ffd7a881a7897c7fe87747c76d57f9429851b325263ad"
+      "adapter_digest": "8532b2fcbc3e116b19bcbecadd4eb1ea96af5806571e509d917d7a1bda9b6b21"
     },
     {
       "provider": "cursor",

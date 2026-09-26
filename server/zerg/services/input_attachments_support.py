@@ -12,9 +12,12 @@ image; the server only needs the row to exist.
   tool can open it and names the path in the prompt (Claude, Cursor,
   Antigravity Console).
 
-Antigravity Helm is absent on purpose: its remote send transport is
-broken (missing ``antigravity-channel`` subcommand), so advertising
-attachments there would advertise a delivery path that cannot run.
+Antigravity Helm is absent on purpose: its remote send transport is the
+hook inbox (see ``antigravity_hook_inbox.py``), whose message schema only
+ever carries ``text`` -- there is no image/attachment field, and the hook's
+``injectSteps: [{"userMessage": ...}]`` reply has nowhere to put one. So
+advertising attachments there would advertise a delivery path that cannot
+run, independent of the send transport itself being up.
 """
 
 from __future__ import annotations
