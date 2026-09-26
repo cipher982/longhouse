@@ -498,6 +498,33 @@ jobs:
         if: ${{ needs.changes.outputs.engine != 'true' && github.event_name != 'workflow_dispatch' }}
         run: make test-shipper-e2e
 
+  engine-compat:
+    # No `needs`: this reads public release metadata over the network, not the
+    # fixture image, so nothing here waits on `changes` or vice versa.
+    # release-rings.md change 5 -- the server keeps accepting the engine that
+    # is actually running on users' laptops right now. Runs on every push
+    # (cheap: no cargo build, no fixture image) rather than gating on engine/
+    # backend paths, because a server-only change can just as easily break
+    # what an old engine expects from it.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04-arm
+    name: "Engine compatibility (previous release)"
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Ship a transcript with the last released engine against the candidate server
+        # `make engine-compat` downloads the newest published release that
+        # isn't the candidate's own version (via `gh`, using this job's
+        # token) and skips cleanly when none exists for this platform yet.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make engine-compat
 
   frontend-tests:
     timeout-minutes: 20

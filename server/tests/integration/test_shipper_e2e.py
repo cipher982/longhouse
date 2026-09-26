@@ -54,29 +54,38 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 BACKEND_DIR = Path(__file__).parent.parent.parent  # server
 REPO_ROOT = BACKEND_DIR.parent  # repo root
 
-# Always use the repo-local binary so tests are coupled to the current source.
-_cargo_profile = os.environ.get("CARGO_PROFILE", "release")
-_artifact_resolver = REPO_ROOT / "scripts" / "build" / "cargo.py"
-_resolved_engine = subprocess.run(
-    [
-        sys.executable,
-        str(_artifact_resolver),
-        "artifact",
-        "--profile",
-        _cargo_profile,
-        "--bin",
-        "longhouse-engine",
-    ],
-    cwd=REPO_ROOT,
-    capture_output=True,
-    text=True,
-    check=False,
-)
-ENGINE_BIN = (
-    Path(_resolved_engine.stdout.strip())
-    if _resolved_engine.returncode == 0
-    else (REPO_ROOT / ".build" / "cargo-target" / _cargo_profile / "longhouse-engine")
-)
+# Always use the repo-local binary so tests are coupled to the current source
+# -- unless LONGHOUSE_ENGINE_BIN names an explicit override (the repo-wide
+# convention for "use this engine instead", e.g. scripts/qa/*.py and
+# server/zerg/services/cursor_hooks.py). The engine/server compatibility
+# smoke (release-rings.md change 5) points this at a previously *released*
+# engine binary to prove the candidate server still accepts it.
+_engine_bin_override = os.environ.get("LONGHOUSE_ENGINE_BIN", "").strip()
+if _engine_bin_override:
+    ENGINE_BIN = Path(_engine_bin_override)
+else:
+    _cargo_profile = os.environ.get("CARGO_PROFILE", "release")
+    _artifact_resolver = REPO_ROOT / "scripts" / "build" / "cargo.py"
+    _resolved_engine = subprocess.run(
+        [
+            sys.executable,
+            str(_artifact_resolver),
+            "artifact",
+            "--profile",
+            _cargo_profile,
+            "--bin",
+            "longhouse-engine",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ENGINE_BIN = (
+        Path(_resolved_engine.stdout.strip())
+        if _resolved_engine.returncode == 0
+        else (REPO_ROOT / ".build" / "cargo-target" / _cargo_profile / "longhouse-engine")
+    )
 
 # Fixture filenames.
 CLAUDE_FIXTURE = "1dd6c481-7d7b-498a-b492-c33c917889b9.jsonl"
@@ -751,6 +760,8 @@ def _terminate_process(proc: subprocess.Popen[str]) -> str:
 def server(tmp_path_factory):
     """Start a real uvicorn server backed by a temp SQLite DB."""
     if not ENGINE_BIN.exists():
+        if _engine_bin_override:
+            pytest.skip(f"LONGHOUSE_ENGINE_BIN engine binary not found at {ENGINE_BIN}.")
         pytest.skip(
             f"Repo-local engine binary not found at {ENGINE_BIN}.\n"
             "Run: python3 scripts/build/cargo.py exec -- build "
