@@ -1559,15 +1559,47 @@ def _omp_continuation_prompt(context_marker: str, resume_marker: str) -> str:
     )
 
 
+def _codex_native_turn_model(source_path: Path) -> str | None:
+    """Return the model Codex's app-server bound to its first turn.
+
+    Codex's app-server protocol (engine/src/codex_exec.rs) sends the selected
+    model over the ``turn/start`` JSON-RPC call, not the spawned process argv:
+    a dedicated Rust test (``codex_app_server_args_omit_model_and_keep_console_
+    defaults``) asserts the model must *not* reach argv. The rollout file Codex
+    itself writes records that per-turn binding as a ``turn_context`` row whose
+    payload carries ``model`` (schemas/transcript_shapes/codex.json).
+    """
+    try:
+        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, Mapping) or row.get("type") != "turn_context":
+            continue
+        payload = row.get("payload")
+        model = payload.get("model") if isinstance(payload, Mapping) else None
+        if isinstance(model, str) and model:
+            return model
+    return None
+
+
 def _claim_uses_selected_model(claim: Mapping[str, object], *, provider: str, model: str) -> bool:
+    expected = _native_model(provider, model)
+    if provider == "codex":
+        # Codex never puts the model in argv (see _codex_native_turn_model), so
+        # checking argv here always fails closed against a successful run.
+        source_path = claim.get("source_path")
+        if not isinstance(source_path, str) or not source_path:
+            return False
+        return _codex_native_turn_model(Path(source_path)) == expected
     result = claim.get("result")
     argv = result.get("argv") if isinstance(result, Mapping) else None
     if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
         return False
-    expected = _native_model(provider, model)
-    if provider == "codex":
-        encoded = expected.replace("\\", "\\\\").replace('"', '\\"')
-        return f'model="{encoded}"' in argv
     return any(flag == "--model" and index + 1 < len(argv) and argv[index + 1] == expected for index, flag in enumerate(argv))
 
 

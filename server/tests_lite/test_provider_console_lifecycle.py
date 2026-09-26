@@ -336,6 +336,59 @@ def test_pi_console_model_binding_uses_native_openrouter_model_id():
     )
 
 
+def test_codex_console_model_binding_reads_native_turn_context_not_argv(tmp_path):
+    """Reproduces the 2026-09-26 factory false failure (interrupt_unsupported).
+
+    The retained rollout on clifford (assurance root
+    c1299af216b10063c7f8ce145d77dccbcc27681240f38d88e211f088639776e1) carried a
+    ``turn_context`` row with ``payload.model == "gpt-5.6-luna"`` -- exactly the
+    qualification model that was requested -- while argv never mentions a
+    model, because Codex's app-server sends it over ``turn/start`` JSON-RPC
+    (engine/src/codex_exec.rs). The old check scanned argv for a
+    ``model="..."`` token that Codex no longer emits and failed a run whose
+    Codex transcript shows the turn completed successfully.
+    """
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session_meta", "payload": {}}),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {
+                            "turn_id": "01a0dbf3-ad8b-7de3-9933-8e48bc1928d0",
+                            "cwd": "/run/lhq/sandbox-home/c/w",
+                            "approval_policy": "never",
+                            "model": "gpt-5.6-luna",
+                            "collaboration_mode": {"settings": {"model": "gpt-5.6-luna"}},
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "LH_CODEX_CONSOLE_marker"}],
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    claim = {
+        "result": {"argv": ["/opt/codex", "-c", "tui.notifications=false", "app-server", "--listen", "stdio://"]},
+        "source_path": str(rollout),
+    }
+
+    assert lifecycle._claim_uses_selected_model(claim, provider="codex", model="gpt-5.6-luna")
+    assert not lifecycle._claim_uses_selected_model(claim, provider="codex", model="gpt-5.3-codex-low")
+    assert not lifecycle._claim_uses_selected_model({"result": claim["result"]}, provider="codex", model="gpt-5.6-luna")
+
+
 def test_codex_local_output_evidence_ignores_prompt_echo(tmp_path):
     marker = "LH_CODEX_CONSOLE_" + "c" * 32
     rollout = tmp_path / "rollout.jsonl"
