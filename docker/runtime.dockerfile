@@ -182,9 +182,11 @@ COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
 # contentless_delete change silently outran this assert's old (3, 35, 0)
 # floor until a candidate host crash-looped on it two days later. The probe
 # table below exercises contentless_delete itself, not a plain fts5 table.
+# Importing zerg.searchd.store loads the embedding contract, so the probe needs
+# MODELS_CONFIG_PATH like the production stage: there is no /repo/config here.
 RUN uv sync --frozen --no-dev \
     && uv pip install /tmp/pysqlite3-dist/*.whl \
-    && PYTHONPATH=/repo/server ./.venv/bin/python -c "\
+    && MODELS_CONFIG_PATH=/config/models.json PYTHONPATH=/repo/server ./.venv/bin/python -c "\
 import pysqlite3, sys; sys.modules['sqlite3'] = pysqlite3; \
 from zerg.searchd.store import MIN_SQLITE_VERSION; \
 v = pysqlite3.sqlite_version; \
