@@ -1247,8 +1247,6 @@ final class TimelineViewModel: ObservableObject {
         searchRemote(query: query, lane: lane, using: appState)
     }
 
-    var searchScopeDays: Int { searchDaysBack }
-
     func refresh(using appState: AppState, reloadWidget: Bool = false, force: Bool = false) async {
         if isRefreshInFlight && !force {
             logger.debug("timeline refresh skipped reason=in_flight")
