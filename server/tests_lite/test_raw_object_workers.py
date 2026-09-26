@@ -323,6 +323,37 @@ async def test_failed_close_reports_failure_and_can_retry_child_cleanup(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_repair_write_queues_for_a_slot_while_live_fails_fast(tmp_path):
+    """A history import's write waits for an occupied slot instead of bouncing:
+    a rejection costs the Machine Agent a 5 s pause of all archive work."""
+    pool = RawObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, queue_multiplier=1)
+    try:
+        assert worker_module.write_queue_deadline("repair") == worker_module.REPAIR_WRITE_QUEUE_DEADLINE_SECONDS
+        assert worker_module.write_queue_deadline("live") == worker_module.LIVE_WRITE_QUEUE_DEADLINE_SECONDS
+        assert worker_module.write_queue_deadline("repair", 0.01) == 0.01
+
+        release = asyncio.Event()
+
+        async def hold(lane: str) -> None:
+            async with pool.admission(lane):
+                await release.wait()
+
+        holders = [asyncio.create_task(hold("repair")), asyncio.create_task(hold("live"))]
+        await asyncio.sleep(0)
+        asyncio.get_running_loop().call_later(0.5, release.set)
+        started = time.monotonic()
+        with pytest.raises(RawObjectWorkerBusy, match="live admission queue is full"):
+            async with pool.admission("live"):
+                raise AssertionError("occupied live admission slot was entered")
+        assert time.monotonic() - started < 0.5
+        async with pool.admission("repair"):
+            assert time.monotonic() - started >= 0.4
+        await asyncio.gather(*holders)
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_admission_is_bounded_and_repair_has_reserved_capacity(tmp_path):
     pool = RawObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, queue_multiplier=1)
     try:

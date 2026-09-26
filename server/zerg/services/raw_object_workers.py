@@ -32,6 +32,21 @@ from zerg.storage_v2.raw_objects import SealedRawObject
 from zerg.storage_v2.raw_objects import read_raw_object_from_store
 from zerg.storage_v2.raw_objects import seal_raw_object
 
+# Write-lane queue deadlines. A live write fails fast: its lane has reserved
+# capacity and a client must see a stalled live tip quickly. A repair (history
+# import) write instead waits for a slot up to the Retry-After the host answers
+# `storage_lane_busy` with (5 s), because a rejection pauses all of the Machine
+# Agent's archive work for that long; queueing is never slower for it, and slot
+# counts still bound memory and worker occupancy.
+LIVE_WRITE_QUEUE_DEADLINE_SECONDS = 0.25
+REPAIR_WRITE_QUEUE_DEADLINE_SECONDS = 5.0
+
+
+def write_queue_deadline(lane: str, requested: float | None = None) -> float:
+    if requested is not None:
+        return requested
+    return REPAIR_WRITE_QUEUE_DEADLINE_SECONDS if lane == "repair" else LIVE_WRITE_QUEUE_DEADLINE_SECONDS
+
 
 class RawObjectWorkerError(RuntimeError):
     pass
@@ -316,13 +331,14 @@ class RawObjectWorkerPool:
         spec: RawObjectSpec,
         *,
         lane: str,
-        queue_timeout_seconds: float = 0.25,
+        queue_timeout_seconds: float | None = None,
         operation_timeout_seconds: float = 10.0,
     ) -> SealedRawObject:
         if self._closed:
             raise RawObjectWorkerError("raw worker pool is closed")
         if lane not in {"live", "repair"}:
             raise ValueError("raw worker lane must be live or repair")
+        queue_timeout_seconds = write_queue_deadline(lane, queue_timeout_seconds)
         if queue_timeout_seconds <= 0 or operation_timeout_seconds <= 0:
             raise ValueError("raw worker deadlines must be positive")
         owner = self._pool_for_lane(lane)
@@ -347,7 +363,7 @@ class RawObjectWorkerPool:
         spec: MediaObjectSpec,
         *,
         lane: str,
-        queue_timeout_seconds: float = 0.25,
+        queue_timeout_seconds: float | None = None,
         operation_timeout_seconds: float = 15.0,
     ) -> SealedMediaObject:
         """Seal media through the same bounded live/repair storage lanes."""
@@ -356,6 +372,7 @@ class RawObjectWorkerPool:
             raise RawObjectWorkerError("storage worker pool is closed")
         if lane not in {"live", "repair"}:
             raise ValueError("media worker lane must be live or repair")
+        queue_timeout_seconds = write_queue_deadline(lane, queue_timeout_seconds)
         if queue_timeout_seconds <= 0 or operation_timeout_seconds <= 0:
             raise ValueError("media worker deadlines must be positive")
         owner = self._pool_for_lane(lane)
@@ -411,7 +428,7 @@ class RawObjectWorkerPool:
         self,
         lane: str,
         *,
-        queue_timeout_seconds: float = 0.25,
+        queue_timeout_seconds: float | None = None,
     ) -> AsyncIterator[None]:
         """Reserve bounded request capacity before JSON/base64 decoding."""
 
@@ -419,6 +436,7 @@ class RawObjectWorkerPool:
             raise RawObjectWorkerError("raw worker pool is closed")
         if lane not in {"live", "repair"}:
             raise ValueError("raw worker lane must be live or repair")
+        queue_timeout_seconds = write_queue_deadline(lane, queue_timeout_seconds)
         if queue_timeout_seconds <= 0:
             raise ValueError("raw worker queue deadline must be positive")
         owner = self._pool_for_lane(lane)

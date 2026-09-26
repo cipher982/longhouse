@@ -16,6 +16,7 @@ from zerg.services.raw_object_workers import _WORKER_CLOSE_TIMEOUT_SECONDS
 from zerg.services.raw_object_workers import _future_completed_normally
 from zerg.services.raw_object_workers import _OwnedProcessPool
 from zerg.services.raw_object_workers import storage_v2_root
+from zerg.services.raw_object_workers import write_queue_deadline
 from zerg.storage_v2.render_objects import DecodedRenderObject
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import SealedRenderObject
@@ -146,13 +147,14 @@ class RenderObjectWorkerPool:
         spec: RenderObjectSpec,
         *,
         lane: str,
-        queue_timeout_seconds: float = 0.25,
+        queue_timeout_seconds: float | None = None,
         operation_timeout_seconds: float = 3.0,
     ) -> SealedRenderObject:
         if self._closed:
             raise RenderObjectWorkerError("render worker pool is closed")
         if lane not in {"live", "repair"}:
             raise ValueError("render worker lane must be live or repair")
+        queue_timeout_seconds = write_queue_deadline(lane, queue_timeout_seconds)
         owner = self._pool_for_lane(lane)
         if not await owner.recover():
             raise RenderObjectWorkerBusy(f"render {lane} workers are unavailable while child cleanup is pending")
