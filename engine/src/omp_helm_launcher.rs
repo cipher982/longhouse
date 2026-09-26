@@ -38,6 +38,10 @@ use crate::omp_helm_control::OMP_HELM_TRANSPORT;
 const STATE_DIR_NAME: &str = "managed-local/omp-helm";
 const EXTENSION_FILE_NAME: &str = "longhouse-omp-helm.ts";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(8);
+/// A Helm launch is not adopted until OMP binds its native session identity.
+/// Keep the wait bounded so a provider that never opens cannot leave a pending
+/// launch looking live.
+const OMP_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const NATIVE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
@@ -1695,6 +1699,25 @@ impl OmpHelmServer {
         }
         write_json_private(&self.state_path(), &snapshot)
     }
+    fn wait_until_ready(&self) -> Result<()> {
+        let deadline = Instant::now() + OMP_READY_TIMEOUT;
+        loop {
+            let state = self.current_state();
+            if state.ready && state.status == "ready" {
+                return Ok(());
+            }
+            if state.status == "stopped" || state.terminal_state.is_some() {
+                anyhow::bail!("OMP exited before native session readiness");
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "OMP native session did not become ready within {} seconds",
+                    OMP_READY_TIMEOUT.as_secs()
+                );
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
 
     fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
@@ -2666,6 +2689,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         state.state.updated_at = Utc::now().to_rfc3339();
         drop(state);
         server_for_spawn.persist_state()?;
+        server_for_spawn.wait_until_ready()?;
         if let Some(transaction) = transaction.as_mut() {
             transaction.confirm_or_degrade("OMP", &crate::config::get_agent_dir()?, &deferred);
         }

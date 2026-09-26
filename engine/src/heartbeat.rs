@@ -1368,8 +1368,9 @@ pub(crate) fn leases_from_pi_helm_observations(
     leases
 }
 
-/// OMP Helm leases use the same exact launcher/provider/channel ownership rule
-/// as Pi, but retain OMP's opaque native session identity separately.
+/// OMP leases require both exact process ownership and a ready native control
+/// channel. Process-only observations remain available as exit evidence.
+///
 pub(crate) fn leases_from_omp_helm_observations(
     machine_id: &str,
     observations: &[OmpHelmObservation],
@@ -1379,7 +1380,7 @@ pub(crate) fn leases_from_omp_helm_observations(
     let observed_at = now.to_rfc3339();
     let mut leases = Vec::new();
     for obs in observations {
-        if !obs.live {
+        if !obs.live || !obs.control_ready {
             continue;
         }
         leases.push(ManagedSessionLease {
@@ -2223,20 +2224,21 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 });
             }
         }
+        let control_ready = obs.live && obs.control_ready;
         if obs.run_id.is_some() {
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "omp".to_string(),
-                terminal_attached: Some(obs.launcher_alive),
+                terminal_attached: Some(control_ready),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.native_session_id.clone(),
                 connection_id: obs.connection_id.clone(),
                 lease_generation: obs.lease_generation.clone(),
                 run_id: obs.run_id.clone(),
-                granted_operations: granted_control_operations("omp", obs.live),
+                granted_operations: granted_control_operations("omp", control_ready),
                 ownership: "managed".to_string(),
-                state: if obs.live { "attached" } else { "detached" }.to_string(),
-                bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
+                state: if control_ready { "attached" } else { "detached" }.to_string(),
+                bridge_status: Some(if control_ready { "ready" } else { "unavailable" }.to_string()),
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "omp_helm_scan".to_string(),
@@ -3507,7 +3509,7 @@ fn resolved_managed_omp_session(
             status: lease.bridge_status.clone(),
             thread_subscription_status: None,
             launch_mode: Some("tui".to_string()),
-            ui_attached: obs.map(|obs| obs.live),
+            ui_attached: obs.map(|obs| obs.live && obs.control_ready),
             ui_presence: if lease.state == "attached" {
                 Some("foreground_tui".into())
             } else {
@@ -4224,6 +4226,47 @@ mod tests {
     use crate::state::db::open_db;
     use std::path::PathBuf;
 
+    #[test]
+    fn omp_process_liveness_does_not_create_a_lease_without_control_readiness() {
+        let observation = OmpHelmObservation {
+            session_id: "omp-session".into(),
+            native_session_id: Some("omp-native".into()),
+            run_id: Some("omp-run".into()),
+            connection_id: Some("connection".into()),
+            lease_generation: Some("generation".into()),
+            state_file: PathBuf::from("/tmp/omp-state.json"),
+            session_file: Some(PathBuf::from("/tmp/omp-session.jsonl")),
+            socket_path: Some(PathBuf::from("/tmp/omp.sock")),
+            cwd: Some("/tmp".into()),
+            launcher_pid: Some(10),
+            launcher_process_start_time: Some("launcher".into()),
+            provider_pid: Some(11),
+            provider_process_start_time: Some("provider".into()),
+            started_at: "2026-09-25T00:00:00Z".into(),
+            updated_at: "2026-09-25T00:00:01Z".into(),
+            phase: Some("unknown".into()),
+            tool_name: None,
+            status: "degraded".into(),
+            launcher_alive: true,
+            provider_alive: true,
+            live: true,
+            control_ready: false,
+        };
+        assert!(leases_from_omp_helm_observations(
+            "cinder",
+            std::slice::from_ref(&observation),
+            Utc::now(),
+        )
+        .is_empty());
+
+        let mut ready = observation;
+        ready.status = "ready".into();
+        ready.control_ready = true;
+        let leases =
+            leases_from_omp_helm_observations("cinder", &[ready], Utc::now());
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].state, "attached");
+    }
     #[test]
     fn heartbeat_transport_tracks_failure_and_recovery_without_losing_history() {
         let mut status = HeartbeatTransportStatus::default();

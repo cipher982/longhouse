@@ -9002,6 +9002,7 @@ mod tests {
             launcher_alive: true,
             provider_alive: true,
             live,
+            control_ready: live,
         }
     }
 

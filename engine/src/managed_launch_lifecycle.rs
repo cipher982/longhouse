@@ -1847,6 +1847,26 @@ fn spawn_registration_retry(
                 settle(RegistrationRetryOutcome::Stopped, None);
                 return;
             }
+            // Provider launchers set this only after their control driver is
+            // usable. For providers whose process is immediately usable it is
+            // set right after spawn; OMP sets it after native identity binding.
+            // Registration before that point would adopt an unready session.
+            let mut waited_for_provider = Duration::ZERO;
+            while !provider_alive_for_thread.load(Ordering::Acquire) {
+                if cancel_for_thread.load(Ordering::Acquire) {
+                    settle(RegistrationRetryOutcome::Stopped, None);
+                    return;
+                }
+                if waited_for_provider >= PROVIDER_READY_WAIT_CAP {
+                    settle(
+                        RegistrationRetryOutcome::Exhausted,
+                        Some("provider never became ready before registration".to_string()),
+                    );
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                waited_for_provider += Duration::from_millis(100);
+            }
             let Ok(runtime) = tokio::runtime::Runtime::new() else {
                 settle(
                     RegistrationRetryOutcome::Exhausted,

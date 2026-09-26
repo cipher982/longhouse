@@ -33,6 +33,7 @@ pub struct OmpHelmObservation {
     pub launcher_alive: bool,
     pub provider_alive: bool,
     pub live: bool,
+    pub control_ready: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,24 +110,22 @@ pub(crate) fn collect_observations_from_paths(
             .filter(|value| !value.trim().is_empty())
             .map(PathBuf::from);
         let status = state.status.unwrap_or_else(|| "unknown".into());
-        // A degraded control path is not a dead session. The provider process is
-        // still running and still writing its transcript, so reporting it as
-        // not-live drops the managed lease and the Runtime Host closes a session
-        // whose terminal is open — the "ended while alive" lie.
-        //
-        // Liveness therefore rests on launch and process evidence only. The
-        // channel socket is control evidence, not liveness evidence: control
-        // path, liveness model, and state are independent axes, and a session
-        // whose launcher cannot be reached still has a live provider and a
-        // growing transcript. Control availability is reported separately
-        // through `status`, which the lease carries as `bridge_status`, and a
-        // missing socket must not invent run termination.
+        // Process liveness and control readiness are separate axes. A degraded
+        // control path can still have a real provider writing its transcript,
+        // so `live` remains process evidence for cleanup and exit detection.
+        // Only `control_ready` may create a managed lease or advertise an
+        // attached terminal: OMP must have committed its native identity and
+        // the launch-scoped channel must still exist.
         let run_over = status == "stopped"
             || state
                 .terminal_state
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
         let live = !run_over && launcher_alive && provider_alive;
+        let control_ready = !run_over
+            && status == "ready"
+            && state.ready
+            && socket_path.as_ref().is_some_and(|path| path.exists());
         observations.push(OmpHelmObservation {
             session_id,
             native_session_id: state
@@ -156,6 +155,7 @@ pub(crate) fn collect_observations_from_paths(
             launcher_alive,
             provider_alive,
             live,
+            control_ready,
         });
     }
     observations.sort_by(|left, right| left.session_id.cmp(&right.session_id));
@@ -247,6 +247,7 @@ mod tests {
         let observations = collect_observations_from_paths(&[path], &facts);
         assert_eq!(observations.len(), 1);
         assert!(observations[0].live);
+        assert!(observations[0].control_ready);
     }
 
     #[cfg(unix)]
@@ -320,11 +321,15 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
 
         let observations = collect_observations_from_paths(&[path], &launched_facts());
-
         assert_eq!(observations.len(), 1);
+
         assert!(
             observations[0].live,
             "a degraded control path must not read as a dead session"
+        );
+        assert!(
+            !observations[0].control_ready,
+            "a degraded control path must not advertise ready control"
         );
         assert_eq!(observations[0].status, "degraded");
     }
@@ -358,11 +363,14 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
 
         let observations = collect_observations_from_paths(&[path], &launched_facts());
-
         assert_eq!(observations.len(), 1);
         assert!(
             observations[0].live,
             "a missing control socket is control evidence, not liveness evidence"
+        );
+        assert!(
+            !observations[0].control_ready,
+            "a missing control socket cannot advertise ready control"
         );
     }
 }
