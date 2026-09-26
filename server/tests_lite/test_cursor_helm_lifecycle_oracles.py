@@ -85,8 +85,34 @@ def test_abort_requires_aborted_stop_without_response() -> None:
         {"event": "afterAgentResponse", "generation_id": "c1", "text": "FORBIDDEN"},
         {"event": "stop", "generation_id": "c1", "status": "completed"},
     ]
-    assert abort_stopped_generation(aborted, generation_id="c1", forbidden_marker="FORBIDDEN")["passed"] is True
-    assert abort_stopped_generation(finished, generation_id="c1", forbidden_marker="FORBIDDEN")["passed"] is False
+    passed_verdict = abort_stopped_generation(aborted, generation_id="c1", forbidden_marker="FORBIDDEN")
+    assert passed_verdict["passed"] is True
+    assert passed_verdict["failure_code"] is None
+    finished_verdict = abort_stopped_generation(finished, generation_id="c1", forbidden_marker="FORBIDDEN")
+    assert finished_verdict["passed"] is False
+    assert finished_verdict["failure_code"] == "abort_generation_not_stopped"
+
+
+def test_abort_failure_code_names_the_exact_cursor_abort_noop_shape() -> None:
+    """A ^C the fault swallowed: no stop hook fires and the forbidden reply
+    lands, exactly as clifford's live cursor_abort_noop runs recorded it. The
+    named code is what the factory's independent verifier keys off (see
+    test_abort_negative_control_reports_a_typed_target_failure_code_for_independent_verification)."""
+
+    noop = [{"event": "afterAgentResponse", "generation_id": "c1", "text": "FORBIDDEN"}]
+    assert (
+        abort_stopped_generation(noop, generation_id="c1", forbidden_marker="FORBIDDEN")["failure_code"] == "abort_generation_not_stopped"
+    )
+
+    # Aborted, but the forbidden reply leaked through anyway.
+    leaked = [
+        {"event": "afterAgentResponse", "generation_id": "c1", "text": "FORBIDDEN"},
+        {"event": "stop", "generation_id": "c1", "status": "aborted"},
+    ]
+    assert (
+        abort_stopped_generation(leaked, generation_id="c1", forbidden_marker="FORBIDDEN")["failure_code"]
+        == "abort_forbidden_response_produced"
+    )
 
 
 def test_abort_passes_only_when_a_following_generation_completes() -> None:
@@ -104,6 +130,7 @@ def test_abort_passes_only_when_a_following_generation_completes() -> None:
     never_recovered = abort_stopped_generation(aborted, generation_id="c1", forbidden_marker="FORBIDDEN", recovery_marker="RECOVERED")
     assert never_recovered["passed"] is False
     assert never_recovered["following_turn_completed"] is False
+    assert never_recovered["failure_code"] == "abort_following_turn_not_completed"
     unfinished = abort_stopped_generation(
         aborted + recovered[:1], generation_id="c1", forbidden_marker="FORBIDDEN", recovery_marker="RECOVERED"
     )
@@ -168,6 +195,7 @@ def test_abort_negative_control_judges_the_abort_step_not_the_steer() -> None:
         status="negative_control_observed",
         abort={
             "passed": False,
+            "failure_code": "abort_generation_not_stopped",
             "generation_stopped_aborted": False,
             "forbidden_response_produced": True,
             "qa_fault_receipt": receipt,
@@ -204,6 +232,55 @@ def test_abort_negative_control_judges_the_abort_step_not_the_steer() -> None:
     assert negative_control_verdict(missed, fault="cursor_abort_noop")["status"] == "fail"
     assert negative_control_verdict(unfired, fault="cursor_abort_noop")["status"] == "inconclusive"
     assert negative_control_verdict(unrelated, fault="cursor_abort_noop")["status"] == "inconclusive"
+
+
+def test_abort_negative_control_reports_a_typed_target_failure_code_for_independent_verification() -> None:
+    """provider_factory/negative_controls.py.normalize_verdict re-derives the
+    control's verdict independently instead of trusting this producer's own
+    "pass" claim (candidate code cannot certify itself). Its generic branch
+    requires a non-empty string `target_failure_code` to confirm the target
+    assertion failed in the fault's own shape -- every other provider's abort
+    oracle already reports one via `failure_code`. Cursor's abort oracle
+    (`abort_stopped_generation`) previously had no `failure_code` field at
+    all, so this producer's `target_detail` never carried one either: the
+    independent verifier's generic branch always saw `target_failure_code` as
+    missing/None and permanently recorded verdict="fail" for cursor_abort_noop
+    even when this producer correctly caught the fault and self-reported
+    "pass" -- exactly what clifford's factory.sqlite3 negative_control_verdicts
+    table shows for the 2026-09-22 and 2026-09-25 runs (producer_claim="pass",
+    independent verdict="fail"). Without a typed code here, the abort chip can
+    never be independently certified regardless of how well the oracle works.
+    """
+
+    receipt = {"fault": "cursor_abort_noop", "generation_id": "g1"}
+    caught = _abort_report(
+        status="negative_control_observed",
+        abort={
+            "passed": False,
+            "failure_code": "abort_generation_not_stopped",
+            "generation_stopped_aborted": False,
+            "forbidden_response_produced": True,
+            "qa_fault_receipt": receipt,
+        },
+    )
+    missed = _abort_report(
+        status="negative_control_observed",
+        abort={
+            "passed": True,
+            "failure_code": None,
+            "generation_stopped_aborted": True,
+            "forbidden_response_produced": False,
+            "qa_fault_receipt": receipt,
+        },
+    )
+
+    verdict = negative_control_verdict(caught, fault="cursor_abort_noop")
+    assert verdict["status"] == "pass"
+    assert isinstance(verdict["target_failure_code"], str) and verdict["target_failure_code"]
+    assert verdict["target_failure_code"] == "abort_generation_not_stopped"
+
+    # A passing (unfaulted) abort must not carry a failure code either.
+    assert negative_control_verdict(missed, fault="cursor_abort_noop")["target_failure_code"] is None
 
 
 def test_abort_control_does_not_read_the_steer_receipt() -> None:

@@ -186,8 +186,26 @@ def abort_stopped_generation(
             row.get("event") == "stop" and row.get("status") == "completed" and str(row.get("generation_id")) in answered for row in rows
         )
         passed = passed and following_completed
+    # A named code, mirroring steer_landed_in_generation's failure_code. Every
+    # other provider's abort oracle already reports one, and
+    # provider_factory/negative_controls.py's independent verdict recompute
+    # (normalize_verdict) requires a typed target_failure_code string to
+    # confirm a negative control actually caught its fault -- without it, the
+    # cursor_abort_noop control is structurally unable to independently verify
+    # as "pass" no matter how correctly this oracle judges the fault.
+    if passed:
+        failure_code = None
+    elif not aborted:
+        # The exact cursor_abort_noop shape: no ^C landed, the generation ran
+        # to completion, and it answered the reply this oracle forbids.
+        failure_code = "abort_generation_not_stopped"
+    elif responded:
+        failure_code = "abort_forbidden_response_produced"
+    else:
+        failure_code = "abort_following_turn_not_completed"
     return {
         "passed": passed,
+        "failure_code": failure_code,
         "generation_stopped_aborted": aborted,
         "forbidden_response_produced": responded,
         "following_turn_completed": following_completed,

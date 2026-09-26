@@ -170,6 +170,15 @@ def negative_control_verdict(report: dict[str, Any], *, fault: str) -> dict[str,
         target_detail = {
             "generation_stopped_aborted": step.get("generation_stopped_aborted"),
             "forbidden_response_produced": step.get("forbidden_response_produced"),
+            # provider_factory/negative_controls.py's independent normalize_verdict
+            # falls back to a generic branch that requires a typed
+            # target_failure_code string to confirm the target genuinely failed
+            # in the fault's shape. Without this, its independent recompute
+            # always disagreed with this producer's own "pass" claim and
+            # recorded the control as "fail" no matter how correctly the abort
+            # oracle judged cursor_abort_noop (factory.sqlite3 negative_control_verdicts,
+            # 2026-09-22 and 2026-09-25: producer_claim=pass, independent verdict=fail).
+            "target_failure_code": step.get("failure_code"),
         }
     else:
         oracle_rejected = step.get("passed") is False and step.get("failure_code") in _STEER_FAULT_FAILURE_CODES
