@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -10,6 +11,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.services.embeddings_v2_projector import IMPORT_YIELD_RECHECK_SECONDS
 from zerg.services.embeddings_v2_projector import PROJECTOR_CLAIM_BATCH
 from zerg.services.embeddings_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
@@ -613,17 +615,41 @@ async def test_embeddings_projector_completes_cleanly_for_never_rendered_session
     assert not any(method == "projector.state.fail.v2" for method, _ in catalog.calls)
 
 
+_INVENTORY = {
+    "schema_version": 1,
+    "generation": 1,
+    "content_sha256": "a" * 64,
+    "observed_at": "2026-09-24T12:00:00Z",
+    "scan_duration_ms": 0,
+    "scan_error_count": 0,
+    "source_count": 0,
+    "source_bytes": 0,
+    "wal_bytes": 0,
+    "footprint_bytes": 0,
+    "providers": [],
+}
+_DRAINED = {
+    "acknowledged_source_bytes": 0,
+    "remaining_source_bytes": 0,
+    "acknowledged_records": 0,
+    "remaining_records": 0,
+    "pending_outbox_count": 0,
+    "pending_outbox_bytes": 0,
+    "blocked_source_count": 0,
+    "blocked_bytes": 0,
+    "providers": [],
+}
+
+
 def _heartbeat(state, *, received_at, device_id="laptop", is_offline=0):
-    inventory = (
-        '{"schema_version":1,"generation":1,"content_sha256":"' + "a" * 64 + '",'
-        '"observed_at":"2026-09-24T12:00:00Z","scan_duration_ms":0,"scan_error_count":0,'
-        '"source_count":0,"source_bytes":0,"wal_bytes":0,"footprint_bytes":0,"providers":[]}'
-    )
+    snapshot = {"state": state, "inventory": _INVENTORY}
+    if state == "current":
+        snapshot["progress"] = _DRAINED
     return {
         "device_id": device_id,
         "received_at": received_at.isoformat(),
         "is_offline": is_offline,
-        "raw_json": '{"history_import":{"state":"' + state + '","inventory":' + inventory + "}}",
+        "raw_json": json.dumps({"history_import": snapshot}),
     }
 
 
@@ -656,7 +682,8 @@ async def test_embedding_projection_waits_while_a_machine_imports_history():
 @pytest.mark.parametrize(
     ("state", "age_seconds", "is_offline"),
     [
-        ("complete", 10, 0),
+        ("current", 10, 0),
+        ("inventory_ready", 10, 0),
         # Not moving data: waiting on these would hold semantic search back forever.
         ("paused", 10, 0),
         ("blocked_source", 10, 0),
@@ -683,11 +710,27 @@ async def test_embedding_projection_rechecks_import_state_on_a_bounded_cadence()
     projector = EmbeddingsV2Projector(catalog=catalog, search=_search())
 
     assert await projector.run_once(now=now) == 0
-    heartbeats[0] = _heartbeat("complete", received_at=now)
+    heartbeats[0] = _heartbeat("current", received_at=now)
     assert await projector.run_once(now=now + timedelta(seconds=1)) == 0
     assert sum(1 for method, _ in catalog.calls if method == "machine.health.list.v2") == 1
 
     later = now + timedelta(seconds=IMPORT_YIELD_RECHECK_SECONDS)
     await projector.run_once(now=later)
     assert sum(1 for method, _ in catalog.calls if method == "machine.health.list.v2") == 2
+    assert "projector.state.claim.v2" in [method for method, _ in catalog.calls]
+
+
+@pytest.mark.asyncio
+async def test_embedding_projection_proceeds_when_import_state_is_unreadable():
+    """Embeddings are rebuildable: a failed health read must not stall them."""
+    catalog = _import_catalog([])
+
+    def unavailable(_params):
+        raise CatalogUnavailable("catalogd did not answer")
+
+    catalog.responses["machine.health.list.v2"] = unavailable
+    projector = EmbeddingsV2Projector(catalog=catalog, search=_search())
+
+    await projector.run_once(now=datetime.now(UTC))
+
     assert "projector.state.claim.v2" in [method for method, _ in catalog.calls]

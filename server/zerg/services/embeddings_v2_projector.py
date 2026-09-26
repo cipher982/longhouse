@@ -13,6 +13,8 @@ from uuid import UUID
 from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.runtime_boot import RUNTIME_BOOT_ID
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
@@ -102,13 +104,19 @@ class EmbeddingsV2Projector:
         checked_at = self._import_checked_at
         if checked_at is not None and (observed_at - checked_at).total_seconds() < IMPORT_YIELD_RECHECK_SECONDS:
             return self._import_active
-        owner = await self.catalog.call("auth.owner.get.v2", {})
         importing: list[str] = []
-        if owner.get("found") is True and owner.get("owner_id") is not None:
-            payload = await self.catalog.call(
-                "machine.health.list.v2",
-                {"owner_id": int(owner["owner_id"]), "device_id": None, "recent_after": None, "limit": 100},
-            )
+        payload: dict = {}
+        try:
+            owner = await self.catalog.call("auth.owner.get.v2", {})
+            if owner.get("found") is True and owner.get("owner_id") is not None:
+                payload = await self.catalog.call(
+                    "machine.health.list.v2",
+                    {"owner_id": int(owner["owner_id"]), "device_id": None, "recent_after": None, "limit": 100},
+                )
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            # Fail open: an unreadable import state must not stall rebuildable work.
+            logger.warning("Embedding projection could not read history import state: %s", exc)
+        if payload:
             summaries, _total = machine_transport_health_from_catalog_rows(payload.get("heartbeats", []), limit=100)
             importing = [
                 summary.device_id
