@@ -38,6 +38,14 @@ get_session_factory = get_catalog_session_factory
 # write path. This is a cheap in-process backstop: a sliding window per
 # rate-key. Defaults are generous for healthy engines (which batch) and can be
 # tuned via env. Disabled when auth is disabled (local/dev) or under TESTING.
+#
+# Storage-v2 writes (envelopes, media claims and uploads) are not counted. A
+# first history import is ~18k small writes, so 600/min paced a 2 GB import
+# to ~30 minutes on an idle server (W2.2 rerun, 2026-09-26) and starved the
+# machine's live runtime events that shared this bucket. Storage-v2 already
+# admits on real resources instead of request counts: lane-isolated worker
+# pools with live capacity reserved (typed 503 `storage_lane_busy`), catalog
+# `resource_exhausted`, and disk/stored-byte historical admission.
 # ---------------------------------------------------------------------------
 
 _RATE_LIMIT_WINDOW_SECONDS = float(os.environ.get("AGENTS_RATE_LIMIT_WINDOW_SECONDS", "60"))
@@ -141,6 +149,11 @@ _CONTROL_PATH_SUFFIXES = (
 )
 
 
+_STORAGE_V2_PREFIX = "/agents/storage/v2/"
+# Lanes admitted by resource-aware backpressure downstream, not by counting.
+_UNCOUNTED_LANES = frozenset({"storage"})
+
+
 def _rate_limit_lane(request: Request) -> str:
     """Classify requests into distinct rate-limit buckets.
 
@@ -152,6 +165,8 @@ def _rate_limit_lane(request: Request) -> str:
     if method in ("GET", "HEAD", "OPTIONS"):
         return "read"
     path = _normalized_agents_path(request)
+    if path.startswith(_STORAGE_V2_PREFIX):
+        return "storage"
     for sub in _CONTROL_PATH_SUBSTRINGS:
         if sub in path:
             return "control"
@@ -266,7 +281,7 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
             lane = _rate_limit_lane(request)
             rate_key = f"device:{device_token.id}:{lane}"
             request.state.agents_rate_key = rate_key
-            if not settings.testing:
+            if not settings.testing and lane not in _UNCOUNTED_LANES:
                 _enforce_rate_limit(rate_key)
             return device_token
     else:
@@ -281,7 +296,7 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
             lane = _rate_limit_lane(request)
             rate_key = f"managed-session:{session_token.scope}:{session_token.session_id}:{lane}"
             request.state.agents_rate_key = rate_key
-            if not settings.testing:
+            if not settings.testing and lane not in _UNCOUNTED_LANES:
                 _enforce_rate_limit(rate_key)
             return session_token
 

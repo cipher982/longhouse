@@ -55,9 +55,13 @@ def test_rate_limit_lane_classification():
 
     # Ingest lane (high-frequency background agent traffic)
     assert _rate_limit_lane(_req("POST", "/api/agents/runtime/events/batch")) == "ingest"
-    assert _rate_limit_lane(_req("POST", "/api/agents/storage/v2/envelopes")) == "ingest"
     assert _rate_limit_lane(_req("POST", "/api/agents/presence")) == "ingest"
     assert _rate_limit_lane(_req("POST", "/api/agents/heartbeat")) == "ingest"
+
+    # Storage lane (storage-v2 writes admitted by resource-aware backpressure)
+    assert _rate_limit_lane(_req("POST", "/api/agents/storage/v2/envelopes")) == "storage"
+    assert _rate_limit_lane(_req("POST", "/api/agents/storage/v2/media/claims")) == "storage"
+    assert _rate_limit_lane(_req("PUT", "/api/agents/storage/v2/media/" + "a" * 64)) == "storage"
 
 
 def test_control_lane_isolated_from_ingest_floods(monkeypatch):
@@ -103,6 +107,42 @@ def test_control_lane_isolated_from_ingest_floods(monkeypatch):
     resolved_read = verify_agents_token(req_read)
     assert resolved_read is fake_token
     assert req_read.state.agents_rate_key == f"device:{device_id}:read"
+
+
+def test_history_import_writes_do_not_consume_the_ingest_bucket(monkeypatch):
+    """A first import is thousands of storage-v2 writes; request counting must not
+    pace it, and it must not starve the machine's live runtime events."""
+    device_id = str(uuid4())
+    fake_token = DeviceToken(id=device_id, owner_id=1, device_id="macbook", token_hash="h")
+    monkeypatch.setattr(
+        "zerg.dependencies.agents_auth._validate_device_token_for_request",
+        lambda token: fake_token,
+    )
+    monkeypatch.setattr(
+        "zerg.dependencies.agents_auth.get_settings",
+        lambda: SimpleNamespace(auth_disabled=False, testing=False, single_tenant=True),
+    )
+    monkeypatch.setattr("zerg.dependencies.agents_auth._RATE_LIMIT_MAX_REQUESTS", 2)
+    monkeypatch.setattr("zerg.dependencies.agents_auth._RATE_LIMIT_WINDOW_SECONDS", 60.0)
+    with _rate_lock:
+        _rate_buckets.clear()
+
+    for path, method in [
+        ("/api/agents/storage/v2/envelopes", "POST"),
+        ("/api/agents/storage/v2/media/claims", "POST"),
+        ("/api/agents/storage/v2/media/" + "b" * 64, "PUT"),
+    ] * 10:
+        request = _req(method, path)
+        assert verify_agents_token(request) is fake_token
+        assert request.state.agents_rate_key == f"device:{device_id}:storage"
+
+    with _rate_lock:
+        assert f"device:{device_id}:storage" not in _rate_buckets
+    for _ in range(2):
+        verify_agents_token(_req("POST", "/api/agents/runtime/events/batch"))
+    with pytest.raises(HTTPException) as exc_info:
+        verify_agents_token(_req("POST", "/api/agents/runtime/events/batch"))
+    assert exc_info.value.status_code == 429
 
 
 def test_parse_retry_after():
