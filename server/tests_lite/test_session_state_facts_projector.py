@@ -209,7 +209,11 @@ def test_run_lifecycle_stays_ended_and_outranks_current_evidence():
             "exit_status": "process_gone",
         },
     }
-    projection = _run_projection(heads=[_control(observed_at=NOW)], now=NOW + timedelta(seconds=2), catalog_facts={**ended, "connections": BOUND_CONTROL_CATALOG_FACTS["connections"]})
+    projection = _run_projection(
+        heads=[_control(observed_at=NOW)],
+        now=NOW + timedelta(seconds=2),
+        catalog_facts={**ended, "connections": BOUND_CONTROL_CATALOG_FACTS["connections"]},
+    )
     assert projection.run is not None
     assert projection.run.lifecycle == "ended"
     assert projection.run.end_reason == "process_gone"
