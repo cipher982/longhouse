@@ -598,6 +598,29 @@ def _retryable_title_row_failure_clause(table):
     return func.lower(func.coalesce(table.c.title_last_error, "")).in_(RETRYABLE_TITLE_ROW_ERRORS)
 
 
+def _title_anchor_replaceable_clause(table):
+    """Anchors a Longhouse AI title may still write over.
+
+    Empty, a provider-native fallback, or a leaked provider special token
+    (`<｜DSML｜tool_calls>`) stored before the title sanitizer rejected them.
+    Selection, the dependency claim, and completion must agree on this set, or
+    the reconciler re-selects rows the claim then refuses, forever.
+    """
+
+    return or_(
+        table.c.anchor_title.is_(None),
+        table.c.anchor_title == "",
+        table.c.anchor_title_source == "provider",
+        table.c.anchor_title.like("<｜%"),
+        table.c.anchor_title.like("<|%"),
+    )
+
+
+def _title_anchor_replaceable(anchor_title: object, anchor_title_source: object) -> bool:
+    anchor = str(anchor_title or "")
+    return not anchor or anchor_title_source == "provider" or anchor.startswith(("<｜", "<|"))
+
+
 def _storage_title_obligation_clause(table):
     """Rows that should eventually receive an AI title."""
 
@@ -619,7 +642,7 @@ def _storage_title_obligation_clause(table):
         # and a provider-sourced anchor both remain obligations; only an
         # anchor the AI itself wrote (or a legacy anchor with no recorded
         # source, already served as "ai") is done.
-        or_(table.c.anchor_title.is_(None), table.c.anchor_title == "", table.c.anchor_title_source == "provider"),
+        _title_anchor_replaceable_clause(table),
         table.c.first_user_message_preview.is_not(None),
         func.length(func.trim(table.c.first_user_message_preview)) > 0,
         ~table.c.first_user_message_preview.contains(RESUME_SEED_TOKEN, autoescape=True),
@@ -10877,11 +10900,13 @@ class CatalogStore:
             if dep is None:
                 return {"dependency_missing": True, "allowed": False, "commit_seq": str(_current_commit_seq(connection))}
             session = connection.execute(
-                select(sessions.c.session_id, sessions.c.anchor_title).where(sessions.c.session_id == session_key)
+                select(sessions.c.session_id, sessions.c.anchor_title, sessions.c.anchor_title_source).where(
+                    sessions.c.session_id == session_key
+                )
             ).first()
             if session is None:
                 return {"session_missing": True, "allowed": False, "commit_seq": str(_current_commit_seq(connection))}
-            if session.anchor_title:
+            if not _title_anchor_replaceable(session.anchor_title, session.anchor_title_source):
                 return {"allowed": False, "already_complete": True, "commit_seq": str(_current_commit_seq(connection))}
             if str(dep["state"]) == "healthy":
                 return {
@@ -11301,7 +11326,7 @@ class CatalogStore:
             # is never rewritten, by the provider or a later AI guess. A
             # provider name is only ever a fallback for the anchor slot.
             anchored = bool(existing["anchor_title"])
-            promotion = anchored and source == "ai" and existing["anchor_title_source"] == "provider"
+            promotion = anchored and source == "ai" and _title_anchor_replaceable(existing["anchor_title"], existing["anchor_title_source"])
             if anchored and not promotion:
                 return {
                     "changed": False,
@@ -11312,7 +11337,7 @@ class CatalogStore:
                 return {"changed": False, "title": title, "ineligible": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_seq = _advance_commit_seq(connection, completed_at)
             anchor_guard = (
-                table.c.anchor_title_source == "provider" if promotion else or_(table.c.anchor_title.is_(None), table.c.anchor_title == "")
+                _title_anchor_replaceable_clause(table) if promotion else or_(table.c.anchor_title.is_(None), table.c.anchor_title == "")
             )
             changed = connection.execute(
                 update(table)

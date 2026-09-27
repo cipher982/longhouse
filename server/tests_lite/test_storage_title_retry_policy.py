@@ -505,6 +505,48 @@ def test_provider_anchored_session_remains_a_title_obligation_until_ai_wins(tmp_
     assert str(provider_anchored_id) not in _candidate_ids(engine)
 
 
+def test_candidate_claim_and_completion_agree_on_replaceable_anchors(tmp_path):
+    """Every row the reconciler selects must be claimable, or it re-selects it forever.
+
+    Covers the provider-name fallback and a leaked DeepSeek special token that
+    an earlier sanitizer stored as an AI anchor.
+    """
+    engine = _build_engine(tmp_path)
+    provider_id, leaked_id, done_id = uuid4(), uuid4(), uuid4()
+    for session_id in (provider_id, leaked_id, done_id):
+        _insert_session(engine, session_id=session_id, first_message="apply this to my blog posts")
+    store = CatalogStore(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    identity = _dependency_identity()
+    store.reconcile_storage_title_dependency(**identity, observed_at=now)
+    store.complete_storage_title(session_id=provider_id, title="Provider name", completed_at=now, source="provider")
+    store.complete_storage_title(session_id=done_id, title="Real AI title", completed_at=now, source="ai")
+    with engine.begin() as connection:
+        table = StorageSession.__table__
+        connection.execute(
+            table.update()
+            .where(table.c.session_id == str(leaked_id))
+            .values(anchor_title="<\uff5cDSML\uff5ctool_calls>", anchor_title_source="ai")
+        )
+
+    assert _candidate_ids(engine) == {str(provider_id), str(leaked_id)}
+
+    def claim(session_id):
+        return store.acquire_storage_title_dependency(
+            session_id=session_id, probe_token=uuid4(), observed_at=now, lease_seconds=60, **identity
+        )
+
+    assert claim(provider_id)["allowed"] is True
+    assert claim(leaked_id)["allowed"] is True
+    assert claim(done_id)["allowed"] is False
+
+    for session_id in (provider_id, leaked_id):
+        assert store.complete_storage_title(session_id=session_id, title="Blog post styling", completed_at=now)["changed"] is True
+        row = _read_session(engine, session_id)
+        assert (row["anchor_title"], row["anchor_title_source"]) == ("Blog post styling", "ai")
+    assert _candidate_ids(engine) == set()
+
+
 def _read_session(engine, session_id) -> dict:
     with engine.begin() as connection:
         row = (
