@@ -11,26 +11,53 @@ import XCTest
 /// its native UIScrollView. The regression was a frozen native contentOffset,
 /// so DOM-only scrollY assertions are not an adequate guard.
 @MainActor
-final class WebTranscriptScrollPinningTests: XCTestCase {
+final class WebTranscriptScrollPinningTests: XCTestCase, WKNavigationDelegate {
     private var window: UIWindow!
     private var webView: TranscriptWebView!
     private var nativeViewportCoordinator: WebTranscriptView.Coordinator?
+    private var documentNavigationFinished = false
+    private var documentNavigationError: Error?
 
     override func setUp() async throws {
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
         webView = TranscriptWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         window.addSubview(webView)
+        webView.navigationDelegate = self
         window.makeKeyAndVisible()
         try await loadTranscriptDocument()
     }
 
     override func tearDown() async throws {
         nativeViewportCoordinator = nil
+        webView.navigationDelegate = nil
         webView.removeFromSuperview()
         webView = nil
         window.isHidden = true
         window = nil
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard self.webView === webView else { return }
+        documentNavigationFinished = true
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        recordNavigationFailure(error, for: webView)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        recordNavigationFailure(error, for: webView)
+    }
+
+    private func recordNavigationFailure(_ error: Error, for webView: WKWebView) {
+        guard self.webView === webView else { return }
+        documentNavigationError = error
+        documentNavigationFinished = true
     }
 
     /// Recreate the exact native failure state: the viewport has shrunk but
@@ -227,15 +254,38 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
     // MARK: - Harness
 
     private func loadTranscriptDocument() async throws {
-        webView.loadHTMLString(WebTranscriptView.documentHTMLForTesting, baseURL: nil)
+        documentNavigationFinished = false
+        documentNavigationError = nil
+        guard webView.loadHTMLString(WebTranscriptView.documentHTMLForTesting, baseURL: nil) != nil else {
+            throw NSError(
+                domain: "WebTranscriptScrollPinningTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "WebKit did not start loading the transcript document."]
+            )
+        }
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(10))
-        while clock.now < deadline {
-            let ready = try? await webView.evaluateJavaScript("typeof window.renderTranscript === 'function'")
-            if (ready as? Bool) == true { return }
+        let deadline = clock.now.advanced(by: .seconds(30))
+        while !documentNavigationFinished && clock.now < deadline {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
-        XCTFail("Transcript document never finished loading")
+        if let documentNavigationError {
+            throw documentNavigationError
+        }
+        guard documentNavigationFinished else {
+            throw NSError(
+                domain: "WebTranscriptScrollPinningTests",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for the transcript navigation to finish."]
+            )
+        }
+        let ready = try await webView.evaluateJavaScript("typeof window.renderTranscript === 'function'")
+        guard (ready as? Bool) == true else {
+            throw NSError(
+                domain: "WebTranscriptScrollPinningTests",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "The loaded transcript document lacks window.renderTranscript."]
+            )
+        }
     }
 
     @discardableResult
