@@ -490,7 +490,12 @@ def events(
     offset: int = typer.Option(
         0,
         "--offset",
-        help="Offset into the event list.",
+        help="Offset into the event list (legacy hosts; storage-v2 hosts page with --cursor).",
+    ),
+    cursor: str | None = typer.Option(
+        None,
+        "--cursor",
+        help="Resume after this cursor: the previous page's next_cursor.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -523,8 +528,12 @@ def events(
         "context_mode": context_mode,
         "branch_mode": branch_mode,
         "limit": limit,
-        "offset": offset,
     }
+    # Storage-v2 hosts reject a nonzero offset and page by cursor instead.
+    if cursor:
+        params["cursor"] = cursor
+    elif offset:
+        params["offset"] = offset
     if roles:
         params["roles"] = roles
     if tool_name:
