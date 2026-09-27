@@ -805,18 +805,40 @@ const LANDING_APP_SHELL: Record<string, unknown> = {
   "/api/health": { status: "healthy" },
 };
 
+/** Fixture API calls no scene answered. Printed at the end so a missing mock is loud. */
+const unmockedCalls = new Set<string>();
+
 async function sealOrFallback(route: Route, scene: SceneName, pathname: string): Promise<void> {
-  // Sealed scenes never reach the dev proxy (which forwards to a real host).
-  if (LANDING_SCENES.includes(scene) || scene === FIRST_RUN_SCENE) {
-    if (pathname in LANDING_APP_SHELL) {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LANDING_APP_SHELL[pathname]) });
+  // Fixture scenes are sealed: nothing reaches the dev proxy, which forwards
+  // to a real Runtime Host with this machine's device token.
+  if (pathname in LANDING_APP_SHELL) {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LANDING_APP_SHELL[pathname]) });
+    return;
+  }
+  // App chrome every fixture page polls; landing scenes keep their own (404) frames.
+  if (!LANDING_SCENES.includes(scene) && scene !== FIRST_RUN_SCENE) {
+    if (pathname === "/api/users/me/client-presence") {
+      await route.fulfill({ status: 204, body: "" });
       return;
     }
-    console.log(`  [${scene}] unmocked ${route.request().method()} ${pathname} -> 404`);
+    if (pathname === "/api/runners/status") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: 2, online: 2, offline: 0, runners: [] }) });
+      return;
+    }
+    const subagents = pathname.match(/^\/api\/timeline\/sessions\/([^/]+)\/subagents$/);
+    if (subagents) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session_id: subagents[1], children: [] }) });
+      return;
+    }
+  }
+  const call = `${route.request().method()} ${pathname}`;
+  unmockedCalls.add(`[${scene}] ${call}`);
+  if (LANDING_SCENES.includes(scene) || scene === FIRST_RUN_SCENE) {
     await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
     return;
   }
-  await route.fallback();
+  console.log(`  [${scene}] UNMOCKED ${call} -> 503 (fixture scenes never reach a real host)`);
+  await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: `ui-capture: no fixture for ${call}` }) });
 }
 
 async function installScenePageOverrides(page: Page, scene: SceneName, pageName: PageName): Promise<void> {
@@ -1255,6 +1277,9 @@ async function main() {
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
     console.log(`\nManifest: ${manifestPath}`);
+    if (unmockedCalls.size > 0) {
+      console.warn(`\nUnmocked fixture API calls (answered 503/404, never proxied):\n  ${[...unmockedCalls].join("\n  ")}`);
+    }
     if (tracePath) {
       console.log(`\nTo view trace: bunx playwright show-trace ${tracePath}`);
     }
