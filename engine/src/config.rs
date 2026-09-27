@@ -316,6 +316,25 @@ pub fn get_agent_flight_dir() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("flight-recorder"))
 }
 
+/// The one command that re-adopts the stored device token's own name.
+///
+/// `longhouse auth` asks the Runtime Host which device a token belongs to and
+/// stores that name, so re-running it over the token already on disk repairs a
+/// machine configured under any other name without minting a new token.
+pub fn adopt_device_identity_command() -> String {
+    let token_path = get_longhouse_home()
+        .map(|home| {
+            home.join("machine")
+                .join("device-token")
+                .display()
+                .to_string()
+        })
+        .unwrap_or_else(|_| "$HOME/.longhouse/machine/device-token".to_string());
+    format!(
+        "LONGHOUSE_DEVICE_TOKEN=\"$(cat '{token_path}')\" longhouse auth && longhouse machine repair --repair-service"
+    )
+}
+
 pub fn get_longhouse_home() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("LONGHOUSE_HOME") {
         return Ok(PathBuf::from(dir));

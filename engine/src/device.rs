@@ -1249,7 +1249,19 @@ fn settle_native_repair(
                 } else if after.reasons.is_empty() {
                     "No new producer identity and status were observed. The previous cached snapshot is not recovery proof.".to_string()
                 } else {
-                    format!("Remaining local health reasons: {}", after.reasons.join(", "))
+                    let actions = native_desktop_suggested_action_ids(&after.reasons)
+                        .into_iter()
+                        .map(|action_id| native_desktop_action_text(&action_id, &after.reasons))
+                        .collect::<Vec<_>>();
+                    if actions.is_empty() {
+                        format!("Remaining local health reasons: {}", after.reasons.join(", "))
+                    } else {
+                        format!(
+                            "Remaining local health reasons: {}. Remaining action: {}",
+                            after.reasons.join(", "),
+                            actions.join(" ")
+                        )
+                    }
                 });
             }
             break;
@@ -1729,6 +1741,14 @@ fn native_health_from_parts(
     if let Some(refusal) = startup_refusal.as_deref() {
         reasons.push(format!("startup_refused: {refusal}"));
     }
+    // The refusal's own kind leads: it names the fix, while the stale
+    // evidence it leaves behind is only a consequence of it.
+    if startup_refused {
+        reasons.push("engine_startup_refused".to_string());
+        if let Some(reason) = startup_reason {
+            reasons.push(reason.to_string());
+        }
+    }
     if error.is_some() {
         reasons.push("engine_status_unreadable".to_string());
     } else if !exists {
@@ -1788,12 +1808,6 @@ fn native_health_from_parts(
     let projection_stale = projection_age.is_some_and(|age| age >= PROJECTION_STALE_SECONDS);
     if projection_stale {
         reasons.push("engine_projection_stale".to_string());
-    }
-    if startup_refused {
-        reasons.push("engine_startup_refused".to_string());
-        if let Some(reason) = startup_reason {
-            reasons.push(reason.to_string());
-        }
     }
     if startup_refused
         || !exists
@@ -1877,6 +1891,9 @@ fn native_health_from_parts(
             Some("runtime_unavailable") => "The Machine Agent cannot reach the Runtime Host",
             Some("runtime_protocol_unsupported") => {
                 "The Runtime Host cannot accept this Machine Agent"
+            }
+            Some("machine_identity_mismatch") => {
+                "This machine's name does not match its device token"
             }
             _ => "The local Machine Agent could not start",
         }
@@ -2118,6 +2135,10 @@ fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
             "Sign in: longhouse auth --url <your-longhouse-url>, then longhouse machine repair --repair-service"
                 .to_string()
         }
+        "adopt_device_identity" => format!(
+            "Connect as the device the token belongs to: {}",
+            crate::config::adopt_device_identity_command()
+        ),
         "inspect_local_health" => "Run: longhouse local-health --json".to_string(),
         "inspect_storage_source" => {
             "Run: longhouse shipping inspect --json and inspect the retained source evidence."
@@ -2268,6 +2289,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
     for reason in reasons {
         let action_id = match reason.as_str() {
             "machine_setup_required" => "sign_in",
+            "machine_identity_mismatch" => "adopt_device_identity",
             "service_stopped"
             | "engine_status_missing"
             | "engine_status_unreadable"
@@ -6578,6 +6600,49 @@ mod tests {
         assert!(!health
             .reasons
             .contains(&"storage_v2_sources_unresolved".to_string()));
+    }
+
+    #[test]
+    fn identity_refusal_is_a_typed_reason_with_the_adoption_fix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let message = "Runtime Host storage identity does not match this Machine Agent: this machine is configured as \"Manageds-VM.local\", but its device token belongs to \"stranger-vm\".";
+        let health = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "daemon_pid": 4242,
+                "last_updated": "2026-09-27T19:00:00Z",
+                "startup_refused": true,
+                "startup_refusal_kind": "machine_identity_mismatch",
+                "startup_refusal": message,
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "broken");
+        assert_eq!(
+            health.headline,
+            "This machine's name does not match its device token"
+        );
+        assert!(health
+            .reasons
+            .contains(&"machine_identity_mismatch".to_string()));
+        assert_eq!(health.engine_status.error.as_deref(), Some(message));
+        assert_eq!(health.engine_status.daemon_pid, Some(json!(4242)));
+        let action_ids = native_desktop_suggested_action_ids(&health.reasons);
+        assert_eq!(
+            action_ids.first().map(String::as_str),
+            Some("adopt_device_identity"),
+            "{:?}",
+            health.reasons
+        );
+        let text = native_desktop_action_text("adopt_device_identity", &health.reasons);
+        assert!(
+            text.contains("longhouse auth && longhouse machine repair --repair-service"),
+            "{text}"
+        );
     }
 
     #[test]

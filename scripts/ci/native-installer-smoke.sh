@@ -294,6 +294,11 @@ http
         res.end(JSON.stringify({ token: "zdt_browser_fixture_token" }));
         return;
       }
+      // A device token names its device; `longhouse auth` adopts that name.
+      if (/\/api\/agents\/storage\/v2\/capabilities$/.test(req.url || "")) {
+        res.end(JSON.stringify({ protocol_version: 2, machine_id: "native-installer-smoke-device" }));
+        return;
+      }
       if (/coordination-token/.test(req.url || "")) {
         res.end(JSON.stringify({ coordination_token: TOKEN }));
         return;
@@ -432,6 +437,8 @@ smoke_command 60 "$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" --brow
 
 smoke_command 60 env LONGHOUSE_DEVICE_TOKEN=native-installer-smoke-token \
   "$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" >/dev/null
+# The stored name is the token's own device, never this host's name.
+grep -q '"machine_name": "native-installer-smoke-device"' "$HOME_DIR/.longhouse/machine/state.json"
 # HOME alone does not isolate launchd/systemd's per-user service namespace.
 # Exercise native repair planning, but never load/restart the global shipper label.
 smoke_command 60 "$installed" machine repair --repair-service --dry-run --json \

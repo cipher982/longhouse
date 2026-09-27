@@ -146,17 +146,18 @@ longhouse-server serve --db sqlite:///path/to/your.db`}
 
       <h2>Machine name</h2>
       <p>
-        Longhouse identifies a machine by its hostname. To override that —
-        useful when several machines report to one Runtime Host — name it when
-        you pair the device:
+        A machine is named by its device token. A token created on the Devices
+        page carries the name you gave it, and <code>longhouse auth</code>{" "}
+        stores that name; browser approval names the token after this
+        machine&apos;s hostname, or after <code>--device</code> when you pass it:
       </p>
-      <CodeBlock title="terminal">
-        {`LONGHOUSE_DEVICE_TOKEN="..." longhouse auth --url https://you.longhouse.ai --device my-vps`}
-      </CodeBlock>
+      <CodeBlock title="terminal">{`longhouse auth --url https://you.longhouse.ai --device my-vps`}</CodeBlock>
       <p>
-        That writes the name into the device state file. Restart the Machine
-        Agent with <code>longhouse machine repair</code> so it picks the new
-        name up.
+        With an existing token, <code>--device</code> must match the
+        token&apos;s own name; <code>longhouse auth</code> refuses a different
+        one rather than store a pair the Runtime Host would reject. To rename a
+        machine, connect it with a token of the new name, then restart the
+        Machine Agent with <code>longhouse machine repair --repair-service</code>.
       </p>
 
       <h2>Running on a server</h2>

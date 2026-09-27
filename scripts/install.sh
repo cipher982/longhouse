@@ -911,7 +911,12 @@ connect_this_machine() {
     local longhouse_bin="$HOME/.local/bin/longhouse"
     local machine_name="${LONGHOUSE_MACHINE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
     if [[ -n "${LONGHOUSE_DEVICE_TOKEN:-}" ]]; then
-        if ! "$longhouse_bin" auth --url "$url" --device "$machine_name"; then
+        # A device token already names its device, and `longhouse auth` adopts
+        # that name from the Runtime Host. Only an explicit
+        # LONGHOUSE_MACHINE_NAME is passed on, so auth can refuse a mismatch.
+        local device_args=()
+        [[ -n "${LONGHOUSE_MACHINE_NAME:-}" ]] && device_args=(--device "$LONGHOUSE_MACHINE_NAME")
+        if ! "$longhouse_bin" auth --url "$url" ${device_args[@]+"${device_args[@]}"}; then
             error "Could not store the device token; create a new one on the Devices page and rerun"
             return 1
         fi
@@ -946,7 +951,10 @@ connect_this_machine() {
         warn "Run 'sudo loginctl enable-linger $(id -un)' so the Machine Agent keeps running after you log out"
     fi
     CONNECTED_THIS_MACHINE=1
-    success "Connected as ${machine_name}; its sessions will appear in the timeline"
+    # The name auth stored is the token's own; report that one.
+    local stored_name
+    stored_name="$(sed -n 's/^ *"machine_name": *"\([^"]*\)".*/\1/p' "${LONGHOUSE_HOME:-$HOME/.longhouse}/machine/state.json" 2>/dev/null | head -n 1 || true)"
+    success "Connected as ${stored_name:-$machine_name}; its sessions will appear in the timeline"
 }
 
 # Main installation flow

@@ -32,8 +32,8 @@ pub(crate) const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_millis(1
 pub(crate) const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 use crate::shipping::storage_v2::{
-    StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt,
-    StorageV2SourceManifest,
+    MachineIdentityMismatch, StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope,
+    StorageV2Receipt, StorageV2SourceManifest,
 };
 use crate::shipping::storage_v2::{
     STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
@@ -472,6 +472,9 @@ impl ShipperClient {
                     }
                     return Ok(negotiated);
                 }
+                // The host answered and named another device: deterministic,
+                // so waiting out the retry window only delays the real fix.
+                Err(error) if error.is::<MachineIdentityMismatch>() => return Err(error),
                 Err(error) => {
                     tracing::warn!(
                         attempt,

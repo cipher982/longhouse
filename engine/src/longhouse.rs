@@ -806,44 +806,113 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
     let token = match std::env::var(&args.token_env) {
         Ok(token) => token,
         Err(_) if args.browser || std::env::var(&args.token_env).is_err() => {
-            browser_device_token(&url, args.device.as_deref())?
+            // The approved token is named for this machine, so the name
+            // proposed here is the one the Runtime Host binds it to.
+            let proposed = args.device.clone().unwrap_or_else(native_machine_name);
+            browser_device_token(&url, &proposed)?
         }
         Err(_) => unreachable!(),
     };
     if token.trim().is_empty() {
         anyhow::bail!("{} is empty", args.token_env);
     }
+    let token = token.trim().to_string();
+    let base = url.trim_end_matches('/');
     let runtime = tokio::runtime::Runtime::new()?;
-    let valid = runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .get(format!(
-                "{}/api/agents/sessions?limit=1",
-                url.trim_end_matches('/')
-            ))
+    let (valid, token_device) = runtime.block_on(async {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("{base}/api/agents/sessions?limit=1"))
             .header("X-Agents-Token", &token)
             .send()
             .await?;
-        Ok::<_, anyhow::Error>(
-            response.status().as_u16() == 200 || response.status().as_u16() == 501,
-        )
+        let valid = response.status().as_u16() == 200 || response.status().as_u16() == 501;
+        if !valid {
+            return Ok::<_, anyhow::Error>((false, None));
+        }
+        Ok((true, token_device_identity(&client, base, &token).await?))
     })?;
     if !valid {
         anyhow::bail!("device token was rejected by the Runtime Host");
     }
+    let machine_name = adopted_machine_name(
+        args.device.as_deref(),
+        token_device.as_deref(),
+        base,
+        native_machine_name,
+    )?;
     let mut state = existing;
     state["schema_version"] = json!(1);
-    state["runtime_url"] = json!(url.trim_end_matches('/'));
-    state["machine_name"] = json!(args.device.unwrap_or_else(native_machine_name));
+    state["runtime_url"] = json!(base);
+    state["machine_name"] = json!(machine_name);
     state["written_by"] = json!("native-auth");
     state["written_at"] = json!(chrono::Utc::now().to_rfc3339());
     std::fs::create_dir_all(&machine_dir)?;
     write_private_json(&state_path, &state)?;
-    write_private_text(&machine_dir.join("device-token"), token.trim())?;
+    write_private_text(&machine_dir.join("device-token"), &token)?;
     println!(
         "Stored native Longhouse credentials for {}",
         state["machine_name"].as_str().unwrap_or("this machine")
     );
     Ok(())
+}
+
+/// Ask the Runtime Host which device this token belongs to.
+///
+/// The host binds a machine's storage identity to its token's device, so the
+/// capabilities route answers with that name. `None` means the host binds no
+/// name to this token (no storage-v2 route, or a principal that is not a
+/// device token), so no stored name can disagree with it.
+async fn token_device_identity(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+) -> anyhow::Result<Option<String>> {
+    let response = client
+        .get(format!("{base}/api/agents/storage/v2/capabilities"))
+        .header("X-Agents-Token", token)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .context("ask the Runtime Host which device this token belongs to")?;
+    match response.status().as_u16() {
+        200 => {}
+        404 | 422 | 501 => return Ok(None),
+        status => anyhow::bail!(
+            "the Runtime Host could not say which device this token belongs to (HTTP {status}); nothing was stored"
+        ),
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("the Runtime Host sent an unreadable device identity")?;
+    body["machine_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| Some(name.to_string()))
+        .context("the Runtime Host answered without the token's device name; nothing was stored")
+}
+
+/// The machine name to store: always the token's own device when the Runtime
+/// Host names one, because a Machine Agent configured as anything else is
+/// refused on every start.
+fn adopted_machine_name(
+    requested: Option<&str>,
+    token_device: Option<&str>,
+    runtime_url: &str,
+    fallback: impl FnOnce() -> String,
+) -> anyhow::Result<String> {
+    match (requested.map(str::trim).filter(|name| !name.is_empty()), token_device) {
+        (Some(requested), Some(token_device)) if requested != token_device => anyhow::bail!(
+            "This device token belongs to \"{token_device}\" on {runtime_url}, not \"{requested}\"; nothing was stored. \
+Run longhouse auth without --device to connect this machine as \"{token_device}\", \
+or create a token named \"{requested}\" at {runtime_url}/settings/devices."
+        ),
+        (_, Some(token_device)) => Ok(token_device.to_string()),
+        (Some(requested), None) => Ok(requested.to_string()),
+        (None, None) => Ok(fallback()),
+    }
 }
 
 /// Bytes accepted for the callback request line plus its headers.
@@ -868,7 +937,7 @@ struct CallbackRequest {
 /// navigation is the one browser→loopback hop every engine allows from an
 /// https page: the Runtime Host's CSP (`form-action 'self'`) blocks a form
 /// POST, and fetch draws mixed-content and private-network blocks.
-fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Result<String> {
+fn browser_device_token(runtime_url: &str, device: &str) -> anyhow::Result<String> {
     use base64::Engine as _;
     use sha2::Digest as _;
 
@@ -879,7 +948,6 @@ fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Resu
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(sha2::Sha256::digest(verifier.as_bytes()));
-    let device = device.unwrap_or("this Mac");
     let runtime_url = runtime_url.trim_end_matches('/');
     let connect_url = format!(
         "{}/settings/devices?connect=1&callback={}&state={}&device={}&challenge={}",
@@ -4958,6 +5026,134 @@ mod tests {
         };
         assert_eq!(args.permission_mode.as_deref(), Some("remote_approve"));
         assert_eq!(args.cursor_args, ["--foo"]);
+    }
+
+    /// A stand-in Runtime Host whose device token belongs to `token_device`.
+    fn spawn_token_host(
+        token_device: &'static str,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut paths = Vec::new();
+            // Validity probe, then the identity question.
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request =
+                    read_callback_request(&mut BufReader::new(stream.try_clone().unwrap()))
+                        .unwrap();
+                let body = if request.path == "/api/agents/storage/v2/capabilities" {
+                    json!({ "protocol_version": 2, "machine_id": token_device }).to_string()
+                } else {
+                    json!({ "sessions": [] }).to_string()
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+                paths.push(request.path);
+            }
+            paths
+        });
+        (url, handle)
+    }
+
+    fn auth_against(url: &str, device: Option<&str>, home: &Path) -> anyhow::Result<()> {
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(home.display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None),
+                (
+                    "LONGHOUSE_F5_TEST_TOKEN",
+                    Some("zdt_stranger_token".to_string()),
+                ),
+                ("NO_PROXY", Some("127.0.0.1".to_string())),
+            ],
+            || {
+                native_auth(AuthArgs {
+                    url: Some(url.to_string()),
+                    token_env: "LONGHOUSE_F5_TEST_TOKEN".to_string(),
+                    browser: false,
+                    clear: false,
+                    device: device.map(str::to_string),
+                })
+            },
+        )
+    }
+
+    #[test]
+    fn auth_adopts_the_device_name_the_token_belongs_to() {
+        // The stranger run: a token named on the Devices page, stored on a
+        // machine whose hostname is something else entirely.
+        let home = tempfile::tempdir().unwrap();
+        let (url, host) = spawn_token_host("stranger-vm");
+        auth_against(&url, None, home.path()).unwrap();
+        assert_eq!(
+            host.join().unwrap(),
+            [
+                "/api/agents/sessions",
+                "/api/agents/storage/v2/capabilities"
+            ]
+        );
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(home.path().join("machine/state.json")).unwrap())
+                .unwrap();
+        assert_eq!(state["machine_name"], "stranger-vm");
+        assert_eq!(state["runtime_url"], url.as_str());
+        assert_eq!(
+            std::fs::read_to_string(home.path().join("machine/device-token")).unwrap(),
+            "zdt_stranger_token"
+        );
+    }
+
+    #[test]
+    fn auth_refuses_a_device_name_the_token_does_not_belong_to() {
+        let home = tempfile::tempdir().unwrap();
+        let (url, host) = spawn_token_host("stranger-vm");
+        let error = auth_against(&url, Some("Manageds-Virtual-Machine.local"), home.path())
+            .unwrap_err()
+            .to_string();
+        host.join().unwrap();
+        assert!(error.contains("belongs to \"stranger-vm\""), "{error}");
+        assert!(
+            error.contains("not \"Manageds-Virtual-Machine.local\""),
+            "{error}"
+        );
+        assert!(error.contains("nothing was stored"), "{error}");
+        // A broken pair is never written: no token, no state.
+        assert!(!home.path().join("machine/device-token").exists());
+        assert!(!home.path().join("machine/state.json").exists());
+
+        // Naming the token's own device is not a conflict.
+        let (url, host) = spawn_token_host("stranger-vm");
+        auth_against(&url, Some("stranger-vm"), home.path()).unwrap();
+        host.join().unwrap();
+    }
+
+    #[test]
+    fn stored_name_follows_the_token_whenever_the_host_names_one() {
+        let hostname = || "host.local".to_string();
+        let url = "https://t.example";
+        assert_eq!(
+            adopted_machine_name(None, Some("stranger-vm"), url, hostname).unwrap(),
+            "stranger-vm"
+        );
+        assert_eq!(
+            adopted_machine_name(Some("stranger-vm"), Some("stranger-vm"), url, hostname).unwrap(),
+            "stranger-vm"
+        );
+        // A host that binds no name to the token leaves the choice local.
+        assert_eq!(
+            adopted_machine_name(Some("box"), None, url, hostname).unwrap(),
+            "box"
+        );
+        assert_eq!(
+            adopted_machine_name(None, None, url, hostname).unwrap(),
+            "host.local"
+        );
+        assert!(adopted_machine_name(Some("box"), Some("stranger-vm"), url, hostname).is_err());
     }
 
     #[test]

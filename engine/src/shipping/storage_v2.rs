@@ -39,8 +39,15 @@ impl StorageV2Capabilities {
                 self.protocol_version
             );
         }
-        if self.tenant_id.is_empty() || self.machine_id != expected_machine_id {
+        if self.tenant_id.is_empty() {
             bail!("Runtime Host storage identity does not match this Machine Agent");
+        }
+        if self.machine_id != expected_machine_id {
+            return Err(MachineIdentityMismatch {
+                configured: expected_machine_id.to_string(),
+                token_device: self.machine_id.clone(),
+            }
+            .into());
         }
         if self.ingest_path != STORAGE_V2_ENVELOPES_PATH
             || self.lane_header != STORAGE_V2_LANE_HEADER
@@ -78,6 +85,31 @@ impl StorageV2Capabilities {
         }
     }
 }
+
+/// The Runtime Host binds a machine to the device its token was issued for,
+/// so a Machine Agent configured under any other name can never ship. Retrying
+/// cannot change that; only re-adopting the token's name can.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MachineIdentityMismatch {
+    /// The name this Machine Agent is configured as (`machine/state.json`).
+    pub configured: String,
+    /// The device the stored token belongs to on the Runtime Host.
+    pub token_device: String,
+}
+
+impl std::fmt::Display for MachineIdentityMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Runtime Host storage identity does not match this Machine Agent: this machine is configured as \"{}\", but its device token belongs to \"{}\". Fix: {}",
+            self.configured,
+            self.token_device,
+            crate::config::adopt_device_identity_command()
+        )
+    }
+}
+
+impl std::error::Error for MachineIdentityMismatch {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageV2BodyEncoding {
@@ -420,6 +452,32 @@ mod tests {
             current_host.envelope_body_encoding(),
             StorageV2BodyEncoding::Zstd
         );
+    }
+
+    #[test]
+    fn identity_mismatch_names_both_identities_and_the_fix() {
+        let error = capabilities(true)
+            .validate("Manageds-VM.local")
+            .unwrap_err();
+        let mismatch = error
+            .downcast_ref::<MachineIdentityMismatch>()
+            .expect("a typed identity mismatch");
+        assert_eq!(mismatch.configured, "Manageds-VM.local");
+        assert_eq!(mismatch.token_device, "cinder");
+        let text = error.to_string();
+        assert!(
+            text.contains("configured as \"Manageds-VM.local\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("device token belongs to \"cinder\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("longhouse auth && longhouse machine repair --repair-service"),
+            "{text}"
+        );
+        assert!(text.contains("machine/device-token"), "{text}");
     }
 
     fn capabilities(cutover: bool) -> StorageV2Capabilities {

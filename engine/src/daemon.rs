@@ -907,7 +907,12 @@ fn record_startup_refusal(reason: &str, message: &str) {
     // Deliberately no engine_pulse_at: the daemon is exiting, and a fresh pulse
     // would tell every local-health surface the engine is alive. The file exists
     // only to carry the reason; liveness still reads as down, which is true.
+    // The pid and time name this attempt, so `machine repair` can see that the
+    // restarted agent answered (with a refusal) instead of waiting out its
+    // whole window for a sample that will never come.
     let payload = serde_json::json!({
+        "daemon_pid": std::process::id(),
+        "last_updated": chrono::Utc::now().to_rfc3339(),
         "startup_refused": true,
         "startup_refusal_kind": reason,
         "startup_refusal": message,
@@ -996,7 +1001,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     {
         Ok(negotiated) => negotiated,
         Err(error) => {
-            record_startup_refusal("runtime_unavailable", &format!("{error:#}"));
+            let reason = if error.is::<crate::shipping::storage_v2::MachineIdentityMismatch>() {
+                "machine_identity_mismatch"
+            } else {
+                "runtime_unavailable"
+            };
+            record_startup_refusal(reason, &format!("{error:#}"));
             return Err(error);
         }
     };
@@ -4716,13 +4726,14 @@ fn maybe_start_managed_observation_scan(
             .collect();
         let process_inventory_ms = process_started.elapsed().as_millis() as u64;
         let codex_started = Instant::now();
-        let (mut codex_observations, unresolved) = match managed_bridge_scan::default_codex_bridge_state_dir() {
-            Some(state_dir) => (
-                managed_bridge_scan::collect_observations_from(&state_dir, &process_facts),
-                false,
-            ),
-            None => (Vec::new(), true),
-        };
+        let (mut codex_observations, unresolved) =
+            match managed_bridge_scan::default_codex_bridge_state_dir() {
+                Some(state_dir) => (
+                    managed_bridge_scan::collect_observations_from(&state_dir, &process_facts),
+                    false,
+                ),
+                None => (Vec::new(), true),
+            };
         unresolved_state_dirs += usize::from(unresolved);
         let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
 
@@ -4756,10 +4767,14 @@ fn maybe_start_managed_observation_scan(
         }
 
         let antigravity_started = Instant::now();
-        let (mut antigravity_observations, unresolved) = match managed_antigravity_scan::default_antigravity_state_dir() {
-            Some(state_dir) => (managed_antigravity_scan::collect_observations_from(&state_dir), false),
-            None => (Vec::new(), true),
-        };
+        let (mut antigravity_observations, unresolved) =
+            match managed_antigravity_scan::default_antigravity_state_dir() {
+                Some(state_dir) => (
+                    managed_antigravity_scan::collect_observations_from(&state_dir),
+                    false,
+                ),
+                None => (Vec::new(), true),
+            };
         unresolved_state_dirs += usize::from(unresolved);
         let retained_antigravity = retain_existing_observations(
             &mut antigravity_observations,
@@ -4769,13 +4784,17 @@ fn maybe_start_managed_observation_scan(
         let antigravity_elapsed_ms = antigravity_started.elapsed().as_millis() as u64;
 
         let claude_started = Instant::now();
-        let (mut claude_observations, unresolved) = match managed_claude_scan::default_claude_channel_state_dir() {
-            Some(state_dir) => (
-                managed_claude_scan::collect_observations_from_processes(&state_dir, &process_facts),
-                false,
-            ),
-            None => (Vec::new(), true),
-        };
+        let (mut claude_observations, unresolved) =
+            match managed_claude_scan::default_claude_channel_state_dir() {
+                Some(state_dir) => (
+                    managed_claude_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    ),
+                    false,
+                ),
+                None => (Vec::new(), true),
+            };
         unresolved_state_dirs += usize::from(unresolved);
         let retained_codex =
             retain_existing_observations(&mut codex_observations, &previous.codex, |observation| {
@@ -4789,24 +4808,32 @@ fn maybe_start_managed_observation_scan(
         let claude_elapsed_ms = claude_started.elapsed().as_millis() as u64;
 
         let opencode_started = Instant::now();
-        let (mut opencode_observations, unresolved) = match managed_opencode_scan::default_opencode_server_state_dir() {
-            Some(state_dir) => (
-                managed_opencode_scan::collect_observations_from_processes(&state_dir, &process_facts),
-                false,
-            ),
-            None => (Vec::new(), true),
-        };
+        let (mut opencode_observations, unresolved) =
+            match managed_opencode_scan::default_opencode_server_state_dir() {
+                Some(state_dir) => (
+                    managed_opencode_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    ),
+                    false,
+                ),
+                None => (Vec::new(), true),
+            };
         unresolved_state_dirs += usize::from(unresolved);
         let opencode_elapsed_ms = opencode_started.elapsed().as_millis() as u64;
 
         let cursor_started = Instant::now();
-        let (mut cursor_observations, unresolved) = match managed_cursor_helm_scan::default_cursor_helm_state_dir() {
-            Some(state_dir) => (
-                managed_cursor_helm_scan::collect_observations_from_processes(&state_dir, &process_facts),
-                false,
-            ),
-            None => (Vec::new(), true),
-        };
+        let (mut cursor_observations, unresolved) =
+            match managed_cursor_helm_scan::default_cursor_helm_state_dir() {
+                Some(state_dir) => (
+                    managed_cursor_helm_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    ),
+                    false,
+                ),
+                None => (Vec::new(), true),
+            };
         unresolved_state_dirs += usize::from(unresolved);
         let retained_opencode = retain_existing_observations(
             &mut opencode_observations,
@@ -4820,13 +4847,17 @@ fn maybe_start_managed_observation_scan(
         );
         let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
         let pi_started = Instant::now();
-        let (mut pi_observations, unresolved) = match managed_pi_helm_scan::default_pi_helm_state_dir() {
-            Some(state_dir) => (
-                managed_pi_helm_scan::collect_observations_from_processes(&state_dir, &process_facts),
-                false,
-            ),
-            None => (Vec::new(), true),
-        };
+        let (mut pi_observations, unresolved) =
+            match managed_pi_helm_scan::default_pi_helm_state_dir() {
+                Some(state_dir) => (
+                    managed_pi_helm_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    ),
+                    false,
+                ),
+                None => (Vec::new(), true),
+            };
         unresolved_state_dirs += usize::from(unresolved);
         let pi_elapsed_ms = pi_started.elapsed().as_millis() as u64;
         let retained_pi =
@@ -4834,13 +4865,17 @@ fn maybe_start_managed_observation_scan(
                 &observation.state_file
             });
         let omp_started = Instant::now();
-        let (mut omp_observations, unresolved) = match managed_omp_helm_scan::default_omp_helm_state_dir() {
-            Some(state_dir) => (
-                managed_omp_helm_scan::collect_observations_from_processes(&state_dir, &process_facts),
-                false,
-            ),
-            None => (Vec::new(), true),
-        };
+        let (mut omp_observations, unresolved) =
+            match managed_omp_helm_scan::default_omp_helm_state_dir() {
+                Some(state_dir) => (
+                    managed_omp_helm_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    ),
+                    false,
+                ),
+                None => (Vec::new(), true),
+            };
         unresolved_state_dirs += usize::from(unresolved);
         let retained_omp =
             retain_existing_observations(&mut omp_observations, &previous.omp, |observation| {
@@ -6764,7 +6799,10 @@ mod tests {
         }
     }
 
-    fn scan_result_fixture(enumeration_complete: bool, retained: usize) -> ManagedObservationScanResult {
+    fn scan_result_fixture(
+        enumeration_complete: bool,
+        retained: usize,
+    ) -> ManagedObservationScanResult {
         ManagedObservationScanResult {
             enumeration_complete,
             retained_stale_rows: retained,
