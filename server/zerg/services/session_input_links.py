@@ -17,6 +17,7 @@ from typing import Any
 from uuid import UUID
 
 from zerg.catalogd.client import CatalogClient
+from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def user_input_candidates(records: list[Any]) -> list[dict[str, Any]]:
             {
                 "event_id": event_id,
                 "timestamp": datetime.fromtimestamp(order_time_us / 1_000_000, tz=UTC).isoformat(),
-                "text": text,
+                "text": strip_claude_channel_wrapper(text),
             }
         )
     return candidates

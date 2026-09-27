@@ -35,6 +35,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_task_notification_display
@@ -529,6 +530,11 @@ def _parse_render_spec(
                     record_payload["role"] = "system"
                     record_payload["content_text"] = notification_text
                     record_payload["interaction_kind"] = INTERACTION_PROVIDER_NOTIFICATION
+                elif str(raw_spec.provider or "").strip().lower() == "claude" and record_payload["role"] == "user":
+                    # Channel framing is execution metadata, not authored
+                    # transcript text. Keep the raw provider envelope intact;
+                    # serve and correlate only its user-authored body.
+                    record_payload["content_text"] = strip_claude_channel_wrapper(record_payload["content_text"])
                 supplied_kind = record_payload.get("interaction_kind")
                 classification = semantic_projection_facts(
                     raw_spec.provider,

@@ -133,6 +133,47 @@ def test_store_links_delivered_receipts_to_matching_user_events(tmp_path):
     assert again["linked"] == []
 
 
+def test_linker_matches_claude_channel_echo_to_the_clean_submitted_text(tmp_path):
+    engine = create_catalog_engine(tmp_path / "channel-links.db")
+    initialize_catalog_schema(engine)
+    session_id = uuid4()
+    sent_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    text = "Please inspect the changed brake hose."
+    wrapped = f'<channel source="longhouse-channel" injected_by="longhouse">\n{text}\n</channel>'
+    _seed_delivered_receipt(
+        engine,
+        session_id=session_id,
+        text=text,
+        client_request_id="ios-steer-1",
+        created_at=sent_at,
+    )
+    records = [
+        SimpleNamespace(
+            role="user",
+            tool_name=None,
+            content_text=wrapped,
+            event_id="channel-echo",
+            order_time_us=int(sent_at.timestamp() * 1_000_000),
+        )
+    ]
+
+    candidates = user_input_candidates(records)
+    assert candidates[0]["text"] == text
+    catalog_candidates = [
+        {
+            **candidates[0],
+            "timestamp": datetime.fromisoformat(candidates[0]["timestamp"]),
+        }
+    ]
+    result = CatalogStore(engine).link_input_receipts_to_events(
+        session_id=str(session_id),
+        candidates=catalog_candidates,
+        observed_at=sent_at + timedelta(seconds=2),
+    )
+
+    assert [(entry["client_request_id"], entry["durable_event_id"]) for entry in result["linked"]] == [("ios-steer-1", "channel-echo")]
+
+
 def test_workspace_envelope_stamps_input_origin_and_lists_receipts():
     session_id = uuid4()
     session = SimpleNamespace(
