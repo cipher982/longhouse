@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 293,
+  "file_count": 294,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -822,6 +822,13 @@
         "claude",
         "codex",
         "cursor"
+      ]
+    },
+    {
+      "path": "scripts/ui-fixtures/timelineHearth.ts",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {

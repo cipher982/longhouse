@@ -49,6 +49,7 @@ import {
   type SessionTone,
 } from "./ui-fixtures/sessionDetailStress";
 import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
+import { buildTimelineHearthFixture, buildTimelineHearthStreamBatch } from "./ui-fixtures/timelineHearth";
 import {
   LANDING_SEARCH_QUERY,
   buildLandingSessionFixture,
@@ -76,6 +77,7 @@ const SCENES = [
   "onboarding-modal",
   "missing-api-key",
   "timeline-card-stress",
+  "timeline-hearth",
   "launch-unavailable",
   "launch-model-picker",
   "launch-model-picked",
@@ -251,6 +253,7 @@ function parseViewport(value: string | undefined): ViewportConfig {
 function sceneUsesMockApi(scene: SceneName): boolean {
   return (
     scene === "timeline-card-stress" ||
+    scene === "timeline-hearth" ||
     scene === "launch-unavailable" ||
     scene === "launch-model-picker" ||
     scene === "launch-model-picked" ||
@@ -565,7 +568,10 @@ async function installSceneMocks(
     return;
   }
 
-  const fixture = buildTimelineCardStressFixture();
+  const fixture = scene === "timeline-hearth" ? buildTimelineHearthFixture() : buildTimelineCardStressFixture();
+  // The hearth scene streams: each EventSource reconnect gets the next batch
+  // of growing counts, so the fires see real tool/reply/prompt deltas.
+  let hearthBatch = 0;
 
   await context.route(`${appOrigin}/api/**`, async (route) => {
     const requestUrl = new URL(route.request().url());
@@ -613,6 +619,15 @@ async function installSceneMocks(
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(fixture.runners),
+      });
+      return;
+    }
+
+    if (pathname === "/api/timeline/sessions/stream" && scene === "timeline-hearth") {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: buildTimelineHearthStreamBatch(hearthBatch++),
       });
       return;
     }
@@ -856,6 +871,12 @@ async function captureBundle(
   console.log(`  Navigating to ${url}...`);
 
   await installScenePageOverrides(page, scene, pageName);
+  // HEARTH_NO_WEBGL=1 renders the fires' static fallback glyphs.
+  if (process.env.HEARTH_NO_WEBGL === "1") {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "WebGL2RenderingContext", { configurable: true, value: undefined });
+    });
+  }
   await page.goto(url);
 
   // Wait for page stability - prefer shared readiness flags.
@@ -910,6 +931,11 @@ async function captureBundle(
 
   // Let CSS apply
   await page.waitForTimeout(100);
+
+  // Let the fires ignite, reach height, and take a few streamed tool batches.
+  if (scene === "timeline-hearth") {
+    await page.waitForTimeout(Number(process.env.HEARTH_WAIT_MS ?? 5000));
+  }
 
   if (scene === "session-resume" && pageName === "session-detail") {
     await page.getByRole("button", { name: /Resume on/ }).click();
@@ -1103,13 +1129,19 @@ async function main() {
   try {
     // Launch browser
     console.log("\nLaunching browser...");
-    browser = await chromium.launch();
+    // SwiftShader gives headless Chromium WebGL2 with float render targets,
+    // so the timeline's Hearth fires render instead of their static glyphs.
+    browser = await chromium.launch({
+      args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+    });
     context = await browser.newContext({
       viewport: { width: opts.viewport.width, height: opts.viewport.height },
       isMobile: opts.viewport.isMobile,
       hasTouch: opts.viewport.hasTouch,
       deviceScaleFactor: opts.viewport.deviceScaleFactor,
-      reducedMotion: "reduce",
+      // The hearth scene captures the fires moving (flames, sparks); every
+      // other scene freezes motion, which also shows the fires' still frames.
+      reducedMotion: opts.scene === "timeline-hearth" ? "no-preference" : "reduce",
       timezoneId: "America/Los_Angeles",
       locale: "en-US",
     });
