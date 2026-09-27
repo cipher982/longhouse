@@ -8,8 +8,9 @@
  * the tab is hidden, or no cell is on screen. Under reduced motion it draws a
  * warmed still frame per change and never loops.
  *
- * The canvas is fixed-position and sized to the strip the visible cells
- * occupy, not the viewport, so an idle list costs the compositor nothing.
+ * The canvas sits in the scrolling content (absolute, inside the list), so
+ * the compositor moves it with the rows during momentum and elastic
+ * overscroll, and it covers only the fire column around the visible slice.
  */
 
 import { NP, NS, PH, PW, SLOT_X, TH, TW, buildBlackbodyLUT, hearthShaders } from "./shaders";
@@ -91,7 +92,16 @@ interface Cell {
   onStarved: (starved: boolean) => void;
 }
 
+export interface HearthPlacement {
+  key: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 export interface HearthStats {
+  placements?: HearthPlacement[];
   gpuMs: number | null;
   frameMs: number;
   running: boolean;
@@ -169,6 +179,8 @@ export class HearthRenderer {
    * RM_STEPS_PER_FRAME, so a burst of card updates costs one short settle. */
   private rmSettle = RM_SETTLE_STEPS;
   private readonly one = new Float32Array(4);
+  /** Where each drawn tile sits, in CSS px relative to the canvas (for QA). */
+  private placements: HearthPlacement[] = [];
   private stats: HearthStats = { gpuMs: null, frameMs: 16.7, running: false, tiles: 0, burning: 0, frames: 0 };
 
   static create(canvas: HTMLCanvasElement, opts: { capacity?: number; reducedMotion: boolean; onLost: () => void }): HearthRenderer | null {
@@ -307,7 +319,7 @@ export class HearthRenderer {
   }
 
   getStats(): HearthStats {
-    return { ...this.stats };
+    return { ...this.stats, placements: this.placements.map((p) => ({ ...p })) };
   }
 
   destroy(): void {
@@ -549,43 +561,43 @@ export class HearthRenderer {
     this.spawnSparks(tile, e.name, slot, t);
   }
 
-  /** Place the canvas over the strip the visible cells occupy and compute
-   * each tile's rect, glow rect and clip in canvas pixels. The tile is taller
-   * and wider than its cell, bottom-aligned on it, so a flame tip fades into
-   * the row instead of meeting a ceiling; the glow reaches wider still.
-   * Returns the visible tile count. */
+  /** Anchor the canvas inside the list and compute each tile's rect, glow
+   * rect and clip in canvas pixels. The canvas is absolutely positioned in
+   * the scrolling content (not fixed to the viewport), so native scrolling,
+   * momentum and elastic overscroll move it with the rows on the
+   * compositor; JS only re-anchors it when the visible slice of the list
+   * leaves it. It spans the fire column and the visible slice plus up to a
+   * viewport above and below, clamped to the list, so it stays bounded.
+   *
+   * The tile is taller and wider than its cell, bottom-aligned on it, so a
+   * flame tip fades into the row instead of meeting a ceiling; the glow
+   * reaches wider still. The scroll viewport clips natively; the sticky
+   * project header clips here. Returns the visible tile count. */
   private layout(): number {
     type Box = { l: number; t: number; r: number; b: number };
     const rects: (Box | null)[] = [];
     const glows: (Box | null)[] = [];
-    const clips: ({ l: number; t: number; r: number; b: number } | null)[] = [];
+    const clips: (Box | null)[] = [];
+    const host = this.canvas.parentElement;
     let L = Infinity;
-    let T = Infinity;
     let R = -Infinity;
-    let B = -Infinity;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    let slice: Box | null = null;
     for (let i = 0; i < this.nt; i++) {
       const cell = this.tileCell[i];
       rects[i] = null;
+      glows[i] = null;
       clips[i] = null;
-      if (!cell || !cell.visible || !cell.el.isConnected) continue;
+      if (!host || !cell || !cell.visible || !cell.el.isConnected) continue;
       const r = cell.el.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) continue;
-      let cl = 0;
-      let ct = 0;
-      let cr = vw;
-      let cb = vh;
-      if (cell.scroller) {
-        const s = cell.scroller.getBoundingClientRect();
-        cl = Math.max(cl, s.left);
-        ct = Math.max(ct, s.top);
-        cr = Math.min(cr, s.right);
-        cb = Math.min(cb, s.bottom);
+      if (!slice) {
+        const s = cell.scroller?.getBoundingClientRect();
+        slice = s ? { l: s.left, t: s.top, r: s.right, b: s.bottom } : { l: 0, t: 0, r: window.innerWidth, b: window.innerHeight };
       }
+      let ct = -Infinity;
       if (cell.occluder) {
         const o = cell.occluder.getBoundingClientRect();
-        if (o.bottom > ct && o.top < r.top) ct = Math.max(ct, o.bottom);
+        if (o.top < r.top) ct = o.bottom;
       }
       const cx = r.left + r.width / 2;
       const th = r.height * TILE_SCALE;
@@ -593,43 +605,66 @@ export class HearthRenderer {
       const tile = { l: cx - tw / 2, t: r.bottom - th, r: cx + tw / 2, b: r.bottom };
       const gw = tw * GLOW_W;
       const glow = { l: cx - gw / 2, t: r.bottom - th * GLOW_H, r: cx + gw / 2, b: r.bottom + r.height * 0.12 };
-      const clip = { l: Math.max(cl, glow.l), t: Math.max(ct, Math.min(tile.t, glow.t) - SPARK_MARGIN_PX), r: Math.min(cr, glow.r), b: Math.min(cb, glow.b) };
-      if (clip.r <= clip.l || clip.b <= clip.t) continue;
+      const clip = { l: glow.l, t: Math.max(ct, Math.min(tile.t, glow.t) - SPARK_MARGIN_PX), r: glow.r, b: glow.b };
+      if (clip.b <= clip.t) continue;
       rects[i] = tile;
       glows[i] = glow;
       clips[i] = clip;
       L = Math.min(L, clip.l);
-      T = Math.min(T, clip.t);
       R = Math.max(R, clip.r);
-      B = Math.max(B, clip.b);
     }
     this.uRect.fill(0);
     this.uClip.fill(0);
     this.uGlowRect.fill(0);
-    if (!Number.isFinite(L)) {
+    this.placements = [];
+    if (!host || !slice || !Number.isFinite(L)) {
       if (this.box.width) {
         this.canvas.style.display = "none";
         this.box = { left: 0, top: 0, width: 0, height: 0 };
       }
       return 0;
     }
+    const hostRect = host.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const box = { left: Math.floor(L), top: Math.floor(T), width: Math.ceil(R) - Math.floor(L), height: Math.ceil(B) - Math.floor(T) };
-    if (box.left !== this.box.left || box.top !== this.box.top || box.width !== this.box.width || box.height !== this.box.height || dpr !== this.dpr) {
+    const sliceTop = Math.max(slice.t, hostRect.top);
+    const sliceBottom = Math.min(slice.b, hostRect.bottom);
+    let cur = this.box.width ? this.canvas.getBoundingClientRect() : null;
+    const covers =
+      cur &&
+      dpr === this.dpr &&
+      cur.left <= L + 0.5 &&
+      cur.right >= R - 0.5 &&
+      cur.width <= R - L + 2 &&
+      cur.top <= Math.max(hostRect.top, sliceTop - 1) + 0.5 &&
+      cur.bottom >= Math.min(hostRect.bottom, sliceBottom + 1) - 0.5 &&
+      cur.top >= hostRect.top - 0.5 &&
+      cur.bottom <= hostRect.bottom + 0.5;
+    if (!covers) {
+      // Re-anchor: the visible slice plus a margin, clamped to the list (an
+      // absolute child past the list's end would grow the scroll height)
+      // and to a backing store the GPU can allocate.
+      const maxCss = 8192 / dpr;
+      const margin = Math.max(0, Math.min(window.innerHeight, (maxCss - (sliceBottom - sliceTop)) / 2));
+      const top = Math.floor(Math.max(hostRect.top, sliceTop - margin));
+      const bottom = Math.ceil(Math.min(hostRect.bottom, sliceBottom + margin));
+      const left = Math.floor(L);
+      const width = Math.ceil(R) - left;
+      const height = Math.max(1, bottom - top);
       const st = this.canvas.style;
       st.display = "block";
-      st.left = `${box.left}px`;
-      st.top = `${box.top}px`;
-      st.width = `${box.width}px`;
-      st.height = `${box.height}px`;
-      const w = Math.max(1, Math.round(box.width * dpr));
-      const h = Math.max(1, Math.round(box.height * dpr));
+      st.left = `${left - hostRect.left}px`;
+      st.top = `${top - hostRect.top}px`;
+      st.width = `${width}px`;
+      st.height = `${height}px`;
+      const w = Math.max(1, Math.round(width * dpr));
+      const h = Math.max(1, Math.round(height * dpr));
       if (this.canvas.width !== w) this.canvas.width = w;
       if (this.canvas.height !== h) this.canvas.height = h;
-      this.box = box;
+      this.box = { left, top, width, height };
       this.dpr = dpr;
+      cur = this.canvas.getBoundingClientRect();
     }
-    const bottom = box.top + box.height;
+    const box = cur!;
     let n = 0;
     for (let i = 0; i < this.nt; i++) {
       const r = rects[i];
@@ -637,9 +672,10 @@ export class HearthRenderer {
       const c = clips[i];
       if (!r || !g || !c) continue;
       n++;
-      this.uRect.set([(r.l - box.left) * dpr, (bottom - r.b) * dpr, (r.r - r.l) * dpr, (r.b - r.t) * dpr], i * 4);
-      this.uGlowRect.set([(g.l - box.left) * dpr, (bottom - g.b) * dpr, (g.r - g.l) * dpr, (g.b - g.t) * dpr], i * 4);
-      this.uClip.set([(c.l - box.left) * dpr, (bottom - c.b) * dpr, (c.r - box.left) * dpr, (bottom - c.t) * dpr], i * 4);
+      this.uRect.set([(r.l - box.left) * dpr, (box.bottom - r.b) * dpr, (r.r - r.l) * dpr, (r.b - r.t) * dpr], i * 4);
+      this.uGlowRect.set([(g.l - box.left) * dpr, (box.bottom - g.b) * dpr, (g.r - g.l) * dpr, (g.b - g.t) * dpr], i * 4);
+      this.uClip.set([(c.l - box.left) * dpr, (box.bottom - c.b) * dpr, (c.r - box.left) * dpr, (box.bottom - c.t) * dpr], i * 4);
+      this.placements.push({ key: this.tileCell[i]!.key, left: r.l - box.left, top: r.t - box.top, width: r.r - r.l, height: r.b - r.t });
     }
     return n;
   }

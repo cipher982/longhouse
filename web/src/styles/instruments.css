@@ -344,8 +344,14 @@
  * carries state alone. Label ladder: working glows amber, waiting on you is
  * ember and heavier, idle is secondary, unknown and ended recede. */
 
+/* The list's positioned container: the canvas anchors inside it, in the
+ * scrolling content, never to the viewport. */
+.hearth-host {
+  position: relative;
+}
+
 .hearth-canvas {
-  position: fixed;
+  position: absolute;
   left: 0;
   top: 0;
   width: 0;

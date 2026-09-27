@@ -104,8 +104,12 @@ export function HearthProvider({ children }: { children: ReactNode }) {
 
   return (
     <HearthContext.Provider value={api}>
-      {children}
-      {status !== "fallback" ? <canvas ref={canvasRef} className="hearth-canvas" aria-hidden="true" /> : null}
+      {/* The canvas lives in the scrolling content beside the rows, so the
+          compositor moves both together (momentum, elastic overscroll). */}
+      <div className="hearth-host">
+        {children}
+        {status !== "fallback" ? <canvas ref={canvasRef} className="hearth-canvas" aria-hidden="true" /> : null}
+      </div>
     </HearthContext.Provider>
   );
 }
