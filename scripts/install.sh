@@ -824,15 +824,15 @@ print_success() {
         echo "Next:"
         echo "  Open Longhouse, start a session, and pick this machine."
         echo "  Sign in to each coding agent from the launcher's 'Sign in' button."
+    elif [[ -n "$CONNECT_PENDING_URL" ]]; then
+        echo "Next, connect this machine to ${CONNECT_PENDING_URL}:"
+        echo "  On a desktop: longhouse auth --url ${CONNECT_PENDING_URL} && longhouse machine repair --repair-service"
+        echo "  On a server:  run the command from ${CONNECT_PENDING_URL}/settings/devices"
     elif [[ "$is_macos" == "1" ]]; then
         echo "Next:"
         echo "  1. Open ${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}/Longhouse.app"
         echo "  2. Choose 'Sign in to connect this Mac'"
         echo "  3. Find one prior session in the timeline"
-    elif [[ -n "$CONNECT_PENDING_URL" ]]; then
-        echo "Next, connect this machine to ${CONNECT_PENDING_URL}:"
-        echo "  On a desktop: longhouse auth --url ${CONNECT_PENDING_URL} && longhouse machine repair --repair-service"
-        echo "  On a server:  run the command from ${CONNECT_PENDING_URL}/settings/devices"
     else
         echo "Next:"
         echo "  1. Run longhouse auth --url <your Longhouse address>"
@@ -902,9 +902,10 @@ connect_this_machine() {
     [[ -n "${LONGHOUSE_URL:-}" ]] || return 0
     CURRENT_INSTALL_STAGE="connect"
     local url="${LONGHOUSE_URL%/}"
+    # A bad address must not undo an install that already worked.
     if [[ ! "$url" =~ ^https?://[^[:space:]\"\\]+$ ]]; then
-        error "LONGHOUSE_URL must be an http(s) address, got: ${LONGHOUSE_URL}"
-        return 1
+        warn "Ignoring LONGHOUSE_URL, which is not an http(s) address: ${LONGHOUSE_URL}"
+        return 0
     fi
     step "Connecting this machine to ${url}"
     local longhouse_bin="$HOME/.local/bin/longhouse"
@@ -915,7 +916,7 @@ connect_this_machine() {
             return 1
         fi
     else
-        remember_runtime_url "$url"
+        remember_runtime_url "$url" || warn "Could not store ${url} in this machine's Longhouse state"
         if ! can_approve_in_browser; then
             CONNECT_PENDING_URL="$url"
             warn "No browser here to approve this machine."
