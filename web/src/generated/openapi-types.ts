@@ -4164,7 +4164,10 @@ export interface components {
         ConnectCodeRedeemRequest: {
             /** Code */
             code: string;
-            /** Code Verifier */
+            /**
+             * Code Verifier
+             * @description RFC 7636 verifier
+             */
             code_verifier: string;
         };
         /** ConnectCodeRequest */

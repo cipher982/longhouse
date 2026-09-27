@@ -471,6 +471,19 @@ def test_browser_connect_code_is_spent_by_a_wrong_verifier(tmp_path):
         cleanup()
 
 
+def test_browser_connect_redeem_refuses_a_non_rfc7636_verifier_without_spending_the_code(tmp_path):
+    factory, cleanup = _setup_app(tmp_path)
+    verifier, challenge = _pkce_pair()
+    try:
+        with patch("zerg.routers.device_tokens.get_write_serializer", return_value=_DirectSerializer()):
+            client = TestClient(api_app)
+            code = client.post("/devices/connect-codes", json={"device_id": "This Mac", "code_challenge": challenge}).json()["code"]
+            assert client.post("/devices/connect-codes/redeem", json={"code": code, "code_verifier": "é" * 43}).status_code == 422
+            assert client.post("/devices/connect-codes/redeem", json={"code": code, "code_verifier": verifier}).status_code == 201
+    finally:
+        cleanup()
+
+
 def test_browser_connect_code_expires(tmp_path):
     factory, cleanup = _setup_app(tmp_path)
     verifier, challenge = _pkce_pair()

@@ -275,7 +275,8 @@ http
       body += chunk;
     });
     req.on("end", () => {
-      res.writeHead(200, { "content-type": "application/json" });
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
       let payload = {};
       try {
         payload = JSON.parse(body || "{}");

@@ -350,7 +350,7 @@ class ConnectCodeResponse(BaseModel):
 
 class ConnectCodeRedeemRequest(BaseModel):
     code: str = Field(..., min_length=1, max_length=128)
-    code_verifier: str = Field(..., min_length=43, max_length=128)
+    code_verifier: str = Field(..., pattern=r"^[A-Za-z0-9._~-]{43,128}$", description="RFC 7636 verifier")
 
 
 @router.post("/connect-codes", response_model=ConnectCodeResponse, status_code=status.HTTP_201_CREATED)
