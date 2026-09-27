@@ -848,9 +848,10 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
 
 /// Bytes accepted for the callback request line plus its headers.
 const CALLBACK_MAX_HEAD_BYTES: usize = 8 * 1024;
-/// `accept` stays unbounded — the human takes as long as they take in the
-/// browser — but once a browser has connected the rest is machine-speed.
+/// Once a browser has connected, the rest is machine-speed.
 const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long `longhouse auth` waits for the human to sign in and approve.
+const CALLBACK_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 struct CallbackRequest {
     method: String,
@@ -872,9 +873,6 @@ fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Resu
     use sha2::Digest as _;
 
     let listener = TcpListener::bind("127.0.0.1:0").context("start local device-auth callback")?;
-    listener
-        .set_nonblocking(false)
-        .context("configure local device-auth callback")?;
     let port = listener.local_addr()?.port();
     let state = Uuid::new_v4().to_string();
     let verifier =
@@ -906,6 +904,7 @@ fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Resu
         &state,
         runtime_url,
         CALLBACK_READ_TIMEOUT,
+        CALLBACK_WAIT_TIMEOUT,
         |code| redeem_connect_code(runtime_url, code, &verifier),
     )
 }
@@ -950,12 +949,31 @@ fn serve_callback(
     state: &str,
     runtime_url: &str,
     read_timeout: Duration,
+    wait_timeout: Duration,
     redeem: impl FnOnce(&str) -> anyhow::Result<String>,
 ) -> anyhow::Result<String> {
+    let deadline = std::time::Instant::now() + wait_timeout;
+    listener
+        .set_nonblocking(true)
+        .context("configure local device-auth callback")?;
     loop {
-        let (mut stream, _) = listener
-            .accept()
-            .context("wait for browser device authorization")?;
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    anyhow::bail!(
+                        "timed out after {}s waiting for the browser to finish connecting this device; run longhouse auth again",
+                        wait_timeout.as_secs()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(error) => return Err(error).context("wait for browser device authorization"),
+        };
+        stream
+            .set_nonblocking(false)
+            .context("configure device authorization callback")?;
         stream
             .set_read_timeout(Some(read_timeout))
             .context("bound device authorization callback read")?;
@@ -5033,6 +5051,7 @@ mod tests {
                 &state,
                 "https://longhouse.ai",
                 read_timeout,
+                Duration::from_secs(10),
                 redeem,
             )
         });
@@ -5094,6 +5113,26 @@ mod tests {
         assert!(handle.join().unwrap().is_err());
         assert!(read_callback_response(&mut client)
             .contains("Location: https://longhouse.ai/settings/devices?connected=0\r\n"));
+    }
+
+    #[test]
+    fn browser_auth_callback_gives_up_when_no_browser_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let started = std::time::Instant::now();
+        let error = serve_callback(
+            &listener,
+            "s",
+            "https://longhouse.ai",
+            Duration::from_secs(1),
+            Duration::from_millis(300),
+            |_| panic!("nothing arrived to redeem"),
+        )
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            error.to_string().contains("run longhouse auth again"),
+            "{error}"
+        );
     }
 
     #[test]

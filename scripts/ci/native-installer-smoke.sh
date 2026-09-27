@@ -282,6 +282,17 @@ http
       } catch (_) {
         payload = {};
       }
+      // The CLI's half of the browser connect: code + PKCE verifier for a token.
+      if (/\/api\/devices\/connect-codes\/redeem$/.test(req.url || "")) {
+        if (payload.code !== "browser-fixture-code" || typeof payload.code_verifier !== "string" || payload.code_verifier.length < 43) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ detail: { code: "invalid_connect_code", message: "fixture rejected the redeem" } }));
+          return;
+        }
+        res.statusCode = 201;
+        res.end(JSON.stringify({ token: "zdt_browser_fixture_token" }));
+        return;
+      }
       if (/coordination-token/.test(req.url || "")) {
         res.end(JSON.stringify({ coordination_token: TOKEN }));
         return;
@@ -393,29 +404,24 @@ if [[ -n "$PREVIOUS_TAG" ]]; then
   echo "native rollback passed: v$EXPECTED_VERSION -> $PREVIOUS_TAG -> v$EXPECTED_VERSION"
 fi
 
+# Stand-in browser: after approval the devices page navigates to the CLI's
+# loopback callback with its state and a one-time code (a top-level GET); the
+# CLI redeems the code with the Runtime Host and answers 303.
 cat > "$HOME_DIR/traps/open" <<'EOF'
 #!/usr/bin/env sh
 "$LONGHOUSE_SMOKE_NODE" -e '
 const target = new URL(process.argv[1]);
+if (!/^[A-Za-z0-9_-]{43}$/.test(target.searchParams.get("challenge") || "")) process.exit(1);
 const callback = new URL(target.searchParams.get("callback"));
-const body = new URLSearchParams({
+callback.search = new URLSearchParams({
   state: target.searchParams.get("state"),
-  token: "zdt_browser_fixture_token",
+  code: "browser-fixture-code",
 }).toString();
-const request = require("http").request(
-  callback,
-  {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      "content-length": Buffer.byteLength(body),
-    },
-  },
-  (response) => process.exit(response.statusCode === 303 ? 0 : 1),
+const request = require("http").get(callback, (response) =>
+  process.exit(response.statusCode === 303 ? 0 : 1),
 );
 request.on("error", () => process.exit(1));
 request.setTimeout(10000, () => request.destroy(new Error("callback timed out")));
-request.end(body);
 ' "$1"
 EOF
 chmod 755 "$HOME_DIR/traps/open"
