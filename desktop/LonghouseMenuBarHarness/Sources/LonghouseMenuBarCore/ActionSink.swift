@@ -768,11 +768,21 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
 
         if snapshot.isSetupRequired {
+            // Sign-in is interactive (a URL prompt, then browser approval), so
+            // it runs visibly in Terminal rather than as a background process.
+            if let command = LonghouseCLI.setupTerminalCommand(), openTerminal(command: command) {
+                return feedback(
+                    for: .repairInstall,
+                    style: .info,
+                    title: "Sign-in opened in Terminal",
+                    detail: "Enter your Longhouse address there and approve this Mac in the browser, then click Refresh."
+                )
+            }
             return feedback(
                 for: .repairInstall,
-                style: .warning,
-                title: "Setup required",
-                detail: "This Mac is not configured for native repair. Complete Longhouse setup and authentication first; no setup or reauthentication was started in the background."
+                style: .failure,
+                title: "Sign-in could not open",
+                detail: "Run in Terminal: longhouse auth --url <your-longhouse-url> && longhouse machine repair --repair-service"
             )
         }
 

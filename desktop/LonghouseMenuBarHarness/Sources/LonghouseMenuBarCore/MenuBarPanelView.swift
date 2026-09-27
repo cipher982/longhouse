@@ -346,7 +346,8 @@ public struct MenuBarPanelView: View {
     }
 
     private var shouldRetryLocalStatus: Bool {
-        !dataTrust.isCurrent
+        guard !snapshot.isSetupRequired else { return false }
+        return !dataTrust.isCurrent
             || snapshot.engineStatus?.fresh == false
             || snapshot.reasons.contains("engine_status_stale")
             || snapshot.reasons.contains("engine_projection_stale")
@@ -391,8 +392,8 @@ public struct MenuBarPanelView: View {
             HStack(spacing: 8) {
                 if presentation.promotion != .normal {
                     headerSummaryStatusPill(
-                        title: presentation.promotion.statusLabel.uppercased(),
-                        color: presentation.promotion.accentColor,
+                        title: snapshot.isSetupRequired ? "SETUP" : presentation.promotion.statusLabel.uppercased(),
+                        color: snapshot.isSetupRequired ? MenuBarPromotion.needsUser.accentColor : presentation.promotion.accentColor,
                         identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
                     )
                 }
@@ -425,30 +426,43 @@ public struct MenuBarPanelView: View {
         }
     }
 
+    private var showsRuntimeSurface: Bool {
+        !snapshot.isSetupRequired
+            || !(snapshot.managedSessions ?? []).isEmpty
+            || !unmanagedActivityEntries.isEmpty
+    }
+
     private var primarySurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if snapshot.sessionDiscoveryAttention {
+            if snapshot.sessionDiscoveryAttention && !snapshot.isSetupRequired {
                 sessionDiscoveryWarning
                 sectionDivider.padding(.horizontal, 4)
             }
 
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    managedRuntimeSurface
+            // A never-connected Mac has no agent to describe: "evidence
+            // unavailable" rows and a column of Unknown facts read as a fault
+            // instead of a first run. Any session evidence still shows.
+            if showsRuntimeSurface {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        managedRuntimeSurface
 
-                    if !unmanagedActivityEntries.isEmpty {
-                        sectionDivider.padding(.horizontal, 4)
-                        PanelSection(title: "Observed agents", trailing: snapshot.liveUnmanagedSummaryLabel) {
-                            UnmanagedActivityList(entries: unmanagedActivityEntries)
+                        if !unmanagedActivityEntries.isEmpty {
+                            sectionDivider.padding(.horizontal, 4)
+                            PanelSection(title: "Observed agents", trailing: snapshot.liveUnmanagedSummaryLabel) {
+                                UnmanagedActivityList(entries: unmanagedActivityEntries)
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxHeight: 240)
             }
-            .frame(maxHeight: 240)
 
-            sectionDivider.padding(.horizontal, 4)
-            systemFactsSection
+            if !snapshot.isSetupRequired {
+                sectionDivider.padding(.horizontal, 4)
+                systemFactsSection
+            }
 
             if let backgroundActivity = presentation.backgroundActivity {
                 sectionDivider.padding(.horizontal, 4)
@@ -505,6 +519,9 @@ public struct MenuBarPanelView: View {
         .accessibilityIdentifier("longhouse.session-discovery-warning")
     }
     private var repairGuidance: String {
+        if snapshot.isSetupRequired {
+            return "Sign in with your Longhouse address (for example https://yourname.longhouse.ai). Terminal opens, your browser asks you to approve this Mac, then Longhouse starts syncing."
+        }
         if !dataTrust.isCurrent {
             return "The local status check is unavailable. Refresh to retry; stale evidence does not indicate a repair."
         }
@@ -516,9 +533,6 @@ public struct MenuBarPanelView: View {
         }
         if snapshot.storageBlockRequiresRepair {
             return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
-        }
-        if snapshot.isSetupRequired {
-            return "Finish setup to install the local agent and connect this Mac."
         }
         if snapshot.isInstallLocationBlocked {
             return "Move Longhouse.app to /Applications, then reopen it."
@@ -924,7 +938,14 @@ public struct MenuBarPanelView: View {
     private var watchingActions: some View {
         VStack(spacing: 8) {
             Group {
-                if !dataTrust.isCurrent {
+                if snapshot.isSetupRequired {
+                    Button {
+                        perform(.repairInstall)
+                    } label: {
+                        Label("Sign in to connect this Mac", systemImage: "person.crop.circle.badge.checkmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if !dataTrust.isCurrent {
                     Button {
                         perform(.refresh)
                     } label: {

@@ -482,11 +482,15 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         }
     }
 
+    /// Native local health reports a never-authorized machine as its own fact
+    /// (`machine_setup_required`); the app synthesizes `desktop_app_setup_required`
+    /// only when the CLI itself is missing.
     public var isSetupRequired: Bool {
-        if launchReadiness?.state == "setup-required" {
+        if launchReadiness?.state == "setup-required" || healthState == "setup_required" {
             return true
         }
-        return reasons.contains("desktop_app_setup_required")
+        return reasons.contains("machine_setup_required")
+            || reasons.contains("desktop_app_setup_required")
     }
 
     public var isInstallLocationBlocked: Bool {
@@ -1315,7 +1319,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "Longhouse.app only runs from /Applications. Quit, move the app there, then relaunch."
         }
         if isSetupRequired {
-            return "Longhouse.app needs to finish setup on this Mac. Set Up Longhouse to install the CLI, runtime, and menu bar wiring."
+            return "This Mac is not connected to a Longhouse yet. Sign in with your Longhouse address to start syncing sessions."
         }
         let primaryReason = reasons.first.map(Self.humanizeReason)
         switch parsedSeverity {
@@ -1485,6 +1489,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         switch raw {
         case "desktop_app_setup_required":
             return "Longhouse needs setup on this Mac"
+        case "machine_setup_required":
+            return "This Mac is not connected to a Longhouse yet"
         case "desktop_app_wrong_install_location":
             return "Longhouse.app is not in /Applications"
         case "managed_unknown_phase":
@@ -1540,7 +1546,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public static func setupRequiredSnapshot(detail: String? = nil) -> HealthSnapshot {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let suggestedAction = "Set up Longhouse from this app to install the CLI, runtime, and menu bar service."
+        let suggestedAction = "Sign in from this app to install the Longhouse CLI and connect this Mac."
         let reason = detail?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return HealthSnapshot(

@@ -1737,6 +1737,54 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.launchReadiness?.state == "setup-required")
     }
 
+    private func harnessFixtureURL(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/\(name).json")
+    }
+
+    @Test
+    func nativeSetupRequiredPresentsSignInInsteadOfStaleWall() throws {
+        // Captured from `longhouse local-health --json` in a fresh HOME that
+        // has the native pair installed but was never authorized.
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: harnessFixtureURL("setup-required")).load()
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date())
+
+        #expect(snapshot.isSetupRequired == true)
+        #expect(snapshot.sessionDiscoveryAttention == false)
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.headline == "Finish setup on this Mac")
+        #expect(snapshot.ambientStatusLabel == "Setup required")
+        #expect(snapshot.attentionSummaryLabel.contains("Sign in"))
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.repairInstall, snapshot: snapshot)
+        #expect(feedback?.title == "Setup dry run recorded")
+    }
+
+    @Test
+    func configuredMachineFixturesAreNotSetupRequired() throws {
+        let fixtures = try FileManager.default.contentsOfDirectory(
+            at: harnessFixtureURL("healthy").deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "json" && $0.lastPathComponent != "setup-required.json" }
+        #expect(!fixtures.isEmpty)
+        for fixture in fixtures {
+            let snapshot = try FixtureHealthSnapshotSource(fileURL: fixture).load()
+            #expect(snapshot.isSetupRequired == false, "\(fixture.lastPathComponent)")
+        }
+    }
+
+    @Test
+    func setupTerminalCommandQuotesEveryArgument() {
+        let command = LonghouseCLI.terminalCommand(
+            for: ("/bin/zsh", ["/Applications/Long house.app/it's/desktop-app-setup.sh"])
+        )
+        #expect(command == "'/bin/zsh' '/Applications/Long house.app/it'\\''s/desktop-app-setup.sh'")
+    }
+
     @Test
     func cliSourceLoadsLargeSnapshotWithoutPipeDeadlock() throws {
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -2373,6 +2421,10 @@ struct LonghouseMenuBarCoreTests {
         #expect(script.contains("LONGHOUSE_RUNTIME_URL"))
         #expect(script.contains("longhouse auth --url"))
         #expect(script.contains("longhouse machine repair --repair-service"))
+        // A first-run Mac has no token in its environment: the script must ask
+        // for the Runtime Host and run the browser handshake itself.
+        #expect(script.contains("read -r \"url?Longhouse URL: \""))
+        #expect(!script.contains("Sign in to a Runtime Host in Longhouse.app"))
         #expect(!script.contains("uv tool"))
         #expect(!script.contains("uv python"))
     }

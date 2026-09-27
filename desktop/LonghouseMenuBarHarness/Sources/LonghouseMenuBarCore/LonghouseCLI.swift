@@ -139,6 +139,17 @@ enum LonghouseCLI {
         return ("/bin/zsh", [scriptURL.path])
     }
 
+    /// The setup script as one shell line for a visible Terminal window.
+    static func setupTerminalCommand() -> String? {
+        setupInvocation().map(terminalCommand(for:))
+    }
+
+    static func terminalCommand(for invocation: (launchPath: String, arguments: [String])) -> String {
+        ([invocation.launchPath] + invocation.arguments)
+            .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+            .joined(separator: " ")
+    }
+
     static func setupInvocation(resourceBundle: Bundle) -> (launchPath: String, arguments: [String])? {
         guard let scriptURL = resourceBundle.url(forResource: setupScriptName, withExtension: "sh") else {
             return nil

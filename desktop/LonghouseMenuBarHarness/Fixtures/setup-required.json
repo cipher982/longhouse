@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "collection_tier": "native",
+  "collected_at": "2026-09-27T16:40:00+00:00",
+  "health_state": "setup_required",
+  "severity": "yellow",
+  "headline": "Sign in to connect this machine to Longhouse",
+  "reasons": [
+    "machine_setup_required"
+  ],
+  "suggested_actions": [
+    "Sign in: longhouse auth --url <your-longhouse-url>, then longhouse machine repair --repair-service"
+  ],
+  "suggested_action_ids": [
+    "sign_in"
+  ],
+  "engine_status": {
+    "path": "/Users/example/.longhouse/agent/engine-status.json",
+    "exists": false,
+    "fresh": false,
+    "age_seconds": null
+  },
+  "transport": {
+    "status": "unknown",
+    "status_reason": "transport_unavailable",
+    "status_summary": "Current shipping evidence is unavailable; last-known transport is not current health."
+  },
+  "heartbeat_transport": {
+    "state": "unknown",
+    "evidence_state": "unknown"
+  },
+  "spool": {
+    "pending_count": null,
+    "dead_count": null
+  },
+  "managed_summary": {},
+  "managed_launch_recovery": {
+    "exhausted_count": 0,
+    "active_count": 0,
+    "scan_error": false
+  },
+  "machine_setup": {
+    "configured": false,
+    "machine_state_present": false,
+    "runtime_url_present": false,
+    "machine_name_present": false,
+    "device_token_present": false
+  }
+}
