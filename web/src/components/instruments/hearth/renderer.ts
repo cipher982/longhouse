@@ -27,6 +27,9 @@ const HEAT_TTL_MS = 120_000;
 /** Redraw idle coal beds this often while nothing burns (they cool in wall time). */
 const COOL_REDRAW_MS = 30_000;
 const SPARK_MARGIN_PX = 4;
+/** Reduced motion: steps to settle a still frame, and at most this many per frame. */
+const RM_SETTLE_STEPS = 90;
+const RM_STEPS_PER_FRAME = 15;
 
 // spark character per tool kind: count, T0 (K), radius (cells), launch speed (cells/s), spread (rad), life (s)
 const SPARK: Record<ToolKind, { n: number; T: number; r: number; v: [number, number]; spread: number; life: number }> = {
@@ -77,6 +80,9 @@ interface Cell {
   visible: boolean;
   hiddenSince: number;
   tile: number;
+  /** On screen but no tile free: the row shows its static glyph. */
+  starved: boolean;
+  onStarved: (starved: boolean) => void;
 }
 
 export interface HearthStats {
@@ -100,11 +106,6 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
     p = p.parentElement;
   }
   return null;
-}
-
-/** Can this browser run the fires? Checked before the renderer module loads work. */
-export function hearthSupported(): boolean {
-  return typeof window !== "undefined" && typeof WebGL2RenderingContext !== "undefined";
 }
 
 export class HearthRenderer {
@@ -155,13 +156,15 @@ export class HearthRenderer {
   private box = { left: 0, top: 0, width: 0, height: 0 };
   private coolTimer = 0;
   private dead = false;
-  /** Reduced motion: re-grow the still frame only when a signal changed. */
-  private rmDirty = true;
+  /** Reduced motion: sim steps left before the still frame is settled.
+   * A signal change resets it (never adds), and each frame spends at most
+   * RM_STEPS_PER_FRAME, so a burst of card updates costs one short settle. */
+  private rmSettle = RM_SETTLE_STEPS;
   private readonly one = new Float32Array(4);
   private stats: HearthStats = { gpuMs: null, frameMs: 16.7, running: false, tiles: 0, burning: 0, frames: 0 };
 
   static create(canvas: HTMLCanvasElement, opts: { capacity?: number; reducedMotion: boolean; onLost: () => void }): HearthRenderer | null {
-    if (!hearthSupported()) return null;
+    if (typeof WebGL2RenderingContext === "undefined") return null;
     let gl: WebGL2RenderingContext | null = null;
     try {
       gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, powerPreference: "low-power" });
@@ -201,6 +204,7 @@ export class HearthRenderer {
     P.jac = this.prog(S.VS_FULL, S.FS_JACOBI);
     P.proj = this.prog(S.VS_FULL, S.FS_PROJECT);
     P.pup = this.prog(S.VS_FULL, S.FS_PUPDATE);
+    P.pkill = this.prog(S.VS_FULL, S.FS_PKILL);
     P.comp = this.prog(S.VS_COMP, S.FS_COMP);
     P.spark = this.prog(S.VS_SPARK, S.FS_SPARK);
     P.meas = this.prog(S.VS_FULL, S.FS_MEASURE);
@@ -243,17 +247,17 @@ export class HearthRenderer {
       this.io = new IntersectionObserver(this.handleIntersect, { rootMargin: "48px 0px" });
     }
     this.coolTimer = window.setInterval(() => {
-      this.rmDirty = true;
+      this.rmSettle = RM_SETTLE_STEPS;
       this.requestFrame();
     }, COOL_REDRAW_MS);
   }
 
   // ---------------- public API ----------------
 
-  register(id: string, key: string, el: HTMLElement): void {
+  register(id: string, key: string, el: HTMLElement, onStarved: (starved: boolean) => void = () => {}): void {
     if (this.dead) return;
     const occluder = (el.closest(".inbox-repo")?.querySelector(".inbox-repo-header") as HTMLElement | null) ?? null;
-    const cell: Cell = { id, key, el, occluder, scroller: scrollParent(el), visible: !this.io, hiddenSince: 0, tile: -1 };
+    const cell: Cell = { id, key, el, occluder, scroller: scrollParent(el), visible: !this.io, hiddenSince: 0, tile: -1, starved: false, onStarved };
     this.cells.set(id, cell);
     const entry = this.heats.get(key);
     if (entry) entry.orphanSince = 0;
@@ -268,7 +272,7 @@ export class HearthRenderer {
     const entry = this.heats.get(cell.key);
     if (!entry) return;
     entry.heat.update(snap, performance.now() / 1000, Date.now());
-    this.rmDirty = true;
+    this.rmSettle = RM_SETTLE_STEPS;
     this.requestFrame();
   }
 
@@ -371,7 +375,15 @@ export class HearthRenderer {
       if (heat) v.hcmd = this.reducedMotion ? 0 : 0.5 * heat.target(now / 1000);
       v.frozen = false;
       this.settleT = now;
-      this.rmDirty = true;
+      this.rmSettle = RM_SETTLE_STEPS;
+    }
+    // A visible row the atlas has no room for draws its static glyph.
+    for (const cell of this.cells.values()) {
+      const starved = cell.visible && cell.tile < 0;
+      if (starved !== cell.starved) {
+        cell.starved = starved;
+        cell.onStarved(starved);
+      }
     }
     for (const [key, entry] of this.heats) {
       if (entry.orphanSince && now - entry.orphanSince > HEAT_TTL_MS) this.heats.delete(key);
@@ -462,14 +474,17 @@ export class HearthRenderer {
     this.packUniforms(wall);
 
     if (this.reducedMotion) {
-      // A still frame: grow each lit tile to its steady state, draw once.
-      if (this.rmDirty) {
-        this.rmDirty = false;
-        this.clearAtlas();
-        for (let k = 0; k < 240 && this.simRuns.length; k++) this.simStep();
-      }
-      this.render(false);
-      this.stats.running = false;
+      // A still frame: settle each lit tile from its current state a few
+      // steps per frame, then draw once; nothing moves after that.
+      const settling = this.rmSettle > 0 && this.simRuns.length > 0;
+      if (settling) {
+        const n = Math.min(RM_STEPS_PER_FRAME, this.rmSettle);
+        for (let k = 0; k < n; k++) this.simStep();
+        this.rmSettle -= n;
+      } else this.rmSettle = 0;
+      if (this.rmSettle === 0 || nowMs < this.stillUntil) this.render(false);
+      this.stats.running = this.rmSettle > 0;
+      if (this.rmSettle > 0) this.raf = requestAnimationFrame(this.frame);
       return;
     }
 
@@ -691,6 +706,9 @@ export class HearthRenderer {
 
   private clearTile(i: number) {
     const gl = this.gl;
+    // Sparks carry an absolute tile index; kill this tile's before reuse.
+    this.run(this.P.pkill, this.F.part.w, { u_pa: this.F.part.r.texs[0], u_pb: this.F.part.r.texs[1], u_kill: i });
+    this.F.part.swap();
     gl.enable(gl.SCISSOR_TEST);
     gl.scissor(i * TW, 0, TW, this.AH);
     for (const t of this.atlasTargets()) {
@@ -701,13 +719,6 @@ export class HearthRenderer {
     gl.disable(gl.SCISSOR_TEST);
   }
 
-  private clearAtlas() {
-    const gl = this.gl;
-    for (const t of this.atlasTargets()) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
-      gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
-    }
-  }
 
   /** One solver span from the first to the last awake tile. Each pass is a
    * render pass, and on tiled GPUs a pass costs far more than the few

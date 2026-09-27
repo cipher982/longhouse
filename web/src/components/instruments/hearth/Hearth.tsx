@@ -13,14 +13,14 @@
 
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { StatusLampState } from "../StatusLamp";
-import { T_AMB, initialBed, snapshotSignature, type HearthMode, type HearthSnapshot } from "./signals";
+import { T_AMB, initialBed, snapshotSignature, type HearthSnapshot } from "./signals";
 import type { HearthRenderer, HearthStats } from "./renderer";
 
 type HearthStatus = "pending" | "gl" | "fallback";
 
 interface HearthApi {
   status: HearthStatus;
-  register(id: string, key: string, el: HTMLElement): void;
+  register(id: string, key: string, el: HTMLElement, onStarved: (starved: boolean) => void): void;
   update(id: string, snap: HearthSnapshot): void;
   unregister(id: string): void;
   touch(): void;
@@ -42,7 +42,9 @@ function webgl2Available(): boolean {
 export function HearthProvider({ children }: { children: ReactNode }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<HearthRenderer | null>(null);
-  const cellsRef = useRef(new Map<string, { key: string; el: HTMLElement; snap: HearthSnapshot | null }>());
+  const cellsRef = useRef(
+    new Map<string, { key: string; el: HTMLElement; snap: HearthSnapshot | null; onStarved: (starved: boolean) => void }>(),
+  );
   const [status, setStatus] = useState<HearthStatus>(() => (webgl2Available() ? "pending" : "fallback"));
 
   useEffect(() => {
@@ -66,7 +68,7 @@ export function HearthProvider({ children }: { children: ReactNode }) {
         }
         rendererRef.current = renderer;
         for (const [id, cell] of cellsRef.current) {
-          renderer.register(id, cell.key, cell.el);
+          renderer.register(id, cell.key, cell.el, cell.onStarved);
           if (cell.snap) renderer.update(id, cell.snap);
         }
         window.__longhouseHearth = () => rendererRef.current?.getStats() ?? null;
@@ -83,9 +85,9 @@ export function HearthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const register = useCallback((id: string, key: string, el: HTMLElement) => {
-    cellsRef.current.set(id, { key, el, snap: null });
-    rendererRef.current?.register(id, key, el);
+  const register = useCallback((id: string, key: string, el: HTMLElement, onStarved: (starved: boolean) => void) => {
+    cellsRef.current.set(id, { key, el, snap: null, onStarved });
+    rendererRef.current?.register(id, key, el, onStarved);
   }, []);
   const update = useCallback((id: string, snap: HearthSnapshot) => {
     const cell = cellsRef.current.get(id);
@@ -106,20 +108,6 @@ export function HearthProvider({ children }: { children: ReactNode }) {
       {status !== "fallback" ? <canvas ref={canvasRef} className="hearth-canvas" aria-hidden="true" /> : null}
     </HearthContext.Provider>
   );
-}
-
-/** The fire's spoken equivalent; the visible label carries the state too. */
-export function describeHearth(mode: HearthMode): string {
-  switch (mode) {
-    case "working":
-      return "Fire burning: the agent is working";
-    case "waiting":
-      return "Fire guttering: waiting on you";
-    case "ended":
-      return "Ash: the session has ended";
-    default:
-      return "Coals cooling: idle";
-  }
 }
 
 export function HearthLamp({
@@ -147,12 +135,17 @@ export function HearthLamp({
   const signature = snapshotSignature(snapshot);
   const snapRef = useRef(snapshot);
   snapRef.current = snapshot;
+  // On screen but the atlas is full: this row draws its static glyph.
+  const [starved, setStarved] = useState(false);
 
   useLayoutEffect(() => {
     const el = cellRef.current;
     if (!register || !unregister || !el) return;
-    register(id, sessionKey, el);
-    return () => unregister(id);
+    register(id, sessionKey, el, setStarved);
+    return () => {
+      unregister(id);
+      setStarved(false);
+    };
   }, [register, unregister, id, sessionKey]);
 
   useEffect(() => {
@@ -164,10 +157,11 @@ export function HearthLamp({
     touch?.();
   });
 
-  const glyph = !ctx || ctx.status === "fallback";
+  const glyph = !ctx || ctx.status === "fallback" || starved;
+  // The fire is decoration: the visible label beside it carries the state.
   return (
     <span className="hearth-lamp" data-state={state} data-mode={snapshot.mode} title={title ?? label}>
-      <span ref={cellRef} className="hearth-lamp__cell" role="img" aria-label={describeHearth(snapshot.mode)} data-hearth={glyph ? "glyph" : "gl"}>
+      <span ref={cellRef} className="hearth-lamp__cell" aria-hidden="true" data-hearth={glyph ? "glyph" : "gl"}>
         {glyph ? <HearthGlyph snapshot={snapshot} /> : null}
       </span>
       <span className="hearth-lamp__label">{label}</span>

@@ -72,6 +72,17 @@ describe("card deltas", () => {
     expect(events).toEqual([{ type: "tool", kind: "edit", name: "Edit" }]);
   });
 
+  it("credits at most a bounded batch when a reconnect reports a huge jump", () => {
+    const heat = new SessionHeat();
+    heat.update(snap(), 0, NOW);
+    heat.update(snap({ toolCalls: 10 + 5_000_000, assistantMessages: 10 + 5_000_000, userMessages: 2 + 3 }), 1, NOW);
+    const events = drain(heat, 1, 5);
+    expect(events.length).toBeLessThanOrEqual(8);
+    expect(events[0]).toEqual({ type: "prompt" });
+    // Unshown events still count as work, but only up to the cap.
+    expect(heat.work).toBeLessThan(24 * 150);
+  });
+
   it("caps how many events of one burst become sparks", () => {
     const heat = new SessionHeat();
     heat.update(snap(), 0, NOW);
@@ -135,6 +146,17 @@ describe("cooling", () => {
     expect(hours.surface).toBeLessThan(320); // black
     expect(hours.core).toBeCloseTo(cool(T_LIT, 4 * 3600, TAU_CORE)); // a faint red in the cracks
     expect(hours.core).toBeGreaterThan(hours.surface);
+  });
+
+  it("cools an idle bed exactly once on first sight", () => {
+    const idle = snap({ mode: "idle", lastActivityMs: NOW - 20 * 60_000 });
+    const expected = initialBed(idle, NOW);
+    const heat = new SessionHeat();
+    heat.update(idle, 0, NOW);
+    heat.step(0.016, 0.016, NOW);
+    expect(heat.surface).toBeCloseTo(expected.surface, 3);
+    expect(heat.core).toBeCloseTo(expected.core, 3);
+    expect(heat.surface).toBeCloseTo(cool(T_LIT, 20 * 60, TAU_BED), 3);
   });
 
   it("keeps a waiting session's coals warm and an ended one's cold", () => {

@@ -162,6 +162,13 @@ float emitL(vec4 s, vec4 B){ float th=max(s.r,0.0), soot=max(s.b,0.0); return po
 uniform sampler2D u_lut;
 vec4 bb(float T){return texture(u_lut,vec2(clamp((T-400.0)/3000.0,0.0,1.0)*(255.0/256.0)+0.5/256.0,0.5));}`;
   // One instanced quad per tile, placed on its row's cell; clip is the cell's visible rect.
+  // Kill one tile's sparks, so a tile handed to another row starts clean.
+  const FS_PKILL = HDR + `
+uniform sampler2D u_pa,u_pb; uniform float u_kill;
+layout(location=0) out vec4 oA; layout(location=1) out vec4 oB;
+void main(){ivec2 c=ivec2(gl_FragCoord.xy);vec4 A=texelFetch(u_pa,c,0),B=texelFetch(u_pb,c,0);
+ if(abs(B.w-u_kill)<0.5) B=vec4(0.0);
+ oA=A; oB=B;}`;
   const VS_COMP = HDR + `
 uniform vec4 u_rect[NT]; uniform vec2 u_canvas; out vec2 v_uv; flat out int v_tile;
 void main(){int t=gl_InstanceID;vec2 k=vec2(float(gl_VertexID&1),float((gl_VertexID>>1)&1));vec4 r=u_rect[t];
@@ -268,6 +275,7 @@ void main(){
     FS_JACOBI,
     FS_PROJECT,
     FS_PUPDATE,
+    FS_PKILL,
     VS_COMP,
     FS_COMP,
     FS_MEASURE,

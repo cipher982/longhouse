@@ -174,9 +174,12 @@ export class SessionHeat {
     const delta = diffSnapshots(prev, next);
     this.snap = next.tool == null && prev?.tool ? { ...next, tool: prev.tool } : next;
     if (!prev) {
+      // Cooling runs once, from the last activity: the bed was lit then
+      // (cold ash if ended), and coolBed() carries it to now.
       const bed = initialBed(next, wallMs);
-      this.surface = this.surface0 = bed.surface;
-      this.core = this.core0 = bed.core;
+      this.surface = bed.surface;
+      this.core = bed.core;
+      this.surface0 = this.core0 = next.mode === "ended" ? T_AMB : T_LIT;
       this.wasActive = next.mode === "working";
       this.work = next.mode === "working" ? BASE_WORK.working + densityWork(next) : 0;
       this.lastUpdateT = t;
@@ -185,17 +188,19 @@ export class SessionHeat {
     const since = Number.isFinite(this.lastUpdateT) ? t - this.lastUpdateT : SPREAD_MAX;
     this.lastUpdateT = t;
     const spread = Math.max(0.3, Math.min(SPREAD_MAX, since));
-    const events: HearthEvent[] = [];
-    for (let i = 0; i < delta.prompts; i++) events.push({ type: "prompt" });
+    // Cap before building anything: a reconnect can report thousands.
+    // Prompts lead the batch (the stoke comes before the work it caused).
+    const prompts = Math.min(delta.prompts, MAX_CREDITED_EVENTS);
+    const tools = Math.min(delta.tools, MAX_CREDITED_EVENTS - prompts);
+    const messages = Math.min(delta.messages, MAX_CREDITED_EVENTS - prompts - tools);
+    const credited: HearthEvent[] = [];
+    for (let i = 0; i < prompts; i++) credited.push({ type: "prompt" });
     // The card names only the tool running now; a batch that finished while
     // the agent went back to thinking keeps the last tool it named.
     const toolName = next.tool ?? prev.tool;
     const kind = kindOf(toolName);
-    for (let i = 0; i < delta.tools; i++) events.push({ type: "tool", kind, name: toolName });
-    for (let i = 0; i < delta.messages; i++) events.push({ type: "message" });
-    const credited = events.slice(0, MAX_CREDITED_EVENTS);
-    // A prompt leads its batch: the stoke comes before the work it caused.
-    credited.sort((a, b) => order(a) - order(b));
+    for (let i = 0; i < tools; i++) credited.push({ type: "tool", kind, name: toolName });
+    for (let i = 0; i < messages; i++) credited.push({ type: "message" });
     const shown = credited.length > MAX_VISIBLE_EVENTS ? thin(credited, MAX_VISIBLE_EVENTS) : credited;
     const extra = credited.filter((e) => !shown.includes(e));
     shown.forEach((event, i) => {
@@ -203,7 +208,7 @@ export class SessionHeat {
     });
     // Unshown events still feed the fire.
     for (const event of extra) this.deposit(event, t);
-    if (events.length) {
+    if (credited.length) {
       this.lastEventWallMs = wallMs;
     }
     return delta;
@@ -293,10 +298,6 @@ export class SessionHeat {
   hasPending(): boolean {
     return this.pending.length > 0;
   }
-}
-
-function order(e: HearthEvent): number {
-  return e.type === "prompt" ? 0 : 1;
 }
 
 /** Keep n evenly spaced items, always keeping prompts. */
