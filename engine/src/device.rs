@@ -111,10 +111,29 @@ struct NativeLocalHealth {
     spool: NativeSpoolStatus,
     managed_sessions: NativeManagedSessionsStatus,
     managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
+    /// Whether this machine was ever authorized to a Runtime Host. Absent only
+    /// where the producer did not look (the repair plan reports its own
+    /// `machine_state`); present on every `local-health` run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machine_setup: Option<NativeMachineSetupStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     control_channel: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     build: Option<Value>,
+}
+
+/// Configuration facts, independent of engine evidence. A machine that was
+/// never authorized has no engine to be stale, so "not set up" is reported as
+/// its own fact instead of as missing or expired liveness evidence.
+#[derive(Debug, Clone, Serialize)]
+struct NativeMachineSetupStatus {
+    configured: bool,
+    machine_state_present: bool,
+    runtime_url_present: bool,
+    machine_name_present: bool,
+    device_token_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,6 +229,8 @@ struct NativeDesktopHealth {
     managed_sessions: Option<Vec<NativeDesktopSession>>,
     managed_summary: NativeDesktopManagedSummary,
     managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machine_setup: Option<NativeMachineSetupStatus>,
     /// Required before the app will open the Runtime Host projection stream.
     /// Without it `presentation` and `activity` stay null forever and every
     /// session renders activity-unknown.
@@ -989,7 +1010,12 @@ pub fn cmd_shipping_discard(source_epoch: &str, confirm: bool) -> anyhow::Result
 
 pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow::Result<()> {
     let status_path = engine_status_path(state_root)?;
-    let health = collect_native_local_health(&status_path);
+    let mut health = collect_native_local_health(&status_path);
+    let setup = collect_native_machine_setup(
+        &machine_state_path(state_root)?,
+        &machine_token_path(state_root)?,
+    );
+    apply_native_machine_setup(&mut health, setup);
     if json {
         // JSON is what Longhouse.app consumes, so it must satisfy the Desktop
         // contract. The human-readable path keeps the terse operator view.
@@ -1001,6 +1027,74 @@ pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow:
         print_native_local_health(&health);
     }
     Ok(())
+}
+
+fn collect_native_machine_setup(state_path: &Path, token_path: &Path) -> NativeMachineSetupStatus {
+    let state = collect_native_machine_state(state_path);
+    let device_token_present = std::fs::read_to_string(token_path)
+        .map(|token| !token.trim().is_empty())
+        .unwrap_or(false);
+    NativeMachineSetupStatus {
+        configured: state.configured && device_token_present,
+        machine_state_present: state.exists,
+        runtime_url_present: state.runtime_url_present,
+        machine_name_present: state.machine_name_present,
+        device_token_present,
+        error: state.error,
+    }
+}
+
+/// Reasons that only restate "no configured engine has run here". On a machine
+/// that was never authorized they are consequences of the missing setup, not
+/// independent faults, and presenting them as stale evidence sends a new user
+/// to a repair that cannot help.
+const UNCONFIGURED_CONSEQUENCE_REASONS: &[&str] = &[
+    "engine_status_missing",
+    "engine_status_stale",
+    "engine_status_aging",
+    "engine_status_age_unknown",
+    "engine_reconciliation_stale",
+    "engine_reconciling",
+    "engine_projection_stale",
+    "engine_offline",
+    "transport_unavailable",
+    "heartbeat_post_failed",
+    "heartbeat_stale",
+];
+
+/// Classify a machine that was never authorized as setup-required.
+///
+/// Two facts must both hold: the machine has no usable configuration (no
+/// runtime URL, machine name, or device token), and no engine is currently
+/// reporting. A fresh engine is evidence that this machine ships through some
+/// other configuration, so it keeps its ordinary classification. An unreadable
+/// machine state is a fault, not a first run, and is left alone too.
+/// Retained-data reasons (storage, archive, spool, recovery) survive: a
+/// deauthorized machine can still hold unshipped evidence.
+fn apply_native_machine_setup(health: &mut NativeLocalHealth, setup: NativeMachineSetupStatus) {
+    let setup_required = !setup.configured && setup.error.is_none() && !health.engine_status.fresh;
+    if setup_required {
+        health
+            .reasons
+            .retain(|reason| !UNCONFIGURED_CONSEQUENCE_REASONS.contains(&reason.as_str()));
+        health
+            .reasons
+            .insert(0, "machine_setup_required".to_string());
+        let retained_data_broken = health.reasons.iter().any(|reason| {
+            matches!(
+                reason.as_str(),
+                "engine_status_unreadable"
+                    | "storage_v2_outbox_unreadable"
+                    | "storage_v2_sources_unresolved"
+                    | "managed_launch_recovery_unreadable"
+            )
+        });
+        if !retained_data_broken {
+            health.health_state = "setup_required".to_string();
+            health.headline = "Sign in to connect this machine to Longhouse".to_string();
+        }
+    }
+    health.machine_setup = Some(setup);
 }
 
 fn machine_token_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
@@ -1878,6 +1972,7 @@ fn native_health_from_parts(
             count: managed_session_count,
         },
         managed_launch_recovery,
+        machine_setup: None,
         control_channel: object
             .and_then(|value| value.get("control_channel"))
             .cloned(),
@@ -1921,7 +2016,7 @@ fn native_desktop_health_from_parts(
 
     let severity = match health.health_state.as_str() {
         "healthy" => "green",
-        "degraded" => "yellow",
+        "degraded" | "setup_required" => "yellow",
         _ => "red",
     }
     .to_string();
@@ -1969,6 +2064,7 @@ fn native_desktop_health_from_parts(
             latest_activity_at: None,
         },
         managed_launch_recovery: health.managed_launch_recovery,
+        machine_setup: health.machine_setup,
         managed_sessions: session_rows,
         realtime,
         control_channel: health.control_channel,
@@ -2014,6 +2110,10 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
 
 fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
     match action_id {
+        "sign_in" => {
+            "Sign in: longhouse auth --url <your-longhouse-url>, then longhouse machine repair --repair-service"
+                .to_string()
+        }
         "inspect_local_health" => "Run: longhouse local-health --json".to_string(),
         "inspect_storage_source" => {
             "Run: longhouse shipping inspect --json and inspect the retained source evidence."
@@ -2163,6 +2263,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
     let mut action_ids = Vec::new();
     for reason in reasons {
         let action_id = match reason.as_str() {
+            "machine_setup_required" => "sign_in",
             "service_stopped"
             | "engine_status_missing"
             | "engine_status_unreadable"
@@ -6486,6 +6587,148 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"engine_status_missing".to_string()));
+    }
+
+    fn write_machine_setup(root: &Path, state: Option<Value>, token: Option<&str>) {
+        let machine = root.join("machine");
+        fs::create_dir_all(&machine).unwrap();
+        if let Some(state) = state {
+            fs::write(machine.join("state.json"), state.to_string()).unwrap();
+        }
+        if let Some(token) = token {
+            fs::write(machine.join("device-token"), token).unwrap();
+        }
+    }
+
+    fn setup_for(root: &Path) -> NativeMachineSetupStatus {
+        collect_native_machine_setup(
+            &root.join("machine").join("state.json"),
+            &root.join("machine").join("device-token"),
+        )
+    }
+
+    #[test]
+    fn never_configured_machine_is_setup_required_not_stale() {
+        // The public installer leaves only the native pair and an install id.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let mut health = native_health_from_parts(&path, false, None, None, None);
+        apply_native_machine_setup(&mut health, setup_for(dir.path()));
+
+        assert_eq!(health.health_state, "setup_required");
+        assert_eq!(health.reasons, vec!["machine_setup_required".to_string()]);
+        assert_eq!(
+            health.headline,
+            "Sign in to connect this machine to Longhouse"
+        );
+        let setup = health.machine_setup.clone().unwrap();
+        assert!(!setup.configured);
+        assert!(!setup.machine_state_present);
+        assert!(!setup.device_token_present);
+
+        let desktop = serde_json::to_value(native_desktop_health_from_parts(
+            health,
+            None,
+            None,
+            None,
+            "2026-09-27T00:00:00Z".to_string(),
+        ))
+        .unwrap();
+        assert_eq!(desktop["health_state"], "setup_required");
+        assert_eq!(desktop["severity"], "yellow");
+        assert_eq!(desktop["suggested_action_ids"], json!(["sign_in"]));
+        assert_eq!(desktop["machine_setup"]["configured"], false);
+        assert!(desktop["suggested_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("longhouse auth --url"));
+    }
+
+    #[test]
+    fn cleared_credentials_are_setup_required_but_keep_retained_data_faults() {
+        // `longhouse auth --clear` nulls runtime_url and removes the token. The
+        // engine that ran before left stale evidence and a stuck upload.
+        let dir = tempfile::tempdir().unwrap();
+        write_machine_setup(
+            dir.path(),
+            Some(json!({"schema_version": 1, "runtime_url": null, "machine_name": "mac"})),
+            None,
+        );
+        let path = dir.path().join("agent").join("engine-status.json");
+        let mut health = native_health_from_parts(
+            &path,
+            true,
+            Some(ENGINE_STALE_SECONDS + 1),
+            Some(json!({"spool_dead_count": 2})),
+            None,
+        );
+        apply_native_machine_setup(&mut health, setup_for(dir.path()));
+
+        assert_eq!(health.health_state, "setup_required");
+        assert_eq!(health.reasons[0], "machine_setup_required");
+        assert!(health.reasons.contains(&"spool_dead_letters".to_string()));
+        assert!(!health.reasons.contains(&"engine_status_stale".to_string()));
+    }
+
+    #[test]
+    fn configured_machine_with_stale_engine_keeps_stale_classification() {
+        let dir = tempfile::tempdir().unwrap();
+        write_machine_setup(
+            dir.path(),
+            Some(json!({"runtime_url": "https://me.longhouse.ai", "machine_name": "mac"})),
+            Some("zdt_example"),
+        );
+        let path = dir.path().join("agent").join("engine-status.json");
+        let mut health = native_health_from_parts(
+            &path,
+            true,
+            Some(ENGINE_STALE_SECONDS + 1),
+            Some(json!({})),
+            None,
+        );
+        apply_native_machine_setup(&mut health, setup_for(dir.path()));
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health.reasons.contains(&"engine_status_stale".to_string()));
+        assert!(!health
+            .reasons
+            .contains(&"machine_setup_required".to_string()));
+        assert!(health.machine_setup.unwrap().configured);
+    }
+
+    #[test]
+    fn configured_machine_with_missing_engine_status_stays_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        write_machine_setup(
+            dir.path(),
+            Some(json!({"runtime_url": "https://me.longhouse.ai", "machine_name": "mac"})),
+            Some("zdt_example"),
+        );
+        let path = dir.path().join("agent").join("engine-status.json");
+        let mut health = native_health_from_parts(&path, false, None, None, None);
+        apply_native_machine_setup(&mut health, setup_for(dir.path()));
+
+        assert_eq!(health.health_state, "broken");
+        assert!(health
+            .reasons
+            .contains(&"engine_status_missing".to_string()));
+    }
+
+    #[test]
+    fn unreadable_machine_state_is_a_fault_not_a_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        fs::create_dir_all(&machine).unwrap();
+        fs::write(machine.join("state.json"), "{not json").unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let mut health = native_health_from_parts(&path, false, None, None, None);
+        apply_native_machine_setup(&mut health, setup_for(dir.path()));
+
+        assert_eq!(health.health_state, "broken");
+        assert!(!health
+            .reasons
+            .contains(&"machine_setup_required".to_string()));
+        assert!(health.machine_setup.unwrap().error.is_some());
     }
 
     #[test]
