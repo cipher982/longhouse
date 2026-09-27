@@ -194,18 +194,23 @@ void main(){int t=v_tile;vec4 cl=u_clip[t];
  vec4 s=cubic(vec2(clamp(lp.x,1.5,TW-1.5)+x0,clamp(lp.y,1.5,TH-1.0)));
  float th=max(s.r,0.0),soot=max(s.b,0.0);
  float T=300.0+1000.0*th; vec4 B=bb(T);
- float topFade=1.0-smoothstep(TH*0.72,TH-0.5,lp.y);
- vec3 col=B.rgb*emitL(s,B)*topFade;
- float a=(1.0-exp(-K_A*soot))*(1.0-smoothstep(0.2,0.8,th))*0.8;
+ // No box: the fire is light on the page. Emission and smoke fade out
+ // softly well inside every edge, so nothing ends on a straight line.
+ float xn=v_uv.x;
+ float fade=(1.0-smoothstep(TH*0.55,TH*0.93,lp.y))*smoothstep(0.02,0.24,xn)*smoothstep(0.98,0.76,xn);
+ vec3 col=B.rgb*emitL(s,B)*fade;
+ float a=(1.0-exp(-K_A*soot))*(1.0-smoothstep(0.2,0.8,th))*0.35*fade;
  col+=vec3(0.020,0.014,0.010)*a;
  vec4 bd=u_bed[t];
- float taper=smoothstep(0.0,5.0,lp.x)*smoothstep(0.0,5.0,TW-lp.x);
- float top=BEDH*(0.7+0.4*vn(lp.x*0.3+bd.z*13.0))*mix(0.5,1.0,taper);
+ // The bed is a low pile on the row's baseline, not a strip: a mound in the
+ // middle of the tile, smaller once it has burnt to ash.
+ float mound=clamp(1.0-pow((xn-0.5)/mix(0.3,0.2,bd.w),2.0),0.0,1.0);
+ float top=BEDH*mix(1.0,0.55,bd.w)*(0.55+0.45*vn(lp.x*0.3+bd.z*13.0))*sqrt(mound);
  vec2 bq=vec2(lp.x*0.2,lp.y*0.3+lp.x*0.035)+bd.z*7.13;
  vec2 rel; vec3 vr=voro(bq,rel);
  float edge=vr.y-vr.x;
  float lump=smoothstep(0.07,0.2,edge)*(1.0-smoothstep(0.5,0.68,vr.x));
- float bm=max(1.0-smoothstep(top-0.6,top,lp.y), lump*(1.0-smoothstep(top+0.2,top+1.0,lp.y)));
+ float bm=max(1.0-smoothstep(top-0.6,top,lp.y), lump*(1.0-smoothstep(top+0.2,top+1.0,lp.y)))*smoothstep(0.0,0.3,mound);
  if(bm>0.0){
    float thb=min(texture(u_s,vec2(x0+clamp(lp.x,0.5,TW-0.5),4.0)/ATLAS).r,1.3);
    float vb=length(texture(u_vel,vec2(x0+clamp(lp.x,0.5,TW-0.5),2.0)/ATLAS).xy);
@@ -225,11 +230,26 @@ void main(){int t=v_tile;vec4 cl=u_clip[t];
    // ash: a burnt-out bed's lumps go pale grey; the gaps stay dark
    vec3 ash=vec3(0.085,0.080,0.074)*(0.45+0.8*up)*(0.75+0.5*vr.z);
    alb=mix(alb,lump*ash+(1.0-lump)*vec3(0.012,0.011,0.010),bd.w);
-   col=mix(col,eb+alb,bm); a=mix(a,1.0,bm);
+   col=mix(col,eb+alb,bm); a=mix(a,mix(1.0,0.75,bd.w),bm);
  }
  col=1.0-exp(-col);
  col=pow(col,vec3(1.0/2.2));
  o=vec4(col,a);}`;
+  // Light spill: a soft warm pool on the row around a lit fire, additive,
+  // centred low on the flame. Intensity comes from the fire (u_glow.rgb).
+  const VS_GLOW = HDR + `
+uniform vec4 u_glowRect[NT]; uniform vec4 u_glow[NT]; uniform vec4 u_clip[NT]; uniform vec2 u_canvas;
+out vec2 v_uv; flat out vec4 v_glow; flat out vec4 v_clip;
+void main(){int t=gl_InstanceID;vec2 k=vec2(float(gl_VertexID&1),float((gl_VertexID>>1)&1));vec4 r=u_glowRect[t];
+ v_uv=k; v_glow=u_glow[t]; v_clip=u_clip[t];
+ gl_Position=(r.z>0.0&&u_glow[t].a>0.0)?vec4((r.xy+k*r.zw)/u_canvas*2.0-1.0,0.0,1.0):vec4(2.0,2.0,2.0,1.0);}`;
+  const FS_GLOW = `#version 300 es
+precision highp float; in vec2 v_uv; flat in vec4 v_glow; flat in vec4 v_clip; out vec4 o;
+void main(){
+ if(gl_FragCoord.x<v_clip.x||gl_FragCoord.y<v_clip.y||gl_FragCoord.x>v_clip.z||gl_FragCoord.y>v_clip.w) discard;
+ vec2 d=(v_uv-vec2(0.5,0.3))*vec2(2.0,1.7);
+ float g=exp(-dot(d,d)*2.6)*(1.0-smoothstep(0.75,1.0,length(d)));
+ o=vec4(v_glow.rgb*g,0.0);}`;
   // flame height probe: one fragment per tile reports the height below which
   // 96% of its luminous emission lies, plus the total
   const FS_MEASURE = HDR + BB_COMMON + EMIT + `
@@ -278,6 +298,8 @@ void main(){
     FS_PKILL,
     VS_COMP,
     FS_COMP,
+    VS_GLOW,
+    FS_GLOW,
     FS_MEASURE,
     VS_SPARK,
     FS_SPARK,

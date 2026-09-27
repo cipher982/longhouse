@@ -27,6 +27,12 @@ const HEAT_TTL_MS = 120_000;
 /** Redraw idle coal beds this often while nothing burns (they cool in wall time). */
 const COOL_REDRAW_MS = 30_000;
 const SPARK_MARGIN_PX = 4;
+/** The drawn tile is this many cell heights tall (aspect TW:TH), bottom on the cell. */
+const TILE_SCALE = 1.2;
+/** Light spill: width in tile widths, height in tile heights, peak additive intensity. */
+const GLOW_W = 2.4;
+const GLOW_H = 0.95;
+const GLOW_MAX = 0.085;
 /** Reduced motion: steps to settle a still frame, and at most this many per frame. */
 const RM_SETTLE_STEPS = 90;
 const RM_STEPS_PER_FRAME = 15;
@@ -134,6 +140,8 @@ export class HearthRenderer {
   private uBed: Float32Array;
   private uRect: Float32Array;
   private uClip: Float32Array;
+  private uGlowRect: Float32Array;
+  private uGlow: Float32Array;
   private measArr: Float32Array;
   private vis: Vis[];
   private tileCell: (Cell | null)[];
@@ -206,6 +214,7 @@ export class HearthRenderer {
     P.pup = this.prog(S.VS_FULL, S.FS_PUPDATE);
     P.pkill = this.prog(S.VS_FULL, S.FS_PKILL);
     P.comp = this.prog(S.VS_COMP, S.FS_COMP);
+    P.glow = this.prog(S.VS_GLOW, S.FS_GLOW);
     P.spark = this.prog(S.VS_SPARK, S.FS_SPARK);
     P.meas = this.prog(S.VS_FULL, S.FS_MEASURE);
     const f16 = () => this.target(this.AW, this.AH, 1, gl.RGBA16F, gl.HALF_FLOAT, gl.LINEAR);
@@ -235,6 +244,8 @@ export class HearthRenderer {
     this.uBed = new Float32Array(capacity * 4);
     this.uRect = new Float32Array(capacity * 4);
     this.uClip = new Float32Array(capacity * 4);
+    this.uGlowRect = new Float32Array(capacity * 4);
+    this.uGlow = new Float32Array(capacity * 4);
     this.measArr = new Float32Array(capacity * 4);
     this.vis = Array.from({ length: capacity }, (_, i) => freshVis(i));
     this.tileCell = Array.from({ length: capacity }, () => null);
@@ -539,9 +550,14 @@ export class HearthRenderer {
   }
 
   /** Place the canvas over the strip the visible cells occupy and compute
-   * each tile's rect and clip in canvas pixels. Returns visible tile count. */
+   * each tile's rect, glow rect and clip in canvas pixels. The tile is taller
+   * and wider than its cell, bottom-aligned on it, so a flame tip fades into
+   * the row instead of meeting a ceiling; the glow reaches wider still.
+   * Returns the visible tile count. */
   private layout(): number {
-    const rects: (DOMRect | null)[] = [];
+    type Box = { l: number; t: number; r: number; b: number };
+    const rects: (Box | null)[] = [];
+    const glows: (Box | null)[] = [];
     const clips: ({ l: number; t: number; r: number; b: number } | null)[] = [];
     let L = Infinity;
     let T = Infinity;
@@ -571,9 +587,16 @@ export class HearthRenderer {
         const o = cell.occluder.getBoundingClientRect();
         if (o.bottom > ct && o.top < r.top) ct = Math.max(ct, o.bottom);
       }
-      const clip = { l: Math.max(cl, r.left - SPARK_MARGIN_PX), t: Math.max(ct, r.top - SPARK_MARGIN_PX), r: Math.min(cr, r.right + SPARK_MARGIN_PX), b: Math.min(cb, r.bottom) };
+      const cx = r.left + r.width / 2;
+      const th = r.height * TILE_SCALE;
+      const tw = (th * TW) / TH;
+      const tile = { l: cx - tw / 2, t: r.bottom - th, r: cx + tw / 2, b: r.bottom };
+      const gw = tw * GLOW_W;
+      const glow = { l: cx - gw / 2, t: r.bottom - th * GLOW_H, r: cx + gw / 2, b: r.bottom + r.height * 0.12 };
+      const clip = { l: Math.max(cl, glow.l), t: Math.max(ct, Math.min(tile.t, glow.t) - SPARK_MARGIN_PX), r: Math.min(cr, glow.r), b: Math.min(cb, glow.b) };
       if (clip.r <= clip.l || clip.b <= clip.t) continue;
-      rects[i] = r;
+      rects[i] = tile;
+      glows[i] = glow;
       clips[i] = clip;
       L = Math.min(L, clip.l);
       T = Math.min(T, clip.t);
@@ -582,6 +605,7 @@ export class HearthRenderer {
     }
     this.uRect.fill(0);
     this.uClip.fill(0);
+    this.uGlowRect.fill(0);
     if (!Number.isFinite(L)) {
       if (this.box.width) {
         this.canvas.style.display = "none";
@@ -609,10 +633,12 @@ export class HearthRenderer {
     let n = 0;
     for (let i = 0; i < this.nt; i++) {
       const r = rects[i];
+      const g = glows[i];
       const c = clips[i];
-      if (!r || !c) continue;
+      if (!r || !g || !c) continue;
       n++;
-      this.uRect.set([(r.left - box.left) * dpr, (bottom - r.bottom) * dpr, r.width * dpr, r.height * dpr], i * 4);
+      this.uRect.set([(r.l - box.left) * dpr, (bottom - r.b) * dpr, (r.r - r.l) * dpr, (r.b - r.t) * dpr], i * 4);
+      this.uGlowRect.set([(g.l - box.left) * dpr, (bottom - g.b) * dpr, (g.r - g.l) * dpr, (g.b - g.t) * dpr], i * 4);
       this.uClip.set([(c.l - box.left) * dpr, (bottom - c.b) * dpr, (c.r - box.left) * dpr, (bottom - c.t) * dpr], i * 4);
     }
     return n;
@@ -645,6 +671,11 @@ export class HearthRenderer {
       this.uSrc.set([0.5, 0.08 + 0.06 * v.hcmd, u, 0.06 * u + 1.2 * v.hcmd], b);
       for (let k = 0; k < SLOT_X.length; k++) this.uSrc.set([SLOT_X[k], 0.06, v.puff[k] * 1.4, v.puff[k] * 0.6], b + (k + 1) * 4);
       this.uBed.set([Ts, Tc, v.seed, ash], i * 4);
+      // Light spill follows the flame (its size, a flicker, a stoke), never idle coals.
+      const lit = Math.min(1, Math.max(0, (v.hcmd - 0.04) / 0.7));
+      const flick = 0.85 + 0.15 * Math.sin(this.simTime * 9.1 + v.seed * 17) * Math.sin(this.simTime * 5.3 + v.seed * 3);
+      const I = GLOW_MAX * lit * flick + Math.min(0.03, v.gust * 0.0006);
+      this.uGlow.set([I, I * 0.5, I * 0.16, I > 0.002 ? 1 : 0], i * 4);
     }
   }
 
@@ -859,6 +890,9 @@ export class HearthRenderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     const cv = [this.canvas.width, this.canvas.height];
+    this.run(this.P.glow, null, { u_glowRect: { v4: this.uGlowRect }, u_glow: { v4: this.uGlow }, u_clip: { v4: this.uClip }, u_canvas: cv }, () =>
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nt),
+    );
     this.run(
       this.P.comp,
       null,

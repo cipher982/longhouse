@@ -195,31 +195,53 @@ export function coalColor(kelvin: number): string {
   return `rgb(${c.join(",")})`;
 }
 
-/** Static fallback: a coal bed coloured by its cooled temperature, with a
- * flame for a working session and a low one for a session waiting on you. */
+/** Static fallback, drawn like the live fire: no box, just a low coal pile
+ * on the baseline coloured by its cooled temperature, a flame for a working
+ * session (with a faint warm spill) and a low one while it waits on you.
+ * Ended is a small grey smudge of ash. */
 function HearthGlyph({ snapshot }: { snapshot: HearthSnapshot }) {
-  const gradId = useId();
+  const uid = useId();
+  const flameId = `${uid}-flame`;
+  const spillId = `${uid}-spill`;
   const bed = initialBed(snapshot, Date.now());
-  const ended = snapshot.mode === "ended";
-  const coal = ended ? "rgb(104,98,91)" : coalColor(bed.surface);
-  const deep = ended ? "rgb(78,73,68)" : coalColor(Math.max(bed.surface, bed.core - 120));
-  const flame = snapshot.mode === "working" ? "M13 7 C17 13 20 18 19 23 C18.5 27.5 16 30 13 30 C10 30 7.5 27.5 7 23 C6.5 18.5 10 15 11 11 C11.8 14 12.8 15 13.6 16 C14.2 13 13.8 10 13 7 Z" : snapshot.mode === "waiting" ? "M13 17 C15.6 20 17 22.5 16.6 25.5 C16.2 28.4 14.8 30 13 30 C11.2 30 9.8 28.4 9.4 25.5 C9.2 23.4 10.6 21.6 11.6 20.2 C12.2 21.4 12.8 22 13.3 22.4 C13.7 20.8 13.6 19 13 17 Z" : null;
+  const mode = snapshot.mode;
+  const flame =
+    mode === "working"
+      ? "M13 7 C17 13 20 18 19 23 C18.5 27.5 16 30 13 30 C10 30 7.5 27.5 7 23 C6.5 18.5 10 15 11 11 C11.8 14 12.8 15 13.6 16 C14.2 13 13.8 10 13 7 Z"
+      : mode === "waiting"
+        ? "M13 17 C15.6 20 17 22.5 16.6 25.5 C16.2 28.4 14.8 30 13 30 C11.2 30 9.8 28.4 9.4 25.5 C9.2 23.4 10.6 21.6 11.6 20.2 C12.2 21.4 12.8 22 13.3 22.4 C13.7 20.8 13.6 19 13 17 Z"
+        : null;
+  if (mode === "ended") {
+    return (
+      <svg className="hearth-glyph" viewBox="0 0 26 36" aria-hidden="true" focusable="false">
+        <ellipse cx="11.5" cy="33.6" rx="3.6" ry="1.3" fill="rgb(96,91,85)" opacity="0.8" />
+        <ellipse cx="15" cy="33.9" rx="2.6" ry="1" fill="rgb(120,114,107)" opacity="0.7" />
+      </svg>
+    );
+  }
+  const coal = coalColor(bed.surface);
+  const crack = coalColor(Math.max(bed.surface, bed.core));
+  const crackOpacity = Math.min(1, Math.max(0.25, (bed.core - 450) / 500));
   return (
     <svg className="hearth-glyph" viewBox="0 0 26 36" aria-hidden="true" focusable="false">
       <defs>
-        <linearGradient id={gradId} x1="0" y1="1" x2="0" y2="0">
+        <linearGradient id={flameId} x1="0" y1="1" x2="0" y2="0">
           <stop offset="0" stopColor="#fff1c4" />
           <stop offset="0.35" stopColor="#ffb44a" />
           <stop offset="0.75" stopColor="#f0621c" />
-          <stop offset="1" stopColor="#a8260e" stopOpacity="0.6" />
+          <stop offset="1" stopColor="#a8260e" stopOpacity="0" />
         </linearGradient>
+        <radialGradient id={spillId} cx="0.5" cy="0.7" r="0.5">
+          <stop offset="0" stopColor="#f08a24" stopOpacity="0.22" />
+          <stop offset="1" stopColor="#f08a24" stopOpacity="0" />
+        </radialGradient>
       </defs>
-      {flame ? <path d={flame} fill={`url(#${gradId})`} /> : null}
-      <ellipse cx="8" cy="32" rx="5.2" ry="2.6" fill={deep} />
-      <ellipse cx="18" cy="32.2" rx="5" ry="2.5" fill={deep} />
-      <ellipse cx="13" cy="31" rx="5.6" ry="2.9" fill={coal} />
-      <ellipse cx="5" cy="31.2" rx="2.6" ry="1.8" fill={coal} />
-      <ellipse cx="21" cy="31.4" rx="2.6" ry="1.8" fill={coal} />
+      {flame ? <ellipse cx="13" cy="26" rx="13" ry="10" fill={`url(#${spillId})`} /> : null}
+      {flame ? <path d={flame} fill={`url(#${flameId})`} /> : null}
+      <ellipse cx="9.6" cy="32.8" rx="3.2" ry="1.7" fill={coal} />
+      <ellipse cx="16.2" cy="32.9" rx="3" ry="1.6" fill={coal} />
+      <ellipse cx="13" cy="31.6" rx="3.4" ry="2" fill={coal} />
+      <path d="M10 33.2 L12.4 32.4 L13.4 33 L15.8 32.2" stroke={crack} strokeWidth="0.6" strokeLinecap="round" fill="none" opacity={crackOpacity} />
     </svg>
   );
 }
