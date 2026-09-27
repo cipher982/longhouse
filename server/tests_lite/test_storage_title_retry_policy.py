@@ -445,6 +445,76 @@ def _build_engine(root: Path):
     return engine
 
 
+def test_complete_storage_title_precedence_ai_wins_over_provider(tmp_path):
+    """The Longhouse AI title is the single title authority; a provider name is a fallback only."""
+    engine = _build_engine(tmp_path)
+    session_id = uuid4()
+    _insert_session(engine, session_id=session_id, first_message="fix the refresh token bug")
+    store = CatalogStore(engine)
+    now = datetime.now(UTC)
+
+    # An empty anchor takes the provider's name as a fallback.
+    filled = store.complete_storage_title(session_id=session_id, title="Claude's own name", completed_at=now, source="provider")
+    assert filled["changed"] is True
+    row = _read_session(engine, session_id)
+    assert (row["anchor_title"], row["anchor_title_source"]) == ("Claude's own name", "provider")
+
+    # A later provider name never rewrites the fallback anchor.
+    second_provider = store.complete_storage_title(session_id=session_id, title="Renamed by provider", completed_at=now, source="provider")
+    assert second_provider["changed"] is False
+    row = _read_session(engine, session_id)
+    assert row["anchor_title"] == "Claude's own name"
+
+    # The AI title promotes the provider fallback -- the single title authority.
+    promoted = store.complete_storage_title(session_id=session_id, title="Real AI title", completed_at=now, source="ai")
+    assert promoted["changed"] is True
+    row = _read_session(engine, session_id)
+    assert (row["anchor_title"], row["anchor_title_source"]) == ("Real AI title", "ai")
+
+    # An AI anchor is frozen: neither a later provider name nor a later AI
+    # guess rewrites it.
+    later_provider = store.complete_storage_title(session_id=session_id, title="Late provider rename", completed_at=now, source="provider")
+    later_ai = store.complete_storage_title(session_id=session_id, title="Late AI guess", completed_at=now, source="ai")
+    assert later_provider["changed"] is False
+    assert later_ai["changed"] is False
+    row = _read_session(engine, session_id)
+    assert (row["anchor_title"], row["anchor_title_source"]) == ("Real AI title", "ai")
+
+
+def test_provider_anchored_session_remains_a_title_obligation_until_ai_wins(tmp_path):
+    """The reconciler must keep pulling a provider-only anchor until the AI title lands."""
+    engine = _build_engine(tmp_path)
+    provider_anchored_id = uuid4()
+    ai_anchored_id = uuid4()
+    _insert_session(engine, session_id=provider_anchored_id, first_message="provider named this one")
+    _insert_session(engine, session_id=ai_anchored_id, first_message="ai already named this one")
+    store = CatalogStore(engine)
+    now = datetime.now(UTC)
+    store.complete_storage_title(session_id=provider_anchored_id, title="Provider name", completed_at=now, source="provider")
+    store.complete_storage_title(session_id=ai_anchored_id, title="AI name", completed_at=now, source="ai")
+
+    candidates = _candidate_ids(engine)
+    assert str(provider_anchored_id) in candidates, "a provider-only anchor is still title debt"
+    assert str(ai_anchored_id) not in candidates, "an AI anchor is done and must not be regenerated"
+
+    health = store.read_storage_title_dependency_health()
+    assert health["pending_sessions"] == 1
+
+    # Once the AI title lands, the row drops out of the obligation set.
+    store.complete_storage_title(session_id=provider_anchored_id, title="AI title now", completed_at=now, source="ai")
+    assert str(provider_anchored_id) not in _candidate_ids(engine)
+
+
+def _read_session(engine, session_id) -> dict:
+    with engine.begin() as connection:
+        row = (
+            connection.execute(select(StorageSession.__table__).where(StorageSession.__table__.c.session_id == str(session_id)))
+            .mappings()
+            .one()
+        )
+    return dict(row)
+
+
 def test_row_specific_title_failure_is_bounded_then_persists_terminal(tmp_path):
     engine = _build_engine(tmp_path)
     session_id = uuid4()

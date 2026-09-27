@@ -240,8 +240,8 @@ def test_turn_end_never_crosses_a_user_boundary_or_leaves_its_page():
 
 
 @pytest.mark.asyncio
-async def test_provider_title_promotes_an_llm_title_once_and_applies_on_replay(monkeypatch):
-    """The provider's name wins the race with the LLM title however the batches land."""
+async def test_ai_title_promotes_a_provider_fallback_once_and_then_is_never_rewritten(monkeypatch):
+    """The Longhouse AI title is the single title authority; a provider name is only a fallback."""
     from zerg.services import storage_session_titles
 
     scheduled: list[dict] = []
@@ -254,18 +254,11 @@ async def test_provider_title_promotes_an_llm_title_once_and_applies_on_replay(m
         payload["session_id"] = str(session_id)
         response = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
         assert response.status_code == 200, response.text
-        assert len(scheduled) == 1, "the prompt-only batch schedules the LLM title"
+        assert len(scheduled) == 1, "the prompt-only batch schedules the AI title"
 
-        # The LLM wins the race and freezes the anchor.
-        await stack.catalog.call(
-            "storage.session.title.complete.v2",
-            {"session_id": str(session_id), "title": "LLM guess", "completed_at": datetime.now(UTC).isoformat(), "source": "ai"},
-        )
-        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
-        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("LLM guess", "ai")
-
-        # The same envelope replayed with the provider's title (a pre-facts
-        # engine catching up) promotes the anchor once.
+        # The provider names the session first (a pre-facts engine catching
+        # up). It fills the empty anchor as an immediate fallback, but it does
+        # not block or preempt the AI title generation already scheduled above.
         payload["facts"] = [
             {"kind": "session.title", "at": "1970-01-01T00:00:00+00:00", "source_position": 0, "payload": {"title": "Claude's own name"}}
         ]
@@ -274,17 +267,26 @@ async def test_provider_title_promotes_an_llm_title_once_and_applies_on_replay(m
         read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
         assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("Claude's own name", "provider")
 
-        # A provider anchor is frozen against the LLM and against later names.
+        # The AI title lands and promotes the provider fallback -- the single
+        # title authority wins the anchor once it is ready.
         await stack.catalog.call(
             "storage.session.title.complete.v2",
-            {"session_id": str(session_id), "title": "Late LLM guess", "completed_at": datetime.now(UTC).isoformat(), "source": "ai"},
+            {"session_id": str(session_id), "title": "LLM guess", "completed_at": datetime.now(UTC).isoformat(), "source": "ai"},
         )
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("LLM guess", "ai")
+
+        # An AI anchor is frozen against a later provider rename and a later AI guess.
         await stack.catalog.call(
             "storage.session.title.complete.v2",
             {"session_id": str(session_id), "title": "Renamed later", "completed_at": datetime.now(UTC).isoformat(), "source": "provider"},
         )
+        await stack.catalog.call(
+            "storage.session.title.complete.v2",
+            {"session_id": str(session_id), "title": "Late LLM guess", "completed_at": datetime.now(UTC).isoformat(), "source": "ai"},
+        )
         read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
-        assert read["session"]["anchor_title"] == "Claude's own name"
+        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("LLM guess", "ai")
 
 
 def _event(event_id: str, role: str, at: datetime) -> dict[str, object]:
@@ -398,8 +400,8 @@ def test_a_stopped_codex_turn_is_served_as_aborted_not_as_work_done():
 
 
 @pytest.mark.asyncio
-async def test_provider_title_freezes_the_anchor_and_skips_the_llm_title(monkeypatch):
-    """Claude names its own session; Longhouse keeps that name instead of buying one."""
+async def test_provider_title_is_only_a_fallback_and_never_blocks_the_ai_title(monkeypatch):
+    """Claude names its own session as an immediate fallback; Longhouse still buys a real AI title."""
     from zerg.services import storage_session_titles
 
     scheduled: list[dict] = []
@@ -425,9 +427,10 @@ async def test_provider_title_freezes_the_anchor_and_skips_the_llm_title(monkeyp
         assert read["found"] is True
         assert read["session"]["anchor_title"] == "G55 app tablet UI beautification"
         assert read["session"]["anchor_title_source"] == "provider"
-        assert scheduled == [], "no LLM title is scheduled when the provider already named the session"
+        assert len(scheduled) == 1, "the AI title is still scheduled even though the provider already named the session"
 
-        # A later provider title never rewrites the frozen anchor.
+        # A later provider title never rewrites the frozen fallback anchor
+        # (the first provider name wins the fallback slot).
         payload["facts"] = [
             {
                 "kind": "session.title",
@@ -440,6 +443,15 @@ async def test_provider_title_freezes_the_anchor_and_skips_the_llm_title(monkeyp
         assert again.status_code == 200, again.text
         read_again = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
         assert read_again["session"]["anchor_title"] == "G55 app tablet UI beautification"
+        assert read_again["session"]["anchor_title_source"] == "provider"
+
+        # The AI title, once generated, promotes over the provider fallback.
+        await stack.catalog.call(
+            "storage.session.title.complete.v2",
+            {"session_id": str(session_id), "title": "Real AI title", "completed_at": datetime.now(UTC).isoformat(), "source": "ai"},
+        )
+        read_promoted = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert (read_promoted["session"]["anchor_title"], read_promoted["session"]["anchor_title_source"]) == ("Real AI title", "ai")
 
 
 def test_title_provenance_names_the_provider_when_it_wrote_the_anchor():

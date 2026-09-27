@@ -773,10 +773,11 @@ def _parse_provider_facts(value: object, *, range_start: int, range_end: int, se
 
 
 async def _apply_provider_title(catalogd: Any, session_id: UUID, title: str) -> None:
-    """Freeze or promote the provider's own session name.
+    """Fill the anchor with the provider's own session name, as a fallback only.
 
-    The store decides: an empty anchor takes the name, a Longhouse LLM title
-    is promoted to it once, and a provider anchor is never rewritten. This
+    The store decides: an empty anchor takes the name, a later provider name
+    never rewrites an existing anchor, and a Longhouse AI title (the single
+    title authority) promotes over a provider anchor once it lands. This
     runs on every path that stores a title fact, including exact replays,
     so the outcome does not depend on which batch the title arrived in.
     """
@@ -1572,11 +1573,13 @@ async def _commit_admitted_envelope(
         )
         provider_title = _first_provider_title(parsed["provider_facts"])
         if provider_title is not None:
-            # The provider named this session. Whether that freezes an empty
-            # anchor, promotes a Longhouse LLM title that won the race, or is
-            # a no-op against an earlier provider name is the store's call.
+            # The provider named this session. That only ever fills an empty
+            # anchor as an immediate fallback (or is a no-op against an
+            # earlier provider name) -- it never blocks or preempts the
+            # Longhouse AI title below, which is the single title authority
+            # and promotes over a provider fallback once it lands.
             await _apply_provider_title(catalogd, spec.session_id, provider_title)
-        elif (
+        if (
             committed.get("title_generation_required") is True
             and render_manifest is not None
             and str(render_manifest.get("first_user_message_preview") or "").strip()

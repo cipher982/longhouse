@@ -614,7 +614,12 @@ def _storage_title_obligation_clause(table):
     return and_(
         table.c.user_messages > 0,
         or_(table.c.provider != "claude", table.c.semantic_projection_version >= 1),
-        or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
+        # A provider-native name is only a fallback: it never blocks the
+        # Longhouse AI title, the single title authority. An unanchored row
+        # and a provider-sourced anchor both remain obligations; only an
+        # anchor the AI itself wrote (or a legacy anchor with no recorded
+        # source, already served as "ai") is done.
+        or_(table.c.anchor_title.is_(None), table.c.anchor_title == "", table.c.anchor_title_source == "provider"),
         table.c.first_user_message_preview.is_not(None),
         func.length(func.trim(table.c.first_user_message_preview)) > 0,
         ~table.c.first_user_message_preview.contains(RESUME_SEED_TOKEN, autoescape=True),
@@ -11290,11 +11295,13 @@ class CatalogStore:
             )
             if existing is None:
                 return {"changed": False, "title": title, "missing": True, "commit_seq": str(_current_commit_seq(connection))}
-            # An anchor is frozen once, with one exception: the provider's own
-            # name promotes a Longhouse LLM title that won the race to it. A
-            # provider anchor is never rewritten, by the LLM or a later name.
+            # An anchor is frozen once, with one exception: the Longhouse AI
+            # title promotes a provider-native name that won the race to it.
+            # The AI title is the single title authority -- once it lands it
+            # is never rewritten, by the provider or a later AI guess. A
+            # provider name is only ever a fallback for the anchor slot.
             anchored = bool(existing["anchor_title"])
-            promotion = anchored and source == "provider" and existing["anchor_title_source"] != "provider"
+            promotion = anchored and source == "ai" and existing["anchor_title_source"] == "provider"
             if anchored and not promotion:
                 return {
                     "changed": False,
@@ -11305,9 +11312,7 @@ class CatalogStore:
                 return {"changed": False, "title": title, "ineligible": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_seq = _advance_commit_seq(connection, completed_at)
             anchor_guard = (
-                or_(table.c.anchor_title_source.is_(None), table.c.anchor_title_source != "provider")
-                if promotion
-                else or_(table.c.anchor_title.is_(None), table.c.anchor_title == "")
+                table.c.anchor_title_source == "provider" if promotion else or_(table.c.anchor_title.is_(None), table.c.anchor_title == "")
             )
             changed = connection.execute(
                 update(table)
