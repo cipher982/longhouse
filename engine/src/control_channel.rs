@@ -1360,6 +1360,7 @@ async fn execute_command(
                 fork_thread_id: None,
                 machine_name: config.machine_name.clone(),
                 local_db_path,
+                transcript_wake_socket: None,
             })
             .await
             .map_err(|err| CommandError {
@@ -2590,6 +2591,7 @@ async fn execute_turn_start(
                 fork_thread_id: fork_provider_thread_id,
                 machine_name: config.machine_name.clone(),
                 local_db_path,
+                transcript_wake_socket: None,
             })
             .await
             .map(|summary| {

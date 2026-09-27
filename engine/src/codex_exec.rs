@@ -332,6 +332,10 @@ pub struct CodexExecRunConfig {
     pub fork_thread_id: Option<String>,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
+    /// Where the completion wake goes. `None` is the socket the daemon
+    /// listens on (`$LONGHOUSE_HOME/agent/transcript-wake.sock`); tests pass a
+    /// private path so a wake cannot reach another test's listener.
+    pub transcript_wake_socket: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -352,6 +356,7 @@ struct CodexExecRuntimeSink {
     client_request_id: Option<String>,
     machine_name: String,
     local_db_path: Option<PathBuf>,
+    transcript_wake_socket: Option<PathBuf>,
     event_tx: mpsc::Sender<Vec<Value>>,
     critical_event_tx: mpsc::Sender<Vec<Value>>,
     queued_events: Arc<AtomicUsize>,
@@ -508,6 +513,7 @@ async fn spawn_initialized_codex_worker(
         fork_thread_id: None,
         machine_name: String::new(),
         local_db_path: None,
+        transcript_wake_socket: None,
     };
     let args = codex_exec_args(&config);
     let argv = std::iter::once(OsString::from(codex_bin))
@@ -684,6 +690,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         client_request_id: config.client_request_id.clone(),
         machine_name: config.machine_name.clone(),
         local_db_path: config.local_db_path.clone(),
+        transcript_wake_socket: config.transcript_wake_socket.clone(),
         event_tx,
         critical_event_tx,
         queued_events: queued_events.clone(),
@@ -1596,6 +1603,16 @@ impl CodexExecRuntimeSink {
         .await;
     }
 
+    /// The socket the daemon listens on. It is derived from the Longhouse
+    /// home, not from `local_db_path`: a `--db` outside `$LONGHOUSE_HOME/agent`
+    /// (simlab, scratch harnesses) put every wake next to a socket nobody
+    /// listened on, so durable ingest waited out the periodic scan instead.
+    fn transcript_wake_socket_path(&self) -> Option<PathBuf> {
+        self.transcript_wake_socket
+            .clone()
+            .or_else(|| crate::config::get_agent_transcript_wake_socket_path().ok())
+    }
+
     #[cfg(unix)]
     async fn wake_transcript_shipper(
         &self,
@@ -1603,13 +1620,7 @@ impl CodexExecRuntimeSink {
         provider_turn_id: &str,
         wake_reason: &str,
     ) {
-        let socket_path = self
-            .local_db_path
-            .as_deref()
-            .and_then(std::path::Path::parent)
-            .map(|parent| parent.join("transcript-wake.sock"))
-            .or_else(|| crate::config::get_agent_transcript_wake_socket_path().ok());
-        let Some(socket_path) = socket_path else {
+        let Some(socket_path) = self.transcript_wake_socket_path() else {
             eprintln!(
                 "[codex-exec] latency stage=durable_wake_miss session={} run={} reason=socket_unresolved",
                 self.session_id, self.run_id
@@ -2170,18 +2181,19 @@ mod tests {
             resume_thread_id: None,
             fork_thread_id: None,
             machine_name: "cinder".to_string(),
-            // Point the sink at a private (nonexistent) path rather than
-            // leaving it to fall back on the process-global
+            local_db_path: None,
+            // Point the wake at a private (nonexistent) socket rather than
+            // leaving it to the process-global
             // `$LONGHOUSE_HOME/agent/transcript-wake.sock`. That fallback made
             // a full-turn test here deliver its completion wake into whatever
             // listener another module's test had bound there.
-            local_db_path: Some(
+            transcript_wake_socket: Some(
                 std::env::temp_dir()
                     .join(format!(
                         "longhouse-codex-exec-test-{}",
                         uuid::Uuid::new_v4()
                     ))
-                    .join("longhouse-shipper.db"),
+                    .join("transcript-wake.sock"),
             ),
         }
     }
@@ -2279,7 +2291,7 @@ for line in sys.stdin:
         assert_ne!(unsafe { libc::kill(child_pid, 0) }, 0);
     }
 
-    fn runtime_sink(local_db_path: Option<PathBuf>) -> CodexExecRuntimeSink {
+    fn runtime_sink(transcript_wake_socket: Option<PathBuf>) -> CodexExecRuntimeSink {
         let config = config();
         CodexExecRuntimeSink {
             session_id: config.session_id,
@@ -2288,7 +2300,8 @@ for line in sys.stdin:
             turn_id: config.turn_id,
             client_request_id: config.client_request_id,
             machine_name: config.machine_name,
-            local_db_path,
+            local_db_path: None,
+            transcript_wake_socket,
             event_tx: mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY).0,
             critical_event_tx: mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY).0,
             queued_events: Arc::new(AtomicUsize::new(0)),
@@ -2318,8 +2331,29 @@ for line in sys.stdin:
         assert_eq!(payload["file_len_hint"], 321);
     }
 
+    #[test]
+    fn completion_wake_targets_the_daemon_socket_not_the_db_directory() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let mut sink = runtime_sink(None);
+        // `--db` outside the agent dir, as simlab and scratch harnesses run it.
+        sink.local_db_path = Some(elsewhere.path().join("longhouse-shipper.db"));
+        let resolved = temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(home.path().display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None),
+            ],
+            || sink.transcript_wake_socket_path(),
+        );
+        assert_eq!(
+            resolved,
+            Some(home.path().join("agent").join("transcript-wake.sock"))
+        );
+    }
+
     #[tokio::test]
-    async fn completion_wake_uses_agent_socket_next_to_local_db() {
+    async fn completion_wake_reaches_the_resolved_socket() {
         let temp = tempfile::tempdir().unwrap();
         let agent_dir = temp.path().join("agent");
         fs::create_dir_all(&agent_dir).unwrap();
@@ -2327,7 +2361,7 @@ for line in sys.stdin:
         let listener = UnixListener::bind(&socket_path).unwrap();
         let rollout = temp.path().join("rollout.jsonl");
         fs::write(&rollout, b"provider evidence").unwrap();
-        let sink = runtime_sink(Some(agent_dir.join("longhouse-shipper.db")));
+        let sink = runtime_sink(Some(socket_path.clone()));
 
         sink.wake_transcript_shipper(
             rollout.to_str().unwrap(),
