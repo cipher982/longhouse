@@ -1116,7 +1116,7 @@ struct LonghouseAPI: Sendable {
         return .structured(status: statusCode, errorCode: code, message: message)
     }
 
-    /// An explicit 4xx response is a known rejection, not an ambiguous delivery outcome.
+    /// A plain session-input 400 is a known rejection, not an ambiguous delivery outcome.
     static func parseSessionInputError(statusCode: Int, data: Data) -> LonghouseAPIError? {
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         if let object,
@@ -1124,9 +1124,7 @@ struct LonghouseAPI: Sendable {
             return structured
         }
         switch statusCode {
-        case 401, 408, 409, 429:
-            return nil
-        case 400..<500:
+        case 400:
             break
         default:
             return nil

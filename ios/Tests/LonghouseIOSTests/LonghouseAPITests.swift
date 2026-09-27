@@ -244,7 +244,7 @@ struct LonghouseAPITests {
     @Test
     func sessionInputErrorsDistinguishRejectionsFromUnknownOutcomes() throws {
         let rejected = try #require("""
-        {"detail": "unsupported attachment type: application/octet-stream"}
+        {"detail": "unsupported attachment type: None"}
         """.data(using: .utf8))
         guard case let .httpRejected(status, message)? = LonghouseAPI.parseSessionInputError(
             statusCode: 400,
@@ -254,7 +254,12 @@ struct LonghouseAPITests {
             return
         }
         #expect(status == 400)
-        #expect(message == "unsupported attachment type: application/octet-stream")
+        #expect(message == "unsupported attachment type: None")
+
+        guard case nil = LonghouseAPI.parseSessionInputError(statusCode: 404, data: rejected) else {
+            Issue.record("plain non-400 4xx replies retain their existing classification")
+            return
+        }
 
         let turnEnded = try #require("""
         {"detail": {"error_code": "turn_ended", "message": "Active turn already ended."}}

@@ -838,7 +838,7 @@ struct SessionViewModelTests {
     func rejectedAttachmentSendIsTerminalAndKeepsTheServerReason() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
-        let serverReason = "unsupported attachment type: application/octet-stream"
+        let serverReason = "unsupported attachment type: None"
         await api.setSendSteps([.httpRejected(status: 400, message: serverReason)])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
