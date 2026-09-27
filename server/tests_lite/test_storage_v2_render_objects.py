@@ -295,6 +295,61 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
     assert parsed.records[1].parent_uuid == "parent-event"
 
 
+def test_storage_wire_strips_claude_channel_control_envelope_from_user_text():
+    session_id = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    text = "Please inspect the changed brake hose."
+    wrapped = f'<channel source="longhouse-channel" injected_by="longhouse">\n{text}\n</channel>'
+    raw = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=session_id,
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+        range_kind="record_ordinal",
+        range_start=0,
+        range_end=1,
+        records=(
+            RawRecord(
+                source_position=0,
+                data=json.dumps({"type": "user", "message": {"role": "user", "content": wrapped}}).encode(),
+            ),
+        ),
+    )
+
+    parsed = _parse_render_spec(
+        {
+            "generation_id": "018f0c3a-7b2d-7f10-8a11-423456789abc",
+            "parser_revision": "engine-parser-v2",
+            "ordering_revision": "semantic-order-v2",
+            "records": [
+                {
+                    "event_id": "channel-echo",
+                    "order_time_us": 1,
+                    "source_position": 0,
+                    "event_subordinal": 0,
+                    "role": "user",
+                    "content_text": wrapped,
+                    "tool_name": None,
+                    "tool_input_json": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": None,
+                    "branch_kind": None,
+                    "raw_record_ordinal": 0,
+                }
+            ],
+        },
+        raw_spec=raw,
+        source_envelope_id="a" * 64,
+    )
+
+    assert parsed is not None
+    assert parsed.records[0].role == "user"
+    assert parsed.records[0].content_text == text
+    assert b"longhouse-channel" in raw.records[0].data
+
+
 def test_storage_wire_uses_complete_raw_window_for_command_before_caveat():
     raw = RawObjectSpec(
         tenant_id="tenant-a",

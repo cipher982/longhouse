@@ -185,6 +185,43 @@ final class SessionChatUITests: XCTestCase {
         add(frame)
     }
 
+    func testHelmSteerReplacesOptimisticRowWithOneCleanDurableMessage() {
+        let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
+        let composer = app.textFields["session-chat-composer"]
+        let sendButton = app.buttons["session-chat-send"]
+        let message = "Keep the current diagnostics and inspect the changed hose."
+
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
+        XCTAssertEqual(sendButton.label, "Send update mid-turn")
+        composer.tap()
+        composer.typeText(message)
+        sendButton.tap()
+
+        let optimisticMessage = app.staticTexts[message]
+        XCTAssertTrue(optimisticMessage.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sending…"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
+        let optimisticShot = XCTAttachment(screenshot: app.screenshot())
+        optimisticShot.name = "helm-send-optimistic"
+        optimisticShot.lifetime = .keepAlways
+        add(optimisticShot)
+
+        let longhouseOrigin = app.staticTexts["Longhouse"]
+        XCTAssertTrue(longhouseOrigin.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
+        XCTAssertFalse(app.staticTexts["Sending…"].exists)
+        XCTAssertFalse(
+            app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "<channel")).firstMatch.exists
+        )
+
+        let durableShot = XCTAttachment(screenshot: app.screenshot())
+        durableShot.name = "helm-send-durable"
+        durableShot.lifetime = .keepAlways
+        add(durableShot)
+    }
+
+
     /// The provider's turn accounting renders as a footer inside the reply row.
     /// The fixture stamps every assistant reply with a 2m 9s turn, the way
     /// Claude writes `turn_duration` after each interactive turn.
