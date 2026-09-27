@@ -266,6 +266,9 @@ export function getToolIntentLabel(interaction: ToolInteraction): string | null 
 export function isActivityEligible(interaction: ToolInteraction): boolean {
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
   if (!interaction.resultEvent) return false;
+  // A live preview row stays standalone until its durable event replaces it,
+  // so the tail stays recognizable as live (see isLivePreviewTimelineItem).
+  if (isLivePreviewEvent(interaction.callEvent)) return false;
   if (isToolInteractionDropped(interaction) || isToolInteractionRunning(interaction)) return false;
   if (isToolInteractionFailed(interaction)) return false;
   const identity = normalizedInteractionIdentity(interaction);
@@ -626,14 +629,14 @@ export function projectionItemsWithTranscriptPreview(
 /** A row built from the live transcript preview rather than a durable event.
  *  Durable ids are catalog strings or positive integers; the preview's
  *  synthetic events above carry a non-positive number. */
-export function isLivePreviewTimelineItem(item: TimelineItem): boolean {
-  const event =
-    item.kind === "message"
-      ? item.event
-      : item.kind === "tool"
-        ? item.interaction.callEvent
-        : null;
+function isLivePreviewEvent(event: AgentEvent | null | undefined): boolean {
   return typeof event?.id === "number" && event.id <= 0;
+}
+
+export function isLivePreviewTimelineItem(item: TimelineItem): boolean {
+  if (item.kind === "message") return isLivePreviewEvent(item.event);
+  if (item.kind === "tool") return isLivePreviewEvent(item.interaction.callEvent);
+  return false;
 }
 
 export function isToolInteractionDropped(interaction: ToolInteraction): boolean {

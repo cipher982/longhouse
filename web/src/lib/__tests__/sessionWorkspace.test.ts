@@ -5,6 +5,7 @@ import {
   buildTimelineModel,
   getSessionInteractionCapabilities,
   getTimelineMessagePreview,
+  isLivePreviewTimelineItem,
   isToolInteractionDropped,
   projectionItemsWithTranscriptPreview,
 } from "../sessionWorkspace";
@@ -283,6 +284,38 @@ describe("buildTimelineModel", () => {
     expect(model.activityGroups[0]?.interactions.map((interaction) => interaction.toolName)).toEqual(["Read", "Grep"]);
     expect(model.items).not.toEqual(expect.arrayContaining([{ kind: "message", event: reasoningEvent }]));
     expect(model.eventIdToSelectionKey.get(reasoningEvent.id)).toBe("reasoning:44");
+  });
+
+  it("keeps a completed live preview tool out of the activity group", () => {
+    // F6 review: grouping the preview with a durable tool hid the live tail,
+    // so a delivered send rendered under the reply it was waiting on.
+    const pair = (id: number, callId: string, name: string, stamp: string): AgentEvent[] => [
+      {
+        id, role: "assistant", content_text: null, tool_name: name,
+        tool_input_json: { command: "ls" }, tool_output_text: null,
+        tool_call_id: callId, tool_call_state: "completed", timestamp: stamp, in_active_context: true,
+      },
+      {
+        id: id - 1, role: "tool", content_text: null, tool_name: name, tool_input_json: null,
+        tool_output_text: "ok", tool_call_id: callId, timestamp: stamp, in_active_context: true,
+      },
+    ];
+    const durable = pair(10, "durable-1", "exec", "2026-03-22T21:00:00Z").map((event, index) => ({
+      ...event,
+      id: 10 + index,
+    }));
+    const preview = pair(-4, "live-1", "exec", "2026-03-22T21:01:00Z");
+    const model = buildTimelineModel(
+      [...durable, ...preview].map((event) => ({
+        kind: "event" as const,
+        session_id: "session-codex",
+        timestamp: event.timestamp,
+        event,
+      })),
+    );
+    const last = model.items.at(-1);
+    expect(last?.kind).toBe("tool");
+    expect(last && isLivePreviewTimelineItem(last)).toBe(true);
   });
 });
 
