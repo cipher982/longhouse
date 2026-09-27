@@ -133,6 +133,7 @@ fn lock_claims() -> Result<std::fs::File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&path)
         .with_context(|| format!("opening the source claim lock {}", path.display()))?;
     #[cfg(unix)]
