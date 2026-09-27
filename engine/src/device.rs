@@ -1031,16 +1031,20 @@ pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow:
 
 fn collect_native_machine_setup(state_path: &Path, token_path: &Path) -> NativeMachineSetupStatus {
     let state = collect_native_machine_state(state_path);
-    let device_token_present = std::fs::read_to_string(token_path)
-        .map(|token| !token.trim().is_empty())
-        .unwrap_or(false);
+    // Only an absent token is "not signed in". A token that exists but cannot
+    // be read is a fault on a configured machine, not a first run.
+    let (device_token_present, token_error) = match std::fs::read_to_string(token_path) {
+        Ok(token) => (!token.trim().is_empty(), None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (false, None),
+        Err(err) => (false, Some(format!("reading device token: {err}"))),
+    };
     NativeMachineSetupStatus {
         configured: state.configured && device_token_present,
         machine_state_present: state.exists,
         runtime_url_present: state.runtime_url_present,
         machine_name_present: state.machine_name_present,
         device_token_present,
-        error: state.error,
+        error: state.error.or(token_error),
     }
 }
 
@@ -6720,6 +6724,28 @@ mod tests {
         let machine = dir.path().join("machine");
         fs::create_dir_all(&machine).unwrap();
         fs::write(machine.join("state.json"), "{not json").unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let mut health = native_health_from_parts(&path, false, None, None, None);
+        apply_native_machine_setup(&mut health, setup_for(dir.path()));
+
+        assert_eq!(health.health_state, "broken");
+        assert!(!health
+            .reasons
+            .contains(&"machine_setup_required".to_string()));
+        assert!(health.machine_setup.unwrap().error.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_device_token_is_a_fault_not_a_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        write_machine_setup(
+            dir.path(),
+            Some(json!({"runtime_url": "https://me.longhouse.ai", "machine_name": "mac"})),
+            None,
+        );
+        // A directory where the token file belongs cannot be read as a file.
+        fs::create_dir_all(dir.path().join("machine").join("device-token")).unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let mut health = native_health_from_parts(&path, false, None, None, None);
         apply_native_machine_setup(&mut health, setup_for(dir.path()));

@@ -482,15 +482,17 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         }
     }
 
-    /// Native local health reports a never-authorized machine as its own fact
-    /// (`machine_setup_required`); the app synthesizes `desktop_app_setup_required`
-    /// only when the CLI itself is missing.
+    /// Native local health reports a never-authorized machine as
+    /// `health_state: setup_required`; the app synthesizes
+    /// `desktop_app_setup_required` only when the CLI itself is missing. The
+    /// native `machine_setup_required` reason alone is not enough: alongside a
+    /// broken retained-data fault the producer keeps `broken`, and that fault
+    /// must own the panel instead of being hidden behind sign-in.
     public var isSetupRequired: Bool {
         if launchReadiness?.state == "setup-required" || healthState == "setup_required" {
             return true
         }
-        return reasons.contains("machine_setup_required")
-            || reasons.contains("desktop_app_setup_required")
+        return reasons.contains("desktop_app_setup_required")
     }
 
     public var isInstallLocationBlocked: Bool {

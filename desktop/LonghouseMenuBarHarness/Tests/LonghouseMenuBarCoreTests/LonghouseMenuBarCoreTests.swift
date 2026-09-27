@@ -1765,6 +1765,19 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func brokenRetainedDataOnUnconfiguredMacIsNotHiddenBehindSignIn() throws {
+        let data = try Data(contentsOf: harnessFixtureURL("setup-required"))
+        var envelope = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        envelope["health_state"] = "broken"
+        envelope["severity"] = "red"
+        envelope["reasons"] = ["machine_setup_required", "storage_v2_outbox_unreadable"]
+        let snapshot = try HealthSnapshotDecoder.decode(data: JSONSerialization.data(withJSONObject: envelope))
+
+        #expect(snapshot.isSetupRequired == false)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).headline != "Finish setup on this Mac")
+    }
+
+    @Test
     func configuredMachineFixturesAreNotSetupRequired() throws {
         let fixtures = try FileManager.default.contentsOfDirectory(
             at: harnessFixtureURL("healthy").deletingLastPathComponent(),

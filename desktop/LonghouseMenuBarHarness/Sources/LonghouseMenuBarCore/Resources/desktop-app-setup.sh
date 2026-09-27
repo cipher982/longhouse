@@ -35,7 +35,7 @@ prompt_runtime_url() {
   log "Enter the address you sign in to, for example https://yourname.longhouse.ai"
   while true; do
     read -r "url?Longhouse URL: "
-    [[ -n "$url" && "$url" != http://* && "$url" != https://* ]] && url="https://$url"
+    [[ -n "$url" && "$url" != *://* ]] && url="https://$url"
     # A host with a dot or port (or localhost) and no whitespace anywhere.
     if [[ "$url" =~ '^https?://([^/[:space:]]*[.:][^/[:space:]]*|localhost)(/[^[:space:]]*)?$' ]]; then
       LONGHOUSE_RUNTIME_URL="${url%/}"
