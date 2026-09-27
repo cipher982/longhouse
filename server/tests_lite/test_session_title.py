@@ -92,6 +92,16 @@ class TestSanitizeTitle:
     def test_strips_tags(self):
         assert sanitize_title("<thinking> do the thing </thinking>") == "do the thing"
 
+    def test_strips_fullwidth_bar_special_tokens(self):
+        # Hosted session 707f95ae: DeepSeek emitted its native tool-call
+        # markup as plain content instead of routing through tool_calls.
+        assert sanitize_title("<｜DSML｜tool_calls>") is None
+        assert sanitize_title("<｜DSML｜tool_calls> fix the retry loop") == "fix the retry loop"
+
+    def test_strips_pipe_special_tokens(self):
+        assert sanitize_title("<|im_start|>") is None
+        assert sanitize_title("<|tool_calls|> fix the retry loop") == "fix the retry loop"
+
     def test_punctuation_only_line_skipped(self):
         # A leftover quote/bullet line must not become the headline.
         assert sanitize_title(">\n\nactually fix the thing") == "actually fix the thing"
@@ -157,6 +167,13 @@ class TestResolveTimelineTitle:
         # An anchor that sanitizes to nothing must fall through, not render blank.
         out = self._resolve(anchor_title='"""')
         assert out == "zerg · main"
+
+    def test_stored_tool_call_markup_anchor_self_heals_at_read_time(self):
+        # A previously stored bad AI title (hosted session 707f95ae) must not
+        # keep serving raw provider markup once the sanitizer rejects it --
+        # the live projection re-sanitizes anchor_title on every read.
+        out = self._resolve(anchor_title="<｜DSML｜tool_calls>", first_user_message="fix the retry loop")
+        assert out == "fix the retry loop"
 
 
 class TestTitleProvenance:

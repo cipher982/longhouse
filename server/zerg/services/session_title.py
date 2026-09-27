@@ -31,6 +31,13 @@ _LOOSE_FENCE_RE = re.compile(r"`{3,}[a-zA-Z0-9_-]*")
 # path is noise, not a headline.
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
 _TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")  # <thinking>, </system>, HTML tags
+# Provider special-token markup: DeepSeek's fullwidth-bar tokens (e.g.
+# <｜DSML｜tool_calls>, U+FF5C) and ASCII-pipe tokens other providers use
+# (<|im_start|>, <|tool_calls|>). _TAG_RE never matches these -- the char
+# after "<" is neither ASCII "<" text nor a-zA-Z -- so this markup survives
+# as a title unless stripped separately.
+_FULLWIDTH_TOKEN_RE = re.compile(r"<｜[^<>]*>")
+_PIPE_TOKEN_RE = re.compile(r"<\|[^<>]*\|>")
 _IMAGE_TAG_RE = re.compile(r"\[image[^\]]*\]", re.IGNORECASE)
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
@@ -82,6 +89,8 @@ def sanitize_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> st
     cleaned = _URL_RE.sub(" ", cleaned)
     cleaned = _INLINE_CODE_RE.sub(" ", cleaned)  # drop backticked code/paths
     cleaned = _TAG_RE.sub(" ", cleaned)  # <thinking>, html, tool tags
+    cleaned = _FULLWIDTH_TOKEN_RE.sub(" ", cleaned)  # <｜DSML｜tool_calls>
+    cleaned = _PIPE_TOKEN_RE.sub(" ", cleaned)  # <|im_start|>, <|tool_calls|>
     cleaned = _TRIPLE_QUOTE_RE.sub(" ", cleaned)
 
     # First line with real (alphanumeric) content, heading marker stripped.

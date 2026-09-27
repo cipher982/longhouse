@@ -44,6 +44,20 @@ INITIAL_SESSION_TITLE_SYSTEM_PROMPT = (
 _FENCE_MARKER_RE = re.compile(r"^\s*```[a-zA-Z0-9_-]*\s*$", re.MULTILINE)
 _IMAGE_MARKER_RE = re.compile(r"\[Image\s+#?\d+[^\]]*\]", re.IGNORECASE)
 
+# Provider tool-call/special-token markup a model sometimes emits as plain
+# ``content`` instead of routing through ``message.tool_calls`` -- e.g.
+# DeepSeek's fullwidth-bar special tokens (``<｜DSML｜tool_calls>``, seen in
+# hosted session 707f95ae) or the ASCII-pipe tokens other providers use
+# (``<|tool_calls|>``). This is never a title.
+_FULLWIDTH_TOKEN_RE = re.compile(r"<｜[^<>]*>")
+_PIPE_TOKEN_RE = re.compile(r"<\|[^<>]*\|>")
+_TOOL_CALL_TAG_RE = re.compile(r"</?tool_calls?\b[^>]*>", re.IGNORECASE)
+
+
+def _looks_like_tool_call_markup(text: str) -> bool:
+    """True when model output is tool-call/special-token markup, not a title."""
+    return bool(_FULLWIDTH_TOKEN_RE.search(text) or _PIPE_TOKEN_RE.search(text) or _TOOL_CALL_TAG_RE.search(text))
+
 
 def _normalize_title_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Normalize and clean messages for title generation.
@@ -204,7 +218,16 @@ async def generate_initial_session_title(
     if not response.choices:
         return None
 
-    raw = response.choices[0].message.content or ""
+    message = response.choices[0].message
+    # A structured tool call is never a title, regardless of what (if
+    # anything) also landed in ``content``.
+    if getattr(message, "tool_calls", None):
+        return None
+
+    raw = message.content or ""
+    if _looks_like_tool_call_markup(raw):
+        return None
+
     parsed = safe_parse_json(raw)
     if isinstance(parsed, dict):
         title = parsed.get("title")

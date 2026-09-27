@@ -54,6 +54,58 @@ async def test_generate_initial_session_title_parses_json_response(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_initial_session_title_rejects_dsml_tool_call_markup(monkeypatch):
+    # Hosted session 707f95ae got title "<｜DSML｜tool_calls>" (title_source=ai):
+    # DeepSeek emitted its native fullwidth-bar tool-call markup as plain
+    # content. That is never a title -- returning None here lets the existing
+    # empty_model_response retry/fallback path handle it instead of freezing
+    # the write-once anchor on garbage.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
+
+    async def _create(**_kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="<｜DSML｜tool_calls>", tool_calls=None))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+
+    title = await generate_initial_session_title(
+        first_user_message="fix the retry loop",
+        client=client,
+        model="deepseek/deepseek-v4-flash",
+        metadata={"project": "longhouse"},
+    )
+
+    assert title is None
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_session_title_rejects_structured_tool_calls(monkeypatch):
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
+
+    async def _create(**_kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(id="call_1", function=SimpleNamespace(name="title", arguments="{}"))],
+                    )
+                )
+            ]
+        )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+
+    title = await generate_initial_session_title(
+        first_user_message="fix the retry loop",
+        client=client,
+        model="deepseek/deepseek-v4-flash",
+        metadata={"project": "longhouse"},
+    )
+
+    assert title is None
+
+
+@pytest.mark.asyncio
 async def test_generate_initial_session_title_is_off_by_default(monkeypatch):
     """The chokepoint every title path funnels through refuses to call out.
 
