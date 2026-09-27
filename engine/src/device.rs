@@ -1244,7 +1244,13 @@ fn settle_native_repair(
                 execution.headline =
                     "Repair ran, but useful Machine Agent service is not yet verified".to_string();
                 let blocking_reasons = native_repair_blocking_reasons(after);
-                execution.notes.push(if !blocking_reasons.is_empty() {
+                // A refused start leaves transport unknown too, but the refusal
+                // is the cause and names the fix; transport is its consequence.
+                let refused = after
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "engine_startup_refused");
+                execution.notes.push(if !blocking_reasons.is_empty() && !refused {
                     native_repair_remaining_action_note(&blocking_reasons)
                 } else if after.reasons.is_empty() {
                     "No new producer identity and status were observed. The previous cached snapshot is not recovery proof.".to_string()
@@ -7079,6 +7085,62 @@ mod tests {
         settle_native_repair(&mut execution, std::time::Instant::now(), || after.clone());
 
         assert_eq!(execution.state, "recovery_pending");
+    }
+
+    #[test]
+    fn native_repair_settles_on_a_refused_start_and_names_its_fix() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let refusal = |pid: u32, at: &str| {
+            native_health_from_parts(
+                &status_path,
+                true,
+                Some(0),
+                Some(json!({
+                    "daemon_pid": pid,
+                    "last_updated": at,
+                    "startup_refused": true,
+                    "startup_refusal_kind": "machine_identity_mismatch",
+                    "startup_refusal": "configured as \"a\", token belongs to \"b\"",
+                })),
+                None,
+            )
+        };
+        let before = refusal(1, "2026-09-27T19:00:00Z");
+        let after = refusal(2, "2026-09-27T19:00:05Z");
+        let mut execution = native_repair_execution_result(
+            false,
+            "completed",
+            "restart observed",
+            Vec::new(),
+            NativeMachineStateStatus {
+                path: dir.path().display().to_string(),
+                exists: true,
+                readable: true,
+                configured: true,
+                runtime_url_present: true,
+                machine_name_present: true,
+                error: None,
+            },
+            None,
+            before,
+            None,
+            Vec::<&'static str>::new(),
+        );
+        // A deadline far away: only the refused restart's own sample may end it.
+        let started = std::time::Instant::now();
+        settle_native_repair(&mut execution, started + Duration::from_secs(60), || {
+            after.clone()
+        });
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(execution.state, "recovery_pending");
+        let note = execution.notes.last().unwrap();
+        assert!(note.contains("machine_identity_mismatch"), "{note}");
+        assert!(
+            note.contains("longhouse auth && longhouse machine repair --repair-service"),
+            "{note}"
+        );
     }
 
     #[cfg(unix)]

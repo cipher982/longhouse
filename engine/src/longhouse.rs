@@ -256,7 +256,8 @@ struct AuthArgs {
     /// Remove stored native device credentials.
     #[arg(long)]
     clear: bool,
-    /// Override the stored machine name.
+    /// Machine name for browser approval. With an existing token it must
+    /// match the token's own device name, which is what gets stored.
     #[arg(long)]
     device: Option<String>,
 }

@@ -156,6 +156,24 @@ mod tests {
     }
 
     #[test]
+    fn adopt_command_quotes_the_token_path_for_the_shell() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let command = temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some("/tmp/it's here/.longhouse")),
+                ("CLAUDE_CONFIG_DIR", None),
+            ],
+            adopt_device_identity_command,
+        );
+        assert!(
+            command.starts_with(
+                "LONGHOUSE_DEVICE_TOKEN=\"$(cat '/tmp/it'\\''s here/.longhouse/machine/device-token')\" longhouse auth"
+            ),
+            "{command}"
+        );
+    }
+
+    #[test]
     fn test_machine_name_loaded_from_file() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("machine")).unwrap();
@@ -322,16 +340,16 @@ pub fn get_agent_flight_dir() -> Result<PathBuf> {
 /// stores that name, so re-running it over the token already on disk repairs a
 /// machine configured under any other name without minting a new token.
 pub fn adopt_device_identity_command() -> String {
+    // Single-quote a resolved path (escaping any quote in it); the fallback
+    // stays unquoted so the shell still expands $HOME.
     let token_path = get_longhouse_home()
         .map(|home| {
-            home.join("machine")
-                .join("device-token")
-                .display()
-                .to_string()
+            let path = home.join("machine").join("device-token");
+            format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
         })
-        .unwrap_or_else(|_| "$HOME/.longhouse/machine/device-token".to_string());
+        .unwrap_or_else(|_| "\"$HOME/.longhouse/machine/device-token\"".to_string());
     format!(
-        "LONGHOUSE_DEVICE_TOKEN=\"$(cat '{token_path}')\" longhouse auth && longhouse machine repair --repair-service"
+        "LONGHOUSE_DEVICE_TOKEN=\"$(cat {token_path})\" longhouse auth && longhouse machine repair --repair-service"
     )
 }
 
