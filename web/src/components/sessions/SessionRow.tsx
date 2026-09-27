@@ -14,7 +14,9 @@ import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { getTimelineSessionAnchor, type SessionStateFacts, type TimelineSessionCard } from "../../services/api/agents";
 import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel, type TimelineSignal } from "../../lib/sessionRuntime";
-import { StatusLamp, type StatusLampState } from "../instruments/StatusLamp";
+import type { StatusLampState } from "../instruments/StatusLamp";
+import { HearthLamp } from "../instruments/hearth/Hearth";
+import { hearthModeForLamp, hearthSnapshotFromSession } from "../instruments/hearth/signals";
 import {
   formatRelativeTime,
   getBranchLabel,
@@ -107,6 +109,7 @@ export function SessionRow({
   // closed). Drives the row's one status instrument.
   const signal = resolveTimelineSignal(session);
   const lampState = getRowLampState({ signal, isClosed, unread, unreadOutcome });
+  const hearthSnapshot = hearthSnapshotFromSession(session, hearthModeForLamp(lampState));
 
   // When the user is searching and the backend returned a match snippet,
   // show that as the row's secondary line with the query highlighted.
@@ -252,7 +255,12 @@ export function SessionRow({
       </div>
 
       <span className="inbox-row-activity" data-tone={statusTone} data-signal={signal}>
-        <StatusLamp state={lampState} label={statusLabel || timelineSignalLabel(signal)} />
+        <HearthLamp
+          sessionKey={thread.thread_id}
+          snapshot={hearthSnapshot}
+          state={lampState}
+          label={statusLabel || timelineSignalLabel(signal)}
+        />
       </span>
 
       <span className="inbox-row-mode">

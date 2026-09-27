@@ -1,6 +1,7 @@
 /**
- * StatusLamp — the one "is the agent doing anything?" instrument, shared by
- * the timeline row, the session header, and (bulb only) the composer head.
+ * StatusLamp — the "is the agent doing anything?" instrument for the session
+ * header and (bulb only) the composer head. Timeline rows show the same
+ * states as a Hearth fire (hearth/Hearth.tsx) with the same label ladder.
  * CSS lives in the ".status-lamp" block of styles/instruments.css.
  *
  * Same geometry in every state — a bulb then a label, at the same insets —

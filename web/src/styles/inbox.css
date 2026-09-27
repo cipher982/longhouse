@@ -17,7 +17,7 @@
     --inbox-repo-pad-y: 7px;
     --inbox-meta-font: 13px;
     --inbox-col-glyph: 20px;
-    --inbox-col-activity: 132px;
+    --inbox-col-activity: 148px;
     --inbox-col-mode: 120px;
     --inbox-col-source: 150px;
     --inbox-col-age: 96px;
@@ -486,19 +486,17 @@
 
 
   /* ---------- Activity column ----------
-   * The row's one status instrument (StatusLamp, styled in instruments.css).
-   * Every state keeps the same bulb and label position, so this column reads
-   * as a bank of lamps down the list: lit, filled, dim, hollow, or flat. */
+   * The row's one status instrument: the Hearth fire plus its state label
+   * (HearthLamp, styled in instruments.css). Every row keeps the fire and
+   * label at the same insets, so the column reads as a bank of hearths down
+   * the list: burning, guttering, cooling coals, or ash. */
 
   .inbox-row-activity {
     grid-area: activity;
     display: flex;
     align-items: center;
-    /* Pull the lamp's inner inset into the gutter so its bulb, not its
-     * capsule edge, sits on the column line. */
-    margin-left: -8px;
     /* No overflow clip: the lamp ellipsizes its own label, and a clip would
-     * cut the working lamp's glow. */
+     * cut the working label's glow. */
     min-width: 0;
   }
 

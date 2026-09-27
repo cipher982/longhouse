@@ -15,6 +15,7 @@
      2. Sparkline   — .instrument-sparkline*
      3. Readout rail — .instrument-readout-rail, .instrument-readout*
      4. Status lamp — .status-lamp*
+     5. Hearth      — .hearth-lamp*, .hearth-canvas (hearth/Hearth.tsx)
    ============================================================================= */
 
 /* ---- 1. Nixie: live numerals ---- */
@@ -333,5 +334,103 @@
   .status-lamp__bulb[data-state="working"]::after {
     animation: none;
     opacity: 0.7;
+  }
+}
+
+/* ---- 5. Hearth: the timeline row's fire ----
+ * hearth/Hearth.tsx. A fire cell (a well the shared WebGL canvas draws
+ * into, or a static SVG glyph without WebGL) and the state's text label.
+ * The label is always visible text in every state, so the fire never
+ * carries state alone. Label ladder: working glows amber, waiting on you is
+ * ember and heavier, idle is secondary, unknown and ended recede. */
+
+.hearth-canvas {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  display: none;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.hearth-lamp {
+  --hearth-w: 26px;
+  --hearth-h: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--color-text-secondary);
+}
+
+.hearth-lamp__cell {
+  position: relative;
+  flex: none;
+  display: block;
+  width: var(--hearth-w);
+  height: var(--hearth-h);
+  border-radius: 5px;
+  overflow: hidden;
+  background: radial-gradient(120% 60% at 50% 100%, #1a120d 0%, #0e0a08 70%);
+  box-shadow:
+    inset 0 0 0 1px rgba(70, 54, 41, 0.55),
+    inset 0 -6px 10px rgba(0, 0, 0, 0.5);
+}
+
+.hearth-glyph {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hearth-lamp__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hearth-lamp[data-state="working"] {
+  color: #ffb25a;
+  text-shadow: 0 0 7px rgba(240, 138, 36, 0.45);
+}
+
+.hearth-lamp[data-state="waiting"] {
+  color: var(--color-intent-warning, #f08a24);
+  font-weight: 600;
+  text-shadow: 0 0 8px rgba(240, 138, 36, 0.35);
+}
+
+.hearth-lamp[data-state="unknown"] {
+  color: color-mix(in srgb, var(--color-text-secondary, #c4b096) 78%, var(--color-text-muted, #8a7862));
+}
+
+.hearth-lamp[data-state="ended"] {
+  color: color-mix(in srgb, var(--color-text-secondary, #c4b096) 62%, var(--color-text-muted, #8a7862));
+}
+
+.hearth-lamp[data-state="done"] {
+  color: var(--color-text-primary, #f6ebd6);
+}
+
+.hearth-lamp[data-state="failed"] {
+  color: color-mix(in srgb, var(--color-intent-error, #e4572e) 70%, var(--color-text-primary, #f6ebd6));
+}
+
+@media (max-width: 720px) {
+  .hearth-lamp {
+    --hearth-w: 20px;
+    --hearth-h: 28px;
+    gap: 6px;
   }
 }

@@ -37,6 +37,7 @@ import {
   type InboxOrderState,
 } from "../../lib/inboxOrder";
 import { SessionRow } from "./SessionRow";
+import { HearthProvider } from "../instruments/hearth/Hearth";
 import { isSessionClosed } from "../../lib/sessionRuntime";
 
 const POINTER_ACTIVATION_DISTANCE = 5;
@@ -136,72 +137,74 @@ export function TimelineInbox({
   }
 
   return (
-    <div className="inbox" data-testid="timeline-inbox">
-      {layout.shelf.length > 0 ? (
-        <section className="inbox-tier inbox-tier--shelf" aria-labelledby={liveHeadingId}>
-          <div className="inbox-live-divider">
-            <h2 id={liveHeadingId} className="inbox-live-divider-label">Live now</h2>
-            <span className="inbox-live-divider-count">{layout.shelf.length}</span>
-          </div>
-          <ShelfSection
-            sessions={layout.shelf}
-            onSessionClick={onSessionClick}
-            onSessionPrefetch={onSessionPrefetch}
-            allowHoverPrefetch={allowHoverPrefetch}
-            relativeNowMs={relativeNowMs}
-            highlightQuery={highlightQuery}
-            onMoveSession={moveShelf}
-          />
-        </section>
-      ) : null}
+    <HearthProvider>
+      <div className="inbox" data-testid="timeline-inbox">
+        {layout.shelf.length > 0 ? (
+          <section className="inbox-tier inbox-tier--shelf" aria-labelledby={liveHeadingId}>
+            <div className="inbox-live-divider">
+              <h2 id={liveHeadingId} className="inbox-live-divider-label">Live now</h2>
+              <span className="inbox-live-divider-count">{layout.shelf.length}</span>
+            </div>
+            <ShelfSection
+              sessions={layout.shelf}
+              onSessionClick={onSessionClick}
+              onSessionPrefetch={onSessionPrefetch}
+              allowHoverPrefetch={allowHoverPrefetch}
+              relativeNowMs={relativeNowMs}
+              highlightQuery={highlightQuery}
+              onMoveSession={moveShelf}
+            />
+          </section>
+        ) : null}
 
-      {layout.unread.length > 0 ? (
-        <section
-          className="inbox-section inbox-section--unread"
-          data-testid="timeline-unread"
-          aria-labelledby={attentionHeadingId}
-        >
-          <div className="inbox-unread-divider">
-            <h2 id={attentionHeadingId} className="inbox-unread-divider-label">Needs attention</h2>
-            <span className="inbox-unread-divider-count">{layout.unread.length}</span>
-          </div>
-          <div className="inbox-repo-rows">
-            {layout.unread.map((thread) => (
-              <SessionRow
-                key={thread.thread_id}
-                thread={thread}
-                unread
-                onClick={() => onSessionClick(thread)}
-                onPrefetch={onSessionPrefetch ? () => onSessionPrefetch(thread) : undefined}
-                allowHoverPrefetch={allowHoverPrefetch}
-                relativeNowMs={relativeNowMs}
-                highlightQuery={highlightQuery}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
+        {layout.unread.length > 0 ? (
+          <section
+            className="inbox-section inbox-section--unread"
+            data-testid="timeline-unread"
+            aria-labelledby={attentionHeadingId}
+          >
+            <div className="inbox-unread-divider">
+              <h2 id={attentionHeadingId} className="inbox-unread-divider-label">Needs attention</h2>
+              <span className="inbox-unread-divider-count">{layout.unread.length}</span>
+            </div>
+            <div className="inbox-repo-rows">
+              {layout.unread.map((thread) => (
+                <SessionRow
+                  key={thread.thread_id}
+                  thread={thread}
+                  unread
+                  onClick={() => onSessionClick(thread)}
+                  onPrefetch={onSessionPrefetch ? () => onSessionPrefetch(thread) : undefined}
+                  allowHoverPrefetch={allowHoverPrefetch}
+                  relativeNowMs={relativeNowMs}
+                  highlightQuery={highlightQuery}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-      {layout.history.length > 0 ? (
-        <section className="inbox-tier inbox-tier--history" aria-labelledby={historyHeadingId}>
-          <div className="inbox-history-divider">
-            <h2 id={historyHeadingId} className="inbox-history-divider-label">History</h2>
-            <span className="inbox-history-divider-count">{layout.historyCount}</span>
-          </div>
-          <RepoTier
-            tier="history"
-            groups={layout.history}
-            onSessionClick={onSessionClick}
-            onSessionPrefetch={onSessionPrefetch}
-            allowHoverPrefetch={allowHoverPrefetch}
-            relativeNowMs={relativeNowMs}
-            highlightQuery={highlightQuery}
-            onMoveRepo={moveRepo}
-            onMoveSession={moveSession}
-          />
-        </section>
-      ) : null}
-    </div>
+        {layout.history.length > 0 ? (
+          <section className="inbox-tier inbox-tier--history" aria-labelledby={historyHeadingId}>
+            <div className="inbox-history-divider">
+              <h2 id={historyHeadingId} className="inbox-history-divider-label">History</h2>
+              <span className="inbox-history-divider-count">{layout.historyCount}</span>
+            </div>
+            <RepoTier
+              tier="history"
+              groups={layout.history}
+              onSessionClick={onSessionClick}
+              onSessionPrefetch={onSessionPrefetch}
+              allowHoverPrefetch={allowHoverPrefetch}
+              relativeNowMs={relativeNowMs}
+              highlightQuery={highlightQuery}
+              onMoveRepo={moveRepo}
+              onMoveSession={moveSession}
+            />
+          </section>
+        ) : null}
+      </div>
+    </HearthProvider>
   );
 }
 
