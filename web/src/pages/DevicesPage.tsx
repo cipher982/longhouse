@@ -40,6 +40,17 @@ function formatDate(iso: string | null): string {
 /** How long a loopback handoff may take before the page reports it failed. */
 const HANDOFF_STALL_MS = 5000;
 
+// `reason` codes the CLI's loopback listener sends back with connected=0
+// (`ConnectFailure` in engine/src/longhouse.rs). Unknown codes get the
+// generic line.
+const CONNECT_FAILURE_REASONS: Record<string, string> = {
+  redeem_failed: "This approval expired or was already used.",
+  token_rejected: "The new device token was not accepted by this Longhouse.",
+  identity_unresolved: "This Longhouse could not say which device the new token belongs to.",
+  device_mismatch: "The new token belongs to a different device name than the one the CLI asked for.",
+  store_failed: "The CLI could not save the new credentials on that device.",
+};
+
 export default function DevicesPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [deviceName, setDeviceName] = useState("");
@@ -70,12 +81,15 @@ export default function DevicesPage() {
     }
   })();
 
-  // The CLI answers the loopback visit with a 303 back to this page, carrying
-  // only whether its redeem succeeded.
+  // The CLI answers the loopback visit with a 303 back to this page once it
+  // has redeemed, validated and stored its token (connected=1), or with
+  // connected=0 and a fixed reason code. Only known codes pick text here, so
+  // a crafted link cannot put its own words on this page.
   const connectOutcome = (() => {
-    const value = new URLSearchParams(window.location.search).get("connected");
-    if (value === "1") return "ok";
-    if (value === "0") return "failed";
+    const params = new URLSearchParams(window.location.search);
+    const value = params.get("connected");
+    if (value === "1") return { ok: true as const };
+    if (value === "0") return { ok: false as const, reason: CONNECT_FAILURE_REASONS[params.get("reason") ?? ""] };
     return null;
   })();
 
@@ -165,11 +179,11 @@ export default function DevicesPage() {
 
       {connectOutcome && (
         <div className="token-reveal" role="status">
-          <h4>{connectOutcome === "ok" ? "Device connected" : "Device connection failed"}</h4>
+          <h4>{connectOutcome.ok ? "Device connected" : "Device connection failed"}</h4>
           <p className="token-reveal-hint">
-            {connectOutcome === "ok"
-              ? "The Longhouse CLI on that device holds its own token now. You can close this tab."
-              : "The device could not finish connecting. Check the terminal where you ran longhouse auth, then run it again."}
+            {connectOutcome.ok
+              ? "The Longhouse CLI on that device has stored its token. You can close this tab."
+              : `${connectOutcome.reason ?? "The device could not finish connecting."} Check the terminal where you ran longhouse auth, then run it again.`}
           </p>
         </div>
       )}

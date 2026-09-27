@@ -804,66 +804,105 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
         })
         .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
         .context("No Longhouse URL configured. Pass --url.")?;
-    let token = match std::env::var(&args.token_env) {
-        Ok(token) => token,
-        Err(_) if args.browser || std::env::var(&args.token_env).is_err() => {
+    let base = url.trim_end_matches('/').to_string();
+    let store = |token: &str| {
+        store_device_credentials(&machine_dir, existing, &base, args.device.as_deref(), token)
+    };
+    let machine_name = match std::env::var(&args.token_env) {
+        Ok(token) => {
+            if token.trim().is_empty() {
+                anyhow::bail!("{} is empty", args.token_env);
+            }
+            store(token.trim()).map_err(|failure| failure.error)?
+        }
+        Err(_) => {
             // The approved token is named for this machine, so the name
             // proposed here is the one the Runtime Host binds it to.
             let proposed = args.device.clone().unwrap_or_else(native_machine_name);
-            browser_device_token(&url, &proposed)?
+            browser_connect_device(&base, &proposed, store)?
         }
-        Err(_) => unreachable!(),
     };
-    if token.trim().is_empty() {
-        anyhow::bail!("{} is empty", args.token_env);
-    }
-    let token = token.trim().to_string();
-    let base = url.trim_end_matches('/');
-    let runtime = tokio::runtime::Runtime::new()?;
-    let (valid, token_device) = runtime.block_on(async {
-        let client = reqwest::Client::new();
-        let response = client
-            .get(format!("{base}/api/agents/sessions?limit=1"))
-            .header("X-Agents-Token", &token)
-            .send()
-            .await?;
-        let valid = response.status().as_u16() == 200 || response.status().as_u16() == 501;
-        if !valid {
-            return Ok::<_, anyhow::Error>((false, None));
-        }
-        Ok((true, token_device_identity(&client, base, &token).await?))
-    })?;
-    if !valid {
-        anyhow::bail!("device token was rejected by the Runtime Host");
-    }
+    println!("Stored native Longhouse credentials for {machine_name}");
+    Ok(())
+}
+
+/// Why a device connection did not finish: a fixed code the Devices page maps
+/// to its own text (so a crafted link cannot put words on the owner's origin),
+/// plus the full error for the terminal.
+#[derive(Debug)]
+struct ConnectFailure {
+    reason: &'static str,
+    error: anyhow::Error,
+}
+
+fn connect_failure(reason: &'static str) -> impl FnOnce(anyhow::Error) -> ConnectFailure {
+    move |error| ConnectFailure { reason, error }
+}
+
+/// Validate a device token with the Runtime Host, resolve the device it
+/// belongs to, and only then write the state and the token. Returns the stored
+/// machine name. Nothing is written unless every step before it succeeded.
+fn store_device_credentials(
+    machine_dir: &Path,
+    existing: serde_json::Value,
+    base: &str,
+    requested_device: Option<&str>,
+    token: &str,
+) -> Result<String, ConnectFailure> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(anyhow::Error::from)
+        .map_err(connect_failure("store_failed"))?;
+    let client = reqwest::Client::new();
+    runtime
+        .block_on(async {
+            let response = client
+                .get(format!("{base}/api/agents/sessions?limit=1"))
+                .header("X-Agents-Token", token)
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await
+                .context("reach the Runtime Host to check the device token")?;
+            if !matches!(response.status().as_u16(), 200 | 501) {
+                anyhow::bail!("device token was rejected by the Runtime Host");
+            }
+            Ok(())
+        })
+        .map_err(connect_failure("token_rejected"))?;
+    let token_device = runtime
+        .block_on(token_device_identity(&client, base, token))
+        .map_err(connect_failure("identity_unresolved"))?;
     let machine_name = adopted_machine_name(
-        args.device.as_deref(),
+        requested_device,
         token_device.as_deref(),
         base,
         native_machine_name,
-    )?;
+    )
+    .map_err(connect_failure("device_mismatch"))?;
     let mut state = existing;
     state["schema_version"] = json!(1);
     state["runtime_url"] = json!(base);
     state["machine_name"] = json!(machine_name);
     state["written_by"] = json!("native-auth");
     state["written_at"] = json!(chrono::Utc::now().to_rfc3339());
-    std::fs::create_dir_all(&machine_dir)?;
-    write_private_json(&state_path, &state)?;
-    write_private_text(&machine_dir.join("device-token"), &token)?;
-    println!(
-        "Stored native Longhouse credentials for {}",
-        state["machine_name"].as_str().unwrap_or("this machine")
-    );
-    Ok(())
+    (|| {
+        std::fs::create_dir_all(machine_dir)?;
+        write_private_json(&machine_dir.join("state.json"), &state)?;
+        write_private_text(&machine_dir.join("device-token"), token)
+    })()
+    .context("store the device credentials on this machine")
+    .map_err(connect_failure("store_failed"))?;
+    Ok(machine_name)
 }
 
 /// Ask the Runtime Host which device this token belongs to.
 ///
 /// The host binds a machine's storage identity to its token's device, so the
-/// capabilities route answers with that name. `None` means the host binds no
-/// name to this token (no storage-v2 route, or a principal that is not a
-/// device token), so no stored name can disagree with it.
+/// capabilities route answers with that name. `None` means the host said it
+/// binds no name to this token: 404/501 (no storage-v2 route) or 422 (a
+/// principal that is not a device token, asked without a machine id), so no
+/// stored name can disagree with it. A 200 without a non-empty `machine_id`
+/// is a broken answer and errors, because storing a guessed name is the
+/// crash loop this check exists to prevent.
 async fn token_device_identity(
     client: &reqwest::Client,
     base: &str,
@@ -938,7 +977,15 @@ struct CallbackRequest {
 /// navigation is the one browser→loopback hop every engine allows from an
 /// https page: the Runtime Host's CSP (`form-action 'self'`) blocks a form
 /// POST, and fetch draws mixed-content and private-network blocks.
-fn browser_device_token(runtime_url: &str, device: &str) -> anyhow::Result<String> {
+///
+/// `store` validates and persists the redeemed token. The browser is told the
+/// device connected only after it returns, so the page never claims a setup
+/// the terminal then abandons.
+fn browser_connect_device<T>(
+    runtime_url: &str,
+    device: &str,
+    store: impl FnOnce(&str) -> Result<T, ConnectFailure>,
+) -> anyhow::Result<T> {
     use base64::Engine as _;
     use sha2::Digest as _;
 
@@ -974,12 +1021,42 @@ fn browser_device_token(runtime_url: &str, device: &str) -> anyhow::Result<Strin
         runtime_url,
         CALLBACK_READ_TIMEOUT,
         CALLBACK_WAIT_TIMEOUT,
-        |code| redeem_connect_code(runtime_url, code, &verifier),
+        |code| finish_browser_connect(runtime_url, code, &verifier, store),
     )
 }
 
+/// Redeem the code, then store the token. A token that was minted but not
+/// stored is revoked, so a failed setup leaves no live credential behind.
+fn finish_browser_connect<T>(
+    runtime_url: &str,
+    code: &str,
+    verifier: &str,
+    store: impl FnOnce(&str) -> Result<T, ConnectFailure>,
+) -> Result<T, ConnectFailure> {
+    let redeemed = redeem_connect_code(runtime_url, code, verifier)
+        .map_err(connect_failure("redeem_failed"))?;
+    store(&redeemed.token).map_err(|failure| {
+        match revoke_unstored_token(runtime_url, &redeemed) {
+            Ok(()) => eprintln!("Revoked the device token this failed connection created."),
+            Err(error) => eprintln!(
+                "Could not revoke the device token this failed connection created ({error:#}); revoke it at {runtime_url}/settings/devices."
+            ),
+        }
+        failure
+    })
+}
+
+struct RedeemedToken {
+    id: String,
+    token: String,
+}
+
 /// Trade the browser's one-time code plus this run's verifier for a token.
-fn redeem_connect_code(runtime_url: &str, code: &str, verifier: &str) -> anyhow::Result<String> {
+fn redeem_connect_code(
+    runtime_url: &str,
+    code: &str,
+    verifier: &str,
+) -> anyhow::Result<RedeemedToken> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let response = reqwest::Client::new()
@@ -998,29 +1075,58 @@ fn redeem_connect_code(runtime_url: &str, code: &str, verifier: &str) -> anyhow:
                 .unwrap_or_else(|| format!("HTTP {status}"));
             anyhow::bail!("the Runtime Host refused this device connection: {message}");
         }
-        body["token"]
+        let token = body["token"]
             .as_str()
             .filter(|token| token.starts_with("zdt_"))
-            .map(str::to_owned)
-            .context("the Runtime Host answered without a device token")
+            .context("the Runtime Host answered without a device token")?;
+        let id = body["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .context("the Runtime Host answered without the device token's id")?;
+        Ok(RedeemedToken {
+            id: id.to_string(),
+            token: token.to_string(),
+        })
     })
 }
 
-/// Wait for the browser to arrive with this run's connect code, redeem it, and
-/// send the browser back to the Runtime Host with the outcome.
+/// Revoke a token this run redeemed but could not store. The token is its own
+/// credential for this: a device token authenticates as its owner.
+fn revoke_unstored_token(runtime_url: &str, redeemed: &RedeemedToken) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .delete(format!(
+                "{runtime_url}/api/devices/tokens/{}",
+                percent_encode(&redeemed.id)
+            ))
+            .bearer_auth(&redeemed.token)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await?;
+        // 404 or 401: the host already holds no usable token under that id.
+        if !(response.status().is_success() || matches!(response.status().as_u16(), 401 | 404)) {
+            anyhow::bail!("HTTP {}", response.status());
+        }
+        Ok(())
+    })
+}
+
+/// Wait for the browser to arrive with this run's connect code, finish the
+/// connection, and send the browser back to the Runtime Host with the outcome.
 ///
 /// Connections that are not that arrival — a speculative preconnect, a
 /// favicon probe, a stale tab from an earlier run — are answered and ignored
-/// rather than ending the wait. Split out from `browser_device_token` so tests
-/// can drive the socket path with real bytes and a stand-in redeem.
-fn serve_callback(
+/// rather than ending the wait. Split out from `browser_connect_device` so tests
+/// can drive the socket path with real bytes and a stand-in finish.
+fn serve_callback<T>(
     listener: &TcpListener,
     state: &str,
     runtime_url: &str,
     read_timeout: Duration,
     wait_timeout: Duration,
-    redeem: impl FnOnce(&str) -> anyhow::Result<String>,
-) -> anyhow::Result<String> {
+    finish: impl FnOnce(&str) -> Result<T, ConnectFailure>,
+) -> anyhow::Result<T> {
     let deadline = std::time::Instant::now() + wait_timeout;
     listener
         .set_nonblocking(true)
@@ -1064,16 +1170,21 @@ fn serve_callback(
             stream.write_all(response.as_bytes()).ok();
             continue;
         };
-        let token = redeem(&code);
+        // The browser waits on this response while the token is redeemed,
+        // validated and stored, so success is only claimed once it is true.
+        let outcome = finish(&code);
+        let query = match &outcome {
+            Ok(_) => "connected=1".to_string(),
+            Err(failure) => format!("connected=0&reason={}", failure.reason),
+        };
         // 303 back to a clean Runtime Host URL either way, so the browser's
         // history entry is that page, not the loopback URL the code rode on.
-        let outcome = i32::from(token.is_ok());
         let response = format!(
-            "HTTP/1.1 303 See Other\r\nLocation: {runtime_url}/settings/devices?connected={outcome}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 303 See Other\r\nLocation: {runtime_url}/settings/devices?{query}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
         stream.write_all(response.as_bytes()).ok();
         stream.flush().ok();
-        return token;
+        return outcome.map_err(|failure| failure.error);
     }
 }
 
@@ -5233,11 +5344,11 @@ mod tests {
     }
 
     /// Run the real listener half of `longhouse auth` on a background thread
-    /// with a stand-in redeem, and hand back the port a browser would reach.
+    /// with a stand-in finish, and hand back the port a browser would reach.
     fn spawn_callback_listener(
         state: &str,
         read_timeout: Duration,
-        redeem: impl FnOnce(&str) -> anyhow::Result<String> + Send + 'static,
+        redeem: impl FnOnce(&str) -> Result<String, ConnectFailure> + Send + 'static,
     ) -> (u16, std::thread::JoinHandle<anyhow::Result<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -5299,17 +5410,128 @@ mod tests {
     }
 
     #[test]
-    fn browser_auth_callback_reports_a_refused_redeem_to_the_browser() {
-        let (port, handle) =
-            spawn_callback_listener("s", Duration::from_secs(10), |_| anyhow::bail!("expired"));
+    fn browser_auth_callback_reports_a_failed_connection_to_the_browser() {
+        let (port, handle) = spawn_callback_listener("s", Duration::from_secs(10), |_| {
+            Err(connect_failure("identity_unresolved")(anyhow::anyhow!(
+                "host said nothing useful"
+            )))
+        });
         let mut client = connect_to_callback(port);
         client
             .write_all(&browser_navigation(port, "state=s&code=c"))
             .unwrap();
 
-        assert!(handle.join().unwrap().is_err());
-        assert!(read_callback_response(&mut client)
-            .contains("Location: https://longhouse.ai/settings/devices?connected=0\r\n"));
+        let error = handle.join().unwrap().unwrap_err();
+        assert!(
+            error.to_string().contains("host said nothing useful"),
+            "{error}"
+        );
+        let response = read_callback_response(&mut client);
+        assert!(
+            response.contains(
+                "Location: https://longhouse.ai/settings/devices?connected=0&reason=identity_unresolved\r\n"
+            ),
+            "unexpected response: {response}"
+        );
+    }
+
+    /// A stand-in Runtime Host for the browser connection: it redeems the
+    /// code, accepts the token, then cannot say which device it belongs to.
+    /// Returns every request it saw as "METHOD path".
+    fn spawn_redeem_then_fail_host() -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+                let mut content_length = 0usize;
+                let mut authorization = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let line = line.trim_end();
+                    if line.is_empty() {
+                        break;
+                    }
+                    let (name, value) = line.split_once(':').unwrap();
+                    match name.to_ascii_lowercase().as_str() {
+                        "content-length" => content_length = value.trim().parse().unwrap(),
+                        "authorization" => authorization = value.trim().to_string(),
+                        _ => {}
+                    }
+                }
+                let mut body = vec![0; content_length];
+                reader.read_exact(&mut body).unwrap();
+                let mut parts = request_line.split_whitespace();
+                let method = parts.next().unwrap().to_string();
+                let path = parts.next().unwrap().split('?').next().unwrap().to_string();
+                let (status, body) = match (method.as_str(), path.as_str()) {
+                    ("POST", "/api/devices/connect-codes/redeem") => (
+                        "201 Created",
+                        json!({"id": "tok-1", "device_id": "mac", "token": "zdt_fresh",
+                               "created_at": "2026-09-27T00:00:00Z"})
+                        .to_string(),
+                    ),
+                    ("GET", "/api/agents/sessions") => {
+                        ("200 OK", json!({"sessions": []}).to_string())
+                    }
+                    ("GET", "/api/agents/storage/v2/capabilities") => {
+                        ("500 Internal Server Error", "{}".to_string())
+                    }
+                    ("DELETE", "/api/devices/tokens/tok-1") => {
+                        assert_eq!(authorization, "Bearer zdt_fresh");
+                        ("204 No Content", String::new())
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+                seen.push(format!("{method} {path}"));
+            }
+            seen
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn browser_connection_that_fails_after_redeem_stores_nothing_and_revokes_the_token() {
+        let home = tempfile::tempdir().unwrap();
+        let machine_dir = home.path().join("machine");
+        let (url, host) = spawn_redeem_then_fail_host();
+        let failure = temp_env::with_var("NO_PROXY", Some("127.0.0.1"), || {
+            finish_browser_connect(&url, "code", "verifier", |token| {
+                assert_eq!(token, "zdt_fresh");
+                store_device_credentials(&machine_dir, json!({}), &url, None, token)
+            })
+        })
+        .unwrap_err();
+
+        // The page is told why, the terminal gets the whole story.
+        assert_eq!(failure.reason, "identity_unresolved");
+        assert!(
+            failure.error.to_string().contains("HTTP 500"),
+            "{:#}",
+            failure.error
+        );
+        assert_eq!(
+            host.join().unwrap(),
+            [
+                "POST /api/devices/connect-codes/redeem",
+                "GET /api/agents/sessions",
+                "GET /api/agents/storage/v2/capabilities",
+                "DELETE /api/devices/tokens/tok-1",
+            ]
+        );
+        assert!(!machine_dir.join("device-token").exists());
+        assert!(!machine_dir.join("state.json").exists());
     }
 
     #[test]
@@ -5322,7 +5544,7 @@ mod tests {
             "https://longhouse.ai",
             Duration::from_secs(1),
             Duration::from_millis(300),
-            |_| panic!("nothing arrived to redeem"),
+            |_| -> Result<(), ConnectFailure> { panic!("nothing arrived to redeem") },
         )
         .unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(5));

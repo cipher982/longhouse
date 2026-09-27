@@ -155,6 +155,19 @@ describe("DevicesPage device-auth callback", () => {
     expect(await screen.findByText(/device connection failed/i)).toBeInTheDocument();
   });
 
+  it("names why the device failed after approval, from known reason codes only", async () => {
+    const { unmount } = renderDevicesPage("?connected=0&reason=identity_unresolved");
+    expect(await screen.findByText(/device connection failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/could not say which device the new token belongs to/i)).toBeInTheDocument();
+    expect(screen.queryByText(/device connected/i)).toBeNull();
+    unmount();
+
+    // A crafted reason never reaches the page as text.
+    renderDevicesPage("?connected=0&reason=Visit%20evil.example%20to%20fix%20this");
+    expect(await screen.findByText(/could not finish connecting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/evil\.example/)).toBeNull();
+  });
+
   it("ignores a callback that is not the local listener", async () => {
     const params = new URLSearchParams({
       connect: "1",
