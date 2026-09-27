@@ -202,6 +202,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(optimisticMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertFalse(app.staticTexts["Longhouse"].exists)
         XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
+        XCTAssertTrue(app.staticTexts["Sending…"].exists)
         let optimisticShot = XCTAttachment(screenshot: app.screenshot())
         optimisticShot.name = "helm-send-optimistic"
         optimisticShot.lifetime = .keepAlways
