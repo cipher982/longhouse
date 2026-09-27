@@ -18,17 +18,8 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import { SectionHeader, EmptyState, Button, Badge, PageShell, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { parseUTC } from "../lib/dateUtils";
+import { connectMachineCommand, connectServerCommand } from "../lib/connectCommands";
 import "./DevicesPage.css";
-
-/** One line that installs Longhouse on a server and connects it as `deviceId`. */
-export function connectServerCommand(deviceId: string, token: string): string {
-  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  return (
-    `curl -fsSL https://get.longhouse.ai/install.sh | ` +
-    `LONGHOUSE_URL=${quote(window.location.origin)} LONGHOUSE_DEVICE_TOKEN=${quote(token)} ` +
-    `LONGHOUSE_MACHINE_NAME=${quote(deviceId)} bash`
-  );
-}
 
 function formatDate(iso: string | null): string {
   if (!iso) return "Never";
@@ -313,8 +304,8 @@ export default function DevicesPage() {
 
       {/* CLI setup instructions */}
       <div className="cli-instructions">
-        <h4>CLI Setup</h4>
-        <code>{`curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse auth --url ${window.location.origin}`}</code>
+        <h4>Connect a machine</h4>
+        <code>{connectMachineCommand()}</code>
       </div>
 
       {/* Create modal */}

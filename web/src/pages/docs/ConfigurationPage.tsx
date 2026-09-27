@@ -132,6 +132,11 @@ longhouse-server serve --db sqlite:///path/to/your.db`}
             <td>Public URL shown to clients when no <code>--domain</code> is stored</td>
           </tr>
           <tr>
+            <td><code>LONGHOUSE_URL</code></td>
+            <td>(none)</td>
+            <td>Runtime Host address the installer stores for <code>longhouse auth</code></td>
+          </tr>
+          <tr>
             <td><code>LONGHOUSE_DEVICE_TOKEN</code></td>
             <td>(none)</td>
             <td>Device token read by <code>longhouse auth</code></td>
@@ -146,7 +151,7 @@ longhouse-server serve --db sqlite:///path/to/your.db`}
         you pair the device:
       </p>
       <CodeBlock title="terminal">
-        {`LONGHOUSE_DEVICE_TOKEN="..." longhouse auth --url https://your-runtime.example --device my-vps`}
+        {`LONGHOUSE_DEVICE_TOKEN="..." longhouse auth --url https://you.longhouse.ai --device my-vps`}
       </CodeBlock>
       <p>
         That writes the name into the device state file. Restart the Machine

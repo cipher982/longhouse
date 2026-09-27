@@ -1,0 +1,55 @@
+@layer components {
+  .connect-machine {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .connect-machine-label {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+  }
+
+  .connect-machine-command {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    background: var(--color-surface-secondary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-lg);
+  }
+
+  .connect-machine-command code {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    line-height: var(--font-line-height-relaxed);
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+
+  .connect-machine-command .ui-button {
+    flex-shrink: 0;
+  }
+
+  .connect-machine-hint {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    line-height: var(--font-line-height-relaxed);
+    color: var(--color-text-secondary);
+  }
+
+  .connect-machine-hint a {
+    color: var(--color-brand-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}

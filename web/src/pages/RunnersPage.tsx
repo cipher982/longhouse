@@ -98,18 +98,18 @@ export default function RunnersPage() {
           actions={
             <Button variant="primary" data-testid="runners-add-button" onClick={() => setShowAddModal(true)}>
               <PlusIcon />
-              Connect Machine
+              Connect a machine
             </Button>
           }
         />
 
         {runners && runners.length === 0 ? (
           <EmptyState
-            title="No machines connected yet"
-            description="Connect a laptop, homelab box, Mac mini, or VPS so Longhouse can start sessions and run commands where your work lives."
+            title="No Runners yet"
+            description="Connected machines appear in the timeline and the session launcher. A Runner is an optional extra for running shell commands on one from the browser."
             action={
               <Button variant="primary" size="lg" data-testid="runners-add-first-button" onClick={() => setShowAddModal(true)}>
-                Connect your first machine
+                Connect a machine
               </Button>
             }
           />

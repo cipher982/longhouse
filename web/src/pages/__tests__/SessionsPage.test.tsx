@@ -742,11 +742,15 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
-    expect(screen.getByText(/Run one command on the machine where you use Claude Code/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "See setup steps" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Machines" })).toBeInTheDocument();
-    expect(screen.getByText("LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url https://your-runtime.example")).toBeInTheDocument();
-    expect(screen.getByText("longhouse machine repair --repair-service")).toBeInTheDocument();
+    expect(screen.getByText(/on the machine where you use Claude Code/i)).toBeInTheDocument();
+    // One command, carrying this Runtime Host's own address.
+    expect(screen.getByTestId("connect-machine-command")).toHaveTextContent(
+      `curl -fsSL https://get.longhouse.ai/install.sh | LONGHOUSE_URL='${window.location.origin}' bash`,
+    );
+    expect(screen.getByRole("link", { name: "Create a server command" })).toHaveAttribute("href", "/settings/devices");
+    expect(document.body).not.toHaveTextContent("your-runtime.example");
+    expect(document.body).not.toHaveTextContent("LONGHOUSE_DEVICE_TOKEN");
+    expect(screen.queryByRole("button", { name: "See setup steps" })).not.toBeInTheDocument();
     expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
   });
 

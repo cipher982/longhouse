@@ -27,13 +27,13 @@ Longhouse does not replace a provider with its own agent runtime or terminal UI.
 **Shell installer** (Linux, WSL, or Mac without the app):
 
 ```bash
-curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse auth --url https://your-runtime.example
-longhouse machine repair --repair-service
+curl -fsSL https://get.longhouse.ai/install.sh | LONGHOUSE_URL=https://you.longhouse.ai bash
 ```
 
-The shell installer installs the native pair. On macOS it also drops
-`Longhouse.app` into `/Applications`; open it to finish setup. Runtime Host
+The shell installer installs the native pair, stores the Runtime Host
+address, opens it in a browser to approve this machine, and starts the
+Machine Agent. On macOS it also drops `Longhouse.app` into `/Applications`.
+An empty timeline shows this line with its own address filled in. Runtime Host
 operators install `longhouse-server` in that server environment.
 
 ## First Session

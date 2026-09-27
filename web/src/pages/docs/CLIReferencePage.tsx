@@ -100,12 +100,15 @@ longhouse antigravity`}
       <h3>longhouse auth</h3>
       <p>
         Store the device credential this machine uses for every other native
-        command. The token comes from the environment, or from a browser
-        pairing flow.
+        command. Without a token in the environment it opens the Runtime Host
+        in a browser to approve this machine. The URL defaults to the one
+        stored on this machine, which the installer writes from{" "}
+        <code>LONGHOUSE_URL</code>.
       </p>
       <CodeBlock title="terminal">
-        {`LONGHOUSE_DEVICE_TOKEN="..." longhouse auth --url https://your-runtime.example
-longhouse auth --url https://your-runtime.example --browser
+        {`longhouse auth
+longhouse auth --url https://you.longhouse.ai
+LONGHOUSE_DEVICE_TOKEN="..." longhouse auth --url https://you.longhouse.ai
 longhouse auth --clear`}
       </CodeBlock>
 
@@ -172,7 +175,7 @@ longhouse-server serve --stop               # stop the background server`}
       </p>
       <CodeBlock title="terminal">
         {`longhouse-server onboard
-longhouse-server onboard --remote-url https://your-runtime.example`}
+longhouse-server onboard --remote-url https://you.longhouse.ai`}
       </CodeBlock>
 
       <h3>longhouse-server ship</h3>

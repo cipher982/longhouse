@@ -625,6 +625,30 @@
     margin: var(--space-3) 0 0 0;
   }
 
+  /* Optional Runner section (AddRunnerModal) */
+
+  .add-runner-optional {
+    margin-top: var(--space-6);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border-primary);
+  }
+
+  .add-runner-optional > summary {
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+  }
+
+  .add-runner-modal .modal-actions {
+    margin-top: var(--space-5);
+  }
+
+  .add-runner-optional[open] > summary {
+    margin-bottom: var(--space-4);
+    color: var(--color-text-primary);
+  }
+
   /* Install method tabs (AddRunnerModal) */
 
   .install-tabs {

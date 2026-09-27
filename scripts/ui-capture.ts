@@ -88,6 +88,7 @@ const SCENES = [
   "landing",
   "landing-search",
   "landing-session",
+  "first-run",
 ] as const;
 type SceneName = (typeof SCENES)[number];
 
@@ -96,6 +97,9 @@ const LANDING_TIMELINE_SCENES: readonly SceneName[] = ["landing", "landing-searc
 // Scenes that render the launch sheet with a machine that has run models.
 const LAUNCH_MODEL_SCENES: readonly SceneName[] = ["launch-model-picker", "launch-model-picked"];
 const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session"];
+// A brand-new Runtime Host: no sessions, no machines. The timeline shows its
+// connect command; the machines page opens its Connect a machine sheet.
+const FIRST_RUN_SCENE: SceneName = "first-run";
 
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
@@ -257,7 +261,8 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-attention" ||
     scene === "session-resume" ||
     scene === "session-stale-observation" ||
-    scene === "session-tones"
+    scene === "session-tones" ||
+    scene === FIRST_RUN_SCENE
   );
 }
 
@@ -566,6 +571,20 @@ async function installSceneMocks(
     const requestUrl = new URL(route.request().url());
     const pathname = requestUrl.pathname;
 
+    if (scene === FIRST_RUN_SCENE && pathname === "/api/timeline/sessions") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...fixture.sessions, sessions: [], total: 0, has_real_sessions: false }),
+      });
+      return;
+    }
+
+    if (scene === FIRST_RUN_SCENE && (pathname === "/api/runners/" || pathname === "/api/runners")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runners: [] }) });
+      return;
+    }
+
     if (pathname === "/api/timeline/sessions") {
       const sessions = LANDING_TIMELINE_SCENES.includes(scene)
         ? buildLandingTimelineFixture(requestUrl.searchParams.get("query") ?? "").sessions
@@ -772,12 +791,13 @@ const LANDING_APP_SHELL: Record<string, unknown> = {
 };
 
 async function sealOrFallback(route: Route, scene: SceneName, pathname: string): Promise<void> {
-  if (LANDING_SCENES.includes(scene)) {
+  // Sealed scenes never reach the dev proxy (which forwards to a real host).
+  if (LANDING_SCENES.includes(scene) || scene === FIRST_RUN_SCENE) {
     if (pathname in LANDING_APP_SHELL) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LANDING_APP_SHELL[pathname]) });
       return;
     }
-    console.log(`  [landing] unmocked ${route.request().method()} ${pathname} -> 404`);
+    console.log(`  [${scene}] unmocked ${route.request().method()} ${pathname} -> 404`);
     await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
     return;
   }
@@ -806,7 +826,12 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     Date.now = () => fixtureNow;
   }, fixtureNowIso);
 
-  if (scene === "timeline-card-stress" || scene === "launch-unavailable" || LANDING_TIMELINE_SCENES.includes(scene)) {
+  if (
+    scene === "timeline-card-stress" ||
+    scene === "launch-unavailable" ||
+    scene === FIRST_RUN_SCENE ||
+    LANDING_TIMELINE_SCENES.includes(scene)
+  ) {
     await page.addInitScript(() => {
       Object.defineProperty(window, "EventSource", {
         configurable: true,
@@ -838,6 +863,11 @@ async function captureBundle(
     await page.waitForSelector("[data-screenshot-ready='true'], [data-ready='true']", { timeout: 5000 });
   } catch {
     await page.waitForLoadState("networkidle", { timeout: 10000 });
+  }
+
+  if (scene === FIRST_RUN_SCENE && pageName === "machines") {
+    await page.click("[data-testid='runners-add-first-button']");
+    await page.waitForSelector("[data-testid='connect-machine-command']", { timeout: 5000 });
   }
 
   if (scene === "launch-unavailable") {

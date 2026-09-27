@@ -16,34 +16,35 @@ export default function QuickStartPage() {
         first proof it is already useful on this machine.
       </p>
 
-      <h2>1. Install</h2>
-      <p>Run the installer on macOS, Linux, or WSL:</p>
+      <h2>1. Connect a machine</h2>
+      <p>
+        Run this on the machine where you use Claude Code, Codex, or another
+        coding agent (macOS, Linux, or WSL), with your Longhouse address in
+        place of the example. An empty timeline shows this line with its own
+        address filled in.
+      </p>
       <CodeBlock title="terminal">
-        {`curl -fsSL https://get.longhouse.ai/install.sh | bash`}
+        {`curl -fsSL https://get.longhouse.ai/install.sh | LONGHOUSE_URL=https://you.longhouse.ai bash`}
       </CodeBlock>
       <p>
-        On Apple Silicon Macs, you can also download <code>Longhouse.app</code>{" "}
-        directly. The app download and terminal bootstrap install the same Mac
-        product.
+        It installs Longhouse (on a Mac, also <code>Longhouse.app</code>), opens
+        your Longhouse in the browser to approve the machine, and starts its
+        Machine Agent. No Python runtime and no sudo needed.
       </p>
       <p>
-        The installer only acquires Longhouse. On macOS, it installs{" "}
-        <code>Longhouse.app</code> in <code>/Applications</code>. On Linux or
-        WSL, it installs the CLI. Setup is the next step, not part of the
-        installer itself.
-      </p>
-      <p>
-        No Python runtime is required on the device. No sudo needed.
+        No browser on that machine, such as a server over SSH? In{" "}
+        <strong>Settings → Devices</strong>, create a token; the page gives you
+        one line that connects the server without a browser.
       </p>
 
-      <h2>2. Open Longhouse</h2>
+      <h2>2. Finish later</h2>
       <p>
-        On macOS, open <code>Longhouse.app</code> to finish setup. On Linux or
-        WSL, authenticate the native pair and install its Machine Agent service:
+        If you skipped the approval or installed without an address, open{" "}
+        <code>Longhouse.app</code> on a Mac and choose{" "}
+        <strong>Sign in to connect this Mac</strong>. Anywhere else:
       </p>
       <CodeBlock title="terminal">
-        {`export LONGHOUSE_DEVICE_TOKEN="..."
-longhouse auth --url https://your-runtime.example
+        {`longhouse auth --url https://you.longhouse.ai
 longhouse machine repair --repair-service`}
       </CodeBlock>
       <p>

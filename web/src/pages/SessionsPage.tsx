@@ -39,6 +39,7 @@ import { TimelineInbox } from "../components/sessions/TimelineInbox";
 import { InboxTuner } from "../components/sessions/InboxTuner";
 import { FilterChip, FilterPopover } from "../components/sessions/SessionsFilter";
 import LaunchSessionModal from "../components/LaunchSessionModal";
+import ConnectMachine from "../components/ConnectMachine";
 import { Sparkline } from "../components/instruments/Sparkline";
 import { bucketTimestamps } from "../components/instruments/activityBuckets";
 import {
@@ -477,48 +478,20 @@ export default function SessionsPage() {
         <div className="sessions-hero-empty">
           <EmptyState
             title="Connect your first machine"
-            description="Run one command on the machine where you use Claude Code, Codex, or Antigravity and your sessions will start appearing here."
-            action={
-              <div className="sessions-guided-actions">
-                <Button
-                  variant="primary"
-                  size="md"
-                  onClick={() => navigate("/docs/quickstart")}
-                >
-                  See setup steps
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="md"
-                  onClick={() => setLaunchModalOpen(true)}
-                  data-testid="timeline-empty-start-session"
-                >
-                  Start a session
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="md"
-                  onClick={() => navigate("/runners")}
-                  data-testid="timeline-empty-runner-action"
-                >
-                  Machines
-                </Button>
-              </div>
-            }
+            description="Longhouse imports the sessions a machine already has, then keeps them in sync."
           />
           <div className="sessions-guided-steps">
-            <p className="sessions-guided-steps-label">Run this on your machine:</p>
-            <ol className="sessions-guided-steps-list">
-              <li><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code> &mdash; install the CLI</li>
-              <li><code>LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url https://your-runtime.example</code> &mdash; link this machine</li>
-              <li><code>longhouse machine repair --repair-service</code> &mdash; start the native Machine Agent</li>
-            </ol>
-            <p className="sessions-guided-cli-hint">
-              Works with{" "}
-              <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
-              <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
-              <a href="https://antigravity.google/product/antigravity-cli" target="_blank" rel="noopener noreferrer">Antigravity CLI</a>.
-            </p>
+            <ConnectMachine />
+          </div>
+          <div className="sessions-guided-actions">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLaunchModalOpen(true)}
+              data-testid="timeline-empty-start-session"
+            >
+              Machine already connected? Start a session
+            </Button>
           </div>
         </div>
         <LaunchSessionModal

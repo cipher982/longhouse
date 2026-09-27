@@ -12,7 +12,8 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmProvider } from "../../components/confirm";
-import DevicesPage, { connectServerCommand } from "../DevicesPage";
+import DevicesPage from "../DevicesPage";
+import { connectServerCommand } from "../../lib/connectCommands";
 
 const deviceApiMocks = vi.hoisted(() => ({
   listDeviceTokens: vi.fn(),

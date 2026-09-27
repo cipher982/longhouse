@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test.describe('Runner onboarding install modes', () => {
-  test('runners page exposes desktop and server install commands', async ({ page }) => {
+  test('machines page leads with the Machine Agent; the Runner is an optional extra', async ({ page }) => {
     await page.goto('/runners', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-ready="true"]', { timeout: 15_000 });
 
@@ -12,7 +12,13 @@ test.describe('Runner onboarding install modes', () => {
     const modal = page.getByTestId('add-runner-modal');
     await expect(modal).toBeVisible();
 
+    const machineCommand = page.getByTestId('connect-machine-command');
+    await expect(machineCommand).toContainText('get.longhouse.ai/install.sh');
+    await expect(machineCommand).toContainText('LONGHOUSE_URL=');
     const command = page.getByTestId('add-runner-command');
+    await expect(command).toHaveCount(0);
+
+    await page.getByTestId('add-runner-optional-toggle').click();
     await expect(command).toContainText('curl -fsSL', { timeout: 15_000 });
     await expect(command).toContainText('/api/runners/install.sh');
     await expect(command).toContainText('ENROLL_TOKEN=');
