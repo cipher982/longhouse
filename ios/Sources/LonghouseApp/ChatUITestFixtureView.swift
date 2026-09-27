@@ -877,7 +877,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
-        let delay = fixtureName == "helm-channel-reconcile" ? 3_000_000_000 : 650_000_000
+        let delay = fixtureName == "helm-channel-reconcile" ? 20_000_000_000 : 650_000_000
         try await Task.sleep(nanoseconds: UInt64(delay))
         let inputID = nextEventID
         events.append(Self.makeEvent(
@@ -895,6 +895,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 clientRequestId: clientRequestId
             )
         ))
+        nextEventID += 1
         if fixtureName == "console-reconcile" {
             Task {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
