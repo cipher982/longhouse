@@ -1104,8 +1104,9 @@ fn revoke_unstored_token(runtime_url: &str, redeemed: &RedeemedToken) -> anyhow:
             .timeout(Duration::from_secs(30))
             .send()
             .await?;
-        // 404 or 401: the host already holds no usable token under that id.
-        if !(response.status().is_success() || matches!(response.status().as_u16(), 401 | 404)) {
+        // 404: the host already holds no token under that id. A 401 is not
+        // proof of that, so it is reported rather than called a revoke.
+        if !(response.status().is_success() || response.status().as_u16() == 404) {
             anyhow::bail!("HTTP {}", response.status());
         }
         Ok(())

@@ -291,7 +291,7 @@ http
           return;
         }
         res.statusCode = 201;
-        res.end(JSON.stringify({ token: "zdt_browser_fixture_token" }));
+        res.end(JSON.stringify({ id: "browser-fixture-token-id", device_id: "native-installer-smoke-device", token: "zdt_browser_fixture_token", created_at: "2026-01-01T00:00:00Z" }));
         return;
       }
       // A device token names its device; `longhouse auth` adopts that name.
