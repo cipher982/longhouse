@@ -877,22 +877,24 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
-        try await Task.sleep(nanoseconds: 650_000_000)
+        let delay = fixtureName == "helm-channel-reconcile" ? 3_000_000_000 : 650_000_000
+        try await Task.sleep(nanoseconds: UInt64(delay))
         let inputID = nextEventID
         events.append(Self.makeEvent(
             id: nextEventID,
             role: "user",
             content: text,
             timestamp: ISO8601DateFormatter().string(from: Date()),
-            // A Console echo has no archive input id; the server links the
-            // delivered receipt at ingest and stamps the client_request_id.
+            // The storage boundary strips Claude channel framing, then links
+            // this event to the accepted receipt by client_request_id.
             inputOrigin: SessionInputOrigin(
                 authoredVia: .longhouse,
-                sessionInputId: fixtureName == "console-reconcile" ? nil : inputID,
+                sessionInputId: ["console-reconcile", "helm-channel-reconcile"].contains(fixtureName)
+                    ? nil
+                    : inputID,
                 clientRequestId: clientRequestId
             )
         ))
-        nextEventID += 1
         if fixtureName == "console-reconcile" {
             Task {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -1215,6 +1217,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Wire up OAuth refresh flow"
         case "loading-long-title":
             return "A very long session title that must stay inside the navigation bar"
+        case "helm-channel-reconcile":
+            return "Helm Send Reconciliation"
         case "background-tasks":
             return "Background Tasks"
         case "background-tasks-transition":
@@ -1243,33 +1247,36 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     ) -> SessionDetail {
         // Marketing captures must not leak test-harness copy into the chrome.
         let isMarketing = title == titleForFixture("marketing")
+        let isHelmChannelReconcile = title == titleForFixture("helm-channel-reconcile")
         let composerPlaceholder = isMarketing
             ? "Message"
             : "Steer this turn"
-        let idleDetail = isMarketing ? "Waiting for input" : "Waiting for UI test input"
+        let idleDetail = isHelmChannelReconcile
+            ? "Working on the current turn"
+            : (isMarketing ? "Waiting for input" : "Waiting for UI test input")
         let available = SessionStateAction(state: "available", reason: nil)
         let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
         var detail = SessionDetail(
             id: sessionID,
             title: title,
-            provider: "codex",
+            provider: isHelmChannelReconcile ? "claude" : "codex",
             project: "longhouse",
             cwd: "/Users/example/git/zerg/longhouse",
             gitBranch: "main",
             summary: title,
             summaryTitle: title,
-            presenceState: "idle",
+            presenceState: isHelmChannelReconcile ? "thinking" : "idle",
             presenceTool: nil,
             userState: "active",
-            status: "idle",
+            status: isHelmChannelReconcile ? "thinking" : "idle",
             lastActivityAt: events.last?.timestamp,
-            displayPhase: "Idle",
+            displayPhase: isHelmChannelReconcile ? "Thinking" : "Idle",
             activeTool: nil,
             homeLabel: "MacBook",
             originLabel: "UI test",
             capabilities: SessionCapabilities(
                 canQueueNextInput: true,
-                canSteerActiveTurn: false,
+                canSteerActiveTurn: isHelmChannelReconcile,
                 defaultInputIntent: "auto",
                 composerPlaceholder: composerPlaceholder,
                 attachImages: false
@@ -1277,16 +1284,16 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "live",
                 signalTier: "none",
-                state: "idle",
-                tone: "idle",
-                headline: "Idle",
+                state: isHelmChannelReconcile ? "thinking" : "idle",
+                tone: isHelmChannelReconcile ? "thinking" : "idle",
+                headline: isHelmChannelReconcile ? "Thinking" : "Idle",
                 detail: idleDetail,
-                phaseLabel: "Idle",
+                phaseLabel: isHelmChannelReconcile ? "Thinking" : "Idle",
                 compactToolLabel: nil,
                 isLive: true,
-                isExecuting: false,
+                isExecuting: isHelmChannelReconcile,
                 needsAttention: false,
-                isIdle: true,
+                isIdle: !isHelmChannelReconcile,
                 isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
@@ -1305,7 +1312,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     dispositionCloseReason: nil,
                     launchState: nil,
                     runLifecycle: "running",
-                    activityState: "quiescent",
+                    activityState: isHelmChannelReconcile ? "thinking" : "quiescent",
                     activityRawKind: nil,
                     activityTool: nil,
                     activitySource: nil,
@@ -1326,7 +1333,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     branch: unavailable,
                     pendingInteractionKind: nil,
                     transcriptConvergence: "current",
-                    primary: SessionStateLabel(key: "idle", label: "Idle", tone: "idle", observedAt: nil),
+                    primary: SessionStateLabel(
+                        key: isHelmChannelReconcile ? "thinking" : "idle",
+                        label: isHelmChannelReconcile ? "Thinking" : "Idle",
+                        tone: isHelmChannelReconcile ? "thinking" : "idle",
+                        observedAt: nil
+                    ),
                     access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),
                     transcript: nil,
                     commitSeq: nil
