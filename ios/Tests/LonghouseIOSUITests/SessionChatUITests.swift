@@ -178,6 +178,11 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Console fixture durable reply."].waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
         XCTAssertFalse(app.staticTexts["Working..."].exists)
+
+        let frame = XCTAttachment(screenshot: app.screenshot())
+        frame.name = "console-send-reconciled"
+        frame.lifetime = .keepAlways
+        add(frame)
     }
 
     /// The provider's turn accounting renders as a footer inside the reply row.

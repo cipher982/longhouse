@@ -242,6 +242,36 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func sessionInputErrorsDistinguishRejectionsFromUnknownOutcomes() throws {
+        let rejected = try #require("""
+        {"detail": "unsupported attachment type: application/octet-stream"}
+        """.data(using: .utf8))
+        guard case let .httpRejected(status, message)? = LonghouseAPI.parseSessionInputError(
+            statusCode: 400,
+            data: rejected
+        ) else {
+            Issue.record("expected a definitive session-input rejection")
+            return
+        }
+        #expect(status == 400)
+        #expect(message == "unsupported attachment type: application/octet-stream")
+
+        let turnEnded = try #require("""
+        {"detail": {"error_code": "turn_ended", "message": "Active turn already ended."}}
+        """.data(using: .utf8))
+        guard case let .structured(status, code, message)? = LonghouseAPI.parseSessionInputError(
+            statusCode: 409,
+            data: turnEnded
+        ) else {
+            Issue.record("expected structured turn-ended semantics")
+            return
+        }
+        #expect(status == 409)
+        #expect(code == "turn_ended")
+        #expect(message == "Active turn already ended.")
+    }
+
+    @Test
     func structuredErrorParsingAlsoAcceptsCodeField() throws {
         let data = try #require("""
         {

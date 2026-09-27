@@ -835,6 +835,51 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func rejectedAttachmentSendIsTerminalAndKeepsTheServerReason() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        let serverReason = "unsupported attachment type: application/octet-stream"
+        await api.setSendSteps([.httpRejected(status: 400, message: serverReason)])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-http-rejection-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+        let attachment = ComposerAttachment(
+            id: UUID(),
+            filename: "shot.jpg",
+            data: Data([0xFF, 0xD8, 0xFF, 0xD9]),
+            mimeType: "image/jpeg",
+            thumbnail: nil
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(
+            text: "Inspect this screenshot",
+            sessionId: "session-1",
+            appState: appState,
+            attachments: [attachment]
+        )
+
+        #expect(!sent)
+        #expect(model.submittedInputs.first?.phase == .failed)
+        #expect(model.submittedInputs.first?.lastError == serverReason)
+        #expect(model.errorMessage == "Could not send: \(serverReason)")
+        #expect(model.refreshErrorMessage == nil)
+        #expect(store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        ).isEmpty)
+    }
+
+    @Test
     func deliveryUnknownErrorRetainsSamePendingOperation() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
@@ -2204,6 +2249,7 @@ private actor StreamStartCounter {
 private enum FakeSendStep: Sendable {
     case response(SessionInputResponse)
     case requestFailed
+    case httpRejected(status: Int, message: String)
     case turnEnded(String)
 }
 
@@ -2346,6 +2392,8 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
                 return response
             case .requestFailed:
                 throw LonghouseAPIError.requestFailed
+            case .httpRejected(let status, let message):
+                throw LonghouseAPIError.httpRejected(status: status, message: message)
             case .turnEnded(let message):
                 throw LonghouseAPIError.structured(status: 409, errorCode: "turn_ended", message: message)
             }

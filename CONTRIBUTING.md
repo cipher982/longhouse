@@ -108,6 +108,11 @@ Do not provide provider credentials to fixture targets.
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared
 conftest). For `ios/` changes, use the native CI lane described below.
 
+For iOS image-send changes, assert the MIME type inside the attachment part's
+header block; checking for that string anywhere in the body misses malformed
+parts. Console send/reconciliation UI tests should assert rendered row counts
+and statuses, then attach a frame through `make ios-ui-shot TEST=<Suite>/<test>`.
+
 ### Native test isolation
 
 Native iOS, macOS packaging, installer, and WebKit onboarding fixtures run

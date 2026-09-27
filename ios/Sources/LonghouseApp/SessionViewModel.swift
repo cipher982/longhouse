@@ -3034,6 +3034,8 @@ final class SessionViewModel: ObservableObject {
             return "Longhouse couldn't confirm delivery. Refreshing to check whether it landed."
         case LonghouseAPIError.requestFailed:
             return "Longhouse couldn't confirm delivery. Refreshing to check whether it landed."
+        case LonghouseAPIError.httpRejected(_, let message):
+            return message
         case LonghouseAPIError.unexpectedResponse(let message):
             return message
         case LonghouseAPIError.serviceUnavailable:
@@ -3063,7 +3065,7 @@ final class SessionViewModel: ObservableObject {
                  .unexpectedResponse,
                  .serviceUnavailable:
                 return true
-            case .notAuthenticated, .conflict:
+            case .notAuthenticated, .conflict, .httpRejected(_, _):
                 return false
             }
         case is DecodingError:

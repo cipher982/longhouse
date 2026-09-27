@@ -820,8 +820,8 @@ struct LonghouseAPI: Sendable {
 
         let (data, httpResponse) = try await data(for: request)
         guard (200..<300).contains(httpResponse.statusCode) else {
-            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
-                throw structured
+            if let inputError = Self.parseSessionInputError(statusCode: httpResponse.statusCode, data: data) {
+                throw inputError
             }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
@@ -975,8 +975,8 @@ struct LonghouseAPI: Sendable {
             "status=\(httpResponse.statusCode) elapsed_ms=\(elapsedMs)"
         )
         guard (200..<300).contains(httpResponse.statusCode) else {
-            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
-                throw structured
+            if let inputError = Self.parseSessionInputError(statusCode: httpResponse.statusCode, data: data) {
+                throw inputError
             }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
@@ -1051,7 +1051,7 @@ struct LonghouseAPI: Sendable {
         for attachment in attachments {
             let safeFilename = sanitizeMultipartFilename(attachment.filename)
             body.append("\(dashes)\(boundary)\(crlf)".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"attachments\"; filename=\"\(safeFilename)\"\(crlf)\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"attachments\"; filename=\"\(safeFilename)\"\(crlf)".data(using: .utf8)!)
             body.append("Content-Type: \(attachment.mimeType)\(crlf)\(crlf)".data(using: .utf8)!)
             body.append(attachment.data)
             body.append(crlf.data(using: .utf8)!)
@@ -1098,16 +1098,45 @@ struct LonghouseAPI: Sendable {
     /// Returns nil when the body isn't structured, letting callers fall back to
     /// the generic `LonghouseAPIError.from(...)`.
     static func parseStructuredError(statusCode: Int, data: Data) -> LonghouseAPIError? {
-        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return nil
         }
-        let detail = (obj["detail"] as? [String: Any]) ?? obj
+        return parseStructuredError(statusCode: statusCode, object: object)
+    }
+
+    private static func parseStructuredError(
+        statusCode: Int,
+        object: [String: Any]
+    ) -> LonghouseAPIError? {
+        let detail = (object["detail"] as? [String: Any]) ?? object
         guard let code = (detail["error_code"] as? String) ?? (detail["code"] as? String) else {
             return nil
         }
         let message = (detail["message"] as? String) ?? (detail["error"] as? String) ?? ""
         return .structured(status: statusCode, errorCode: code, message: message)
     }
+
+    /// An explicit 4xx response is a known rejection, not an ambiguous delivery outcome.
+    static func parseSessionInputError(statusCode: Int, data: Data) -> LonghouseAPIError? {
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if let object,
+           let structured = parseStructuredError(statusCode: statusCode, object: object) {
+            return structured
+        }
+        switch statusCode {
+        case 401, 408, 409, 429:
+            return nil
+        case 400..<500:
+            break
+        default:
+            return nil
+        }
+        let detail = (object?["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = detail.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "Longhouse rejected this message (HTTP \(statusCode))."
+        return .httpRejected(status: statusCode, message: message)
+    }
+
 
     static func decodeSessionInputResponse(_ data: Data) throws -> SessionInputResponse {
         do {
@@ -1873,6 +1902,7 @@ extension LonghouseAPI: SessionWorkspaceClient {}
 
 enum LonghouseAPIError: Error {
     case requestFailed
+    case httpRejected(status: Int, message: String)
     case notAuthenticated
     case conflict
     case serviceUnavailable
@@ -1909,7 +1939,7 @@ enum LonghouseAPIError: Error {
             return true
         case .structured(_, let code, _):
             return code == "catalog_unavailable" || code == "turn_start_outcome_unknown"
-        case .requestFailed, .notAuthenticated, .conflict:
+        case .httpRejected(_, _), .requestFailed, .notAuthenticated, .conflict:
             return false
         }
     }
@@ -1947,6 +1977,8 @@ extension LonghouseAPIError: LocalizedError {
             return "Generation failed. Try again."
         case .unexpectedResponse(let message):
             return message
+        case .httpRejected(_, let message):
+            return message.isEmpty ? "Request was rejected." : message
         case .structured(_, _, let message):
             return message.isEmpty ? "Request was rejected." : message
         }
