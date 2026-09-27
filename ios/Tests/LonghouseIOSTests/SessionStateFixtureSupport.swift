@@ -26,11 +26,17 @@ func makeSessionStateFacts(
     lastResultOutcome: String? = nil,
     transcriptConvergence: String = "current",
     commitSeq: Int? = nil,
-    activityValidUntil: String? = nil
+    activityValidUntil: String? = nil,
+    /// Overrides the computed primary label -- for cases the `activity`
+    /// switch below cannot express, such as the server's Helm
+    /// idle-persistence override presenting key "idle" while `activityState`
+    /// itself is still "unknown" (its own window expired, but a fresher
+    /// control lease/terminal kept the presentation plain "Idle").
+    primaryOverride: SessionStateLabel? = nil
 ) -> SessionStateFacts {
     let available = SessionStateAction(state: "available", reason: nil)
     let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
-    let primary: SessionStateLabel = {
+    let primary: SessionStateLabel = primaryOverride ?? {
         if closed { return SessionStateLabel(key: "closed", label: "Closed", tone: "closed", observedAt: nil) }
         if pendingInteractionKind != nil {
             return SessionStateLabel(key: "needs_answer", label: "Needs answer", tone: "blocked", observedAt: nil)

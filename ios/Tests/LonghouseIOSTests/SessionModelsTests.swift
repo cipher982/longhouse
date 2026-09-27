@@ -277,6 +277,49 @@ struct SessionModelsTests {
     }
 
     @Test
+    func helmIdleOverrideReadsQuietNotUnknown() {
+        // Mirrors the server's Helm idle-persistence override
+        // (session_state_contract._primary) and web's resolveTimelineSignal:
+        // activityState itself is "unknown" (its own short window expired),
+        // but a fresher control lease/terminal kept the server's presentation
+        // plain "Idle". The dot must agree with that label instead of
+        // independently re-deriving "unknown" from the raw activity state.
+        let base = timelineSummary(activityRecency: "none")
+        let helmIdle = SessionSummary(
+            id: base.id,
+            title: base.title,
+            presenceState: base.presenceState,
+            provider: base.provider,
+            project: base.project,
+            lastActivityAt: base.lastActivityAt,
+            runtimeDisplay: base.runtimeDisplay,
+            timelineCard: base.timelineCard,
+            stateFacts: makeSessionStateFacts(
+                activity: "unknown",
+                primaryOverride: SessionStateLabel(key: "idle", label: "Idle", tone: "idle", observedAt: nil)
+            )
+        )
+        let signal = TimelineSignal.resolve(for: helmIdle)
+        #expect(signal == .quiet)
+        #expect(signal.accessibilityState == "Idle")
+
+        // Without the override (ordinary stale activity, e.g. a stale
+        // "thinking"/"running"), the row still reads unknown.
+        let ordinaryStale = SessionSummary(
+            id: base.id,
+            title: base.title,
+            presenceState: base.presenceState,
+            provider: base.provider,
+            project: base.project,
+            lastActivityAt: base.lastActivityAt,
+            runtimeDisplay: base.runtimeDisplay,
+            timelineCard: base.timelineCard,
+            stateFacts: makeSessionStateFacts(activity: "unknown")
+        )
+        #expect(TimelineSignal.resolve(for: ordinaryStale) == .unknown)
+    }
+
+    @Test
     func projectLabelIsAbsentRatherThanInvented() {
         let base = timelineSummary(activityRecency: "none")
 

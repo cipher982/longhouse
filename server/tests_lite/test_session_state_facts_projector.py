@@ -110,7 +110,7 @@ def _head(
     }
 
 
-def _activity(*, observed_at: datetime, valid_until: datetime, source: str = "provider_a") -> dict:
+def _activity(*, observed_at: datetime, valid_until: datetime, source: str = "provider_a", kind: str = "running") -> dict:
     return _head(
         family="activity",
         source=source,
@@ -119,8 +119,8 @@ def _activity(*, observed_at: datetime, valid_until: datetime, source: str = "pr
             "provider": "codex",
             "session_id": "session-1",
             "run_id": "run-1",
-            "kind": "running",
-            "raw_kind": "running",
+            "kind": kind,
+            "raw_kind": kind,
             "tool_name": "Shell",
             "source": source,
             "observed_at": observed_at.isoformat(),
@@ -650,6 +650,40 @@ def test_served_projector_describes_expired_activity_without_claiming_it_is_curr
     assert served.presentation.primary.key == "no_recent_activity"
     assert served.presentation.primary.label == "Last observed running a tool"
     assert served.presentation.primary.observed_at == NOW
+
+
+def test_served_projector_keeps_a_stale_helm_idle_observation_plain_idle():
+    """The served (catalogd) path exercise of David's 2026-09 product decision:
+    a managed Helm session's short activity lease (`ACTIVITY_OBSERVATION_LEASE`,
+    15s) can expire long before the control lease does (`lease_ttl_ms`, 60s
+    here). While the control lease is still fresh, an idle/needs_user
+    observation must stay plain "Idle" rather than decay into "Last observed
+    idle" the way `test_served_projector_describes_expired_activity_without_claiming_it_is_current`
+    (raw kind `running`) still correctly does.
+    """
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=83,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+        heads=[
+            _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=1), kind="idle"),
+            _control(observed_at=NOW, grants=["interrupt", "send_input"]),
+        ],
+        supported_operations={"send_input", "interrupt"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW + timedelta(seconds=30),
+    )
+
+    assert served.mode == "helm"
+    assert served.activity.state == "unknown"
+    assert served.activity.raw_kind == "idle"
+    assert served.control.connection == "connected"
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.key == "idle"
+    assert served.presentation.primary.label == "Idle"
+    assert served.presentation.primary.tone == "idle"
 
 
 def test_served_projector_without_control_head_fails_actions_closed():

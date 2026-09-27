@@ -242,6 +242,24 @@ describe("resolveTimelineSignal", () => {
     expect(timelineSignalLabel("unknown")).toBe("Activity unknown");
   });
 
+  it("a stale Helm idle observation the server kept as Idle reads quiet, not unknown", () => {
+    // Mirrors the server's Helm idle-persistence override
+    // (session_state_contract._primary): the activity axis itself is expired
+    // ("unknown"), but a fresh control lease/terminal makes the server present
+    // key "idle" anyway. The dot must agree with that label instead of
+    // independently re-deriving "unknown" from the raw activity state.
+    const session_state = makeSessionStateFacts({ activity: "unknown" });
+    session_state.presentation.primary = { key: "idle", label: "Idle", tone: "idle", observed_at: null };
+    expect(resolveTimelineSignal({ session_state, user_state: "active" })).toBe("quiet");
+  });
+
+  it("an ordinary stale activity observation (no server override) still reads unknown", () => {
+    expect(resolveTimelineSignal({
+      session_state: makeSessionStateFacts({ activity: "unknown" }),
+      user_state: "active",
+    })).toBe("unknown");
+  });
+
   it("a global connectivity banner suppresses attention", () => {
     expect(sig({ needs_attention: true }, { connectivityHealthy: false })).toBe("quiet");
   });

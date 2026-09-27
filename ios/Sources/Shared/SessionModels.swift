@@ -673,7 +673,14 @@ enum TimelineSignal {
         case "quiescent":
             return .quiet
         default:
-            return .unknown
+            // A managed Helm session's idle/needs_user activity observation can
+            // expire while its control lease or attached terminal stays fresh;
+            // the server already presents that as plain "Idle" rather than
+            // "Activity unknown" (session_state_contract._primary, the Helm
+            // idle-persistence override). Mirror that here instead of
+            // re-deriving "unknown" from the raw, now-expired activity state,
+            // matching web's `resolveTimelineSignal`.
+            return session.stateFacts.primary?.key == "idle" ? .quiet : .unknown
         }
     }
 }

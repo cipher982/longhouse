@@ -73,7 +73,12 @@ export function resolveTimelineSignal(
   if (needsSessionAttention(session)) return "attention";
   if (facts.activity.state === "thinking" || facts.activity.state === "executing") return "working";
   if (facts.activity.state === "blocked" || facts.activity.state === "stalled") return "attention";
-  if (facts.activity.state === "unknown") return "unknown";
+  // A managed Helm session's idle/needs_user activity observation can expire
+  // while its control lease or attached terminal stays fresh; the server
+  // already presents that as plain "Idle" rather than "Last observed idle"
+  // (session_state_contract._primary, the Helm idle-persistence override), so
+  // the dot must not contradict the label with "Activity unknown".
+  if (facts.activity.state === "unknown" && facts.presentation.primary?.key !== "idle") return "unknown";
   return "quiet";
 }
 

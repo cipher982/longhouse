@@ -110,6 +110,12 @@ _LAST_SEEN_LABEL: dict[str, str] = {
     "blocked": "Last observed blocked",
     "stalled": "Last observed stalled",
 }
+# A managed Helm session sees every turn start through hooks/channel, so an
+# idle/needs_user observation going stale is not the same kind of gap as
+# thinking/running/blocked going stale: nothing can have changed without
+# Longhouse observing it, as long as the control lease or terminal attachment
+# is still fresh. Only these two raw kinds get that treatment.
+_HELM_PERSISTENT_IDLE_KINDS = frozenset({"idle", "needs_user"})
 _ENDED_RUNTIME_STATES = {"session_ended", "process_gone", *RUN_TERMINAL_STATES}
 _ACTIVITY_MAP: dict[str, ActivityState] = {
     "thinking": "thinking",
@@ -1066,6 +1072,22 @@ def _primary(
         and control.actions.start_turn.state == "available"
     ):
         return SessionPresentationLabel(key="ready", label="Ready", tone="idle")
+    # For a managed Helm session, a fresh control lease or attached terminal is
+    # itself the evidence that nothing has changed since the last idle/
+    # needs_user observation -- Longhouse would have observed a new turn start.
+    # Stay a plain "Idle" instead of decaying into a last-seen note purely
+    # because the (much shorter) activity freshness window passed; only the
+    # liveness evidence itself going stale should demote it further down. This
+    # must run before the generic cross-axis block below, which would otherwise
+    # read the same expired activity as "Last observed idle".
+    if (
+        run is not None
+        and mode == "helm"
+        and activity.state == "unknown"
+        and activity.raw_kind in _HELM_PERSISTENT_IDLE_KINDS
+        and (control.connection in {"connected", "degraded"} or control.terminal_attached is True)
+    ):
+        return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     # Cross-axis composition: the activity axis is `unknown` (its evidence
     # expired), but we still hold the expired observation and the control lease
     # is live. Control does not create activity here; it only bounds how long an

@@ -163,14 +163,18 @@ def test_stale_observation_label_names_what_was_seen_and_carries_its_clock():
     "No recent activity (last: idle)" said nothing a reader could act on: `last`
     was the activity *kind*, not a time, so a quiet session read as broken. The
     label names the observation; `observed_at` lets every client render its age.
+
+    Uses a raw kind outside the Helm idle-persistence set (see
+    `test_helm_idle_with_a_live_control_lease_stays_plain_idle` below) so this
+    stays a test of the last-seen label itself, not of when it fires.
     """
 
-    facts = _facts(runtime=_runtime(phase="idle", confidence="stale"))
+    facts = _facts(runtime=_runtime(phase="running", confidence="stale", tool="Bash"))
 
     primary = facts.presentation.primary
     assert primary is not None
     assert primary.key == "no_recent_activity"
-    assert primary.label == "Last observed idle"
+    assert primary.label == "Last observed running a tool"
     assert primary.tone == "quiet"
     # The clock the clients render from.
     assert primary.observed_at is not None
@@ -178,7 +182,101 @@ def test_stale_observation_label_names_what_was_seen_and_carries_its_clock():
     # No claim of a current state, and no raw kind in the prose.
     assert "(last:" not in primary.label
     assert facts.activity.state == "unknown"
-    assert facts.activity.raw_kind == "idle"
+    assert facts.activity.raw_kind == "running"
+
+
+@pytest.mark.parametrize("phase", ["idle", "needs_user"])
+def test_helm_idle_with_a_live_control_lease_stays_plain_idle(phase):
+    """David's 2026-09 product decision: a managed Helm session sees every turn
+    start through hooks/channel, so a still-fresh control lease is itself the
+    evidence nothing changed since the last idle/needs_user observation. It
+    must not decay into "Last observed idle" the way a stale thinking/running
+    observation legitimately does (see
+    `test_expired_activity_with_live_control_is_unknown_plus_live_control`) --
+    only the liveness evidence itself going stale should demote it, which
+    `test_last_observed_idle_when_the_control_lease_has_gone_stale` covers.
+    """
+
+    facts = _facts(runtime=_runtime(phase=phase, confidence="stale"))
+
+    assert facts.mode == "helm"
+    assert facts.control.connection == "connected"
+    assert facts.activity.state == "unknown"
+    assert facts.activity.raw_kind == phase
+    primary = facts.presentation.primary
+    assert primary is not None
+    assert primary.key == "idle"
+    assert primary.label == "Idle"
+    assert primary.tone == "idle"
+    assert primary.observed_at == facts.activity.observed_at
+
+
+def test_activity_unknown_when_the_control_lease_has_gone_stale():
+    """A lost lease (reattach-only, not currently live) is a real liveness gap,
+    unlike an ordinary idle/needs_user activity window expiring on its own --
+    Longhouse cannot vouch that nothing changed while the lease was down. This
+    never reached "Idle" nor even "Last observed idle" before this change
+    either: a disconnected control path already fell all the way to the
+    generic "Activity unknown", which the idle-persistence override must not
+    disturb.
+    """
+
+    facts = _facts(
+        runtime=_runtime(phase="idle", confidence="stale"),
+        capabilities=_capabilities(live=False, reattach=True),
+    )
+
+    assert facts.mode == "helm"
+    assert facts.control.connection == "disconnected"
+    primary = facts.presentation.primary
+    assert primary is not None
+    assert primary.key == "activity_unknown"
+    assert primary.label == "Activity unknown"
+
+
+def test_shadow_idle_does_not_borrow_the_helm_idle_override():
+    """`observe_only` sessions are Shadow regardless of what the control axis
+    reports (see `_mode`), and Shadow never sees every turn start the way a
+    managed Helm session does. The override is scoped to `mode == "helm"`
+    specifically so a Shadow row can never read plain "Idle" off a control path
+    it does not own the way Helm does -- even in the unusual case where a
+    Shadow session's control facts still resolve to a live connection.
+    """
+
+    facts = _facts(
+        runtime=_runtime(phase="idle", confidence="stale"),
+        capabilities=_capabilities(observe=True, live=True, reattach=True),
+    )
+
+    assert facts.mode == "shadow"
+    assert facts.control.connection == "connected"
+    primary = facts.presentation.primary
+    assert primary is not None
+    assert primary.key == "no_recent_activity"
+    assert primary.label == "Last observed idle"
+
+
+def test_console_idle_does_not_borrow_the_helm_idle_override():
+    """Console has its own turn lifecycle (a durable turn row), not per-turn
+    hooks/channel evidence, so it must not borrow the Helm idle-persistence
+    override even on the rare row whose activity axis carries a raw idle kind.
+    """
+
+    facts = _facts(
+        runtime=_runtime(phase="idle", confidence="stale"),
+        session=_session(origin_kind="console"),
+        capabilities=replace(
+            _capabilities(label="live", live=False, reattach=False),
+            control_owned=True,
+        ),
+        execution_lifetime="one_shot",
+    )
+
+    assert facts.mode == "console"
+    primary = facts.presentation.primary
+    assert primary is not None
+    assert primary.key == "no_recent_activity"
+    assert primary.label == "Last observed idle"
 
 
 def test_mode_does_not_consume_the_rolled_up_control_label():
@@ -1107,6 +1205,76 @@ def test_console_run_stops_claiming_work_once_its_activity_evidence_expires():
     assert facts.presentation.primary.key == "no_recent_activity"
     assert facts.presentation.primary.label == "Last observed running a tool"
     assert facts.working_set == "history"
+
+
+def _primary_for_helm_idle(*, connection, terminal_attached):
+    """Exercise `_primary` directly for the terminal-attachment leg of the Helm
+    idle-persistence override, which the served (catalogd) path can populate
+    but the cold `_control()` path never does -- so it is unreachable through
+    `_facts()`. See `session_state_facts_projector._project_control`, which
+    carries `terminal_attached` through verbatim.
+    """
+    from zerg.services.session_state_contract import SessionActionAvailability
+    from zerg.services.session_state_contract import SessionActivityFacts
+    from zerg.services.session_state_contract import SessionControlActions
+    from zerg.services.session_state_contract import SessionControlFacts
+    from zerg.services.session_state_contract import SessionDelegationFacts
+    from zerg.services.session_state_contract import SessionDispositionFacts
+    from zerg.services.session_state_contract import SessionRunFacts
+    from zerg.services.session_state_contract import _primary
+
+    unavailable = SessionActionAvailability(state="unavailable", reason="test")
+    control = SessionControlFacts(
+        ownership="owned",
+        connection=connection,
+        terminal_attached=terminal_attached,
+        actions=SessionControlActions(
+            send_input=unavailable,
+            interrupt=unavailable,
+            terminate=unavailable,
+            reattach=unavailable,
+            resume=unavailable,
+        ),
+    )
+    return _primary(
+        mode="helm",
+        disposition=SessionDispositionFacts(state="open"),
+        launch=None,
+        run=SessionRunFacts(lifecycle="running"),
+        activity=SessionActivityFacts(state="unknown", raw_kind="idle", observed_at=NOW),
+        delegation=SessionDelegationFacts(),
+        control=control,
+        interaction=None,
+    )
+
+
+def test_helm_idle_stays_idle_on_an_attached_terminal_alone():
+    """An attached terminal is fresh evidence on its own axis from the control
+    lease (see `SessionControlFacts.terminal_attached`); either one being fresh
+    is enough to keep a Helm idle session plain "Idle", per the same 2026-09
+    product decision as `test_helm_idle_with_a_live_control_lease_stays_plain_idle`.
+    """
+
+    primary = _primary_for_helm_idle(connection="unknown", terminal_attached=True)
+
+    assert primary is not None
+    assert primary.key == "idle"
+    assert primary.label == "Idle"
+    assert primary.tone == "idle"
+
+
+def test_helm_idle_falls_back_when_neither_lease_nor_terminal_is_fresh():
+    """Mirrors `test_activity_unknown_when_the_control_lease_has_gone_stale`:
+    the pre-existing "no_recent_activity" branch also requires a connected or
+    degraded connection outside Console, so a disconnected control path with
+    no attached terminal already fell to "Activity unknown", not "Last
+    observed idle" -- the idle-persistence override does not change that.
+    """
+    primary = _primary_for_helm_idle(connection="unknown", terminal_attached=None)
+
+    assert primary is not None
+    assert primary.key == "activity_unknown"
+    assert primary.label == "Activity unknown"
 
 
 def test_branch_availability_is_narrower_than_resume():
