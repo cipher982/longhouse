@@ -1130,4 +1130,39 @@ describe("TimelinePane outbox", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it("puts a delivered send above the live reply it is waiting on", () => {
+    // F6: the provider's live preview streams before the send's durable echo
+    // is ingested; the ask must not render under its own answer.
+    const durable = makeMessageItem("earlier turn");
+    const livePreview: TimelineItem = {
+      kind: "message",
+      event: { ...messageItem.event, id: -3, role: "assistant", content_text: "STRANGER_STEERED" },
+    };
+    render(
+      <TimelinePane
+        items={[durable, livePreview]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+        outbox={[
+          { key: "a", text: "Reply with exactly one word", state: "sent" },
+          { key: "b", text: "after this", state: "queued" },
+        ]}
+      />,
+    );
+
+    const order = [
+      ...document.querySelectorAll('[data-testid="session-outbox-row"], #event--3, #event-1'),
+    ].map((node) => node.getAttribute("data-outbox-state") ?? node.id);
+    expect(order).toEqual(["event-1", "sent", "event--3", "queued"]);
+    expect(screen.getAllByTestId("session-outbox-row")[0]).toHaveTextContent("Sent");
+  });
 });

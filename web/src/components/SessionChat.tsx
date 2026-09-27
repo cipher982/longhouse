@@ -1477,7 +1477,11 @@ export function SessionChat({
             receipt?.status === "queued" ? [cancelAction(receipt)] : undefined,
         });
       } else {
-        inFlight.push({ key, text: pending.text, state: "sending" });
+        inFlight.push({
+          key,
+          text: pending.text,
+          state: pending.phase === "delivered" ? "sent" : "sending",
+        });
       }
     }
 

@@ -623,6 +623,19 @@ export function projectionItemsWithTranscriptPreview(
   return [...projectionItems, callItem, resultItem];
 }
 
+/** A row built from the live transcript preview rather than a durable event.
+ *  Durable ids are catalog strings or positive integers; the preview's
+ *  synthetic events above carry a non-positive number. */
+export function isLivePreviewTimelineItem(item: TimelineItem): boolean {
+  const event =
+    item.kind === "message"
+      ? item.event
+      : item.kind === "tool"
+        ? item.interaction.callEvent
+        : null;
+  return typeof event?.id === "number" && event.id <= 0;
+}
+
 export function isToolInteractionDropped(interaction: ToolInteraction): boolean {
   return interaction.callEvent?.tool_call_state === "dropped";
 }

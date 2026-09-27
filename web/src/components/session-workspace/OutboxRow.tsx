@@ -6,7 +6,10 @@
  * state.
  */
 
-export type OutboxEntryState = "sending" | "queued" | "unconfirmed" | "failed";
+/** `sent`: the Runtime Host confirmed delivery and only the transcript echo
+ *  is outstanding. The provider may already be answering it, so it must not
+ *  read as still in flight. */
+export type OutboxEntryState = "sending" | "sent" | "queued" | "unconfirmed" | "failed";
 
 export interface OutboxEntryAction {
   label: string;
@@ -25,6 +28,7 @@ export interface OutboxEntry {
 
 const STATE_LABEL: Record<OutboxEntryState, string> = {
   sending: "Sending…",
+  sent: "Sent",
   queued: "Queued · sends after this turn",
   unconfirmed: "Not confirmed",
   failed: "Not delivered",

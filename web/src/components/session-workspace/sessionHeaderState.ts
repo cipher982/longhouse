@@ -67,6 +67,7 @@ export function getSessionHeaderState(
   // signal — a session can be "blocked" or "stalled" with activity.state
   // still "quiescent" underneath, so activity.state alone under-detects.
   const primaryTone = facts.presentation.primary?.tone ?? null;
+  const primaryKey = facts.presentation.primary?.key ?? null;
   const closed = facts.disposition.state === "closed";
   // A served tone is a verdict about the moment it was minted. The reader's
   // clock decides when that ended, so an expired window may not keep the
@@ -128,7 +129,15 @@ export function getSessionHeaderState(
     };
   }
 
-  if (!closed && (staleClaim || facts.activity.state === "unknown")) {
+  // No fresh activity claim is not the same as no evidence. The server keeps
+  // an at-rest verdict when other evidence settles it: a Console run that
+  // ended (Console work only happens inside a run), a Console slot ready for
+  // its first turn, or a Helm idle kept by a fresh control lease. Reading
+  // "Activity uncertain" under those contradicts evidence the page holds.
+  const servedAtRest =
+    facts.activity.state === "unknown" &&
+    (primaryKey === "idle" || primaryKey === "ready" || (primaryKey === "ended" && primaryTone === "closed"));
+  if (!closed && !servedAtRest && (staleClaim || facts.activity.state === "unknown")) {
     return { tone: "unknown", text: "Activity uncertain" };
   }
 

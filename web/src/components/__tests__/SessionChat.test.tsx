@@ -1721,7 +1721,7 @@ describe("SessionChat", () => {
 
       await waitFor(() => {
         expect(lastOutbox(onOutboxChange)).toMatchObject([
-          { text: "tldr please", state: "sending" },
+          { text: "tldr please", state: "sent" },
         ]);
       });
       // Nothing about this send renders inside the composer.
@@ -1756,7 +1756,7 @@ describe("SessionChat", () => {
       await user.click(screen.getByRole("button", { name: /send/i }));
       await waitFor(() =>
         expect(lastOutbox(onOutboxChange)).toMatchObject([
-          { state: "sending" },
+          { state: "sent" },
         ]),
       );
 
@@ -1823,7 +1823,7 @@ describe("SessionChat", () => {
       await user.click(screen.getByRole("button", { name: /send/i }));
       await waitFor(() =>
         expect(lastOutbox(onOutboxChange)).toMatchObject([
-          { state: "sending" },
+          { state: "sent" },
         ]),
       );
 

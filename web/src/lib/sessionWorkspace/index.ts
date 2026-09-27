@@ -47,6 +47,7 @@ export {
   isAgentToolInteraction,
   isActivityEligible,
   isEditInteraction,
+  isLivePreviewTimelineItem,
   isOutsideActiveContext,
   isToolInteractionDropped,
   isToolInteractionFailed,

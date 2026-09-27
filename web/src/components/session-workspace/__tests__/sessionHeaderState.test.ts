@@ -132,6 +132,46 @@ describe("getSessionHeaderState", () => {
     expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
   });
 
+  it("reads a Console session whose run ended as idle, not uncertain", () => {
+    // F6: a completed Console turn has no fresh activity claim, but the
+    // ended run is itself the evidence nothing is running.
+    const state = getSessionHeaderState(
+      session({
+        activityState: "unknown",
+        primaryKey: "ended",
+        primaryTone: "closed",
+        primaryLabel: "Ended",
+        lastResultAt: "2026-04-15T15:55:00Z",
+      }),
+      Date.parse("2026-04-15T16:30:00Z"),
+    );
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Idle since /);
+  });
+
+  it("keeps a server-kept Helm idle and a ready Console slot out of uncertain", () => {
+    for (const primaryKey of ["idle", "ready"]) {
+      const state = getSessionHeaderState(
+        session({ activityState: "unknown", primaryKey, primaryTone: "idle", primaryLabel: "Idle" }),
+        Date.now(),
+      );
+      expect(state).toEqual({ tone: "cool", text: "Idle" });
+    }
+  });
+
+  it("still reads an activity-unknown verdict as uncertain", () => {
+    const state = getSessionHeaderState(
+      session({
+        activityState: "unknown",
+        primaryKey: "activity_unknown",
+        primaryTone: "quiet",
+        primaryLabel: "Activity unknown",
+      }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
   it("stops claiming work when the served window has passed", () => {
     const now = Date.parse("2026-04-15T16:30:00Z");
     const state = getSessionHeaderState(

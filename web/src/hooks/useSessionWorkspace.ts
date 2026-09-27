@@ -268,11 +268,50 @@ export function useSessionWorkspace(
       ["agent-session-events", sessionId],
       ["agent-session-events-infinite", sessionId],
     ] as const;
-    let refreshInFlight: Promise<void> | null = null;
-    // Keep a tri-state queued value: null means no wake arrived while the
-    // refresh was active; false preserves a runtime-only wake that must still
-    // trigger a second snapshot; true also refreshes transcript families.
-    let queuedRefresh: boolean | null = null;
+    // Two independent coalescing lanes. Every wake refreshes the workspace
+    // snapshot; only transcript mutations also refresh the transcript. Each
+    // lane waits only for its own in-flight round (an invalidation joins an
+    // in-flight fetch, which may predate the change, so a wake that lands
+    // mid-round must run one more). Sharing one round made an ingest wake wait
+    // for whatever workspace refetch a runtime wake had just started: during a
+    // live turn runtime wakes arrive several per second, so on a slow Runtime
+    // Host the durable echo of a send and its reply reached the page a full
+    // workspace round late (stranger run F6).
+    const lanes = {
+      base: { keys: baseRefreshQueryKeys, inFlight: false, queued: false },
+      transcript: {
+        keys: transcriptRefreshQueryKeys,
+        inFlight: false,
+        queued: false,
+        retirePreview: false,
+      },
+    };
+    const applyStreamTranscriptPreview = (
+      transcriptPreview: SessionTranscriptPreview | null,
+    ) => {
+      setStreamTranscriptPreview(transcriptPreview);
+      queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
+        { queryKey: ["agent-session-workspace", sessionId] },
+        (current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            session: applyTranscriptPreviewToSession(
+              current.session,
+              transcriptPreview,
+            ),
+            thread: {
+              ...current.thread,
+              sessions: current.thread.sessions.map((item) =>
+                item.id === sessionId
+                  ? applyTranscriptPreviewToSession(item, transcriptPreview)
+                  : item,
+              ),
+            },
+          };
+        },
+      );
+    };
     let disposed = false;
     let freshnessTimer: number | null = null;
     const armFreshnessDeadline = () => {
@@ -283,29 +322,36 @@ export function useSessionWorkspace(
         if (!disposed) setStreamConnected(false);
       }, STREAM_FRAME_FRESHNESS_MS);
     };
-    const refreshWorkspaceQueries = (includeTranscript: boolean) => {
-      if (refreshInFlight) {
-        queuedRefresh =
-          queuedRefresh === null ? includeTranscript : queuedRefresh || includeTranscript;
+    const runLane = (lane: {
+      keys: readonly (readonly unknown[])[];
+      inFlight: boolean;
+      queued: boolean;
+      retirePreview?: boolean;
+    }) => {
+      if (lane.inFlight) {
+        lane.queued = true;
         return;
       }
-      const refreshQueryKeys = includeTranscript
-        ? [...baseRefreshQueryKeys, ...transcriptRefreshQueryKeys]
-        : baseRefreshQueryKeys;
-      refreshInFlight = Promise.all(
-        refreshQueryKeys.map((queryKey) =>
+      lane.inFlight = true;
+      void Promise.all(
+        lane.keys.map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
         ),
-      )
-        .then(() => undefined)
-        .finally(() => {
-          refreshInFlight = null;
-          const nextIncludeTranscript = queuedRefresh;
-          queuedRefresh = null;
-          if (nextIncludeTranscript !== null && !disposed) {
-            refreshWorkspaceQueries(nextIncludeTranscript);
-          }
-        });
+      ).finally(() => {
+        lane.inFlight = false;
+        if (disposed) return;
+        if (lane.queued) {
+          lane.queued = false;
+          runLane(lane);
+        } else if (lane.retirePreview) {
+          lane.retirePreview = false;
+          applyStreamTranscriptPreview(null);
+        }
+      });
+    };
+    const refreshWorkspaceQueries = (includeTranscript: boolean) => {
+      runLane(lanes.base);
+      if (includeTranscript) runLane(lanes.transcript);
     };
 
     const cleanup = connectSessionWorkspaceStream(
@@ -361,31 +407,15 @@ export function useSessionWorkspace(
             hasTranscriptPreview &&
             (isTranscriptMutation || isFreshTranscriptPreview)
           ) {
-            setStreamTranscriptPreview(transcriptPreview);
-            queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
-              { queryKey: ["agent-session-workspace", sessionId] },
-              (current) => {
-                if (!current) return current;
-                return {
-                  ...current,
-                  session: applyTranscriptPreviewToSession(
-                    current.session,
-                    transcriptPreview,
-                  ),
-                  thread: {
-                    ...current.thread,
-                    sessions: current.thread.sessions.map((item) =>
-                      item.id === sessionId
-                        ? applyTranscriptPreviewToSession(
-                            item,
-                            transcriptPreview,
-                          )
-                        : item,
-                    ),
-                  },
-                };
-              },
-            );
+            if (transcriptPreview === null && data.change_kind === "ingest") {
+              // The durable rows that replace the preview are not on the page
+              // until the transcript round lands; clearing it now blanked the
+              // live reply for a whole fetch.
+              lanes.transcript.retirePreview = true;
+            } else {
+              lanes.transcript.retirePreview = false;
+              applyStreamTranscriptPreview(transcriptPreview);
+            }
           }
 
           pendingRenderBeaconRef.current = {

@@ -630,6 +630,72 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it("refetches the transcript on ingest without waiting for an active runtime refresh", async () => {
+    // F6: during a live Codex turn runtime wakes keep a workspace refetch in
+    // flight. The ingest wake carrying a send's durable echo must reach the
+    // transcript now, not after that round, or a slow Runtime Host leaves the
+    // send on "Sending…" under the reply it already got.
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 0,
+        thread_session_count: 1,
+      });
+    });
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "ingest",
+        latest_event_id: 0,
+        thread_session_count: 1,
+      });
+    });
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
+      { cancelRefetch: false },
+    );
+
+    // The workspace round that predates the ingest still owes one more
+    // snapshot; the transcript round it did not share owes nothing.
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+    await waitFor(() => {
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(11);
+    });
+    const projectionCalls = queryClientMocks.invalidateQueries.mock.calls.filter(
+      ([filters]) => filters.queryKey[0] === "agent-session-projection-infinite",
+    );
+    expect(projectionCalls).toHaveLength(1);
+  });
+
   it("applies SSE transcript previews to the workspace cache before refetch", () => {
     let handlers:
       | {
@@ -858,6 +924,63 @@ describe("useSessionWorkspace", () => {
         "Preview from SSE before refetch wins",
       );
     });
+  });
+
+  it("keeps the live reply until the ingest's transcript refetch lands", async () => {
+    // F6: the ingest wake carries no preview. Clearing on arrival blanked the
+    // reply for the whole projection fetch; retire it after that round.
+    seedHookMocks(1);
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: Record<string, unknown> & { session_id: string; latest_event_id: number }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const texts = () => result.current.events.map((event) => event.content_text);
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "transcript_preview",
+        latest_event_id: -3,
+        transcript_preview: {
+          event_id: 3,
+          text: "STRANGER_STEERED",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: true,
+          is_stale: false,
+        },
+      });
+    });
+    await waitFor(() => expect(texts()).toContain("STRANGER_STEERED"));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "ingest",
+        latest_event_id: 0,
+        transcript_preview: null,
+      });
+    });
+    expect(texts()).toContain("STRANGER_STEERED");
+
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+    await waitFor(() => expect(texts()).not.toContain("STRANGER_STEERED"));
   });
 
   it("waits to emit render telemetry until the latest SSE event is in the rendered projection", async () => {

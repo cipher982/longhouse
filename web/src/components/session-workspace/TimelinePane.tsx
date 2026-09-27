@@ -36,6 +36,7 @@ import {
   getToolTier,
   isAgentToolInteraction,
   isEditInteraction,
+  isLivePreviewTimelineItem,
   isOutsideActiveContext,
   isToolInteractionDropped,
   isToolInteractionFailed,
@@ -1384,6 +1385,92 @@ export function TimelinePane({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a send, not a visibility change, scrolls
   }, [outbox.length]);
 
+  // The live preview is the provider answering now, so a send the Runtime
+  // Host already delivered came before it: render those above the preview
+  // rows instead of leaving the ask under its own reply until ingest lands.
+  // Sends still in flight, queued or failed stay at the tail.
+  let livePreviewStart = filteredItems.length;
+  while (
+    livePreviewStart > 0 &&
+    isLivePreviewTimelineItem(filteredItems[livePreviewStart - 1])
+  ) {
+    livePreviewStart -= 1;
+  }
+  const hasLivePreview = livePreviewStart < filteredItems.length;
+  const outboxBeforePreview = hasLivePreview
+    ? visibleOutbox.filter((entry) => entry.state === "sent")
+    : EMPTY_OUTBOX;
+  const outboxAfterPreview = hasLivePreview
+    ? visibleOutbox.filter((entry) => entry.state !== "sent")
+    : visibleOutbox;
+
+  const renderTimelineItem = (item: TimelineItem) => {
+    if (item.kind === "seam") {
+      return <SeamRow key={item.seam.key} seam={item.seam} />;
+    }
+
+    if (item.kind === "action") {
+      return <ActionRow key={item.action.key} action={item.action} />;
+    }
+    if (item.kind === "reasoning") {
+      return (
+        <ReasoningRow
+          key={item.event.id}
+          event={item.event}
+          isSelected={timelineItemContainsSelection(item, selectedKey)}
+        />
+      );
+    }
+
+    if (item.kind === "provider_notification") {
+      return (
+        <ProviderNotificationRow
+          key={item.event.id}
+          event={item.event}
+          isSelected={timelineItemContainsSelection(item, selectedKey)}
+        />
+      );
+    }
+
+    if (item.kind === "message") {
+      return <MessageRow key={item.event.id} event={item.event} renderMedia={renderMedia} provider={provider} />;
+    }
+
+    if (item.kind === "tool") {
+      const selectionKey = `tool:${item.interaction.key}`;
+      return (
+        <Fragment key={item.interaction.key}>
+          <ToolRow
+  interaction={item.interaction}
+  rowId={`event-${item.interaction.anchorId}`}
+  expanded={expandedTools.has(item.interaction.key)}
+  isSelected={selectedKey === selectionKey}
+  onSelect={() => onSelectKey(selectionKey)}
+  onToggleExpand={() => toggleTool(item.interaction.key)}
+  renderMedia={renderMedia}
+          />
+          <TurnEndRow turnEnd={turnEndForInteraction(item.interaction)} />
+        </Fragment>
+      );
+    }
+
+    const groupKey = `group:${item.group.key}`;
+    return (
+      <ActivityChip
+        key={item.group.key}
+        group={item.group}
+        rowId={`event-${item.group.anchorId}`}
+        expanded={expandedGroups.has(item.group.key)}
+        isSelected={timelineItemContainsSelection(item, selectedKey)}
+        expandedInteractionKeys={expandedTools}
+        onSelect={() => onSelectKey(groupKey)}
+        onToggleExpand={() => toggleGroup(item.group.key)}
+        onToggleInteraction={(k) => toggleTool(k)}
+        renderMedia={renderMedia}
+      />
+    );
+  };
+
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
@@ -1553,73 +1640,12 @@ export function TimelinePane({
           // normal (non-scrolling) block, so its height is the true content
           // height and the line spans the whole transcript.
           <div className="timeline-pane__rows">
-          {filteredItems.map((item) => {
-            if (item.kind === "seam") {
-              return <SeamRow key={item.seam.key} seam={item.seam} />;
-            }
-
-            if (item.kind === "action") {
-              return <ActionRow key={item.action.key} action={item.action} />;
-            }
-            if (item.kind === "reasoning") {
-              return (
-                <ReasoningRow
-                  key={item.event.id}
-                  event={item.event}
-                  isSelected={timelineItemContainsSelection(item, selectedKey)}
-                />
-              );
-            }
-
-            if (item.kind === "provider_notification") {
-              return (
-                <ProviderNotificationRow
-                  key={item.event.id}
-                  event={item.event}
-                  isSelected={timelineItemContainsSelection(item, selectedKey)}
-                />
-              );
-            }
-
-            if (item.kind === "message") {
-              return <MessageRow key={item.event.id} event={item.event} renderMedia={renderMedia} provider={provider} />;
-            }
-
-            if (item.kind === "tool") {
-              const selectionKey = `tool:${item.interaction.key}`;
-              return (
-                <Fragment key={item.interaction.key}>
-                  <ToolRow
-                    interaction={item.interaction}
-                    rowId={`event-${item.interaction.anchorId}`}
-                    expanded={expandedTools.has(item.interaction.key)}
-                    isSelected={selectedKey === selectionKey}
-                    onSelect={() => onSelectKey(selectionKey)}
-                    onToggleExpand={() => toggleTool(item.interaction.key)}
-                    renderMedia={renderMedia}
-                  />
-                  <TurnEndRow turnEnd={turnEndForInteraction(item.interaction)} />
-                </Fragment>
-              );
-            }
-
-            const groupKey = `group:${item.group.key}`;
-            return (
-              <ActivityChip
-                key={item.group.key}
-                group={item.group}
-                rowId={`event-${item.group.anchorId}`}
-                expanded={expandedGroups.has(item.group.key)}
-                isSelected={timelineItemContainsSelection(item, selectedKey)}
-                expandedInteractionKeys={expandedTools}
-                onSelect={() => onSelectKey(groupKey)}
-                onToggleExpand={() => toggleGroup(item.group.key)}
-                onToggleInteraction={(k) => toggleTool(k)}
-                renderMedia={renderMedia}
-              />
-            );
-          })}
-          {visibleOutbox.map((entry) => (
+          {filteredItems.slice(0, livePreviewStart).map(renderTimelineItem)}
+          {outboxBeforePreview.map((entry) => (
+            <OutboxRow key={entry.key} entry={entry} />
+          ))}
+          {filteredItems.slice(livePreviewStart).map(renderTimelineItem)}
+          {outboxAfterPreview.map((entry) => (
             <OutboxRow key={entry.key} entry={entry} />
           ))}
           </div>
