@@ -45,12 +45,25 @@ prompt_runtime_url() {
   done
 }
 
+# The address this Mac already knows: the installer stores the LONGHOUSE_URL
+# its command carried, and `longhouse auth` keeps the last one it connected to.
+stored_runtime_url() {
+  local state="${LONGHOUSE_HOME:-$HOME/.longhouse}/machine/state.json"
+  [[ -r "$state" ]] || return 0
+  sed -n 's/^[[:space:]]*"runtime_url":[[:space:]]*"\(https\{0,1\}:\/\/[^"]*\)".*/\1/p' "$state" | head -n 1
+}
+
 configure_machine() {
   if [[ -n "${LONGHOUSE_DEVICE_TOKEN:-}" && -n "${LONGHOUSE_RUNTIME_URL:-}" ]]; then
     log "Authorizing this Mac with the configured Runtime Host..."
   else
     unset LONGHOUSE_DEVICE_TOKEN
-    prompt_runtime_url
+    LONGHOUSE_RUNTIME_URL="${LONGHOUSE_RUNTIME_URL:-$(stored_runtime_url)}"
+    if [[ -n "$LONGHOUSE_RUNTIME_URL" ]]; then
+      log "Connecting this Mac to $LONGHOUSE_RUNTIME_URL."
+    else
+      prompt_runtime_url
+    fi
     log "Your browser will open. Sign in if asked, then click \"Connect this device\"."
   fi
   # Without LONGHOUSE_DEVICE_TOKEN, `longhouse auth` runs the browser handshake.

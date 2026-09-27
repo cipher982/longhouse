@@ -820,28 +820,27 @@ print_success() {
     echo "============================================"
     echo -e "${NC}"
     echo ""
-    if [[ "$is_macos" == "1" ]]; then
-        echo "Next:"
-        echo "  1. Open ${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}/Longhouse.app"
-        echo "  2. Finish setup in the app"
-        echo "  3. Find one prior session in the timeline"
-        echo ""
-        echo "macOS:"
-        echo "  The terminal installer only acquires Longhouse."
-        echo "  Longhouse.app owns first-run setup, repair, and local status."
-    elif [[ "$CONNECTED_THIS_MACHINE" == "1" ]]; then
+    if [[ "$CONNECTED_THIS_MACHINE" == "1" ]]; then
         echo "Next:"
         echo "  Open Longhouse, start a session, and pick this machine."
         echo "  Sign in to each coding agent from the launcher's 'Sign in' button."
+    elif [[ "$is_macos" == "1" ]]; then
+        echo "Next:"
+        echo "  1. Open ${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}/Longhouse.app"
+        echo "  2. Choose 'Sign in to connect this Mac'"
+        echo "  3. Find one prior session in the timeline"
+    elif [[ -n "$CONNECT_PENDING_URL" ]]; then
+        echo "Next, connect this machine to ${CONNECT_PENDING_URL}:"
+        echo "  On a desktop: longhouse auth --url ${CONNECT_PENDING_URL} && longhouse machine repair --repair-service"
+        echo "  On a server:  run the command from ${CONNECT_PENDING_URL}/settings/devices"
     else
         echo "Next:"
-        echo "  1. Export LONGHOUSE_DEVICE_TOKEN from your Runtime Host"
-        echo "  2. Run longhouse auth --url <runtime-url>"
-        echo "  3. Run longhouse machine repair --repair-service"
+        echo "  1. Run longhouse auth --url <your Longhouse address>"
+        echo "  2. Run longhouse machine repair --repair-service"
         if has_command claude; then
             # Claude Console turns stay unavailable until the native lifecycle
             # hook is installed; nothing else tells a Linux user that.
-            echo "  4. Run longhouse claude configure   (enables Claude Console sessions on this machine)"
+            echo "  3. Run longhouse claude configure   (enables Claude Console sessions on this machine)"
         fi
     fi
     if has_command claude; then
@@ -855,7 +854,7 @@ print_success() {
     fi
     echo ""
     echo "Native device commands:"
-    echo "  longhouse auth --url <url>  Store a device token from LONGHOUSE_DEVICE_TOKEN"
+    echo "  longhouse auth              Connect this machine (browser approval)"
     echo "  longhouse local-health --json"
     echo "  longhouse machine repair --dry-run"
     echo ""
@@ -869,22 +868,71 @@ print_success() {
     fi
 }
 
-# A headless server has no browser for `longhouse auth --browser`, whose
-# approval callback only works on the machine running the browser. When the
-# Devices page's "connect a server" line passes LONGHOUSE_URL and
-# LONGHOUSE_DEVICE_TOKEN, finish the whole setup here instead of printing three
-# follow-up commands. macOS keeps its app-driven setup.
+# A Runtime Host's first screen hands out
+#   curl -fsSL https://get.longhouse.ai/install.sh | LONGHOUSE_URL=<its origin> bash
+# so this machine learns its Runtime Host here and nothing later has to ask
+# for it: the address is stored before anything else, and `longhouse auth`
+# and Longhouse.app's setup read it back. Then connect: headlessly when the
+# Devices page's server line also passed LONGHOUSE_DEVICE_TOKEN, otherwise
+# through the browser approval of `longhouse auth` when a browser can open here.
 CONNECTED_THIS_MACHINE=0
+CONNECT_PENDING_URL=""
+
+# Record the Runtime Host address on a machine that has no machine state yet.
+# An existing state file belongs to `longhouse auth`, which rewrites the URL
+# itself once it connects.
+remember_runtime_url() {
+    local url="$1"
+    local machine_dir="${LONGHOUSE_HOME:-$HOME/.longhouse}/machine"
+    [[ -e "$machine_dir/state.json" ]] && return 0
+    mkdir -p "$machine_dir"
+    chmod 700 "$machine_dir" 2>/dev/null || true
+    (umask 077 && printf '{\n  "schema_version": 1,\n  "runtime_url": "%s",\n  "written_by": "installer"\n}\n' "$url" > "$machine_dir/state.json")
+}
+
+# The browser approval hands a code back to a listener on this machine's
+# loopback, so the browser has to open here, not on the far side of SSH.
+can_approve_in_browser() {
+    [[ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ]] || return 1
+    [[ "$(uname -s)" == "Darwin" ]] && return 0
+    [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && has_command xdg-open
+}
+
 connect_this_machine() {
-    [[ -n "${LONGHOUSE_URL:-}" && -n "${LONGHOUSE_DEVICE_TOKEN:-}" ]] || return 0
-    [[ "$(uname -s)" != "Darwin" ]] || return 0
+    [[ -n "${LONGHOUSE_URL:-}" ]] || return 0
     CURRENT_INSTALL_STAGE="connect"
-    step "Connecting this machine to ${LONGHOUSE_URL}"
+    local url="${LONGHOUSE_URL%/}"
+    if [[ ! "$url" =~ ^https?://[^[:space:]\"\\]+$ ]]; then
+        error "LONGHOUSE_URL must be an http(s) address, got: ${LONGHOUSE_URL}"
+        return 1
+    fi
+    step "Connecting this machine to ${url}"
     local longhouse_bin="$HOME/.local/bin/longhouse"
     local machine_name="${LONGHOUSE_MACHINE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
-    if ! "$longhouse_bin" auth --url "$LONGHOUSE_URL" --device "$machine_name"; then
-        error "Could not store the device token; create a new one on the Devices page and rerun"
-        return 1
+    if [[ -n "${LONGHOUSE_DEVICE_TOKEN:-}" ]]; then
+        if ! "$longhouse_bin" auth --url "$url" --device "$machine_name"; then
+            error "Could not store the device token; create a new one on the Devices page and rerun"
+            return 1
+        fi
+    else
+        remember_runtime_url "$url"
+        if ! can_approve_in_browser; then
+            CONNECT_PENDING_URL="$url"
+            warn "No browser here to approve this machine."
+            warn "  Create a server command at ${url}/settings/devices and run it on this machine."
+            return 0
+        fi
+        info "Approve this machine in the browser page that opens (Ctrl-C to finish later)."
+        # Ctrl-C ends only the wait for approval; the install already worked.
+        local approved=1
+        trap ':' INT
+        "$longhouse_bin" auth --url "$url" --device "$machine_name" || approved=0
+        trap - INT
+        if [[ "$approved" != "1" ]]; then
+            CONNECT_PENDING_URL="$url"
+            warn "This machine is not connected yet."
+            return 0
+        fi
     fi
     if ! "$longhouse_bin" machine repair --repair-service; then
         error "Stored credentials, but the Machine Agent service did not start; run: longhouse machine repair --repair-service"
@@ -897,7 +945,7 @@ connect_this_machine() {
         warn "Run 'sudo loginctl enable-linger $(id -un)' so the Machine Agent keeps running after you log out"
     fi
     CONNECTED_THIS_MACHINE=1
-    success "Connected as ${machine_name}; it will appear on the Machines page"
+    success "Connected as ${machine_name}; its sessions will appear in the timeline"
 }
 
 # Main installation flow
@@ -934,8 +982,8 @@ main() {
     # Verify everything works
     verify_installation
 
-    # One-line server setup: connect and start the Machine Agent when the
-    # Devices page handed us a URL and token.
+    # Connect and start the Machine Agent when the command carried this
+    # machine's Runtime Host address (and, for a server, a device token).
     connect_this_machine
 
     # Done!
