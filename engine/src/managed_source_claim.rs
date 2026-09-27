@@ -9,15 +9,17 @@
 //! stayed degraded with no native identity.
 //!
 //! The authority is local, so it belongs in a local file: an atomically
-//! renamed claim under `managed-local/claims/`, one per session, written and
-//! read by the launcher alone. `ready` follows the claim, not the database. The
-//! daemon projects claims into `session_binding` — the view discovery reads —
-//! and it does that **before** it looks for sources, because a discovery pass
-//! that ran first would mint the duplicate the claim exists to prevent.
+//! renamed claim under `managed-local/claims/`, one per session, written by
+//! launchers. The daemon and later launchers read it. `ready` follows the claim,
+//! not the database. The daemon projects claims into `session_binding`, the
+//! view discovery reads, before it enumerates sources. That ordering prevents
+//! a discovery pass from minting the duplicate the claim exists to prevent.
 //!
 //! A claim is a lease, not a record: it carries an expiry, and an expired or
-//! unreadable claim is ignored rather than obeyed. Losing one costs at most a
-//! re-scan; it can never lose shipped bytes.
+//! unreadable claim is ignored rather than obeyed. Expired non-released claims
+//! are collected without changing durable binding state: age ends the
+//! reservation, not the provider execution or its shipping debt. Losing a claim
+//! costs at most a re-scan; it can never lose shipped bytes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -31,6 +33,7 @@ use serde::{Deserialize, Serialize};
 pub const CLAIM_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 const CLAIM_SCHEMA_VERSION: u64 = 1;
+const CLAIM_LOCK_FILE: &str = ".claims.lock";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -111,6 +114,37 @@ fn claim_path(session_id: &str) -> Result<PathBuf> {
     Ok(claims_dir()?.join(format!("{session_id}.json")))
 }
 
+fn prepare_claim_dir() -> Result<PathBuf> {
+    let dir = claims_dir()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("creating the claim directory {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(dir)
+}
+
+/// Serialize writers and expiry collection so pruning cannot race a renewal.
+fn lock_claims() -> Result<std::fs::File> {
+    let path = prepare_claim_dir()?.join(CLAIM_LOCK_FILE);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&path)
+        .with_context(|| format!("opening the source claim lock {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.lock()
+        .with_context(|| format!("locking source claims in {}", path.display()))?;
+    Ok(file)
+}
+
 fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now()
 }
@@ -122,19 +156,17 @@ fn expiry() -> String {
 
 /// Write a claim through a temporary file and a rename, so a reader never sees
 /// half a claim and a crash leaves either the old claim or the new one.
+#[cfg(test)]
 fn write_claim(claim: &SourceClaim) -> Result<()> {
+    let _lock = lock_claims()?;
+    write_claim_locked(claim)
+}
+
+fn write_claim_locked(claim: &SourceClaim) -> Result<()> {
     use std::io::Write;
 
+    prepare_claim_dir()?;
     let path = claim_path(&claim.session_id)?;
-    let dir = path.parent().context("claim path has no parent")?;
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("creating the claim directory {}", dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-
     // Same idiom as `turn_claims`: a private temporary file, fsynced, then
     // renamed over the claim, so a reader sees one whole claim or the previous
     // one.
@@ -169,10 +201,11 @@ pub fn reserve(
     provider_pid: Option<u32>,
     provider_start_time: Option<String>,
 ) -> Result<SourceClaim> {
+    let _lock = lock_claims()?;
     // One path, one managed owner. The archive binding used to enforce this in
     // the database; the claim is the authority now, so it enforces it here.
     let normalized = crate::storage_v2_shipper::stable_source_path(source_path);
-    for existing in active_claims()? {
+    for existing in active_claims_locked()? {
         if existing.session_id == session_id {
             continue;
         }
@@ -201,7 +234,7 @@ pub fn reserve(
         updated_at: timestamp,
         expires_at: expiry(),
     };
-    write_claim(&claim)?;
+    write_claim_locked(&claim)?;
     Ok(claim)
 }
 
@@ -218,6 +251,7 @@ pub fn confirm_identity(
     provider_pid: Option<u32>,
     provider_start_time: Option<String>,
 ) -> Result<SourceClaim> {
+    let _lock = lock_claims()?;
     let existing = read_claim(session_id)?;
     let claim = SourceClaim {
         schema_version: CLAIM_SCHEMA_VERSION,
@@ -244,7 +278,7 @@ pub fn confirm_identity(
         updated_at: now().to_rfc3339(),
         expires_at: expiry(),
     };
-    write_claim(&claim)?;
+    write_claim_locked(&claim)?;
     Ok(claim)
 }
 
@@ -260,9 +294,16 @@ pub fn read_claim(session_id: &str) -> Result<Option<SourceClaim>> {
 
 /// Every claim the daemon should honour, newest first.
 ///
-/// An unreadable or expired claim is skipped and reported, never obeyed: this
-/// is a lease over a path, and a corrupt lease must not hold a path hostage.
+/// An unreadable claim is ignored rather than obeyed. Expired non-released
+/// claims are removed under the same lock as writes; expiry releases only the
+/// launch reservation and never changes durable binding lifecycle. Released
+/// tombstones remain until `retire_released` handles their binding.
 pub fn active_claims() -> Result<Vec<SourceClaim>> {
+    let _lock = lock_claims()?;
+    active_claims_locked()
+}
+
+fn active_claims_locked() -> Result<Vec<SourceClaim>> {
     let dir = claims_dir()?;
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
@@ -289,20 +330,49 @@ pub fn active_claims() -> Result<Vec<SourceClaim>> {
                 continue;
             }
         };
-        if claim.is_expired(now) {
-            tracing::warn!(
-                session_id = %claim.session_id,
-                source = %claim.source_path,
-                "ignoring an expired source claim"
-            );
+        if claim.state == ClaimState::Released {
             continue;
         }
-        if claim.state != ClaimState::Released {
-            claims.push(claim);
+        if claim.is_expired(now) {
+            match std::fs::remove_file(&path) {
+                Ok(()) => tracing::debug!(
+                    session_id = %claim.session_id,
+                    "collected an expired source claim"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => tracing::warn!(
+                    session_id = %claim.session_id,
+                    error = %error,
+                    "removing an expired source claim failed"
+                ),
+            }
+            continue;
         }
+        claims.push(claim);
     }
     claims.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     Ok(claims)
+}
+
+fn remove_claim_if_unchanged(path: &Path, expected: &[u8]) -> Result<bool> {
+    let _lock = lock_claims()?;
+    let current = match std::fs::read(path) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading source claim {}", path.display()))
+        }
+    };
+    if current != expected {
+        return Ok(false);
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => {
+            Err(error).with_context(|| format!("removing source claim {}", path.display()))
+        }
+    }
 }
 
 /// Refuse a bind that would contradict what is already claimed.
@@ -343,6 +413,7 @@ pub fn ensure_bindable(session_id: &str, source_path: &Path, native_id: &str) ->
 /// simply vanishes would leave a binding row naming a session nobody released.
 /// `retire_released` removes the file once it has.
 pub fn release(session_id: &str) -> Result<()> {
+    let _lock = lock_claims()?;
     let Some(mut claim) = read_claim(session_id)? else {
         return Ok(());
     };
@@ -353,7 +424,7 @@ pub fn release(session_id: &str) -> Result<()> {
     claim.native_session_id = None;
     claim.updated_at = now().to_rfc3339();
     claim.expires_at = expiry();
-    write_claim(&claim)
+    write_claim_locked(&claim)
 }
 
 /// Retire the projections of claims that ended, then remove their tombstones.
@@ -420,13 +491,15 @@ pub fn retire_released(conn: &rusqlite::Connection) -> Result<usize> {
                 continue;
             }
         }
-        match std::fs::remove_file(&path) {
-            Ok(()) => retired += 1,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => retired += 1,
+        // Keep SQLite outside the claim lock; recheck under lock so a concurrent
+        // reservation is never unlinked by this retirement.
+        match remove_claim_if_unchanged(&path, &bytes) {
+            Ok(true) => retired += 1,
+            Ok(false) => {}
             Err(error) => tracing::warn!(
                 path = %path.display(),
-                error = %error,
-                "removing a retired claim failed"
+                error = %format!("{error:#}"),
+                "removing a retired claim failed; the next pass retries it"
             ),
         }
     }
@@ -649,6 +722,19 @@ mod tests {
                 Some(ClaimState::Released),
                 "release leaves a tombstone the daemon can see"
             );
+            let mut expired_release = read_claim(&session_id)
+                .expect("read released claim")
+                .expect("release leaves a tombstone");
+            expired_release.expires_at = (now() - chrono::Duration::seconds(1)).to_rfc3339();
+            write_claim(&expired_release).expect("expire release tombstone");
+            assert!(
+                active_claims().expect("active claims").is_empty(),
+                "released tombstones are not active claims"
+            );
+            assert!(
+                read_claim(&session_id).expect("read expired tombstone").is_some(),
+                "an expired tombstone stays until its binding is retired"
+            );
 
             project_claims(&db_path).expect("project again");
             let state: String = conn
@@ -715,28 +801,71 @@ mod tests {
     }
 
     #[test]
-    fn an_expired_claim_is_ignored_rather_than_obeyed() {
+    fn expired_claim_cleanup_preserves_binding_without_claiming_exit() {
         let dir = tempfile::tempdir().unwrap();
-        with_home(&dir.path().join("longhouse"), || {
-            reserve(
-                "session-1",
-                "omp",
-                Path::new("/tmp/a.jsonl"),
-                Path::new("/tmp"),
-                None,
-                None,
-            )
-            .expect("reserve");
-            let mut claim = read_claim("session-1").expect("read").expect("claim");
+        let longhouse_home = dir.path().join("longhouse");
+        with_home(&longhouse_home, || {
+            let db_path = longhouse_home.join("agent/longhouse-shipper.db");
+            let source = dir.path().join("session.jsonl");
+            std::fs::write(&source, b"{}\n").unwrap();
+            let session_id = uuid::Uuid::new_v4().to_string();
+
+            reserve(&session_id, "codex", &source, dir.path(), None, None).expect("reserve");
+            confirm_identity(&session_id, "codex", &source, "native-1", None, None)
+                .expect("confirm identity");
+            let conn = crate::state::db::open_db(Some(&db_path)).expect("open agent db");
+            project_claims(&db_path).expect("project active claim");
+
+            let mut claim = read_claim(&session_id).expect("read").expect("claim");
             claim.expires_at = (now() - chrono::Duration::seconds(1)).to_rfc3339();
-            write_claim(&claim).expect("rewrite");
+            write_claim(&claim).expect("expire claim");
+            project_claims(&db_path).expect("collect expired claim");
 
             assert!(
-                active_claims().expect("active claims").is_empty(),
-                "an expired lease must not hold a path"
+                read_claim(&session_id).expect("read collected claim").is_none(),
+                "the expired authority file should be removed"
+            );
+            let state: String = conn
+                .query_row(
+                    "SELECT state FROM session_binding WHERE session_id = ?1",
+                    [session_id.as_str()],
+                    |row| row.get(0),
+                )
+                .expect("the durable binding remains");
+            assert_eq!(
+                state, "active",
+                "lease age is not evidence that the provider execution ended"
             );
         });
     }
+
+    #[test]
+    fn released_claim_cleanup_keeps_a_reused_session_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        with_home(&dir.path().join("longhouse"), || {
+            let source = dir.path().join("session.jsonl");
+            reserve("session-1", "codex", &source, dir.path(), None, None).expect("reserve");
+            release("session-1").expect("release original claim");
+            let path = claim_path("session-1").expect("claim path");
+            let released_claim_bytes = std::fs::read(&path).expect("read release tombstone");
+
+            reserve("session-1", "codex", &source, dir.path(), None, None)
+                .expect("reserve replacement");
+
+            assert!(
+                !remove_claim_if_unchanged(&path, &released_claim_bytes)
+                    .expect("compare claim before collection"),
+                "cleanup must not remove a claim replaced after its snapshot"
+            );
+            assert_eq!(
+                read_claim("session-1")
+                    .expect("read replacement")
+                    .map(|claim| claim.state),
+                Some(ClaimState::Reserved)
+            );
+        });
+    }
+
 
     #[test]
     fn an_unreadable_claim_is_skipped_and_does_not_hide_the_others() {
