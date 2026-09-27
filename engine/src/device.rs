@@ -1066,6 +1066,46 @@ const UNCONFIGURED_CONSEQUENCE_REASONS: &[&str] = &[
     "heartbeat_stale",
 ];
 
+/// Reasons that make a machine broken rather than degraded.
+/// `storage_v2_sources_unresolved` is only reported when retained evidence is
+/// at risk, and `managed_launch_recovery_unreadable` when the recovery scan
+/// failed.
+const BROKEN_REASONS: &[&str] = &[
+    "engine_status_unreadable",
+    "engine_status_missing",
+    "engine_startup_refused",
+    "payload_rejected",
+    "payload_too_large",
+    "storage_v2_outbox_unreadable",
+    "storage_v2_sources_unresolved",
+    "managed_launch_recovery_unreadable",
+];
+
+/// Faults in data this machine still holds that signing in does not fix: local
+/// evidence that has not reached the Runtime Host, or whose state cannot be
+/// read to prove it has. Signing in restores shipping; it does not replay a
+/// dead letter, unblock a refused source, resume a paused archive repair, or
+/// retry an exhausted recovery.
+///
+/// Transport-window reasons (`payload_rejected`, `payload_too_large`,
+/// `parse_errors`, `spool_dead`, `ship_stalled`, ...) are absent on purpose:
+/// setup-required needs an engine that is not fresh, and a non-fresh engine's
+/// transport is already reported as `transport_unavailable` because last-hour
+/// counters from a stopped engine are not current health. The durable facts
+/// behind them are here instead (`spool_dead` is `spool_dead_letters`).
+const RETAINED_DATA_FAULT_REASONS: &[&str] = &[
+    "engine_status_unreadable",
+    "spool_dead_letters",
+    "archive_dead_lettered",
+    "archive_repair_paused",
+    "storage_v2_outbox_unreadable",
+    "storage_v2_sources_blocked",
+    "storage_v2_sources_proof_unknown",
+    "storage_v2_sources_unresolved",
+    "managed_launch_recovery_exhausted",
+    "managed_launch_recovery_unreadable",
+];
+
 /// Classify a machine that was never authorized as setup-required.
 ///
 /// Two facts must both hold: the machine has no usable configuration (no
@@ -1073,8 +1113,13 @@ const UNCONFIGURED_CONSEQUENCE_REASONS: &[&str] = &[
 /// reporting. A fresh engine is evidence that this machine ships through some
 /// other configuration, so it keeps its ordinary classification. An unreadable
 /// machine state is a fault, not a first run, and is left alone too.
-/// Retained-data reasons (storage, archive, spool, recovery) survive: a
-/// deauthorized machine can still hold unshipped evidence.
+///
+/// A deauthorized machine can still hold data at risk. When any
+/// `RETAINED_DATA_FAULT_REASONS` remain, the machine keeps its headline and is
+/// classified by the reasons that survive, so the fault is not hidden behind
+/// "sign in" and a consequence of the missing setup cannot make it red;
+/// `machine_setup_required` still leads its reasons, so signing in is offered
+/// alongside the fault.
 fn apply_native_machine_setup(health: &mut NativeLocalHealth, setup: NativeMachineSetupStatus) {
     let setup_required = !setup.configured && setup.error.is_none() && !health.engine_status.fresh;
     if setup_required {
@@ -1084,18 +1129,21 @@ fn apply_native_machine_setup(health: &mut NativeLocalHealth, setup: NativeMachi
         health
             .reasons
             .insert(0, "machine_setup_required".to_string());
-        let retained_data_broken = health.reasons.iter().any(|reason| {
-            matches!(
-                reason.as_str(),
-                "engine_status_unreadable"
-                    | "storage_v2_outbox_unreadable"
-                    | "storage_v2_sources_unresolved"
-                    | "managed_launch_recovery_unreadable"
-            )
-        });
-        if !retained_data_broken {
+        let retained_data_fault = health
+            .reasons
+            .iter()
+            .any(|reason| RETAINED_DATA_FAULT_REASONS.contains(&reason.as_str()));
+        if !retained_data_fault {
             health.health_state = "setup_required".to_string();
             health.headline = "Sign in to connect this machine to Longhouse".to_string();
+        } else if health
+            .reasons
+            .iter()
+            .any(|reason| BROKEN_REASONS.contains(&reason.as_str()))
+        {
+            health.health_state = "broken".to_string();
+        } else {
+            health.health_state = "degraded".to_string();
         }
     }
     health.machine_setup = Some(setup);
@@ -1866,18 +1914,10 @@ fn native_health_from_parts(
         reasons.push(transport.status_reason.clone());
     }
 
-    let health_state = if reasons.iter().any(|reason| {
-        matches!(
-            reason.as_str(),
-            "engine_status_unreadable"
-                | "engine_status_missing"
-                | "engine_startup_refused"
-                | "payload_rejected"
-                | "payload_too_large"
-                | "storage_v2_outbox_unreadable"
-        ) || storage_block_requires_repair
-            || managed_launch_recovery.scan_error
-    }) {
+    let health_state = if reasons
+        .iter()
+        .any(|reason| BROKEN_REASONS.contains(&reason.as_str()))
+    {
         "broken"
     } else if reasons.is_empty() {
         "healthy"
@@ -6720,9 +6760,9 @@ mod tests {
     }
 
     #[test]
-    fn cleared_credentials_are_setup_required_but_keep_retained_data_faults() {
+    fn cleared_credentials_do_not_hide_retained_data_faults_behind_sign_in() {
         // `longhouse auth --clear` nulls runtime_url and removes the token. The
-        // engine that ran before left stale evidence and a stuck upload.
+        // engine that ran before left stale evidence and dead-lettered data.
         let dir = tempfile::tempdir().unwrap();
         write_machine_setup(
             dir.path(),
@@ -6739,10 +6779,34 @@ mod tests {
         );
         apply_native_machine_setup(&mut health, setup_for(dir.path()));
 
-        assert_eq!(health.health_state, "setup_required");
+        // The dead letters keep the machine's own classification; signing in
+        // is offered alongside them, not instead of them.
+        assert_eq!(health.health_state, "degraded");
+        assert_ne!(
+            health.headline,
+            "Sign in to connect this machine to Longhouse"
+        );
         assert_eq!(health.reasons[0], "machine_setup_required");
         assert!(health.reasons.contains(&"spool_dead_letters".to_string()));
         assert!(!health.reasons.contains(&"engine_status_stale".to_string()));
+        let actions = native_desktop_suggested_action_ids(&health.reasons);
+        assert!(actions.contains(&"sign_in".to_string()), "{actions:?}");
+        assert!(
+            actions.contains(&"inspect_shipping".to_string()),
+            "{actions:?}"
+        );
+
+        // With only consequences of the missing setup left, sign-in is the
+        // whole fix.
+        let mut clean = native_health_from_parts(
+            &path,
+            true,
+            Some(ENGINE_STALE_SECONDS + 1),
+            Some(json!({"spool_dead_count": 0})),
+            None,
+        );
+        apply_native_machine_setup(&mut clean, setup_for(dir.path()));
+        assert_eq!(clean.health_state, "setup_required");
     }
 
     #[test]
