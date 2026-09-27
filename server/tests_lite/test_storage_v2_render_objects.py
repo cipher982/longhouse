@@ -295,7 +295,7 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
     assert parsed.records[1].parent_uuid == "parent-event"
 
 
-def test_storage_wire_strips_claude_channel_control_envelope_from_user_text():
+def test_storage_wire_normalizes_channel_text_and_preserves_missing_user_content():
     session_id = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
     text = "Please inspect the changed brake hose."
     wrapped = f'<channel source="longhouse-channel" injected_by="longhouse">\n{text}\n</channel>'
@@ -308,11 +308,15 @@ def test_storage_wire_strips_claude_channel_control_envelope_from_user_text():
         source_epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
         range_kind="record_ordinal",
         range_start=0,
-        range_end=1,
+        range_end=2,
         records=(
             RawRecord(
                 source_position=0,
                 data=json.dumps({"type": "user", "message": {"role": "user", "content": wrapped}}).encode(),
+            ),
+            RawRecord(
+                source_position=1,
+                data=json.dumps({"type": "user", "message": {"role": "user", "content": None}}).encode(),
             ),
         ),
     )
@@ -337,7 +341,22 @@ def test_storage_wire_strips_claude_channel_control_envelope_from_user_text():
                     "thread_id": None,
                     "branch_kind": None,
                     "raw_record_ordinal": 0,
-                }
+                },
+                {
+                    "event_id": "missing-text",
+                    "order_time_us": 2,
+                    "source_position": 1,
+                    "event_subordinal": 0,
+                    "role": "user",
+                    "content_text": None,
+                    "tool_name": None,
+                    "tool_input_json": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": None,
+                    "branch_kind": None,
+                    "raw_record_ordinal": 1,
+                },
             ],
         },
         raw_spec=raw,
@@ -347,6 +366,7 @@ def test_storage_wire_strips_claude_channel_control_envelope_from_user_text():
     assert parsed is not None
     assert parsed.records[0].role == "user"
     assert parsed.records[0].content_text == text
+    assert parsed.records[1].content_text is None
     assert b"longhouse-channel" in raw.records[0].data
 
 

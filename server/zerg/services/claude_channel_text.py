@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+# Only these source values are Longhouse-owned; other MCP channel bodies are user text.
+# Add a source only when the Longhouse channel protocol explicitly changes.
 _CHANNEL_WRAPPER_RE = re.compile(
     r"""^<channel\b(?=[^>]*\ssource=(?:"longhouse(?:-channel)?"|'longhouse(?:-channel)?'))[^>]*>\n?([\s\S]*?)\n?</channel>$"""
 )

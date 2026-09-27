@@ -530,7 +530,11 @@ def _parse_render_spec(
                     record_payload["role"] = "system"
                     record_payload["content_text"] = notification_text
                     record_payload["interaction_kind"] = INTERACTION_PROVIDER_NOTIFICATION
-                elif str(raw_spec.provider or "").strip().lower() == "claude" and record_payload["role"] == "user":
+                elif (
+                    str(raw_spec.provider or "").strip().lower() == "claude"
+                    and record_payload["role"] == "user"
+                    and isinstance(record_payload["content_text"], str)
+                ):
                     # Channel framing is execution metadata, not authored
                     # transcript text. Keep the raw provider envelope intact;
                     # serve and correlate only its user-authored body.
