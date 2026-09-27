@@ -732,7 +732,9 @@ mod tests {
                 "released tombstones are not active claims"
             );
             assert!(
-                read_claim(&session_id).expect("read expired tombstone").is_some(),
+                read_claim(&session_id)
+                    .expect("read expired tombstone")
+                    .is_some(),
                 "an expired tombstone stays until its binding is retired"
             );
 
@@ -822,7 +824,9 @@ mod tests {
             project_claims(&db_path).expect("collect expired claim");
 
             assert!(
-                read_claim(&session_id).expect("read collected claim").is_none(),
+                read_claim(&session_id)
+                    .expect("read collected claim")
+                    .is_none(),
                 "the expired authority file should be removed"
             );
             let state: String = conn
@@ -865,7 +869,6 @@ mod tests {
             );
         });
     }
-
 
     #[test]
     fn an_unreadable_claim_is_skipped_and_does_not_hide_the_others() {
