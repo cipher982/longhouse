@@ -7,12 +7,13 @@
  */
 
 import { useState, type FormEvent } from "react";
+import { useMutation } from "@tanstack/react-query";
 import {
   useDeviceTokens,
   useCreateDeviceToken,
   useRevokeDeviceToken,
 } from "../hooks/useDeviceTokens";
-import type { DeviceTokenCreated } from "../services/api/devices";
+import { createDeviceConnectCode, type DeviceTokenCreated } from "../services/api/devices";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { SectionHeader, EmptyState, Button, Badge, PageShell, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
@@ -45,34 +46,41 @@ function formatDate(iso: string | null): string {
   return d.toLocaleDateString();
 }
 
+/** How long a loopback handoff may take before the page reports it failed. */
+const HANDOFF_STALL_MS = 5000;
+
 export default function DevicesPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [newToken, setNewToken] = useState<DeviceTokenCreated | null>(null);
+  const [handoffStalled, setHandoffStalled] = useState(false);
 
   const { data, isLoading, error } = useDeviceTokens();
   const createToken = useCreateDeviceToken();
   const revokeToken = useRevokeDeviceToken();
   const confirm = useConfirm();
+  // `longhouse auth` opens this page with a loopback callback, a state and a
+  // PKCE challenge. A request without a challenge comes from a CLI older than
+  // the code exchange; it gets told to update rather than a dead button.
   const connectRequest = (() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("connect") !== "1") return null;
     const callback = params.get("callback");
     const state = params.get("state");
     const device = params.get("device");
+    const challenge = params.get("challenge");
     if (!callback || !state || !device) return null;
     try {
       const url = new URL(callback);
       if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.pathname !== "/connected") return null;
-      return { callback: url, state, device };
+      return { callback: url, state, device, challenge };
     } catch {
       return null;
     }
   })();
 
-  // The CLI's callback answers 303 back to this page, so the request that
-  // carried the token is never left as the current history entry. `connected`
-  // is the only trace of it, and it carries no credential.
+  // The CLI answers the loopback visit with a 303 back to this page, carrying
+  // only whether its redeem succeeded.
   const connectOutcome = (() => {
     const value = new URLSearchParams(window.location.search).get("connected");
     if (value === "1") return "ok";
@@ -83,40 +91,31 @@ export default function DevicesPage() {
   // Ready signal for tests
   useReadinessFlag({ ready: !isLoading });
 
-  // Hand the token to the waiting CLI as a top-level form POST. Two constraints
-  // pin that shape, and neither is a style choice:
-  //   * The token must not ride in a URL. Device tokens never expire and
-  //     authorize the whole agents surface, so a query-string callback writes a
-  //     live credential into browser history permanently.
-  //   * It cannot be fetch/XHR. A subresource request from https://longhouse.ai
-  //     to http://127.0.0.1 triggers a private-network preflight that the raw
-  //     TcpListener in `browser_device_token` (engine/src/longhouse.rs) cannot
-  //     answer. Top-level navigations are exempt from that preflight, and
-  //     127.0.0.1 is a potentially-trustworthy origin, so the submission is not
-  //     treated as mixed content either.
-  // The listener reads the request line, the headers and Content-Length bytes
-  // of body, then answers 303 back to this page — so the callback URL never
-  // survives as a history entry at all.
-  const deliverToken = (token: string) => {
-    if (!connectRequest) return;
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = connectRequest.callback.toString();
-    form.enctype = "application/x-www-form-urlencoded";
-    form.hidden = true;
-    for (const [name, value] of [
-      ["state", connectRequest.state],
-      ["token", token],
-    ]) {
-      const field = document.createElement("input");
-      field.type = "hidden";
-      field.name = name;
-      field.value = value;
-      form.appendChild(field);
-    }
-    document.body.appendChild(form);
-    form.submit();
-  };
+  // Approve the waiting CLI. The browser never holds a device token: the
+  // Runtime Host returns a one-time code bound to the CLI's PKCE challenge,
+  // and the page hands that code to the loopback listener as a top-level GET
+  // navigation. The CLI redeems code + verifier for the token itself, so
+  // nothing is minted unless the process that started the flow collects it.
+  //
+  // Why a navigation: this origin's CSP (`form-action 'self'`) blocks a form
+  // POST to the loopback in every engine, and fetch/XHR to http://127.0.0.1
+  // from https is blocked as mixed content (WebKit) or by private-network
+  // access (Chromium). A top-level GET is exempt from both. The code in that
+  // URL is single-use, expires in minutes and is worthless without the
+  // verifier, and the listener's 303 replaces the entry anyway.
+  const connectDevice = useMutation({
+    mutationFn: (request: NonNullable<typeof connectRequest>) =>
+      createDeviceConnectCode({ device_id: request.device, code_challenge: request.challenge ?? "" }),
+    onSuccess: ({ code }, request) => {
+      const target = new URL(request.callback);
+      target.search = new URLSearchParams({ state: request.state, code }).toString();
+      window.location.replace(target.toString());
+      // A successful handoff unloads this page. Still here means the browser
+      // could not reach the CLI (it exited, or the port is gone), and some
+      // engines fail that navigation without showing any error page.
+      window.setTimeout(() => setHandoffStalled(true), HANDOFF_STALL_MS);
+    },
+  });
 
   const handleCreate = (e: FormEvent) => {
     e.preventDefault();
@@ -126,25 +125,9 @@ export default function DevicesPage() {
       { device_id: deviceName.trim() },
       {
         onSuccess: (created) => {
-          if (connectRequest) {
-            deliverToken(created.token);
-            return;
-          }
           setNewToken(created);
           setShowCreateModal(false);
           setDeviceName("");
-        },
-      }
-    );
-  };
-
-  const handleConnect = () => {
-    if (!connectRequest) return;
-    createToken.mutate(
-      { device_id: connectRequest.device },
-      {
-        onSuccess: (created) => {
-          deliverToken(created.token);
         },
       }
     );
@@ -190,23 +173,51 @@ export default function DevicesPage() {
       />
 
       {connectOutcome && (
-        <div className="token-reveal">
+        <div className="token-reveal" role="status">
           <h4>{connectOutcome === "ok" ? "Device connected" : "Device connection failed"}</h4>
           <p className="token-reveal-hint">
             {connectOutcome === "ok"
-              ? "The native client on that device holds its own token now."
-              : "The device did not accept the token. Run longhouse auth again on that device."}
+              ? "The Longhouse CLI on that device holds its own token now. You can close this tab."
+              : "The device could not finish connecting. Check the terminal where you ran longhouse auth, then run it again."}
           </p>
         </div>
       )}
 
-      {connectRequest && (
+      {connectRequest && !connectRequest.challenge && (
+        <div className="token-reveal" role="alert">
+          <h4>Update Longhouse on {connectRequest.device}</h4>
+          <p className="token-reveal-hint">
+            That Longhouse CLI is too old to connect through this page. Update it, then run longhouse auth again.
+          </p>
+        </div>
+      )}
+
+      {connectRequest?.challenge && (
         <div className="token-reveal">
           <h4>Connect {connectRequest.device}</h4>
           <p className="token-reveal-hint">Approve this browser request to authorize the native Longhouse client on that device.</p>
-          <Button variant="primary" onClick={handleConnect} disabled={createToken.isPending}>
-            {createToken.isPending ? "Connecting…" : "Connect this device"}
+          <Button
+            variant="primary"
+            onClick={() => connectDevice.mutate(connectRequest)}
+            disabled={connectDevice.isPending || connectDevice.isSuccess}
+          >
+            {handoffStalled
+              ? "Not connected"
+              : connectDevice.isPending || connectDevice.isSuccess
+                ? "Connecting…"
+                : "Connect this device"}
           </Button>
+          {handoffStalled && (
+            <p className="token-reveal-hint" role="alert">
+              This browser could not reach longhouse auth on {connectRequest.device}. Make sure it is still running in
+              your terminal; if it exited, run it again. No token was created.
+            </p>
+          )}
+          {connectDevice.isError && (
+            <p className="token-reveal-hint" role="alert">
+              Could not approve this device: {connectDevice.error.message}. Try again, or run longhouse auth again.
+            </p>
+          )}
         </div>
       )}
 

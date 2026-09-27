@@ -3536,6 +3536,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/devices/connect-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Connect Code
+         * @description Approve a waiting `longhouse auth` without minting anything yet.
+         */
+        post: operations["create_connect_code_devices_connect_codes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/connect-codes/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redeem Connect Code
+         * @description Exchange a connect code and its PKCE verifier for a new device token.
+         *
+         *     Unauthenticated by design: the code proves the owner approved it, the
+         *     verifier proves this caller started the flow. A code is spent on the first
+         *     attempt, right or wrong, so it cannot be guessed at.
+         */
+        post: operations["redeem_connect_code_devices_connect_codes_redeem_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/devices/apns-register": {
         parameters: {
             query?: never;
@@ -4115,6 +4159,33 @@ export interface components {
             managed_session_name?: string | null;
             /** Observed At */
             observed_at?: string | null;
+        };
+        /** ConnectCodeRedeemRequest */
+        ConnectCodeRedeemRequest: {
+            /** Code */
+            code: string;
+            /** Code Verifier */
+            code_verifier: string;
+        };
+        /** ConnectCodeRequest */
+        ConnectCodeRequest: {
+            /** Device Id */
+            device_id: string;
+            /**
+             * Code Challenge
+             * @description base64url(SHA-256(code_verifier)), unpadded
+             */
+            code_challenge: string;
+        };
+        /** ConnectCodeResponse */
+        ConnectCodeResponse: {
+            /**
+             * Code
+             * @description One-time code for the waiting CLI; worthless without its verifier
+             */
+            code: string;
+            /** Expires In */
+            expires_in: number;
         };
         /** ConsoleSessionCreate */
         ConsoleSessionCreate: {
@@ -17153,6 +17224,72 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["CreateTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_connect_code_devices_connect_codes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectCodeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    redeem_connect_code_devices_connect_codes_redeem_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectCodeRedeemRequest"];
             };
         };
         responses: {

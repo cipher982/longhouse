@@ -1,12 +1,11 @@
 /**
- * The browser half of the `longhouse auth --browser` handshake.
+ * The browser half of the `longhouse auth` handshake.
  *
- * This page and the engine's callback listener are two halves of one wire
- * format, and shipping only one half has already broken device auth twice.
- * The assertions below pin the exact shape the listener parses in
- * `read_callback_request` / `callback_token` (engine/src/longhouse.rs):
- * method POST, `application/x-www-form-urlencoded`, and the two field names
- * `state` and `token`. Change either side and this test fails first.
+ * This page and the engine's loopback listener are two halves of one wire
+ * format (`read_callback_request` / `callback_code` in engine/src/longhouse.rs):
+ * a top-level GET to http://127.0.0.1:<port>/connected carrying `state` and a
+ * one-time `code`. The page must never hold a device token, and approving must
+ * not mint one -- the CLI redeems the code with its PKCE verifier.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -18,6 +17,7 @@ import DevicesPage, { connectServerCommand } from "../DevicesPage";
 const deviceApiMocks = vi.hoisted(() => ({
   listDeviceTokens: vi.fn(),
   createDeviceToken: vi.fn(),
+  createDeviceConnectCode: vi.fn(),
   revokeDeviceToken: vi.fn(),
 }));
 
@@ -29,10 +29,10 @@ vi.mock("../../lib/readiness-contract", () => ({
 
 const CALLBACK = "http://127.0.0.1:54321/connected";
 const STATE = "8f1c0f6e-1c1c-4a5e-9d21-7d0d2b8a51aa";
-// A urlsafe-base64 body like `secrets.token_urlsafe` produces, plus the
-// characters form encoding actually has to escape, so an encoding change on
-// either side shows up here rather than in a failed device setup.
-const TOKEN = "zdt_A+B/C=D E_F-Gxy9";
+const CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+// Characters URL encoding has to escape, so an encoding change on either side
+// shows up here rather than in a failed device setup.
+const CODE = "Ab_c-9+z/=";
 
 function renderDevicesPage(search: string) {
   window.history.replaceState({}, "", `/settings/devices${search}`);
@@ -48,82 +48,102 @@ function renderDevicesPage(search: string) {
   );
 }
 
-function connectSearch() {
+function connectSearch(extra: Record<string, string> = { challenge: CHALLENGE }) {
   const params = new URLSearchParams({
     connect: "1",
     callback: CALLBACK,
     state: STATE,
     device: "This Mac",
+    ...extra,
   });
   return `?${params.toString()}`;
 }
 
 describe("DevicesPage device-auth callback", () => {
-  let submitted: HTMLFormElement | null = null;
-  let submitSpy: ReturnType<typeof vi.spyOn>;
+  let replace: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    submitted = null;
     deviceApiMocks.listDeviceTokens.mockResolvedValue({ tokens: [], total: 0 });
-    deviceApiMocks.createDeviceToken.mockResolvedValue({
-      id: "tok-1",
-      device_id: "This Mac",
-      token: TOKEN,
-      created_at: "2026-08-25T00:00:00Z",
-    });
-    // jsdom does not implement form submission; capture the form the page
-    // actually built and appended, at the moment it tries to submit it.
-    submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {
-      submitted = document.querySelector<HTMLFormElement>("form[hidden]");
-    });
+    deviceApiMocks.createDeviceConnectCode.mockResolvedValue({ code: CODE, expires_in: 300 });
+    replace = vi.fn();
   });
 
   afterEach(() => {
-    submitSpy.mockRestore();
+    vi.restoreAllMocks();
     window.history.replaceState({}, "", "/");
   });
 
-  it("hands the token to the CLI as a form POST the engine listener can parse", async () => {
+  // jsdom cannot navigate; capture where the page sends the browser.
+  function captureNavigation() {
+    const real = window.location;
+    vi.spyOn(window, "location", "get").mockReturnValue({
+      href: real.href,
+      origin: real.origin,
+      search: real.search,
+      pathname: real.pathname,
+      replace,
+    } as unknown as Location);
+  }
+
+  it("approves with a code bound to the CLI's challenge and navigates to the loopback with it", async () => {
     const user = userEvent.setup();
     renderDevicesPage(connectSearch());
+    captureNavigation();
 
     await user.click(await screen.findByRole("button", { name: /connect this device/i }));
-    await waitFor(() => expect(submitted).not.toBeNull());
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
 
-    const form = submitted!;
-    // The listener rejects anything that is not a POST, and reads the body by
-    // Content-Length -- a GET or a multipart body reaches it as no params.
-    expect(form.method.toUpperCase()).toBe("POST");
-    expect(form.enctype).toBe("application/x-www-form-urlencoded");
-    expect(form.action).toBe(CALLBACK);
+    expect(deviceApiMocks.createDeviceConnectCode.mock.calls[0][0]).toEqual({
+      device_id: "This Mac",
+      code_challenge: CHALLENGE,
+    });
+    // Approving must not mint a token in the browser.
+    expect(deviceApiMocks.createDeviceToken).not.toHaveBeenCalled();
 
-    const fields = Object.fromEntries(
-      [...form.querySelectorAll("input")].map((input) => [input.name, input.value])
-    );
-    // `callback_token` reads exactly these two keys.
-    expect(Object.keys(fields).sort()).toEqual(["state", "token"]);
-    expect(fields.state).toBe(STATE);
-    expect(fields.token).toBe(TOKEN);
-    // Whatever the browser escapes on the wire, the decoded value the engine
-    // stores has to be the token byte-for-byte.
-    expect(new URLSearchParams(new FormData(form) as never).get("token")).toBe(TOKEN);
-
-    expect(deviceApiMocks.createDeviceToken.mock.calls[0][0]).toEqual({ device_id: "This Mac" });
+    const target = new URL(replace.mock.calls[0][0]);
+    expect(`${target.origin}${target.pathname}`).toBe(CALLBACK);
+    // `callback_code` reads exactly these two keys.
+    expect([...target.searchParams.keys()].sort()).toEqual(["code", "state"]);
+    expect(target.searchParams.get("state")).toBe(STATE);
+    expect(target.searchParams.get("code")).toBe(CODE);
+    expect(target.href).not.toContain("zdt_");
   });
 
-  it("never puts the token in a URL", async () => {
+  it("says so when the browser never reached the CLI, instead of spinning forever", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      renderDevicesPage(connectSearch());
+      captureNavigation();
+
+      await user.click(await screen.findByRole("button", { name: /connect this device/i }));
+      await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText(/could not reach longhouse auth/i)).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(await screen.findByText(/could not reach longhouse auth on this mac/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /not connected/i })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows why approval failed instead of doing nothing", async () => {
+    deviceApiMocks.createDeviceConnectCode.mockRejectedValue(new Error("Too many device connections are pending"));
     const user = userEvent.setup();
     renderDevicesPage(connectSearch());
+    captureNavigation();
 
     await user.click(await screen.findByRole("button", { name: /connect this device/i }));
-    await waitFor(() => expect(submitted).not.toBeNull());
+    expect(await screen.findByText(/could not approve this device: too many device connections/i)).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
 
-    // A device token does not expire, so a query-string callback would write a
-    // live credential into browser history permanently. Neither the form target
-    // nor the page's own URL may carry it.
-    expect(submitted!.action).not.toContain("zdt_");
-    expect(window.location.href).not.toContain("zdt_");
+  it("tells an out-of-date CLI to update instead of offering a dead button", async () => {
+    renderDevicesPage(connectSearch({}));
+    expect(await screen.findByText(/too old to connect through this page/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /connect this device/i })).toBeNull();
   });
 
   it("reports the outcome the engine's 303 redirect carries back", async () => {
@@ -140,6 +160,7 @@ describe("DevicesPage device-auth callback", () => {
       callback: "https://evil.example/connected",
       state: STATE,
       device: "This Mac",
+      challenge: CHALLENGE,
     });
     renderDevicesPage(`?${params.toString()}`);
 

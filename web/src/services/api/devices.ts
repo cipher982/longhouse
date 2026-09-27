@@ -53,6 +53,22 @@ export async function createDeviceToken(body: DeviceTokenCreate): Promise<Device
   });
 }
 
+/** Approval for a waiting `longhouse auth`: a one-time code, never a token. */
+export interface DeviceConnectCode {
+  code: string;
+  expires_in: number;
+}
+
+export async function createDeviceConnectCode(body: {
+  device_id: string;
+  code_challenge: string;
+}): Promise<DeviceConnectCode> {
+  return request<DeviceConnectCode>("/devices/connect-codes", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function revokeDeviceToken(tokenId: string): Promise<void> {
   return request<void>(`/devices/tokens/${tokenId}`, {
     method: "DELETE",

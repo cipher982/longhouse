@@ -4,11 +4,15 @@ Provides endpoints for:
 - POST /api/devices/tokens - Create a new device token
 - GET /api/devices/tokens - List user's device tokens
 - DELETE /api/devices/tokens/{id} - Revoke a token
+- POST /api/devices/connect-codes - Approve a waiting `longhouse auth` (browser)
+- POST /api/devices/connect-codes/redeem - CLI exchanges code + verifier for a token
 """
 
+import base64
 import hashlib
 import logging
 import secrets
+import time
 from datetime import datetime
 from datetime import timezone
 from typing import List
@@ -193,7 +197,10 @@ async def create_device_token(
     The plain token is returned only once during creation. Store it securely.
     Subsequent API calls will use this token in the X-Agents-Token header.
     """
-    # Generate token
+    return await _mint_device_token(owner_id=int(current_user.id), device_id=request.device_id, db=db)
+
+
+async def _mint_device_token(*, owner_id: int, device_id: str, db: Session | None) -> CreateTokenResponse:
     plain_token = generate_device_token()
     token_hash = hash_token(plain_token)
 
@@ -213,9 +220,9 @@ async def create_device_token(
             result = await client.call(
                 "auth.device.create.v2",
                 {
-                    "owner_id": int(current_user.id),
+                    "owner_id": owner_id,
                     "token_id": token_id,
-                    "device_id": request.device_id,
+                    "device_id": device_id,
                     "token_hash": token_hash,
                 },
                 timeout_seconds=1.0,
@@ -255,13 +262,13 @@ async def create_device_token(
             ) from exc
         logger.info(
             "Created device token for user %s device %s at catalog commit %s",
-            current_user.id,
-            request.device_id,
+            owner_id,
+            device_id,
             result.get("commit_seq"),
         )
         return CreateTokenResponse(
             id=token_id,
-            device_id=request.device_id,
+            device_id=device_id,
             token=plain_token,
             created_at=created_at,
         )
@@ -272,8 +279,8 @@ async def create_device_token(
 
     def _create_token(wdb: Session) -> tuple[str, str, datetime]:
         device_token = DeviceToken(
-            owner_id=current_user.id,
-            device_id=request.device_id,
+            owner_id=owner_id,
+            device_id=device_id,
             token_hash=token_hash,
             created_at=datetime.now(timezone.utc),
         )
@@ -282,20 +289,119 @@ async def create_device_token(
         wdb.refresh(device_token)
         return str(device_token.id), device_token.device_id, device_token.created_at
 
-    token_id, device_id, created_at = await ws.execute_or_direct(
+    token_id, stored_device_id, created_at = await ws.execute_or_direct(
         _create_token,
         db,
         label="device-token-create",
     )
 
-    logger.info(f"Created device token for user {current_user.id} device {request.device_id}")
+    logger.info(f"Created device token for user {owner_id} device {device_id}")
 
     return CreateTokenResponse(
         id=token_id,
-        device_id=device_id,
+        device_id=stored_device_id,
         token=plain_token,
         created_at=created_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Browser connect: `longhouse auth` loopback handoff
+# ---------------------------------------------------------------------------
+#
+# `longhouse auth` opens /settings/devices with a loopback callback and a PKCE
+# challenge. Approving there creates a one-time connect code, never a token; the
+# page navigates to the loopback with that code, and the CLI redeems code +
+# verifier here for the device token. So the token never exists in the browser,
+# and nothing is minted unless the CLI that started the flow collects it.
+#
+# Pending codes are in memory on purpose: they live five minutes, the Runtime
+# Host is a single process, and a restart only means running `longhouse auth`
+# again.
+
+CONNECT_CODE_TTL_SECONDS = 300
+_CONNECT_CODE_LIMIT = 256
+
+
+class _PendingConnect(BaseModel):
+    owner_id: int
+    device_id: str
+    code_challenge: str
+    expires_at: float
+
+
+_pending_connects: dict[str, _PendingConnect] = {}
+
+
+def _pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+class ConnectCodeRequest(BaseModel):
+    device_id: str = Field(..., min_length=1, max_length=255)
+    code_challenge: str = Field(..., pattern=r"^[A-Za-z0-9_-]{43}$", description="base64url(SHA-256(code_verifier)), unpadded")
+
+
+class ConnectCodeResponse(BaseModel):
+    code: str = Field(..., description="One-time code for the waiting CLI; worthless without its verifier")
+    expires_in: int
+
+
+class ConnectCodeRedeemRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=128)
+    code_verifier: str = Field(..., min_length=43, max_length=128)
+
+
+@router.post("/connect-codes", response_model=ConnectCodeResponse, status_code=status.HTTP_201_CREATED)
+async def create_connect_code(
+    request: ConnectCodeRequest,
+    current_user=Depends(get_current_user),
+) -> ConnectCodeResponse:
+    """Approve a waiting `longhouse auth` without minting anything yet."""
+    now = time.monotonic()
+    for key in [key for key, pending in _pending_connects.items() if pending.expires_at <= now]:
+        _pending_connects.pop(key, None)
+    if len(_pending_connects) >= _CONNECT_CODE_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"code": "connect_codes_exhausted", "message": "Too many device connections are pending. Try again shortly."},
+        )
+    code = secrets.token_urlsafe(32)
+    _pending_connects[hash_token(code)] = _PendingConnect(
+        owner_id=int(current_user.id),
+        device_id=request.device_id,
+        code_challenge=request.code_challenge,
+        expires_at=now + CONNECT_CODE_TTL_SECONDS,
+    )
+    return ConnectCodeResponse(code=code, expires_in=CONNECT_CODE_TTL_SECONDS)
+
+
+@router.post("/connect-codes/redeem", response_model=CreateTokenResponse, status_code=status.HTTP_201_CREATED)
+async def redeem_connect_code(
+    request: ConnectCodeRedeemRequest,
+    db: Session | None = Depends(_auth_compat_db),
+) -> CreateTokenResponse:
+    """Exchange a connect code and its PKCE verifier for a new device token.
+
+    Unauthenticated by design: the code proves the owner approved it, the
+    verifier proves this caller started the flow. A code is spent on the first
+    attempt, right or wrong, so it cannot be guessed at.
+    """
+    pending = _pending_connects.pop(hash_token(request.code), None)
+    if (
+        pending is None
+        or pending.expires_at <= time.monotonic()
+        or not secrets.compare_digest(_pkce_challenge(request.code_verifier), pending.code_challenge)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_connect_code",
+                "message": "This device connection expired or was already used. Run longhouse auth again.",
+            },
+        )
+    return await _mint_device_token(owner_id=pending.owner_id, device_id=pending.device_id, db=db)
 
 
 @router.get("/tokens", response_model=TokenListResponse)

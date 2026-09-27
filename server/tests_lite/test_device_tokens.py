@@ -404,3 +404,94 @@ def test_production_revoke_routes_mutation_through_catalogd(tmp_path):
         "timeout_seconds": 1.0,
     }
     cleanup()
+
+
+def _pkce_pair() -> tuple[str, str]:
+    import base64
+    import hashlib
+    import secrets
+
+    verifier = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+class _DirectSerializer:
+    is_configured = True
+
+    async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True):
+        result = fn(fallback_db)
+        if auto_commit:
+            fallback_db.commit()
+        return result
+
+
+def test_browser_connect_mints_only_when_the_cli_redeems_its_code(tmp_path):
+    """Approving in the browser creates a code, not a token; the CLI's verifier turns it into one."""
+    factory, cleanup = _setup_app(tmp_path)
+    verifier, challenge = _pkce_pair()
+    try:
+        with patch("zerg.routers.device_tokens.get_write_serializer", return_value=_DirectSerializer()):
+            client = TestClient(api_app)
+            approved = client.post("/devices/connect-codes", json={"device_id": "This Mac", "code_challenge": challenge})
+            assert approved.status_code == 201, approved.text
+            assert "token" not in approved.json()
+            with factory() as db:
+                assert db.query(DeviceToken).count() == 0
+
+            redeemed = client.post("/devices/connect-codes/redeem", json={"code": approved.json()["code"], "code_verifier": verifier})
+            assert redeemed.status_code == 201, redeemed.text
+            token = redeemed.json()["token"]
+            assert token.startswith("zdt_")
+            with factory() as db:
+                stored = db.query(DeviceToken).one()
+                assert (stored.owner_id, stored.device_id, stored.token_hash) == (1, "This Mac", hash_token(token))
+
+            replay = client.post("/devices/connect-codes/redeem", json={"code": approved.json()["code"], "code_verifier": verifier})
+            assert replay.status_code == 400
+            with factory() as db:
+                assert db.query(DeviceToken).count() == 1
+    finally:
+        cleanup()
+
+
+def test_browser_connect_code_is_spent_by_a_wrong_verifier(tmp_path):
+    factory, cleanup = _setup_app(tmp_path)
+    verifier, challenge = _pkce_pair()
+    other_verifier, _ = _pkce_pair()
+    try:
+        client = TestClient(api_app)
+        code = client.post("/devices/connect-codes", json={"device_id": "This Mac", "code_challenge": challenge}).json()["code"]
+        assert client.post("/devices/connect-codes/redeem", json={"code": code, "code_verifier": other_verifier}).status_code == 400
+        # One guess spends the code, so the right verifier afterwards gets nothing either.
+        assert client.post("/devices/connect-codes/redeem", json={"code": code, "code_verifier": verifier}).status_code == 400
+        with factory() as db:
+            assert db.query(DeviceToken).count() == 0
+    finally:
+        cleanup()
+
+
+def test_browser_connect_code_expires(tmp_path):
+    factory, cleanup = _setup_app(tmp_path)
+    verifier, challenge = _pkce_pair()
+    try:
+        client = TestClient(api_app)
+        code = client.post("/devices/connect-codes", json={"device_id": "This Mac", "code_challenge": challenge}).json()["code"]
+        with patch("zerg.routers.device_tokens.time.monotonic", return_value=10**12):
+            assert client.post("/devices/connect-codes/redeem", json={"code": code, "code_verifier": verifier}).status_code == 400
+        with factory() as db:
+            assert db.query(DeviceToken).count() == 0
+    finally:
+        cleanup()
+
+
+def test_browser_connect_code_requires_a_signed_in_owner(tmp_path):
+    _factory, cleanup = _setup_app(tmp_path)
+    api_app.dependency_overrides.pop(get_current_user, None)
+    _, challenge = _pkce_pair()
+    try:
+        with patch("zerg.dependencies.auth.AUTH_DISABLED", False):
+            response = TestClient(api_app).post("/devices/connect-codes", json={"device_id": "This Mac", "code_challenge": challenge})
+        assert response.status_code == 401
+    finally:
+        cleanup()
