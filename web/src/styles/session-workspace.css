@@ -298,68 +298,18 @@
   margin-right: 5px;
 }
 
-/* --- Header state: dot + sentence, right of the title --- */
+/* --- Header state: the shared StatusLamp (instruments.css), right of the
+   title. This wrapper only places it; the lamp owns every state treatment. --- */
 .session-state-line {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13.5px;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
+  min-width: 0;
   flex-shrink: 0;
 }
 
-.session-ember-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  flex: none;
-  background: var(--color-intent-warning);
-  box-shadow:
-    0 0 0 3px rgba(240, 138, 36, 0.16),
-    0 0 10px rgba(240, 138, 36, 0.55);
-  animation: session-ember-breathe 2.8s ease-in-out infinite;
-}
-
-@keyframes session-ember-breathe {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.6;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-ember-dot {
-    animation: none;
-  }
-}
-
-.session-ember-dot--attention {
-  background: var(--color-intent-error);
-  box-shadow:
-    0 0 0 3px rgba(228, 87, 46, 0.16),
-    0 0 8px rgba(228, 87, 46, 0.4);
-  animation: none;
-}
-
-.session-cool-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  flex: none;
-  background: var(--color-state-cool);
-}
-
-.session-unknown-dot {
-  width: 8px;
-  height: 8px;
-  border: 1px solid var(--color-text-secondary);
-  border-radius: 999px;
-  flex: none;
-  opacity: 0.85;
+.session-state-line .status-lamp {
+  height: 26px;
+  font-size: 13.5px;
 }
 
 .session-overflow-menu {
@@ -2965,10 +2915,17 @@
     min-width: 0;
   }
 
-  /* At phone width the dot alone carries the state; the sentence lives in
-     the title attribute and in the composer's own head row. */
-  .session-state-line__text {
+  /* At phone width the bulb alone carries the state (the waiting fill
+     stays, so it still reads without hue); the sentence lives in the title
+     attribute and in the composer's own head row. */
+  .session-state-line .status-lamp__label {
     display: none;
+  }
+
+  .session-state-line .status-lamp {
+    width: 26px;
+    padding: 0;
+    justify-content: center;
   }
 
   .session-workspace-header__left {

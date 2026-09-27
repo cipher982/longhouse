@@ -16,7 +16,6 @@
     --inbox-repo-font: 13.5px;
     --inbox-repo-pad-y: 7px;
     --inbox-meta-font: 13px;
-    --inbox-col-lead: 16px;
     --inbox-col-glyph: 20px;
     --inbox-col-activity: 132px;
     --inbox-col-mode: 120px;
@@ -173,7 +172,7 @@
     vertical-align: 2px;
   }
 
-  /* Unread rows are already called out by the ember lead dot; the title
+  /* Unread rows are already called out by their result lamp; the title
    * carries a touch more weight so it still reads on a quick scan, without a
    * second (redundant) marker dot. */
   .inbox-row[data-unread="true"] .inbox-row-title {
@@ -250,8 +249,8 @@
   }
 
   /* ---------- Row ----------
-   * Compact, dense, single-line: 16px lead dot, provider glyph,
-   * title+summary, activity, mode chip, machine + branch, tabular age. Fixed meta tracks — never
+   * Compact, dense, single-line: provider glyph, title+summary,
+   * status lamp, mode chip, machine + branch, tabular age. Fixed meta tracks — never
    * shrink for short labels like "idle" / "Reattach", or the whole right
    * cluster drifts left of neighboring rows. Ember spec, Phase 3 §2.
    */
@@ -267,14 +266,13 @@
 
     display: grid;
     grid-template-columns:
-      var(--inbox-col-lead)
       var(--inbox-col-glyph)
       minmax(0, 1fr)
       var(--inbox-col-activity)
       var(--inbox-col-mode)
       var(--inbox-col-source)
       var(--inbox-col-age);
-    grid-template-areas: "lead glyph main activity mode source age";
+    grid-template-areas: "glyph main activity mode source age";
     align-items: center;
     gap: var(--inbox-row-gap);
     padding: 0 var(--space-2);
@@ -337,18 +335,9 @@
     cursor: default;
   }
 
-  /* ---------- Lead (ember / dot) ---------- */
-
-  .inbox-row-lead {
-    grid-area: lead;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
   /* Provider identity: the brand glyph, its own column so the left edge reads
-   * as a scannable run of logos (same as the iOS row). Status stays on the
-   * lead dot — the glyph never carries runtime color. */
+   * as a scannable run of logos (same as the iOS row). Status lives on the
+   * activity column's lamp — the glyph never carries runtime color. */
   .inbox-row-glyph {
     grid-area: glyph;
     display: flex;
@@ -415,16 +404,6 @@
    * enough room for their normal domain; title/summary is the only pressure
    * valve for ordinary row updates.
    */
-
-  .inbox-row-activity {
-    font-size: var(--inbox-meta-font);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 
   /* .inbox-row-source and .inbox-row-time are flex containers with more than
    * one child (machine + branch; time text + hide button) — a
@@ -506,42 +485,21 @@
   }
 
 
-  /* ---------- Activity column ---------- */
+  /* ---------- Activity column ----------
+   * The row's one status instrument (StatusLamp, styled in instruments.css).
+   * Every state keeps the same bulb and label position, so this column reads
+   * as a bank of lamps down the list: lit, filled, dim, hollow, or flat. */
 
   .inbox-row-activity {
     grid-area: activity;
-    text-transform: lowercase;
-    transition: color 200ms ease, opacity 200ms ease;
-  }
-
-  /* Live work reads in primary ink; a needs-approval row reads ember;
-   * everything else (finished, closed, idle) stays secondary. Mirrors the
-   * lead dot's data-signal / legacy data-tone precedence exactly. */
-  .inbox-row-activity[data-signal="working"],
-  .inbox-row-activity[data-tone="thinking"],
-  .inbox-row-activity[data-tone="active"],
-  .inbox-row-activity[data-tone="running"] {
-    color: var(--color-text-primary);
-  }
-
-  .inbox-row-activity[data-signal="attention"],
-  .inbox-row-activity[data-tone="blocked"],
-  .inbox-row-activity[data-tone="stalled"] {
-    color: var(--tl-ember);
-  }
-
-  /* A live row's Nixie capsule (Phase 4 Instruments) is an inline-block, so
-   * the container's own overflow/text-overflow can't ellipsize it as a
-   * unit — the capsule needs to do its own truncation on the text inside
-   * it. No property here conflicts with instruments.css's unlayered base
-   * rule, so being inside @layer pages is fine. */
-  .inbox-row-activity .instrument-nixie {
-    display: inline-block;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    vertical-align: middle;
+    display: flex;
+    align-items: center;
+    /* Pull the lamp's inner inset into the gutter so its bulb, not its
+     * capsule edge, sits on the column line. */
+    margin-left: -8px;
+    /* No overflow clip: the lamp ellipsizes its own label, and a clip would
+     * cut the working lamp's glow. */
+    min-width: 0;
   }
 
   /* ---------- Mode column (Helm / Shadow / Console hairline chip) ---------- */
@@ -613,99 +571,6 @@
     .inbox-row-branch {
       display: none;
     }
-  }
-
-  /* ---------- Lead dot ---------- */
-
-  .inbox-row-status-dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--tl-ash) 85%, transparent);
-    transition: background-color 200ms ease, box-shadow 200ms ease;
-    flex-shrink: 0;
-  }
-
-  /* 3-stop attention signal, shared with iOS TimelineSignal: flame (live,
-   * breathing) / ember (waiting on you, steady) / cooled ash (quiet, ended —
-   * the one cold foil). The signal axis takes precedence over the legacy
-   * per-tone colors below (which remain as a fallback for rows rendered
-   * without data-signal, and currently win in practice since every real
-   * tone value matches one of them — see cascade order note below). */
-  .inbox-row-status-dot[data-signal="attention"] {
-    /* Steady, not pulsing: "waiting on you" is a stable state (no alarm fatigue). */
-    background: color-mix(in srgb, var(--tl-ember) 85%, transparent);
-  }
-
-  .inbox-row-status-dot[data-signal="working"] {
-    background: var(--tl-flame);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--tl-flame) 16%, transparent),
-      0 0 10px color-mix(in srgb, var(--tl-flame) 55%, transparent);
-    animation: inbox-ember-breathe 2.8s ease-in-out infinite;
-  }
-
-  .inbox-row-status-dot[data-signal="quiet"],
-  .inbox-row-status-dot[data-signal="unknown"] {
-    background: color-mix(in srgb, var(--tl-ash) 85%, transparent);
-  }
-
-  .inbox-row-status-dot[data-signal="closed"] {
-    background: color-mix(in srgb, var(--tl-ash) 85%, transparent);
-  }
-
-  @keyframes inbox-ember-breathe {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.55;
-    }
-  }
-
-  /* Motion is reserved for genuine live work. */
-  @media (prefers-reduced-motion: reduce) {
-    .inbox-row-status-dot[data-signal="working"],
-    .inbox-row-status-dot[data-tone="thinking"],
-    .inbox-row-status-dot[data-tone="active"],
-    .inbox-row-status-dot[data-tone="running"] {
-      animation: none;
-    }
-  }
-
-  /* Legacy per-tone fallback — wins the cascade today (see note above), so
-   * this is the block that actually paints the dot for real rows. Kept in
-   * lockstep with the data-signal rules above.
-   *
-   * Gated on [data-signal="working"] too: a row's primary.tone can still
-   * read "running"/"active"/"thinking" after the row itself has gone quiet
-   * or finished (the signal axis reconciles faster than tone), and without
-   * this gate the equal-specificity, later-in-source tone selector would
-   * repaint the glow/breathe over a data-signal="quiet"/"closed" row.
-   * Nothing on a finished or quiet row may glow. */
-  .inbox-row-status-dot[data-tone="thinking"][data-signal="working"],
-  .inbox-row-status-dot[data-tone="active"][data-signal="working"],
-  .inbox-row-status-dot[data-tone="running"][data-signal="working"] {
-    background: var(--tl-flame);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--tl-flame) 16%, transparent),
-      0 0 10px color-mix(in srgb, var(--tl-flame) 55%, transparent);
-    animation: inbox-ember-breathe 2.8s ease-in-out infinite;
-  }
-
-  .inbox-row-status-dot[data-tone="idle"] {
-    background: color-mix(in srgb, var(--tl-ash) 85%, transparent);
-  }
-
-  .inbox-row-status-dot[data-tone="blocked"],
-  .inbox-row-status-dot[data-tone="stalled"] {
-    background: color-mix(in srgb, var(--tl-ember) 85%, transparent);
-  }
-
-  .inbox-row-status-dot[data-tone="closed"] {
-    background: color-mix(in srgb, var(--tl-ash) 85%, transparent);
   }
 
   .inbox-row-time {
@@ -822,7 +687,7 @@
   }
 
   /* ---------- Mobile ----------
-   * Title stacks over meta: lead dot + glyph + title/summary on their own
+   * Title stacks over meta: glyph + title/summary on their own
    * line, then activity, mode chip and age on the line below. Machine/branch
    * (the source column) drops out — it's the one thing narrow screens can't
    * afford. No horizontal scroll: every meta column can shrink or is
@@ -831,10 +696,10 @@
 
   @media (max-width: 720px) {
     .inbox-row {
-      grid-template-columns: var(--inbox-col-lead) var(--inbox-col-glyph) minmax(0, 1fr) max-content max-content;
+      grid-template-columns: var(--inbox-col-glyph) minmax(0, 1fr) max-content max-content;
       grid-template-areas:
-        "lead glyph main     main main"
-        ".    .     activity mode age";
+        "glyph main     main main"
+        ".     activity mode age";
       height: auto;
       min-height: var(--inbox-row-min-h);
       padding: var(--space-1) var(--space-2);

@@ -38,6 +38,7 @@ import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
 import type { OutboxEntry } from "./session-workspace/OutboxRow";
 import { Nixie } from "./instruments/Nixie";
+import { StatusBulb } from "./instruments/StatusLamp";
 import { getRunningTurnStartMs } from "./instruments/toolActivity";
 import {
   formatClockTime,
@@ -1855,7 +1856,7 @@ export function SessionChat({
               <>
                 {composerState.tone === "live" ? (
                   <>
-                    <span className="session-ember-dot" aria-hidden="true" />
+                    <StatusBulb state="working" />
                     <span className="session-chat-composer__head-label">
                       {composerUsingLabel}
                     </span>
@@ -1868,17 +1869,14 @@ export function SessionChat({
                   </>
                 ) : composerState.tone === "attention" ? (
                   <>
-                    <span
-                      className="session-ember-dot session-ember-dot--attention"
-                      aria-hidden="true"
-                    />
+                    <StatusBulb state="waiting" />
                     <span className="session-chat-composer__head-label">
                       {composerState.text}
                     </span>
                   </>
                 ) : composerState.tone === "unknown" ? (
                   <>
-                    <span className="session-unknown-dot" aria-hidden="true" />
+                    <StatusBulb state="unknown" />
                     <span className="session-chat-composer__head-label">
                       Activity uncertain
                     </span>
@@ -1890,7 +1888,7 @@ export function SessionChat({
                   </>
                 ) : (
                   <>
-                    <span className="session-cool-dot" aria-hidden="true" />
+                    <StatusBulb state="idle" />
                     <span className="session-chat-composer__head-label session-chat-composer__head-label--idle">
                       Idle
                     </span>

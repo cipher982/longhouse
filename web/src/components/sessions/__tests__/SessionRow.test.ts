@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getRowControlPresentation, getRowTimeLabel } from "../SessionRow";
+import { getRowControlPresentation, getRowLampState, getRowTimeLabel } from "../SessionRow";
 import { makeSessionStateFacts } from "../../../test/sessionState";
 
 const NOW = Date.parse("2026-05-19T16:00:00Z");
@@ -93,5 +93,28 @@ describe("getRowControlPresentation", () => {
       label: "Reattach",
       tone: "reattach",
     });
+  });
+});
+
+describe("getRowLampState", () => {
+  const base = { isClosed: false, unread: false, unreadOutcome: null };
+
+  it("maps the live signal onto one lamp per state", () => {
+    expect(getRowLampState({ ...base, signal: "working" })).toBe("working");
+    expect(getRowLampState({ ...base, signal: "attention" })).toBe("waiting");
+    expect(getRowLampState({ ...base, signal: "quiet" })).toBe("idle");
+    expect(getRowLampState({ ...base, signal: "unknown" })).toBe("unknown");
+    expect(getRowLampState({ ...base, signal: "closed" })).toBe("ended");
+  });
+
+  it("lets a closed row end even while a stale signal still reads working", () => {
+    expect(getRowLampState({ ...base, signal: "working", isClosed: true })).toBe("ended");
+  });
+
+  it("labels unread results by outcome, ahead of the live signal", () => {
+    const unread = { ...base, unread: true, signal: "quiet" as const };
+    expect(getRowLampState({ ...unread, unreadOutcome: "completed" })).toBe("done");
+    expect(getRowLampState({ ...unread, unreadOutcome: "failed" })).toBe("failed");
+    expect(getRowLampState({ ...unread, unreadOutcome: "cancelled" })).toBe("ended");
   });
 });

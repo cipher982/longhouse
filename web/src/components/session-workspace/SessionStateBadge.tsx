@@ -1,35 +1,40 @@
 import type { SessionHeaderStateTone } from "./sessionHeaderState";
+import { StatusLamp, type StatusLampState } from "../instruments/StatusLamp";
 
 /**
- * Dot + sentence state readout, shared by the session header and the
- * composer header. Live breathes (ember), attention is a static red ember,
- * unknown is a static outlined marker, and cool is a static ash dot (idle or
- * ended).
+ * The session header's state readout: the same StatusLamp the timeline row
+ * uses, so a session looks the same in the list and once opened. Live is the
+ * lit lamp, attention the filled one, unknown the hollow ring, and cool is the
+ * ash bulb while idle or the flat line once the session has ended.
  */
+export function headerLampState(tone: SessionHeaderStateTone, ended: boolean): StatusLampState {
+  switch (tone) {
+    case "live":
+      return "working";
+    case "attention":
+      return "waiting";
+    case "unknown":
+      return "unknown";
+    default:
+      return ended ? "ended" : "idle";
+  }
+}
+
 export function SessionStateBadge({
   tone,
   text,
+  ended = false,
   testId,
 }: {
   tone: SessionHeaderStateTone;
   text: string;
+  /** The session is closed: a cool tone reads as ended, not idle. */
+  ended?: boolean;
   testId?: string;
 }) {
   return (
-    <span className="session-state-line" data-tone={tone} data-testid={testId} title={text}>
-      <span
-        className={
-          tone === "live"
-            ? "session-ember-dot"
-            : tone === "attention"
-              ? "session-ember-dot session-ember-dot--attention"
-              : tone === "unknown"
-                ? "session-unknown-dot"
-                : "session-cool-dot"
-        }
-        aria-hidden="true"
-      />
-      <span className="session-state-line__text">{text}</span>
+    <span className="session-state-line" data-tone={tone} data-testid={testId}>
+      <StatusLamp state={headerLampState(tone, ended)} label={text} />
     </span>
   );
 }

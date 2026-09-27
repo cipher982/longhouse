@@ -696,6 +696,7 @@ function SessionDetailWorkspaceRoute({
             <SessionStateBadge
               tone={headerState.tone}
               text={headerState.text}
+              ended={displaySession.session_state.disposition.state === "closed"}
               testId="session-header-state"
             />
           }

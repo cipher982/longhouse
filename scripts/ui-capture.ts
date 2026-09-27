@@ -122,6 +122,15 @@ const VIEWPORT_PRESETS = {
     hasTouch: true,
     deviceScaleFactor: 3,
   },
+  // The whole timeline fixture in one frame, at 2x so small instruments
+  // (status lamps, chips) can be inspected, not just located.
+  "desktop-tall": {
+    width: 1280,
+    height: 1400,
+    isMobile: false,
+    hasTouch: false,
+    deviceScaleFactor: 2,
+  },
   "mobile-small": {
     width: 375,
     height: 667,

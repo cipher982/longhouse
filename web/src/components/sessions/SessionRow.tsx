@@ -13,8 +13,8 @@ import { setSessionTimelineVisibility } from "../../services/api/agents";
 import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { getTimelineSessionAnchor, type SessionStateFacts, type TimelineSessionCard } from "../../services/api/agents";
-import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel } from "../../lib/sessionRuntime";
-import { Nixie } from "../instruments/Nixie";
+import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel, type TimelineSignal } from "../../lib/sessionRuntime";
+import { StatusLamp, type StatusLampState } from "../instruments/StatusLamp";
 import {
   formatRelativeTime,
   getBranchLabel,
@@ -103,9 +103,10 @@ export function SessionRow({
 
   const statusTone = unread ? (unreadOutcome === "failed" ? "blocked" : "idle") : isClosed ? "closed" : (timelineStatus?.tone ?? "inactive");
   const statusLabel = unread ? unreadOutcomeLabel : isClosed ? "Closed" : (timelineStatus?.label ?? "");
-  // 3-stop attention signal (amber=waiting / teal=working / grey=quiet), shared
-  // with iOS. Drives the dot color + the a11y label so amber isn't sight-only.
+  // Attention signal shared with iOS (waiting / working / quiet / unknown /
+  // closed). Drives the row's one status instrument.
   const signal = resolveTimelineSignal(session);
+  const lampState = getRowLampState({ signal, isClosed, unread, unreadOutcome });
 
   // When the user is searching and the backend returned a match snippet,
   // show that as the row's secondary line with the query highlighted.
@@ -224,15 +225,6 @@ export function SessionRow({
       }}
       onBlur={clearHover}
     >
-      <span className="inbox-row-lead" aria-hidden="false">
-        <span
-          className="inbox-row-status-dot"
-          data-tone={statusTone}
-          data-signal={signal}
-          aria-label={timelineSignalLabel(signal)}
-        />
-      </span>
-
       <span className="inbox-row-glyph">
         <ProviderGlyph provider={provider} size={20} />
       </span>
@@ -260,7 +252,7 @@ export function SessionRow({
       </div>
 
       <span className="inbox-row-activity" data-tone={statusTone} data-signal={signal}>
-        {signal === "working" ? <Nixie value={statusLabel} title={statusLabel} /> : statusLabel}
+        <StatusLamp state={lampState} label={statusLabel || timelineSignalLabel(signal)} />
       </span>
 
       <span className="inbox-row-mode">
@@ -305,6 +297,37 @@ export function SessionRow({
       </span>
     </div>
   );
+}
+
+/** One instrument state per row. Unread results and closed rows are decided
+ * by the row's own facts before the live signal, matching the label beside it. */
+export function getRowLampState({
+  signal,
+  isClosed,
+  unread,
+  unreadOutcome,
+}: {
+  signal: TimelineSignal;
+  isClosed: boolean;
+  unread: boolean;
+  unreadOutcome: string | null | undefined;
+}): StatusLampState {
+  if (unread) {
+    if (unreadOutcome === "failed") return "failed";
+    // A cancelled run stopped rather than finished: the flat line, not sage.
+    return unreadOutcome === "cancelled" ? "ended" : "done";
+  }
+  if (isClosed || signal === "closed") return "ended";
+  switch (signal) {
+    case "working":
+      return "working";
+    case "attention":
+      return "waiting";
+    case "unknown":
+      return "unknown";
+    default:
+      return "idle";
+  }
 }
 
 /** Helm / Shadow / Console — the product's canonical mode nouns, straight off
