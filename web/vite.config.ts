@@ -109,6 +109,7 @@ export default defineConfig(({ mode }) => {
       // (`cd video && bun install`) used only to render. Mirrored in
       // tsconfig.base.json `paths`.
       alias: {
+        "@": path.resolve(import.meta.dirname, "src"),
         "@longhouse/video/demo": path.resolve(import.meta.dirname, "../video/src/demo/index.ts"),
       },
       // Prevent React duplication across workspaces/hoisting
@@ -166,13 +167,13 @@ export default defineConfig(({ mode }) => {
         },
       },
       // Pages behind the app shell and the landing demos are lazy chunks
-      // (routes/App.tsx, pages/LandingPage.tsx); the remaining eager shell is
+      // (app/App.tsx, features/marketing/landing/LandingPage.tsx); the remaining eager shell is
       // well under this floor, which still catches a regression.
       chunkSizeWarningLimit: 750,
     },
     test: {
       environment: "jsdom",
-      setupFiles: "./src/test/setup.ts",
+      setupFiles: "./src/shared/test/setup.ts",
     },
   };
 });

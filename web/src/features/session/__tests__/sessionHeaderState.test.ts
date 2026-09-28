@@ -1,0 +1,430 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildSessionMetaSentence,
+  buildSessionMetaSentenceParts,
+  formatElapsedClock,
+  getSessionHeaderState,
+} from "../sessionHeaderState";
+import type { AgentSession } from "@/shared/api/agents";
+
+function session(overrides: {
+  disposition?: string;
+  pendingInteraction?: unknown;
+  activityState?: string;
+  tool?: string | null;
+  observedAt?: string | null;
+  validUntil?: string | null;
+  primaryTone?: string | null;
+  primaryLabel?: string | null;
+  primaryKey?: string | null;
+  lastResultAt?: string | null;
+}): Pick<AgentSession, "session_state"> {
+  return {
+    session_state: {
+      disposition: { state: overrides.disposition ?? "open" },
+      pending_interaction: overrides.pendingInteraction ?? null,
+      activity: {
+        state: overrides.activityState ?? "quiescent",
+        tool: overrides.tool ?? null,
+        observed_at: overrides.observedAt ?? null,
+        valid_until: overrides.validUntil ?? null,
+      },
+      presentation: {
+        primary:
+          overrides.primaryTone != null
+            ? {
+                key: overrides.primaryKey ?? "idle",
+                tone: overrides.primaryTone,
+                label: overrides.primaryLabel ?? "",
+              }
+            : null,
+      },
+      last_result_at: overrides.lastResultAt ?? null,
+    } as never,
+  };
+}
+
+describe("getSessionHeaderState", () => {
+  it("reads a real provider question as attention, with the server's own copy", () => {
+    const state = getSessionHeaderState(
+      session({
+        pendingInteraction: { id: "1" },
+        primaryTone: "blocked",
+        primaryLabel: "Needs answer",
+      }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "attention", text: "Needs answer" });
+  });
+
+  it("reads a blocked/stalled presentation tone as attention even when activity.state is quiescent", () => {
+    const state = getSessionHeaderState(
+      session({ primaryTone: "stalled", primaryLabel: "No progress for 31m" }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "attention", text: "No progress for 31m" });
+  });
+
+  it("reads an executing/thinking session as live, with a tool-named sentence", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "executing",
+        tool: "hub",
+        observedAt: "2026-04-15T15:55:00Z",
+        primaryTone: "running",
+      }),
+      now,
+    );
+    expect(state.tone).toBe("live");
+    expect(state.text).toBe("Using hub for 35 minutes");
+  });
+
+  it("uses the server's delegated label instead of a tool name", () => {
+    // The main loop is idle; something it started is not. The tool field
+    // belongs to the loop, so the client must not re-derive this sentence.
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "quiescent",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:29:00Z",
+        primaryTone: "active",
+        primaryKey: "delegated_work",
+        primaryLabel: "Waiting on 1 background agent",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "live", text: "Waiting on 1 background agent" });
+  });
+
+  it("does not name a tool for a thinking activity that still carries one", () => {
+    // A finished tool leaves its name on the activity fact, so a non-empty
+    // `tool` is not evidence that one is running. Without the gate this read
+    // "Using Bash for 1 minute" while the session was only thinking — the
+    // defect that made an idle parent look busy on the strength of a child's
+    // tool name.
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "thinking",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:29:00Z",
+        primaryTone: "thinking",
+      }),
+      now,
+    );
+    expect(state.tone).toBe("live");
+    expect(state.text).toMatch(/^Working for /);
+    expect(state.text).not.toContain("Bash");
+  });
+
+  it("does not turn expired activity evidence into a positive idle claim", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "unknown",
+        observedAt: "2026-04-15T16:29:00Z",
+        lastResultAt: "2026-04-15T15:55:00Z",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
+  it("reads a Console session whose run ended as idle, not uncertain", () => {
+    // F6: a completed Console turn has no fresh activity claim, but the
+    // ended run is itself the evidence nothing is running.
+    const state = getSessionHeaderState(
+      session({
+        activityState: "unknown",
+        primaryKey: "ended",
+        primaryTone: "closed",
+        primaryLabel: "Ended",
+        lastResultAt: "2026-04-15T15:55:00Z",
+      }),
+      Date.parse("2026-04-15T16:30:00Z"),
+    );
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Idle since /);
+  });
+
+  it("keeps a server-kept Helm idle and a ready Console slot out of uncertain", () => {
+    for (const primaryKey of ["idle", "ready"]) {
+      const state = getSessionHeaderState(
+        session({ activityState: "unknown", primaryKey, primaryTone: "idle", primaryLabel: "Idle" }),
+        Date.now(),
+      );
+      expect(state).toEqual({ tone: "cool", text: "Idle" });
+    }
+  });
+
+  it("still reads an activity-unknown verdict as uncertain", () => {
+    const state = getSessionHeaderState(
+      session({
+        activityState: "unknown",
+        primaryKey: "activity_unknown",
+        primaryTone: "quiet",
+        primaryLabel: "Activity unknown",
+      }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
+  it("stops claiming work when the served window has passed", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "executing",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:12:00Z",
+        validUntil: "2026-04-15T16:22:00Z",
+        primaryTone: "running",
+        primaryLabel: "Using Bash",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
+  it("keeps claiming work while the served window is still valid", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "executing",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:29:00Z",
+        validUntil: "2026-04-15T16:40:00Z",
+        primaryTone: "running",
+        primaryLabel: "Using Bash",
+      }),
+      now,
+    );
+    expect(state.tone).toBe("live");
+  });
+
+  it("stops presenting an expired stall as an attention state", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "stalled",
+        observedAt: "2026-04-15T16:00:00Z",
+        validUntil: "2026-04-15T16:10:00Z",
+        primaryTone: "stalled",
+        primaryLabel: "No progress for 31m",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
+  it("reads a closed session as cool/ended", () => {
+    const state = getSessionHeaderState(
+      session({ disposition: "closed", lastResultAt: "2026-04-15T16:12:00Z" }),
+      Date.now(),
+    );
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Ended/);
+  });
+
+  it("keeps a closed session ended when activity evidence has expired", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        disposition: "closed",
+        activityState: "unknown",
+        lastResultAt: "2026-04-15T16:12:00Z",
+      }),
+      now,
+    );
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Ended /);
+  });
+
+  it("reads an open, non-working session as idle", () => {
+    const state = getSessionHeaderState(
+      session({ lastResultAt: "2026-04-15T16:12:00Z" }),
+      Date.now(),
+    );
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Idle since/);
+  });
+
+  it("does not invent a new idle boundary when heartbeat evidence renews", () => {
+    const first = getSessionHeaderState(
+      session({ observedAt: "2026-04-15T16:12:00Z" }),
+      Date.parse("2026-04-15T16:12:00Z"),
+    );
+    const renewed = getSessionHeaderState(
+      session({ observedAt: "2026-04-15T16:22:00Z" }),
+      Date.parse("2026-04-15T16:22:00Z"),
+    );
+    expect(renewed).toEqual(first);
+    expect(renewed.tone).toBe("cool");
+  });
+});
+
+describe("buildSessionMetaSentence", () => {
+  it("builds the full sentence from provider, project, host, and counts", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 57,
+        toolCalls: 334,
+        tone: "live",
+      }),
+    ).toBe("OMP working in zerg on cinder, 57 messages and 334 tool calls so far");
+  });
+
+  it("drops missing parts gracefully instead of leaving stray punctuation", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: null,
+        host: null,
+        messages: 0,
+        toolCalls: 0,
+        tone: "live",
+      }),
+    ).toBe("OMP working");
+  });
+
+  it("falls back to counts alone when nothing else is known", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: null,
+        project: null,
+        host: null,
+        messages: 3,
+        toolCalls: 0,
+        tone: "live",
+      }),
+    ).toBe("3 messages so far");
+  });
+
+  it("returns null when there is nothing to say", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: null,
+        project: null,
+        host: null,
+        messages: 0,
+        toolCalls: 0,
+        tone: "live",
+      }),
+    ).toBeNull();
+  });
+
+  it("drops \"working\" when the header tone is not live, so an ended session isn't claimed as still working", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 57,
+        toolCalls: 334,
+        tone: "cool",
+      }),
+    ).toBe("OMP in zerg on cinder, 57 messages and 334 tool calls so far");
+  });
+
+  it("drops \"working\" for the attention tone too", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 0,
+        toolCalls: 0,
+        tone: "attention",
+      }),
+    ).toBe("OMP in zerg on cinder");
+  });
+});
+
+describe("buildSessionMetaSentenceParts", () => {
+  it("splits the sentence around the tool-call count, joining back to the same text", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: "OMP",
+      project: "zerg",
+      host: "cinder",
+      messages: 57,
+      toolCalls: 334,
+      tone: "live",
+    });
+    expect(parts).not.toBeNull();
+    expect(`${parts!.before}334 ${parts!.toolCallsWord}${parts!.after}`).toBe(
+      "OMP working in zerg on cinder, 57 messages and 334 tool calls so far",
+    );
+  });
+
+  it("returns null when there are no tool calls to highlight", () => {
+    expect(
+      buildSessionMetaSentenceParts({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 57,
+        toolCalls: 0,
+        tone: "live",
+      }),
+    ).toBeNull();
+  });
+
+  it("drops the messages clause and the leading sentence when neither is known", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: null,
+      project: null,
+      host: null,
+      messages: 0,
+      toolCalls: 5,
+      tone: "live",
+    });
+    expect(parts).toEqual({
+      before: "",
+      toolCalls: 5,
+      toolCallsWord: "tool calls",
+      after: " so far",
+    });
+  });
+
+  it("uses the singular word for exactly one tool call", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: null,
+      project: null,
+      host: null,
+      messages: 0,
+      toolCalls: 1,
+      tone: "live",
+    });
+    expect(parts?.toolCallsWord).toBe("tool call");
+  });
+
+  it("drops \"working\" when the header tone is not live", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: "OMP",
+      project: "zerg",
+      host: "cinder",
+      messages: 57,
+      toolCalls: 334,
+      tone: "cool",
+    });
+    expect(parts).not.toBeNull();
+    expect(`${parts!.before}334 ${parts!.toolCallsWord}${parts!.after}`).toBe(
+      "OMP in zerg on cinder, 57 messages and 334 tool calls so far",
+    );
+  });
+});
+
+describe("formatElapsedClock", () => {
+  it("formats minutes:seconds", () => {
+    expect(formatElapsedClock(35 * 60 + 37)).toBe("35:37");
+  });
+
+  it("formats hours:minutes:seconds past an hour", () => {
+    expect(formatElapsedClock(60 * 65 + 5)).toBe("1:05:05");
+  });
+});

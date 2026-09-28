@@ -1,0 +1,1463 @@
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Route, Routes, useLocation } from "react-router";
+import * as reactRouterDom from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as agentsApi from "@/shared/api/agents";
+import type {
+  AgentSession,
+  AgentSessionFilters,
+  RecallFilters,
+  SessionCapabilities,
+  SessionRuntimeDisplay,
+  TimelineCardPresentation,
+  TimelineSessionCard,
+  TimelineSessionsListResponse,
+} from "@/shared/api/agents";
+import { makeSessionStateFacts } from "@/shared/test/sessionState";
+import type { Runner } from "@/shared/api/index";
+import { TestRouter } from "@/shared/test/test-utils";
+import SessionsPage from "../SessionsPage";
+
+const hookMocks = vi.hoisted(() => ({
+  useAgentSessions: vi.fn(),
+  useAgentFilters: vi.fn(),
+  useRecall: vi.fn(),
+  useRecallContext: vi.fn(),
+}));
+
+const runnerHookMocks = vi.hoisted(() => ({
+  useRunners: vi.fn(),
+}));
+
+const timelineStreamMocks = vi.hoisted(() => ({
+  useTimelineSessionStream: vi.fn(),
+}));
+
+vi.mock("@/shared/api/useAgentSessions", () => ({
+  useAgentSessions: hookMocks.useAgentSessions,
+  useAgentFilters: hookMocks.useAgentFilters,
+  useRecall: hookMocks.useRecall,
+  useRecallContext: hookMocks.useRecallContext,
+}));
+
+vi.mock("@/features/runners/useRunners", () => ({
+  useRunners: runnerHookMocks.useRunners,
+}));
+
+vi.mock("../useTimelineSessionStream", () => ({
+  useTimelineSessionStream: timelineStreamMocks.useTimelineSessionStream,
+}));
+
+vi.mock("@/shared/lib/readiness-contract", () => ({
+  useReadinessFlag: vi.fn(),
+}));
+
+vi.mock("@/shared/lib/config", () => ({
+  config: {
+    llmAvailable: true,
+  },
+}));
+
+const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFilters, useRecall: mockUseRecall } = hookMocks;
+const { useRunners: mockUseRunners } = runnerHookMocks;
+const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStreamMocks;
+
+function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+  return {
+    live_control_available: false,
+    host_reattach_available: false,
+    reply_to_live_session_available: false,
+    control_label: "imported",
+    observe_only: false,
+    search_only: true,
+    ...overrides,
+  };
+}
+
+function makeRuntimeDisplay(overrides: Partial<SessionRuntimeDisplay> = {}): SessionRuntimeDisplay {
+  return {
+    truth_tier: "none",
+    signal_tier: "none",
+    state: null,
+    tone: "inactive",
+    headline: "Inactive",
+    detail: null,
+    phase_label: "Inactive",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    needs_attention: false,
+    is_idle: false,
+    is_stalled: false,
+    is_managed_local_truth: false,
+    has_signal: false,
+    control_path: "unmanaged",
+    activity_recency: "none",
+    lifecycle: "open",
+    host_state: "unknown",
+    terminal_reason: null,
+    ...overrides,
+  };
+}
+
+function makeTimelinePresentation(overrides: Partial<TimelineCardPresentation> = {}): TimelineCardPresentation {
+  return {
+    ownership: { label: "Unmanaged", tone: "neutral" },
+    status: { label: "Activity unknown", tone: "inactive", seen_at: null, seen_at_prefix: "Checked" },
+    border_tone: "inactive",
+    ...overrides,
+  };
+}
+
+function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
+  const now = "2026-03-21T12:00:00Z";
+  const capabilities = overrides.capabilities ?? makeCapabilities();
+  const access = capabilities.live_control_available
+    ? "live_control"
+    : capabilities.host_reattach_available
+      ? "reattach"
+      : capabilities.observe_only
+        ? "observe_only"
+        : "search_only";
+  return {
+    id: "session-1",
+    provider: "codex",
+    project: "zerg",
+    device_id: "device-1",
+    environment: "laptop",
+    cwd: "/Users/example/git/zerg",
+    git_repo: "https://github.com/cipher982/longhouse.git",
+    git_branch: "main",
+    started_at: now,
+    ended_at: now,
+    last_activity_at: now,
+    user_messages: 4,
+    assistant_messages: 4,
+    tool_calls: 2,
+    summary: "Shipped session cleanup.",
+    summary_title: "Cleanup sessions page",
+    first_user_message: "clean this up",
+    match_event_id: null,
+    match_snippet: null,
+    match_role: null,
+    match_score: null,
+    thread_root_session_id: "session-1",
+    thread_head_session_id: "session-1",
+    thread_continuation_count: 1,
+    continued_from_session_id: null,
+    continuation_kind: null,
+    origin_label: "laptop",
+    home_label: null,
+    branched_from_event_id: null,
+    is_writable_head: true,
+    control: null,
+    capabilities,
+    session_state: makeSessionStateFacts({ access }),
+    runtime_display: makeRuntimeDisplay(),
+    timeline_card: makeTimelinePresentation(),
+    ...overrides,
+  };
+}
+
+function makeTimelineCard(
+  overrides: Partial<AgentSession> = {},
+  cardOverrides: Partial<TimelineSessionCard> = {},
+): TimelineSessionCard {
+  const head = cardOverrides.head ?? makeSession(overrides);
+
+  return {
+    thread_id: head.thread_root_session_id,
+    timeline_anchor_at: head.timeline_anchor_at || head.last_activity_at || head.started_at,
+    head,
+    continuation_count: head.thread_continuation_count,
+    started_origin_label: head.origin_label || head.environment,
+    head_origin_label: head.origin_label || head.environment,
+    ...cardOverrides,
+  };
+}
+
+function makeSessionsResponse(): TimelineSessionsListResponse {
+  return {
+    sessions: [makeTimelineCard()],
+    total: 120,
+    has_real_sessions: true,
+  };
+}
+
+function makeRunner(overrides: Partial<Runner> = {}): Runner {
+  const now = "2026-03-21T12:00:00Z";
+  return {
+    id: 1,
+    owner_id: 1,
+    name: "demo-machine",
+    availability_policy: "always_on",
+    labels: null,
+    capabilities: ["exec.full"],
+    status: "online",
+    status_reason: null,
+    status_summary: "Ready to start sessions.",
+    last_seen_at: now,
+    last_seen_age_seconds: 3,
+    heartbeat_interval_ms: 30_000,
+    stale_after_seconds: 90,
+    runner_metadata: { hostname: "demo-machine" },
+    install_mode: "native",
+    auto_update_policy: "notify",
+    install_layout_version: 1,
+    managed_install_ready: true,
+    runner_version: "1.0.0",
+    latest_runner_version: "1.0.0",
+    version_status: "current",
+    reported_capabilities: ["exec.full"],
+    capabilities_match: true,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function renderSessionsPage(initialEntry = "/timeline", queryClient = createQueryClient()) {
+  const rendered = render(
+    <QueryClientProvider client={queryClient}>
+      <TestRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route
+            path="/timeline"
+            element={
+              <>
+                <SessionsPage />
+                <LocationProbe />
+              </>
+            }
+          />
+          <Route
+            path="/runners"
+            element={
+              <>
+                <div>Machines</div>
+                <LocationProbe />
+              </>
+            }
+          />
+          <Route path="/settings" element={<div>Settings</div>} />
+        </Routes>
+      </TestRouter>
+    </QueryClientProvider>
+  );
+
+  return {
+    ...rendered,
+    queryClient,
+  };
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
+}
+
+function setDocumentVisibility(state: "visible" | "hidden") {
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    value: state === "hidden",
+  });
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: state,
+  });
+}
+
+describe("SessionsPage", () => {
+  let latestFilters: AgentSessionFilters | undefined;
+  let latestRecallFilters: RecallFilters | undefined;
+  let latestSessionOptions: { refetchInterval?: unknown } | undefined;
+  let latestTimelineStreamOptions: { enabled?: boolean; skipInitialReplay?: boolean } | undefined;
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    latestFilters = undefined;
+    latestRecallFilters = undefined;
+    latestSessionOptions = undefined;
+    latestTimelineStreamOptions = undefined;
+    setDocumentVisibility("visible");
+    window.localStorage.clear();
+    vi.stubGlobal("EventSource", class {} as typeof EventSource);
+
+    mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters, options?: { refetchInterval?: unknown }) => {
+      latestFilters = filters;
+      latestSessionOptions = options;
+      return {
+        data: makeSessionsResponse(),
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      };
+    });
+
+    mockUseAgentFilters.mockReturnValue({
+      data: {
+        projects: ["zerg", "longhouse"],
+        providers: ["codex", "claude"],
+        machines: ["laptop", "demo-machine"],
+      },
+      isLoading: false,
+    });
+
+    mockUseRecall.mockImplementation((filters: RecallFilters) => {
+      latestRecallFilters = filters;
+      return {
+        data: { results: [], total: 0, lanes: ["lexical"], degraded: [], coverage: null },
+        isLoading: false,
+        error: null,
+      };
+    });
+    hookMocks.useRecallContext.mockReturnValue({ data: undefined, isLoading: false, error: null });
+
+    mockUseRunners.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    });
+
+    mockUseTimelineSessionStream.mockImplementation(
+      (_filters: AgentSessionFilters, options?: { enabled?: boolean; skipInitialReplay?: boolean }) => {
+      latestTimelineStreamOptions = options;
+      }
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setDocumentVisibility("visible");
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("hydrates timeline filters directly from the URL", async () => {
+    renderSessionsPage(
+      "/timeline?project=zerg&provider=codex&device_id=laptop&days_back=30&query=fix%20bug&mode=hybrid&sort=recent&hide_autonomous=false&limit=150"
+    );
+
+    await waitFor(() => {
+      expect(latestFilters).toEqual({
+        project: "zerg",
+        provider: "codex",
+        device_id: "laptop",
+        days_back: 30,
+        query: "fix bug",
+        limit: 100,
+        mode: "hybrid",
+        sort: "recency",
+        hide_autonomous: false,
+      });
+    });
+  });
+
+  it("shows import progress only with an exact byte denominator", () => {
+    const importing = (exact: boolean) => ({
+      device_id: "laptop",
+      history_import: {
+        state: "importing",
+        progress: {
+          providers: [
+            {
+              unit: "bytes" as const,
+              observed_units: 800,
+              acknowledged_units: 344,
+              exact_total: exact,
+              inventory_coverage_complete: true,
+            },
+          ],
+        },
+      },
+    });
+    mockUseAgentSessions.mockReturnValue({
+      data: { ...makeSessionsResponse(), history_imports: [importing(true)] },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const { unmount } = renderSessionsPage();
+    expect(screen.getByText(/Importing history/)).toHaveTextContent(
+      "Importing history (43%) · sessions appear as they arrive",
+    );
+    unmount();
+
+    mockUseAgentSessions.mockReturnValue({
+      data: { ...makeSessionsResponse(), history_imports: [importing(false)] },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage();
+    expect(screen.getByText(/Importing history/)).toHaveTextContent(
+      "Importing history · sessions appear as they arrive",
+    );
+  });
+
+  it("does not show import progress without an active import", () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        history_imports: [{ device_id: "laptop", history_import: { state: "current" } }],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage();
+    expect(screen.queryByText(/Importing history/)).not.toBeInTheDocument();
+  });
+
+  it("shows lexical rebuild coverage for search hits and misses only while incomplete", () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        coverage: { indexed_sessions: 8, expected_sessions: 10, complete: false, lagging_sessions: 2 },
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const { unmount } = renderSessionsPage("/timeline?query=needle");
+    expect(screen.getByText("Search index rebuilding — 8 of 10 sessions indexed")).toBeInTheDocument();
+    unmount();
+
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [],
+        total: 0,
+        has_real_sessions: true,
+        coverage: { indexed_sessions: 8, expected_sessions: 10, complete: false, lagging_sessions: 2 },
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage("/timeline?query=needle");
+    expect(screen.getByText("No matches yet — search index is rebuilding (8 of 10 sessions)")).toBeInTheDocument();
+
+    expect(screen.queryByText(/Search index rebuilding —/)).toBeInTheDocument();
+  });
+
+  it("hides lexical rebuild coverage when the search index is complete", () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        coverage: { indexed_sessions: 10, expected_sessions: 10, complete: true, lagging_sessions: 0 },
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=needle");
+    expect(screen.queryByText(/Search index rebuilding —/)).not.toBeInTheDocument();
+  });
+
+  it("passes active provider filters into recall search", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage("/timeline?project=zerg&provider=codex");
+
+    await user.click(await screen.findByTestId("recall-toggle"));
+
+    await waitFor(() => {
+      expect(latestRecallFilters).toMatchObject({
+        project: "zerg",
+        provider: "codex",
+      });
+    });
+  });
+
+  it("maps environment URLs into the machine filter", async () => {
+    renderSessionsPage("/timeline?environment=laptop");
+
+    await waitFor(() => {
+      expect(latestFilters).toMatchObject({
+        device_id: "laptop",
+      });
+    });
+  });
+
+  it("defers filter option loading until the filter popover opens", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage("/timeline");
+
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, false, false);
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, true, false);
+  });
+
+  it("does not render a redundant timeline page heading above the toolbar", async () => {
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByPlaceholderText("Search sessions")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces each row's control bucket before opening a session", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-live",
+            summary_title: "Live thread",
+            thread_root_session_id: "thread-live",
+            thread_head_session_id: "session-live",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+              control_label: "live",
+              search_only: false,
+            }),
+          }),
+          makeTimelineCard({
+            id: "session-reattach",
+            summary_title: "Reattach thread",
+            thread_root_session_id: "thread-reattach",
+            thread_head_session_id: "session-reattach",
+            capabilities: makeCapabilities({
+              host_reattach_available: true,
+              control_label: "reattach",
+              search_only: false,
+            }),
+          }),
+          makeTimelineCard({
+            id: "session-observe",
+            summary_title: "Observe thread",
+            thread_root_session_id: "thread-observe",
+            thread_head_session_id: "session-observe",
+            capabilities: makeCapabilities({
+              control_label: "search-only",
+              observe_only: true,
+              search_only: false,
+            }),
+          }),
+          makeTimelineCard({
+            id: "session-imported",
+            summary_title: "Imported thread",
+            thread_root_session_id: "thread-imported",
+            thread_head_session_id: "session-imported",
+            capabilities: makeCapabilities({
+              control_label: "imported",
+              search_only: true,
+            }),
+          }),
+        ],
+        total: 4,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    // The visible chip reads the canonical product mode noun (Helm / Shadow),
+    // not the finer-grained access bucket (Live control / Reattach / Observe
+    // only / Search only) — that richer label now lives on the chip's title
+    // / aria-label only. live_control and reattach both resolve to a Helm
+    // (managed) session; observe_only and search_only both resolve to Shadow
+    // (unmanaged).
+    const controlLabels = await screen.findAllByTestId("session-row-control");
+    expect(controlLabels.map((node) => node.textContent)).toEqual([
+      "Helm",
+      "Helm",
+      "Shadow",
+      "Shadow",
+    ]);
+  });
+
+  it("shows the Console mode chip and omits the chip entirely for an unknown mode", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-console",
+            summary_title: "Console thread",
+            thread_root_session_id: "thread-console",
+            thread_head_session_id: "session-console",
+            session_state: makeSessionStateFacts({ mode: "console" }),
+          }),
+          makeTimelineCard({
+            id: "session-unknown-mode",
+            summary_title: "Unknown mode thread",
+            thread_root_session_id: "thread-unknown-mode",
+            thread_head_session_id: "session-unknown-mode",
+            session_state: makeSessionStateFacts({ mode: "unknown" }),
+          }),
+        ],
+        total: 2,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const rows = await screen.findAllByTestId("session-row");
+    expect(within(rows[0]).getByTestId("session-row-control").textContent).toBe("Console");
+    expect(within(rows[1]).queryByTestId("session-row-control")).not.toBeInTheDocument();
+  });
+
+  it("disables timeline card hover transitions while the user is actively scrolling", async () => {
+    vi.useFakeTimers();
+    const appRoot = document.createElement("div");
+    appRoot.id = "react-root";
+    document.body.appendChild(appRoot);
+    renderSessionsPage("/timeline");
+
+    const scroller = document.querySelector(".page-shell");
+    expect(scroller).not.toBeNull();
+    expect(appRoot).not.toBeNull();
+    expect(scroller).not.toHaveClass("page-shell--scrolling");
+    expect(appRoot).not.toHaveClass("react-root--scrolling");
+
+    fireEvent.wheel(scroller!);
+    expect(scroller).toHaveClass("page-shell--scrolling");
+    expect(appRoot).toHaveClass("react-root--scrolling");
+
+    act(() => {
+      vi.advanceTimersByTime(249);
+    });
+    expect(scroller).toHaveClass("page-shell--scrolling");
+    expect(appRoot).toHaveClass("react-root--scrolling");
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(scroller).not.toHaveClass("page-shell--scrolling");
+    expect(appRoot).not.toHaveClass("react-root--scrolling");
+
+    appRoot.remove();
+  });
+
+
+
+
+
+
+
+
+
+
+
+
+  it("uses honest grouped-results copy in grouped query mode", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-root",
+            project: "query-root",
+            summary_title: "query root",
+            thread_root_session_id: "thread-1",
+            thread_head_session_id: "thread-2",
+          }),
+          makeTimelineCard({
+            id: "session-other",
+            project: "query-other",
+            summary_title: "query other",
+            thread_root_session_id: "thread-3",
+            thread_head_session_id: "thread-3",
+          }),
+        ],
+        total: 3,
+        has_real_sessions: true,
+        query_grouping_mode: "grouped_results",
+        query_grouping_has_more: false,
+        query_grouping_source_count: 3,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=needle");
+
+    expect(await screen.findByText("2 results")).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 grouped results from 3 matching sessions")).toBeInTheDocument();
+    expect(screen.queryByText("Showing 2 of 3 task threads")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load More" })).not.toBeInTheDocument();
+  });
+
+  it("keeps grouped query load-more tied to raw matching-session exhaustion", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-root",
+            project: "query-root",
+            thread_root_session_id: "thread-1",
+            thread_head_session_id: "thread-2",
+          }),
+        ],
+        total: 5,
+        has_real_sessions: true,
+        query_grouping_mode: "grouped_results",
+        query_grouping_has_more: true,
+        query_grouping_source_count: 2,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=needle");
+
+    expect(await screen.findByRole("button", { name: "Load More" })).toBeInTheDocument();
+  });
+
+  it("shows import-first guidance when the timeline is empty", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [],
+        total: 0,
+        has_real_sessions: false,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
+    expect(screen.getByText(/on the machine where you use Claude Code/i)).toBeInTheDocument();
+    // One command, carrying this Runtime Host's own address.
+    expect(screen.getByTestId("connect-machine-command")).toHaveTextContent(
+      `curl -fsSL https://get.longhouse.ai/install.sh | LONGHOUSE_URL='${window.location.origin}' bash`,
+    );
+    expect(screen.getByRole("link", { name: "Create a server command" })).toHaveAttribute("href", "/settings/devices");
+    expect(document.body).not.toHaveTextContent("your-runtime.example");
+    expect(document.body).not.toHaveTextContent("LONGHOUSE_DEVICE_TOKEN");
+    expect(screen.queryByRole("button", { name: "See setup steps" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
+  });
+
+  it("does not show a redundant Machines button in the timeline header", async () => {
+    mockUseRunners.mockReturnValue({
+      data: [makeRunner()],
+      isLoading: false,
+      error: null,
+    });
+
+    renderSessionsPage("/timeline");
+
+    await screen.findByPlaceholderText("Search sessions");
+    // Machines is a nav item — no redundant header button
+    expect(screen.queryByTestId("timeline-runner-action")).not.toBeInTheDocument();
+  });
+
+  it("treats demo sessions as preview data instead of the primary onboarding path", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeTimelineCard()],
+        total: 1,
+        has_real_sessions: false,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByText("These are demo sessions.")).toBeInTheDocument();
+    expect(screen.getByText(/Link this machine with native auth/i)).toBeInTheDocument();
+    expect(screen.getByText(/launch managed sessions with Longhouse when you want control after launch/i)).toBeInTheDocument();
+  });
+
+
+  it("refreshes relative time labels while the timeline stays open", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-21T12:00:45Z"));
+
+      mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters, options?: { refetchInterval?: unknown }) => {
+        latestFilters = filters;
+        latestSessionOptions = options;
+        return {
+          data: {
+            sessions: [
+              makeTimelineCard({
+                started_at: "2026-03-21T12:00:00Z",
+                last_activity_at: "2026-03-21T12:00:00Z",
+                timeline_anchor_at: "2026-03-21T12:00:00Z",
+                ended_at: null,
+                status: "idle",
+                display_phase: "Idle",
+              }),
+            ],
+            total: 1,
+            has_real_sessions: true,
+          },
+          isLoading: false,
+          error: null,
+          refetch: vi.fn(),
+        };
+      });
+
+      renderSessionsPage("/timeline");
+
+      // The age cell shows the bare relative time (the activity column
+      // already names the verb); the full "Updated …" string lives on its
+      // title for a11y/hover.
+      expect(screen.getByText("Just now")).toBeInTheDocument();
+      expect(screen.getByTitle("Updated Just now")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+
+      expect(screen.getByText("1m ago")).toBeInTheDocument();
+      expect(screen.getByTitle("Updated 1m ago")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a slow reconciliation poll when the timeline SSE stream is active", async () => {
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestSessionOptions?.refetchInterval).toBe(120000);
+    });
+  });
+
+  it("waits for the initial timeline data before opening the SSE stream", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
+    });
+  });
+
+  it("does not re-skip timeline replay when reconnecting the same filter set", async () => {
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(true);
+    });
+
+    act(() => {
+      setDocumentVisibility("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
+    });
+
+    act(() => {
+      setDocumentVisibility("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(true);
+      expect(latestTimelineStreamOptions?.skipInitialReplay).toBe(false);
+    });
+  });
+
+  it("pauses the timeline SSE stream while the page is hidden", async () => {
+    setDocumentVisibility("hidden");
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
+    });
+
+    act(() => {
+      setDocumentVisibility("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(true);
+    });
+  });
+
+  it("falls back to normal polling when EventSource is unavailable", async () => {
+    vi.stubGlobal("EventSource", undefined);
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
+      expect(latestSessionOptions?.refetchInterval).not.toBe(120000);
+      expect(typeof latestSessionOptions?.refetchInterval).toBe("function");
+    });
+  });
+
+  it("resets pagination immediately and debounces the query filter", async () => {
+    renderSessionsPage("/timeline?limit=150");
+
+    const input = await screen.findByPlaceholderText("Search sessions");
+    fireEvent.change(input, { target: { value: "alpha" } });
+
+    await waitFor(() => {
+      expect(latestFilters?.limit).toBe(50);
+      expect(latestFilters?.query).toBeUndefined();
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+
+    await waitFor(() => {
+      expect(latestFilters?.query).toBe("alpha");
+      expect(latestFilters?.limit).toBe(50);
+    });
+  });
+
+  it("reports a dead AI lane instead of claiming it ran", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        lanes: ["lexical"],
+        degraded: [
+          {
+            lane: "dense",
+            status_code: 503,
+            code: "search_unavailable",
+            message: "The derived search index is unavailable.",
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=provider&mode=hybrid");
+
+    expect(
+      await screen.findByText("Meaning search is unavailable, so these results are keyword matches."),
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("AI search unavailable — these are keyword matches")).toBeInTheDocument();
+  });
+
+  it("does not report a degraded lane the request never asked for", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        lanes: ["lexical"],
+        degraded: [
+          {
+            lane: "dense",
+            status_code: 503,
+            code: "search_unavailable",
+            message: "The derived search index is unavailable.",
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=provider");
+
+    await screen.findByPlaceholderText("Search sessions");
+    expect(screen.queryByText(/Meaning search is unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("opens the matched event carried by a timeline result", async () => {
+    const navigate = vi.fn();
+    vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigate);
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        sessions: [makeTimelineCard({ match_event_id: "event-42" })],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage();
+
+    fireEvent.click(await screen.findByTestId("session-row"));
+
+    expect(navigate).toHaveBeenCalledWith("/timeline/session-1?event_id=event-42", {
+      state: { from: "/timeline" },
+    });
+  });
+
+  it("keeps pagination in the URL-owned filter contract", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage("/timeline?project=zerg");
+
+    const loadMoreButton = await screen.findByRole("button", { name: "Load More" });
+    await user.click(loadMoreButton);
+
+    await waitFor(() => {
+      expect(latestFilters).toMatchObject({
+        project: "zerg",
+        limit: 100,
+      });
+    });
+  });
+
+  it("removes the provider chip without introducing a 1d filter", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage("/timeline?provider=claude");
+
+    const dismissButton = await screen.findByLabelText("Remove claude filter");
+    await user.click(dismissButton);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Remove claude filter")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Remove 1d filter")).not.toBeInTheDocument();
+      expect(screen.getByTestId("location-probe")).toHaveTextContent("/timeline");
+    });
+  });
+
+  it("treats a blank days_back param as the default window", async () => {
+    renderSessionsPage("/timeline?provider=claude&days_back=");
+
+    await waitFor(() => {
+      expect(latestFilters?.days_back).toBe(14);
+      expect(screen.queryByLabelText("Remove 1d filter")).not.toBeInTheDocument();
+    });
+  });
+
+  it("searches all indexed history by default when a query has no explicit date range", async () => {
+    renderSessionsPage("/timeline?query=fix%20bug");
+
+    await waitFor(() => {
+      // No days_back reaches the request at all: the server decides "all
+      // indexed history" for a query with no named range.
+      expect(latestFilters?.days_back).toBeUndefined();
+      expect(screen.getByText("All time")).toBeInTheDocument();
+      // The default-scope chip states scope; it has nothing narrower to fall
+      // back to, so it is not dismissible.
+      expect(screen.queryByLabelText("Remove All time filter")).not.toBeInTheDocument();
+    });
+  });
+
+  it("narrows the scope chip when an explicit range is chosen alongside a query", async () => {
+    renderSessionsPage("/timeline?query=fix%20bug&days_back=30");
+
+    await waitFor(() => {
+      expect(latestFilters?.days_back).toBe(30);
+      expect(screen.getByText("30d")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Remove 30d filter"));
+
+    await waitFor(() => {
+      // Clearing an explicit range while a query is active goes back to "all
+      // indexed history", not to the plain-listing 14-day default.
+      expect(latestFilters?.days_back).toBeUndefined();
+      expect(screen.getByText("All time")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps the plain listing window (no All-time chip) when there is no query", async () => {
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestFilters?.days_back).toBeUndefined();
+      expect(screen.queryByText("All time")).not.toBeInTheDocument();
+    });
+  });
+
+
+
+
+  it("uses generated title with first prompt subheading and ignores summary or live transcript card copy", async () => {
+    const receivedAt = new Date(Date.now() - 45_000).toISOString();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: "Older generated summary.",
+            summary_title: "Generated subject",
+            first_user_message: "Original user prompt for this session.",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+            }),
+            control: {
+              source_runner_id: 7,
+              source_runner_name: "cinder",
+              attach_command: "longhouse-engine codex-bridge attach --session-id session-1",
+            },
+            transcript_preview: {
+              event_id: 101,
+              text: "The provider already streamed this answer before the durable transcript poll landed.",
+              event_origin: "live_provisional",
+              timestamp: receivedAt,
+              is_complete: false,
+              content_cursor: "codex_bridge_live:session-1:thread-1:turn-1:12",
+              is_provisional: true,
+              is_stale: false,
+              stale_reason: null,
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Generated subject")).toBeInTheDocument();
+    expect(await screen.findByText("Original user prompt for this session.")).toBeInTheDocument();
+    expect(screen.queryByText("Older generated summary.")).not.toBeInTheDocument();
+    expect(screen.queryByText("The provider already streamed this answer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-card-transcript-preview")).not.toBeInTheDocument();
+  });
+
+  it("does not let stale partial transcript preview or summary replace first prompt card copy", async () => {
+    const staleReceivedAt = new Date(Date.now() - 45_000).toISOString();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: "Current durable summary.",
+            first_user_message: "Stable first prompt.",
+            transcript_preview: {
+              event_id: 102,
+              text: "Partial text from a bridge that stopped sending updates.",
+              event_origin: "live_provisional",
+              timestamp: staleReceivedAt,
+              is_complete: false,
+              content_cursor: "codex_bridge_live:session-1:thread-1:turn-1:3",
+              is_provisional: true,
+              is_stale: true,
+              stale_reason: "freshness_window_expired",
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Stable first prompt.")).toBeInTheDocument();
+    expect(screen.queryByText("Current durable summary.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-card-transcript-preview")).not.toBeInTheDocument();
+  });
+
+  it("keeps first prompt card copy even when the server has a fresh transcript preview", async () => {
+    const oldButServerCurrent = new Date(Date.now() - 5 * 60_000).toISOString();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: "Durable summary should stay behind the current server preview.",
+            first_user_message: "Stable prompt beats live preview.",
+            transcript_preview: {
+              event_id: 103,
+              text: "Server says this complete bridge snapshot is still the card preview.",
+              event_origin: "live_provisional",
+              timestamp: oldButServerCurrent,
+              is_complete: true,
+              content_cursor: "codex_bridge_live:session-1:thread-1:turn-1:10",
+              is_provisional: true,
+              is_stale: false,
+              stale_reason: null,
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Stable prompt beats live preview.")).toBeInTheDocument();
+    expect(screen.queryByText("Server says this complete bridge snapshot")).not.toBeInTheDocument();
+    expect(screen.queryByText("Durable summary should stay behind the current server preview.")).not.toBeInTheDocument();
+  });
+
+  it("uses the first user message instead of a generating-summary placeholder", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: null,
+            summary_title: null,
+            first_user_message: "Workshop an inbox-style homepage layout for Longhouse timeline cards.",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findAllByText("Workshop an inbox-style homepage layout for Longhouse timeline cards.")).toHaveLength(1);
+    expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
+  });
+
+  it("uses deterministic copy before any transcript arrives", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            provider: "claude",
+            project: "zerg",
+            summary: null,
+            summary_title: null,
+            first_user_message: null,
+            user_messages: 0,
+            assistant_messages: 0,
+            tool_calls: 0,
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("New Claude session in zerg")).toBeInTheDocument();
+    expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
+  });
+
+
+
+
+
+
+  it("does not treat a merely open session as live without runtime evidence", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            status: undefined,
+            confidence: undefined,
+            display_phase: undefined,
+            last_live_at: undefined,
+            presence_state: undefined,
+            presence_tool: undefined,
+            presence_updated_at: undefined,
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("clean this up")).toBeInTheDocument();
+    expect(screen.queryByText("Working")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
+  });
+
+
+  it.each([
+    { anchor: "2026-09-05T11:59:00Z", ageText: "1m ago" },
+    { anchor: null, ageText: "3m ago" },
+  ])("dates an old approval by recent session activity (anchor: $anchor)", ({ anchor, ageText }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
+    const approvalState = makeSessionStateFacts({
+      pendingInteraction: true,
+      activity: "quiescent",
+      observedAt: "2026-07-20T12:00:00Z",
+    });
+    approvalState.pending_interaction = {
+      id: "old-cursor-approval",
+      kind: "approval",
+      opened_at: "2026-07-20T12:00:00Z",
+      can_respond: false,
+    };
+    approvalState.presentation.primary = {
+      key: "needs_approval",
+      label: "Needs approval",
+      tone: "blocked",
+      observed_at: "2026-07-20T12:00:00Z",
+    };
+
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            provider: "cursor",
+            started_at: "2026-07-19T11:00:00Z",
+            ended_at: null,
+            last_activity_at: "2026-09-05T11:57:00Z",
+            timeline_anchor_at: anchor,
+            session_state: approvalState,
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    const row = within(screen.getByTestId("session-row"));
+    expect(row.getByText("Needs approval")).toBeInTheDocument();
+    expect(row.getByText(ageText)).toBeInTheDocument();
+    expect(row.getByTitle(`Updated ${ageText}`)).toBeInTheDocument();
+    expect(row.queryByText(/Jul 20/)).not.toBeInTheDocument();
+  });
+
+  it("keeps unread result ages anchored to completion rather than newer session activity", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            timeline_anchor_at: "2026-09-05T11:59:00Z",
+            last_activity_at: "2026-09-05T11:59:00Z",
+            session_state: makeSessionStateFacts({
+              mode: "console",
+              activity: "quiescent",
+              unread: true,
+              lastResultAt: "2026-09-05T11:50:00Z",
+              lastResultOutcome: "completed",
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    const row = within(screen.getByTestId("session-row"));
+    expect(row.getByText("10m ago")).toBeInTheDocument();
+    expect(row.getByTitle("Finished 10m ago")).toBeInTheDocument();
+  });
+
+  it("toggles include_hidden through the filter popover and displays view all chip", async () => {
+    const user = userEvent.setup();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeTimelineCard({ id: "session-1" })],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    // Open filter popover
+    const filterButton = screen.getByRole("button", { name: /^Filters/ });
+    await user.click(filterButton);
+
+    // Toggle view all
+    const viewAllSwitch = screen.getByRole("switch", { name: /view all/i });
+    expect(viewAllSwitch).toHaveAttribute("aria-checked", "false");
+    await user.click(viewAllSwitch);
+
+    // Should pass include_hidden: true to useAgentSessions
+    await waitFor(() => {
+      expect(mockUseAgentSessions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ include_hidden: true }),
+        expect.anything(),
+      );
+    });
+
+    // Chip should be visible
+    expect(screen.getByText("view all")).toBeInTheDocument();
+  });
+
+  it("calls setSessionTimelineVisibility when hide button on session row is clicked", async () => {
+    const user = userEvent.setup();
+    const hideSpy = vi.spyOn(agentsApi, "setSessionTimelineVisibility").mockResolvedValue({
+      session_id: "session-1",
+      hidden: true,
+    });
+
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeTimelineCard({ id: "session-1" })],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    const hideButton = screen.getByTestId("session-row-hide-button");
+    await user.click(hideButton);
+
+    expect(hideSpy).toHaveBeenCalledWith("session-1", true);
+    hideSpy.mockRestore();
+  });
+
+
+
+
+
+});

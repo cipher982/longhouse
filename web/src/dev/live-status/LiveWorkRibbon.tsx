@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { SessionLedger } from "../../components/session-workspace/SessionLedger";
+import { SessionLedger } from "@/features/session/SessionLedger";
 import type { LiveWorkRibbonProps } from "./types";
-import "../../components/session-workspace/SessionLedger.css";
+import "@/features/session/SessionLedger.css";
 import "./LiveWorkRibbon.css";
 
 /**

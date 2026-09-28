@@ -76,7 +76,7 @@
     "gdrive":     { "icon": "G", "color": "success" }
   },
   "mcp_default_tier": "noise",
-  "_shell_classifier": "Content-aware salience for shell tools (docs/specs/timeline-reading-experience.md, Change B). The generator emits these as constants; the grammar lives handwritten in web/src/lib/sessionWorkspace/shellSalience.ts and ios/Sources/Shared/Transcript/ShellSalience.swift, kept in lockstep by config/shell-salience-fixtures.json.",
+  "_shell_classifier": "Content-aware salience for shell tools (docs/specs/timeline-reading-experience.md, Change B). The generator emits these as constants; the grammar lives handwritten in web/src/shared/session/model/shellSalience.ts and ios/Sources/Shared/Transcript/ShellSalience.swift, kept in lockstep by config/shell-salience-fixtures.json.",
   "shell_classifier": {
     "shell_tools": ["Bash", "shell", "shell_command", "exec_command", "run_shell_command"],
     "read_only_commands": [

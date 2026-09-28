@@ -664,7 +664,7 @@ export function buildSessionDetailStressFixture(): SessionDetailFixture {
       tool_call_id: "head-tool-2",
     }),
     // Model reasoning, served as interaction_kind=provider_reasoning with the
-    // engine's projection prefix (web/src/components/session-workspace/ReasoningRow.tsx).
+    // engine's projection prefix (web/src/features/session/ReasoningRow.tsx).
     makeEvent(2068, "system", "2026-04-15T15:18:05Z", {
       interaction_kind: "provider_reasoning",
       content_text:
@@ -806,7 +806,7 @@ export function buildSessionDetailStressFixture(): SessionDetailFixture {
       tool_call_id: "head-tool-mobile-capture",
     }),
     // Spread across the last 30 minutes (not clustered at `now`) so the
-    // Phase 4 activity sparkline (web/src/components/instruments/
+    // Phase 4 activity sparkline (web/src/shared/instruments/
     // toolActivity.ts) has more than one non-empty minute bucket to draw —
     // otherwise every one of these polls lands in the same "now" bucket and
     // Sparkline correctly renders nothing.

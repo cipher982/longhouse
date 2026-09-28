@@ -1,12 +1,12 @@
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { encodeFrames } from "../src/components/remote-scene/sceneCodec";
-import { renderSceneFrames } from "../src/components/remote-scene/sceneRenderer";
-import { SCENE_SPEC, type SceneProfileKey } from "../src/components/remote-scene/sceneSpec";
+import { encodeFrames } from "../src/features/marketing/remote-scene/sceneCodec";
+import { renderSceneFrames } from "../src/features/marketing/remote-scene/sceneRenderer";
+import { SCENE_SPEC, type SceneProfileKey } from "../src/features/marketing/remote-scene/sceneSpec";
 
 const root = path.resolve(import.meta.dir, "..");
-const generatedDir = path.join(root, "src/components/remote-scene/generated");
+const generatedDir = path.join(root, "src/features/marketing/remote-scene/generated");
 const dataPath = path.join(generatedDir, "sceneData.ts");
 const framesPath = path.join(generatedDir, "sceneFrames.txt");
 const MAX_GZIP_BYTES = 80 * 1024;

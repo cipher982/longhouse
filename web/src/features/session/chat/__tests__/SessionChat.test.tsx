@@ -1,0 +1,2030 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, beforeEach, vi } from "vitest";
+import { SessionChat, type SessionChatTarget } from "../SessionChat";
+import type { SessionLockInfo } from "@/shared/api/index";
+import type { TimelineItem } from "@/shared/session/model";
+import { makeSessionStateFacts } from "@/shared/test/sessionState";
+import type { OutboxEntry } from "../../OutboxRow";
+
+const { fetchWithRefreshMock } = vi.hoisted(() => ({
+  fetchWithRefreshMock: vi.fn(),
+}));
+
+const { requestMock } = vi.hoisted(() => ({
+  requestMock: vi.fn(),
+}));
+
+const { writeTextMock } = vi.hoisted(() => ({
+  writeTextMock: vi.fn(),
+}));
+
+vi.mock("@/features/auth/auth-refresh", () => ({
+  fetchWithRefresh: fetchWithRefreshMock,
+}));
+
+vi.mock("@/shared/api/base", () => {
+  class ApiError extends Error {
+    readonly status: number;
+    readonly url: string;
+    readonly body: unknown;
+    constructor({
+      url,
+      status,
+      body,
+    }: {
+      url: string;
+      status: number;
+      body: unknown;
+    }) {
+      super(`Request failed (${status})`);
+      this.name = "ApiError";
+      this.status = status;
+      this.url = url;
+      this.body = body;
+    }
+  }
+  return {
+    buildUrl: (path: string) => path,
+    request: requestMock,
+    ApiError,
+  };
+});
+
+vi.mock("../imageCompression", () => ({
+  ImageCompressionError: class ImageCompressionError extends Error {},
+  compressImageForUpload: vi.fn(async (file: File) => ({
+    blob: file,
+    byteSize: file.size,
+    mimeType: file.type,
+  })),
+}));
+
+function makeSession(
+  overrides: Partial<SessionChatTarget> = {},
+): SessionChatTarget {
+  return {
+    id: "sess-1",
+    project: "zerg",
+    provider: "claude",
+    device_id: null,
+    session_state: makeSessionStateFacts({
+      access: "live_control",
+      interruptAvailable: true,
+    }),
+    ...overrides,
+  };
+}
+
+function jsonResponse(body: unknown, status: number = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function getRequestCallCount(pathSuffix: string) {
+  return fetchWithRefreshMock.mock.calls.filter(([url]) =>
+    String(url).endsWith(pathSuffix),
+  ).length;
+}
+
+function getLastRequestBody(pathSuffix: string) {
+  const call = [...fetchWithRefreshMock.mock.calls]
+    .reverse()
+    .find(([url]) => String(url).endsWith(pathSuffix));
+  if (!call) {
+    throw new Error(`Expected a ${pathSuffix} request`);
+  }
+  const options = call[1] as RequestInit | undefined;
+  return JSON.parse(String(options?.body ?? "{}"));
+}
+
+function createDeferredResponse() {
+  let resolve: ((response: Response) => void) | null = null;
+  const promise = new Promise<Response>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return {
+    promise,
+    resolve(response: Response) {
+      if (!resolve) {
+        throw new Error("Deferred response already resolved");
+      }
+      resolve(response);
+      resolve = null;
+    },
+  };
+}
+
+function renderSessionChat(
+  props: Partial<React.ComponentProps<typeof SessionChat>> = {},
+  options: { queryClient?: QueryClient } = {},
+) {
+  const queryClient =
+    options.queryClient ??
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+
+  const defaultProps: React.ComponentProps<typeof SessionChat> = {
+    session: makeSession(),
+    layout: "dock",
+    ...props,
+  };
+
+  const renderResult = render(
+    <QueryClientProvider client={queryClient}>
+      <SessionChat {...defaultProps} />
+    </QueryClientProvider>,
+  );
+
+  return {
+    queryClient,
+    ...renderResult,
+    rerenderSessionChat(
+      nextProps: Partial<React.ComponentProps<typeof SessionChat>>,
+    ) {
+      renderResult.rerender(
+        <QueryClientProvider client={queryClient}>
+          <SessionChat {...defaultProps} {...nextProps} />
+        </QueryClientProvider>,
+      );
+    },
+  };
+}
+
+function makeLonghouseUserItem({
+  sessionInputId,
+  clientRequestId,
+  text = "server projected text",
+  authoredVia = "longhouse",
+}: {
+  sessionInputId?: number | null;
+  clientRequestId?: string | null;
+  text?: string;
+  authoredVia?: "longhouse" | "terminal" | null;
+}): TimelineItem {
+  return {
+    kind: "message",
+    event: {
+      id: 99,
+      role: "user",
+      content_text: text,
+      tool_name: null,
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: null,
+      timestamp: "2026-05-15T20:00:00Z",
+      in_active_context: true,
+      is_head_branch: true,
+      input_origin: authoredVia
+        ? {
+            authored_via: authoredVia,
+            session_input_id: sessionInputId,
+            client_request_id: clientRequestId,
+          }
+        : null,
+    },
+  };
+}
+
+describe("SessionChat", () => {
+  beforeEach(() => {
+    fetchWithRefreshMock.mockReset();
+    requestMock.mockReset();
+    writeTextMock.mockReset();
+    writeTextMock.mockResolvedValue(undefined);
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: writeTextMock },
+    });
+    Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    URL.createObjectURL = vi.fn(() => "blob:test-preview");
+    URL.revokeObjectURL = vi.fn();
+    window.localStorage.clear();
+  });
+
+  it("shows the Console model chip and sends its selected model", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/providers/codex/models")) {
+        return Promise.resolve({
+          device_id: "cinder",
+          provider: "codex",
+          models: [
+            { model: "gpt-5.6-luna", last_used_at: "2026-09-25T12:00:00Z" },
+          ],
+        });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as {
+          client_request_id?: string;
+        };
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 1,
+          intent: "auto",
+          client_request_id: body.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const user = userEvent.setup();
+    renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        device_id: "cinder",
+        provider: "codex",
+        selected_model: "gpt-5.5",
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          mode: "console",
+        }),
+      }),
+    });
+
+    expect(await screen.findByTestId("session-model-select")).toHaveTextContent(
+      "gpt-5.5",
+    );
+    await user.click(
+      screen.getByTestId("session-model-select").querySelector("summary")!,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /gpt-5\.6-luna/ })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /gpt-5\.6-luna/ }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Next instruction" }),
+      "Continue with this model",
+    );
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      const inputCall = requestMock.mock.calls.find(
+        ([path, init]) =>
+          String(path).endsWith("/input") &&
+          (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(inputCall).toBeTruthy();
+      expect(JSON.parse(String((inputCall?.[1] as RequestInit).body))).toMatchObject({
+        model: "gpt-5.6-luna",
+      });
+    });
+  });
+  it("expires turn-specific actions without another update while retaining the draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-10T12:00:00Z"));
+    const view = renderSessionChat({
+      chatMode: "managed_local",
+      canSteerActiveTurn: true,
+      canQueueNextInput: true,
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          activity: "executing",
+          access: "live_control",
+          interruptAvailable: true,
+          activityValidUntil: "2026-09-10T12:00:01.500Z",
+        }),
+      }),
+    });
+    try {
+      const draft = screen.getByRole("textbox");
+      fireEvent.change(draft, { target: { value: "Keep this instruction" } });
+      draft.focus();
+      expect(
+        screen.getByRole("button", { name: /send update/i }),
+      ).toBeEnabled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(
+        screen.queryByRole("button", { name: /send update/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+      expect(screen.getByRole("textbox")).toBe(draft);
+      expect(draft).toHaveValue("Keep this instruction");
+      expect(draft).toHaveFocus();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+  it("retains an editable draft when control is revoked without allowing a send", async () => {
+    const user = userEvent.setup();
+    const view = renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          activity: "executing",
+          access: "live_control",
+          interruptAvailable: true,
+        }),
+      }),
+      canSteerActiveTurn: true,
+      canQueueNextInput: true,
+    });
+    const draft = screen.getByRole("textbox");
+    await user.type(draft, "Preserve this instruction");
+    view.rerenderSessionChat({
+      composerDisabledReason: "Answer in the terminal first.",
+    });
+    expect(screen.getByRole("textbox")).toBe(draft);
+    expect(draft).toHaveFocus();
+    expect(draft).toHaveValue("Preserve this instruction");
+    expect(screen.getByRole("button", { name: "Send update" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Queue next" })).toBeDisabled();
+    view.rerenderSessionChat({ composerDisabledReason: null });
+    expect(screen.getByRole("textbox")).toBe(draft);
+    expect(draft).toHaveValue("Preserve this instruction");
+  });
+
+  it("shows a manual interrupt affordance for stalled managed sessions", async () => {
+    const user = userEvent.setup();
+    let interruptCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/interrupt-live") && init?.method === "POST") {
+        interruptCalls += 1;
+        return Promise.resolve({
+          interrupt_dispatched: true,
+          confirmed_stopped: false,
+          session_id: "sess-1",
+          exit_code: 0,
+          error: null,
+          released_lock: true,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      canQueueNextInput: true,
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          activity: "stalled",
+          access: "live_control",
+          interruptAvailable: true,
+        }),
+      }),
+    });
+
+    const recovery = await screen.findByTestId("session-chat-stall-recovery");
+    expect(recovery).toHaveTextContent(/managed session appears stalled/i);
+    expect(
+      screen.queryByText(/queue next auto-sends at the next turn boundary/i),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /interrupt/i }));
+    await waitFor(() => expect(interruptCalls).toBe(1));
+  });
+
+  it("shows an inline Stop button for locked managed-local sessions", async () => {
+    const user = userEvent.setup();
+    let interruptCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/interrupt-live") && init?.method === "POST") {
+        interruptCalls += 1;
+        return Promise.resolve({
+          interrupt_dispatched: true,
+          confirmed_stopped: false,
+          session_id: "sess-1",
+          exit_code: 0,
+          error: null,
+          released_lock: true,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+    });
+
+    expect(await screen.findByRole("button", { name: /stop/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /stop/i }));
+    await waitFor(() => expect(interruptCalls).toBe(1));
+  });
+
+  it("routes Console Stop to the turn-scoped interrupt endpoint", async () => {
+    const user = userEvent.setup();
+    let consoleInterruptCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (
+        String(path).endsWith("/turns/current/interrupt") &&
+        init?.method === "POST"
+      ) {
+        consoleInterruptCalls += 1;
+        return Promise.resolve({
+          interrupt_dispatched: true,
+          session_id: "sess-1",
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        provider: "cursor",
+        session_state: makeSessionStateFacts({
+          activity: "executing",
+          access: "live_control",
+          mode: "console",
+          startTurnAvailable: true,
+          sendAvailable: false,
+          interruptAvailable: true,
+        }),
+        capabilities: {
+          control_label: "console",
+          can_interrupt_active_turn: true,
+        } as SessionChatTarget["capabilities"],
+      }),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /stop/i }));
+    await waitFor(() => expect(consoleInterruptCalls).toBe(1));
+  });
+
+  it("does not mention Stop when a locked session is not interruptible", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
+
+    renderSessionChat({}, { queryClient });
+
+    expect(
+      screen.queryByRole("button", { name: /stop/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the dock visible but shows the blocker it was given, not a hardcoded heading", () => {
+    renderSessionChat({
+      composerDisabledTitle: "Can't send",
+      composerDisabledReason:
+        "This session's machine isn't accepting new Codex turns.",
+    });
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("Can't send");
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("isn't accepting new Codex turns");
+    // The heading used to be the literal string "Control offline" regardless of
+    // the blocker, which is how a connected machine got told to reconnect.
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).not.toHaveTextContent("Control offline");
+  });
+
+  it("replaces disabled full-panel composer controls with status copy", () => {
+    renderSessionChat({
+      layout: "panel",
+      composerDisabledTitle: "Machine offline",
+      composerDisabledReason:
+        "The machine running this Codex session is offline. Sending resumes when it reconnects.",
+    });
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("Machine offline");
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("Sending resumes when it reconnects");
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  });
+
+  it("shows a managed-launch hint card for unmanaged sessions", () => {
+    renderSessionChat({
+      composerDisabledReason:
+        "This unmanaged Codex session is read-only in Longhouse.",
+      managedLaunchSuggestion: {
+        title: "Start the next Codex session through Longhouse",
+        body: "This session stays searchable here. Use this command when you want the next Codex session to stay steerable from Longhouse.",
+        command: "longhouse codex",
+      },
+    });
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-chat-managed-launch-hint"),
+    ).toHaveTextContent("Start the next Codex session through Longhouse");
+    expect(
+      screen.getByTestId("session-chat-managed-launch-hint-command"),
+    ).toHaveTextContent("longhouse codex");
+    expect(
+      screen.queryByTestId("session-chat-disabled-reason"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /copy command: longhouse codex/i }),
+    ).toHaveTextContent("Copy");
+  });
+
+  it("shows empty-state copy instead of resume wording", () => {
+    renderSessionChat({
+      layout: "panel",
+    });
+
+    expect(
+      screen.getByText("Start a conversation with this session."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Earlier synced turns stay visible here. Your first message continues from that context.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
+  });
+
+  it("blocks duplicate input until a managed-local ack arrives", async () => {
+    const user = userEvent.setup();
+    let resolveInput: ((value: unknown) => void) | null = null;
+    const inputDeferred = new Promise((resolve) => {
+      resolveInput = resolve;
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    let lockReads = 0;
+
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        lockReads += 1;
+        return Promise.resolve(
+          lockReads === 1
+            ? { locked: false, fork_available: false }
+            : {
+                locked: true,
+                holder: "req-1234",
+                time_remaining_seconds: 295,
+                fork_available: true,
+              },
+        );
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        return inputDeferred;
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local" }, { queryClient });
+
+    await user.type(screen.getByRole("textbox"), "Continue locally");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    const inputCall = requestMock.mock.calls.find(
+      ([path, init]) =>
+        String(path).endsWith("/input") &&
+        (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(inputCall).toBeTruthy();
+    const inputPayload = JSON.parse(
+      String((inputCall?.[1] as RequestInit).body ?? "{}"),
+    );
+    expect(inputPayload).toEqual({
+      text: "Continue locally",
+      intent: "auto",
+      client_request_id: expect.stringMatching(/^web-/),
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+      expect(screen.getByText("Delivering...")).toBeInTheDocument();
+      expect(screen.getByText("Continue locally")).toBeInTheDocument();
+    });
+
+    resolveInput?.({
+      outcome: "sent",
+      input_id: 1,
+      intent: "auto",
+      client_request_id: inputPayload.client_request_id,
+      queued: [],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toBeEnabled();
+      expect(screen.getByRole("button", { name: /waiting/i })).toBeDisabled();
+    });
+    expect(screen.queryByText(/req-1234/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox"), "Next follow-up{enter}");
+    expect(screen.getByRole("textbox")).toHaveValue("Next follow-up");
+    const inputPostCount = requestMock.mock.calls.filter(
+      ([path, init]) =>
+        String(path).endsWith("/input") &&
+        (init as RequestInit | undefined)?.method === "POST",
+    ).length;
+    expect(inputPostCount).toBe(1);
+  });
+
+  it("replays the same ID after an initial runtime-draining refusal with no receipt", async () => {
+    const user = userEvent.setup();
+    const { ApiError } = await import("@/shared/api/base");
+    const requestIds: string[] = [];
+
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        requestIds.push(payload.client_request_id);
+        if (requestIds.length === 1) {
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 503,
+              body: {
+                detail: {
+                  error_code: "runtime_draining",
+                  message: "Runtime is restarting.",
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 7,
+          intent: payload.intent,
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+
+    await user.type(screen.getByRole("textbox"), "Continue locally");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Not confirmed — retry with the same request"),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("Continue locally", {
+        selector: "span.session-chat-pending-message__text",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Sent")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requestIds).toHaveLength(2));
+    expect(requestIds[1]).toBe(requestIds[0]);
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Continue locally", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      window.localStorage.getItem(
+        `longhouse:session-input:sess-1:${requestIds[0]}`,
+      ),
+    ).toBeNull();
+  });
+  it("retains provider-ambiguous intent after explicit same-ID replay", async () => {
+    const user = userEvent.setup();
+    const requestIds: string[] = [];
+    const receipts = new Map<
+      string,
+      { id: null; client_request_id: string; text: string; intent: "auto"; status: "delivering"; last_error: string; created_at: null }
+    >();
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve(Array.from(receipts.values()));
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        requestIds.push(payload.client_request_id);
+        const receipt = {
+          id: null,
+          client_request_id: payload.client_request_id,
+          text: payload.text,
+          intent: "auto" as const,
+          status: "delivering" as const,
+          last_error: "delivery_unknown: provider response not confirmed",
+          created_at: null,
+        };
+        receipts.set(payload.client_request_id, receipt);
+        return Promise.resolve({
+          outcome: "unknown",
+          intent: payload.intent,
+          client_request_id: payload.client_request_id,
+          queued: [receipt],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+    await user.type(screen.getByRole("textbox"), "first unresolved");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("first unresolved", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
+    );
+    await user.clear(screen.getByRole("textbox"));
+
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "second unresolved");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("second unresolved", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
+    );
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).not.toBe(requestIds[1]);
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
+
+    expect(screen.getByTestId("session-chat-queued")).toHaveTextContent(
+      "Delivery status uncertain",
+    );
+    await user.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+    await waitFor(() => expect(requestIds).toHaveLength(3));
+    expect(requestIds[2]).toBe(requestIds[0]);
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
+  });
+  it("hydrates the current session outbox on mount and clears it on switch", async () => {
+    const clientRequestId = "web-reload-1";
+    window.localStorage.setItem(
+      `longhouse:session-input:sess-1:${clientRequestId}`,
+      JSON.stringify({
+        sessionId: "sess-1",
+        text: "survive reload",
+        intent: "auto",
+        clientRequestId,
+        attachments: [],
+        createdAt: 1,
+      }),
+    );
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs")) return Promise.resolve([]);
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const first = renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({ id: "sess-1" }),
+    });
+    expect(await screen.findByText("survive reload")).toBeInTheDocument();
+    first.unmount();
+
+    const second = renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({ id: "sess-1" }),
+    });
+    expect(await screen.findByText("survive reload")).toBeInTheDocument();
+    window.localStorage.setItem(
+      "longhouse:session-input:sess-2:web-switch-1",
+      JSON.stringify({
+        sessionId: "sess-2",
+        text: "only for session two",
+        intent: "auto",
+        clientRequestId: "web-switch-1",
+        attachments: [],
+        createdAt: 2,
+      }),
+    );
+
+    second.rerenderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({ id: "sess-2" }),
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("survive reload")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText("only for session two")).toBeInTheDocument();
+    second.unmount();
+  });
+
+  it("keeps runtime-draining refusal retryable with the same operation ID", async () => {
+    const user = userEvent.setup();
+    const { ApiError } = await import("@/shared/api/base");
+    const requestIds: string[] = [];
+    let receipt: {
+      id: number;
+      client_request_id: string;
+      text: string;
+      intent: "auto";
+      status: "delivering";
+      last_error: string;
+      created_at: null;
+    } | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve(receipt ? [receipt] : []);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        requestIds.push(payload.client_request_id);
+        if (requestIds.length === 1) {
+          receipt = {
+            id: 77,
+            client_request_id: payload.client_request_id,
+            text: payload.text,
+            intent: "auto",
+            status: "delivering",
+            last_error: "runtime_draining: runtime is restarting",
+            created_at: null,
+          };
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 503,
+              body: {
+                detail: {
+                  error_code: "runtime_draining",
+                  message: "Runtime is restarting.",
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 78,
+          intent: "auto",
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+    await user.type(screen.getByRole("textbox"), "retry after restart");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("retry after restart", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requestIds).toHaveLength(2));
+    expect(requestIds[1]).toBe(requestIds[0]);
+    await waitFor(() =>
+      expect(
+        screen.queryByText("retry after restart", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+  it("rehydrates attachment bytes before retrying a draining refusal", async () => {
+    const user = userEvent.setup();
+    const { ApiError } = await import("@/shared/api/base");
+    const requestIds: string[] = [];
+    const multipartBodies: FormData[] = [];
+    let receipt: {
+      id: number;
+      client_request_id: string;
+      text: string;
+      intent: "auto";
+      status: "delivering";
+      last_error: string;
+      created_at: null;
+    } | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve(receipt ? [receipt] : []);
+      }
+      if (
+        String(path).endsWith("/inputs-multipart") &&
+        init?.method === "POST"
+      ) {
+        const form = init.body as FormData;
+        multipartBodies.push(form);
+        const clientRequestId = String(form.get("client_request_id"));
+        requestIds.push(clientRequestId);
+        if (requestIds.length === 1) {
+          receipt = {
+            id: 81,
+            client_request_id: clientRequestId,
+            text: String(form.get("text") ?? ""),
+            intent: "auto",
+            status: "delivering",
+            last_error: "runtime_draining: runtime is restarting",
+            created_at: null,
+          };
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 503,
+              body: {
+                detail: {
+                  error_code: "runtime_draining",
+                  message: "Runtime is restarting.",
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 82,
+          intent: "auto",
+          client_request_id: clientRequestId,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const session = makeSession({
+      provider: "codex",
+      capabilities: { attach_images: true },
+    });
+    const first = renderSessionChat({ chatMode: "managed_local", session });
+    const input = first.container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    const bytes = [7, 8, 9];
+    await user.upload(
+      input!,
+      new File([new Uint8Array(bytes)], "note.png", { type: "image/png" }),
+    );
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("Not confirmed — retry with the same request"),
+      ).toBeInTheDocument(),
+    );
+    first.unmount();
+
+    const second = renderSessionChat({ chatMode: "managed_local", session });
+    await screen.findByText("Not confirmed — retry with the same request");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requestIds).toHaveLength(2));
+    expect(requestIds[1]).toBe(requestIds[0]);
+    const attachment = multipartBodies[1].get("attachments");
+    expect(attachment).toBeInstanceOf(File);
+    if (!(attachment instanceof File)) throw new Error("Expected attachment file");
+    const attachmentBytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(attachment);
+    });
+    expect(
+      Array.from(new Uint8Array(attachmentBytes)),
+    ).toEqual(bytes);
+    second.unmount();
+  });
+  it("routes attachment-only sends through multipart with empty text", async () => {
+    const user = userEvent.setup();
+    let jsonCalls = 0;
+    let multipartBody: FormData | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (
+        String(path).endsWith("/inputs-multipart") &&
+        init?.method === "POST"
+      ) {
+        multipartBody = init.body as FormData;
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 9,
+          intent: "auto",
+          client_request_id: (multipartBody as FormData).get(
+            "client_request_id",
+          ),
+          queued: [],
+        });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        jsonCalls += 1;
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const { container } = renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        provider: "codex",
+        capabilities: { attach_images: true },
+      }),
+    });
+
+    const input = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    const file = new File([new Uint8Array([1, 2, 3])], "shot.png", {
+      type: "image/png",
+    });
+    await user.upload(input!, file);
+
+    expect(await screen.findByAltText("shot.png")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(multipartBody).not.toBeNull());
+    expect(jsonCalls).toBe(0);
+    expect(multipartBody?.get("text")).toBe("");
+    expect(multipartBody?.get("intent")).toBe("auto");
+    expect(multipartBody?.get("attachments")).toBeInstanceOf(File);
+    await waitFor(() => expect(screen.getByText("Sent")).toBeInTheDocument());
+  });
+
+  it("requires an explicit click for the first message when configured", async () => {
+    const user = userEvent.setup();
+    let inputCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        inputCalls += 1;
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: inputCalls,
+          intent: "auto",
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      requireClickForFirstSend: true,
+      keyboardHintText: "Click send to confirm.",
+    });
+
+    await user.type(screen.getByRole("textbox"), "Continue locally");
+    await user.keyboard("{Enter}");
+
+    expect(
+      screen.getByTestId("session-chat-explicit-submit-hint"),
+    ).toHaveTextContent("Click send to confirm.");
+    expect(inputCalls).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(inputCalls).toBe(1));
+  });
+
+  it("queues an auto send when the session is locked and capability is on", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
+
+    let inputsReads = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        inputsReads += 1;
+        return Promise.resolve(
+          inputsReads === 1
+            ? []
+            : [
+                {
+                  id: 42,
+                  text: "wait for it",
+                  intent: "auto",
+                  status: "queued",
+                  created_at: null,
+                },
+              ],
+        );
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        return Promise.resolve({
+          outcome: "queued",
+          input_id: 42,
+          intent: "auto",
+          client_request_id: payload.client_request_id,
+          queued: [
+            {
+              id: 42,
+              client_request_id: payload.client_request_id,
+              text: "wait for it",
+              intent: "auto",
+              status: "queued",
+              created_at: null,
+            },
+          ],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      { chatMode: "managed_local", canQueueNextInput: true },
+      { queryClient },
+    );
+
+    expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
+
+    await user.type(screen.getByRole("textbox"), "wait for it");
+    // Button says "Queue next" while working with queue capability, and is
+    // enabled once a draft exists.
+    const queueButton = await screen.findByRole("button", {
+      name: /queue next/i,
+    });
+    expect(queueButton).toBeEnabled();
+    await user.click(queueButton);
+
+    const chip = await screen.findByTestId("session-chat-queued");
+    expect(chip).toHaveTextContent("wait for it");
+    expect(chip).toHaveTextContent(/queued/i);
+    expect(
+      screen.getByRole("button", { name: /cancel queued message/i }),
+    ).toBeEnabled();
+  });
+
+  it("shows an uncertain Console dispatch instead of leaving it silently sending", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([
+          {
+            id: 43,
+            text: "survive the reconnect",
+            intent: "auto",
+            status: "delivering",
+            created_at: null,
+            last_error:
+              "turn_start_outcome_unknown: Machine control channel disconnected",
+          },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: true });
+
+    const chip = await screen.findByTestId("session-chat-queued");
+    expect(chip).toHaveTextContent("survive the reconnect");
+    expect(chip).toHaveTextContent(
+      "turn_start_outcome_unknown: Machine control channel disconnected",
+    );
+    expect(chip).not.toHaveTextContent("Sending…");
+  });
+
+  it("shows a persisted Console launch failure on the input instead of a request banner", async () => {
+    const user = userEvent.setup();
+    let inputReads = 0;
+    let failedClientRequestId: string | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        inputReads += 1;
+        return Promise.resolve(
+          inputReads === 1
+            ? []
+            : [
+                {
+                  id: null,
+                  live_input_id: "failed-console-input",
+                  client_request_id: failedClientRequestId,
+                  text: "launch from missing cwd",
+                  intent: "auto",
+                  status: "failed",
+                  created_at: null,
+                  last_error: "cwd_not_found: cwd does not exist: /missing",
+                },
+              ],
+        );
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        failedClientRequestId = JSON.parse(
+          String(init.body ?? "{}"),
+        ).client_request_id;
+        return Promise.reject(
+          Object.assign(new Error("Request failed (502)"), {
+            body: {
+              detail: {
+                code: "cwd_not_found",
+                message: "cwd does not exist: /missing",
+              },
+            },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: true });
+
+    await user.type(screen.getByRole("textbox"), "launch from missing cwd");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    const failure = await screen.findByTestId("session-chat-queued-failed");
+    expect(failure).toHaveTextContent("launch from missing cwd");
+    expect(failure).toHaveTextContent(
+      "cwd_not_found: cwd does not exist: /missing",
+    );
+    expect(screen.queryByText("Request failed (502)")).not.toBeInTheDocument();
+  });
+
+  it("loads a durable input failure after the Console session has ended", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([
+          {
+            id: null,
+            live_input_id: "ended-console-failure",
+            text: "launch from missing cwd",
+            intent: "auto",
+            status: "failed",
+            created_at: null,
+            last_error: "cwd_not_found: cwd does not exist: /missing",
+          },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: false });
+
+    const failure = await screen.findByTestId("session-chat-queued-failed");
+    expect(failure).toHaveTextContent("launch from missing cwd");
+    expect(failure).toHaveTextContent(
+      "cwd_not_found: cwd does not exist: /missing",
+    );
+  });
+
+  it("shows Send update primary + Queue next secondary when steer capability is on", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
+
+    let steerCalls = 0;
+    let queueCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        if (payload.intent === "steer") {
+          steerCalls += 1;
+          return Promise.resolve({
+            outcome: "sent",
+            input_id: steerCalls,
+            intent: "steer",
+            client_request_id: payload.client_request_id,
+            queued: [],
+          });
+        }
+        if (payload.intent === "queue") {
+          queueCalls += 1;
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: 100 + queueCalls,
+            intent: "queue",
+            client_request_id: payload.client_request_id,
+            queued: [],
+          });
+        }
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "redirect the test");
+    expect(screen.getByRole("button", { name: /send update/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /queue next/i })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+    await waitFor(() => expect(steerCalls).toBe(1));
+    expect(queueCalls).toBe(0);
+  });
+
+  it("uses runtime execution as working state when the lock endpoint is stale false", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: false,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: false,
+      },
+    );
+
+    let submittedIntent: string | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        submittedIntent = payload.intent;
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 44,
+          intent: "steer",
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            activity: "executing",
+            access: "live_control",
+            interruptAvailable: true,
+          }),
+        }),
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "still working");
+    expect(screen.getByRole("button", { name: /send update/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+
+    await waitFor(() => expect(submittedIntent).toBe("steer"));
+  });
+
+  it("clears accepted steer input without waiting for a durable user transcript row", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
+
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 45,
+          intent: "steer",
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            activity: "executing",
+            access: "live_control",
+            interruptAvailable: true,
+          }),
+        }),
+        timelineItems: [],
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "redirect now");
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("redirect now")).not.toBeInTheDocument();
+      expect(screen.queryByText("Delivering...")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Sent")).toBeInTheDocument();
+  });
+
+  it("offers Queue instead after a steer fails with turn_ended", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
+
+    const { ApiError } = await import("@/shared/api/base");
+
+    let queueCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        if (payload.intent === "steer") {
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 409,
+              body: {
+                detail: {
+                  error_code: "turn_ended",
+                  message: "The active turn already ended.",
+                },
+              },
+            }),
+          );
+        }
+        if (payload.intent === "queue") {
+          queueCalls += 1;
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: 200 + queueCalls,
+            intent: "queue",
+            client_request_id: payload.client_request_id,
+            queued: [],
+          });
+        }
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "too late");
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+
+    // Turn-ended prompt appears with the original text + a Queue instead action.
+    const prompt = await screen.findByTestId("session-chat-turn-ended");
+    expect(prompt).toHaveTextContent("too late");
+    await user.click(screen.getByRole("button", { name: /queue instead/i }));
+    await waitFor(() => expect(queueCalls).toBe(1));
+  });
+
+  it("does not silently queue when Enter is pressed while working", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
+
+    let postCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        postCalls += 1;
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        return Promise.resolve({
+          outcome: "queued",
+          input_id: postCalls,
+          intent: "auto",
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      { chatMode: "managed_local", canQueueNextInput: true },
+      { queryClient },
+    );
+
+    await user.type(
+      screen.getByRole("textbox"),
+      "do not silently queue{enter}",
+    );
+    expect(postCalls).toBe(0);
+    expect(screen.getByRole("textbox")).toHaveValue("do not silently queue");
+  });
+
+  describe("with the outbox in the transcript", () => {
+    function lastOutbox(mock: ReturnType<typeof vi.fn>): OutboxEntry[] {
+      const calls = mock.mock.calls;
+      return (calls[calls.length - 1]?.[0] ?? []) as OutboxEntry[];
+    }
+
+    function mockSendOutcome(outcome: "sent" | "queued", text: string) {
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([]);
+        }
+        if (String(path).endsWith("/input") && init?.method === "POST") {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          return Promise.resolve({
+            outcome,
+            input_id: 7,
+            intent: "auto",
+            client_request_id: payload.client_request_id,
+            queued: [
+              {
+                id: 7,
+                client_request_id: payload.client_request_id,
+                text,
+                intent: "auto",
+                status: outcome === "sent" ? "delivered" : "queued",
+                created_at: null,
+              },
+            ],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+    }
+
+    it("keeps a delivered send in the transcript until its echo arrives", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "tldr please");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "tldr please");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() => {
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { text: "tldr please", state: "sent" },
+        ]);
+      });
+      // Nothing about this send renders inside the composer.
+      expect(screen.queryByText("tldr please")).not.toBeInTheDocument();
+      expect(screen.queryByText("Sent")).not.toBeInTheDocument();
+
+      const postCall = requestMock.mock.calls.find(
+        ([path, init]) =>
+          String(path).endsWith("/input") && init?.method === "POST",
+      );
+      const clientRequestId = JSON.parse(String(postCall?.[1]?.body))
+        .client_request_id as string;
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [makeLonghouseUserItem({ clientRequestId })],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("clears a delivered send when its echo lands before identity is linked", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "same words");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "same words");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { state: "sent" },
+        ]),
+      );
+
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [
+          makeLonghouseUserItem({ text: "same  words", authoredVia: null }),
+        ],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("clears one of two identical sends per identity-less echo", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "again");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      for (let index = 0; index < 2; index += 1) {
+        await user.type(screen.getByRole("textbox"), "again");
+        await user.click(screen.getByRole("button", { name: /send/i }));
+        await waitFor(() =>
+          expect(lastOutbox(onOutboxChange)).toHaveLength(index + 1),
+        );
+      }
+
+      const echo = (id: number): TimelineItem => {
+        const item = makeLonghouseUserItem({ text: "again", authoredVia: null });
+        return item.kind === "message"
+          ? { ...item, event: { ...item.event, id } }
+          : item;
+      };
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [echo(1)],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toHaveLength(1));
+
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [echo(1), echo(2)],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("matches a delivered send by the server input id alone", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "by id");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "by id");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { state: "sent" },
+        ]),
+      );
+
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [
+          makeLonghouseUserItem({ sessionInputId: 7, text: "reworded" }),
+        ],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("shows a rehydrated send the server is delivering as sending", async () => {
+      const onOutboxChange = vi.fn();
+      window.localStorage.setItem(
+        "longhouse:session-input:sess-1:web-draining-1",
+        JSON.stringify({
+          sessionId: "sess-1",
+          text: "on its way",
+          intent: "auto",
+          clientRequestId: "web-draining-1",
+          attachments: [],
+          createdAt: 1,
+        }),
+      );
+      requestMock.mockImplementation((path: string) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs")) {
+          return Promise.resolve([
+            {
+              id: 3,
+              client_request_id: "web-draining-1",
+              text: "on its way",
+              intent: "auto",
+              status: "delivering",
+              created_at: null,
+            },
+          ]);
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { text: "on its way", state: "sending" },
+        ]),
+      );
+      expect(lastOutbox(onOutboxChange)[0].actions).toBeUndefined();
+    });
+
+    it("drops a cancelled queued send and its stored retry slot", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      let cancelled = false;
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([]);
+        }
+        if (init?.method === "DELETE") {
+          cancelled = true;
+          return Promise.resolve({ cancelled: true, input_id: 7 });
+        }
+        if (String(path).endsWith("/input") && init?.method === "POST") {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: 7,
+            intent: "auto",
+            client_request_id: payload.client_request_id,
+            queued: [
+              {
+                id: 7,
+                client_request_id: payload.client_request_id,
+                text: "never mind",
+                intent: "auto",
+                status: "queued",
+                created_at: null,
+              },
+            ],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "never mind");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)[0]?.actions?.[0]?.label).toBe(
+          "Cancel",
+        ),
+      );
+
+      act(() => lastOutbox(onOutboxChange)[0].actions?.[0].onClick());
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+      expect(cancelled).toBe(true);
+      const storedSlots = Object.keys(window.localStorage).filter((key) =>
+        key.startsWith("longhouse:session-input:sess-1:"),
+      );
+      expect(storedSlots).toEqual([]);
+    });
+
+    it("reports a queued send with a cancel action", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("queued", "after this");
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "after this");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() => {
+        const [entry] = lastOutbox(onOutboxChange);
+        expect(entry).toMatchObject({ text: "after this", state: "queued" });
+        expect(entry.actions?.map((action) => action.label)).toEqual([
+          "Cancel",
+        ]);
+      });
+      expect(
+        screen.queryByTestId("session-chat-queued"),
+      ).not.toBeInTheDocument();
+    });
+    it("reconciles a queued Console turn when its receipt later delivers", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      let inputListCalls = 0;
+      let clientRequestId = "";
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          inputListCalls += 1;
+          return Promise.resolve(
+            inputListCalls === 1
+              ? []
+              : [
+                  {
+                    id: 7,
+                    live_input_id: "turn-1",
+                    client_request_id: clientRequestId,
+                    text: "keep this Console turn",
+                    intent: "auto",
+                    status: "delivered",
+                    created_at: null,
+                  },
+                ],
+          );
+        }
+        if (String(path).endsWith("/input") && init?.method === "POST") {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          clientRequestId = payload.client_request_id;
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: null,
+            intent: "auto",
+            client_request_id: clientRequestId,
+            turn: { turn_id: "turn-1", run_id: "run-1", state: "starting" },
+            queued: [],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await waitFor(() => expect(inputListCalls).toBe(1));
+
+      await user.type(screen.getByRole("textbox"), "keep this Console turn");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() => {
+        const storedSlots = Object.keys(window.localStorage).filter((key) =>
+          key.startsWith("longhouse:session-input:sess-1:"),
+        );
+        expect(storedSlots).toEqual([]);
+      });
+    });
+
+  });
+});

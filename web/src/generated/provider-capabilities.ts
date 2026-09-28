@@ -5,7 +5,7 @@
 //
 // Only fields the provider contract can answer live here. Marketing name,
 // archive visibility, hooks support and telemetry quality have no contract
-// counterpart and remain hand-maintained in ../lib/providers.ts.
+// counterpart and remain hand-maintained in ../shared/lib/providers.ts.
 
 export type GeneratedProviderId = "antigravity" | "claude" | "codex" | "cursor" | "omp" | "opencode" | "pi";
 

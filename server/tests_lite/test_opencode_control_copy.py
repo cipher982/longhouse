@@ -11,12 +11,12 @@ EXPECTED_COPY = {
     # per-provider prose from the public README on purpose. That surface no
     # longer exists, so nothing here may require it back; FORBIDDEN_COPY below
     # still guards README.md against stale live-send-only copy.
-    "web/src/pages/docs/IntegrationsPage.tsx": [
+    "web/src/features/marketing/docs/IntegrationsPage.tsx": [
         "send, interrupt, terminate, and pause-answer",
         "permission reply endpoint",
         "Mid-turn steer lands at the next step boundary",
     ],
-    "web/src/pages/docs/QuickStartPage.tsx": [
+    "web/src/features/marketing/docs/QuickStartPage.tsx": [
         "OpenCode Helm supports managed send, interrupt, terminate, pause-answer, and",
         "active-turn steer that lands at the next step boundary",
     ],
@@ -43,22 +43,22 @@ FORBIDDEN_COPY = {
         "managed live-send",
         "OpenCode supports managed live",
     ],
-    "web/src/lib/providers.ts": [
+    "web/src/shared/lib/providers.ts": [
         "Archive, launch, and managed live send",
         'statusLabel: "Live send"',
     ],
-    "web/src/components/landing/IntegrationsSection.tsx": [
+    "web/src/features/marketing/landing/IntegrationsSection.tsx": [
         "OpenCode supports managed live",
     ],
-    "web/src/pages/docs/IntegrationsPage.tsx": [
+    "web/src/features/marketing/docs/IntegrationsPage.tsx": [
         "managed live-send",
         "Live send and interrupt",
     ],
-    "web/src/pages/docs/QuickStartPage.tsx": [
+    "web/src/features/marketing/docs/QuickStartPage.tsx": [
         "managed live send",
         "OpenCode supports managed live",
     ],
-    "web/src/pages/docs/CLIReferencePage.tsx": [
+    "web/src/features/marketing/docs/CLIReferencePage.tsx": [
         "managed live send",
         "OpenCode supports managed live",
     ],

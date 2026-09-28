@@ -1,7 +1,7 @@
 """What `longhouse <provider>` commands actually exist.
 
 `config/native_device_entrypoints.json` already governed this for the web
-client (`web/src/lib/providers.ts` reads it explicitly, with a comment
+client (`web/src/shared/lib/providers.ts` reads it explicitly, with a comment
 explaining why it does not use the capability flags: a provider can support
 `launch_local` while its device entrypoint stays `excluded`, and telling a user
 to run a command that does not exist is worse than saying nothing).

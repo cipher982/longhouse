@@ -60,7 +60,7 @@ export default [
   },
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/hooks/usePageMeta.ts", "src/lib/readiness-contract.ts"],
+    ignores: ["src/shared/hooks/usePageMeta.ts", "src/shared/lib/readiness-contract.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",
@@ -98,8 +98,12 @@ export default [
     },
   },
   {
-    files: ["src/pages/*Page.tsx"],
-    ignores: ["src/pages/LoginPage.tsx", "src/pages/SessionsPage.tsx"],
+    files: ["src/features/**/*Page.tsx"],
+    ignores: [
+      "src/features/auth/LoginPage.tsx",
+      "src/features/timeline/SessionsPage.tsx",
+      "src/features/marketing/docs/**",
+    ],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -130,7 +134,7 @@ export default [
     },
   },
   {
-    files: ["**/*.test.ts", "**/*.test.tsx", "src/test/**/*.ts"],
+    files: ["**/*.test.ts", "**/*.test.tsx", "src/shared/test/**/*.ts"],
     rules: {
       "no-prototype-builtins": "off",
     },

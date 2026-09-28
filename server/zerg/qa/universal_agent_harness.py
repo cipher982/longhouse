@@ -5399,7 +5399,9 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
         "failed_calls_remain_prominent": any(call["failed"] for call in projected_calls),
         "fixture_projection_matches_server": fixture_projection_matches,
     }
-    web_parity_test = default_repo_root() / "web" / "src" / "lib" / "__tests__" / "sharedProjectionFixtures.test.ts"
+    web_parity_test = (
+        default_repo_root() / "web" / "src" / "shared" / "session" / "model" / "__tests__" / "sharedProjectionFixtures.test.ts"
+    )
     ios_parity_test = default_repo_root() / "ios" / "Tests" / "LonghouseIOSTests" / "Models" / "SharedProjectionFixtureTests.swift"
     parity_consumed_by_clients = all(
         path.is_file() and parity_fixture.name in path.read_text(encoding="utf-8") for path in (web_parity_test, ios_parity_test)
@@ -5446,7 +5448,7 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
         "cross_surface_fixture": {
             "path": str(parity_fixture.relative_to(default_repo_root())),
             "sha256": hashlib.sha256(parity_fixture.read_bytes()).hexdigest() if parity_fixture.is_file() else None,
-            "web_test": "web/src/lib/__tests__/sharedProjectionFixtures.test.ts",
+            "web_test": "web/src/shared/session/model/__tests__/sharedProjectionFixtures.test.ts",
             "ios_test": "ios/Tests/LonghouseIOSTests/Models/SharedProjectionFixtureTests.swift",
         },
         "concision_proof": concision_proof,

@@ -22,7 +22,7 @@ from starlette.types import Send
 # visibly breaks without it (verified 2026-09-16 on longhouse.ai, where this
 # list had been missing since the policy landed):
 #   - web fonts: web/index.html links Google Fonts and Fontshare stylesheets
-#   - the landing live demo sandbox: web/src/components/landing/demo/liveDemoConfig.ts
+#   - the landing live demo sandbox: web/src/features/marketing/hero-demo/liveDemoConfig.ts
 _FONT_STYLE_ORIGINS = ("https://fonts.googleapis.com", "https://api.fontshare.com")
 _FONT_FILE_ORIGINS = ("https://fonts.gstatic.com", "https://cdn.fontshare.com")
 _LIVE_DEMO_ORIGIN = "https://freetype-phase1.drose-agents.workers.dev"

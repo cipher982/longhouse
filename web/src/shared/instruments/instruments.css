@@ -1,0 +1,440 @@
+/* =============================================================================
+   Instruments — Phase 4 of the web restyle
+   (control-plane/docs/specs/web-restyle-signal.md)
+
+   Self-contained on purpose: every value here is hardcoded (gold/flame rgba,
+   not --tl-flame/--tl-ash) rather than reading the timeline's local aliases
+   in sessions.css, which are scoped to pages that import that file and
+   aren't guaranteed to be loaded wherever an instrument renders. That keeps
+   this whole file — and its components (Nixie, Sparkline, ReadoutRail, StatusLamp,
+   plus the pure-data helpers in activityBuckets.ts/toolActivity.ts) —
+   deletable in one commit.
+
+   Four blocks, each independently deletable:
+     1. Nixie      — .instrument-nixie*
+     2. Sparkline   — .instrument-sparkline*
+     3. Readout rail — .instrument-readout-rail, .instrument-readout*
+     4. Status lamp — .status-lamp*
+     5. Hearth      — .hearth-lamp*, .hearth-canvas (hearth/Hearth.tsx)
+   ============================================================================= */
+
+/* ---- 1. Nixie: live numerals ---- */
+
+.instrument-nixie {
+  display: inline-block;
+  font-family: var(--font-family-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: #ffb25a;
+  text-shadow:
+    0 0 6px rgba(240, 138, 36, 0.7),
+    0 0 16px rgba(240, 138, 36, 0.3);
+  background: rgba(246, 235, 214, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.28);
+  padding: 1px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.instrument-nixie--dim {
+  color: var(--color-text-secondary);
+  text-shadow: none;
+}
+
+.instrument-nixie--flicker {
+  animation: instrument-nixie-flicker 140ms ease-out;
+}
+
+@keyframes instrument-nixie-flicker {
+  0% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instrument-nixie--flicker {
+    animation: none;
+  }
+}
+
+/* ---- 2. Sparkline: inline activity trace ---- */
+
+.instrument-sparkline {
+  display: inline-flex;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.instrument-sparkline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* The timeline toolbar (web/src/features/timeline/SessionsPage.tsx) doesn't wrap at
+   narrow widths — below this, the label only pushes Clear/Recall/Filter
+   off-screen, so it's dropped rather than crowding them. This file is
+   unlayered (see the header comment) so this wins over anything a
+   page stylesheet inside @layer pages tries to do to it. */
+@media (max-width: 640px) {
+  .instrument-sparkline,
+  .instrument-sparkline-label {
+    display: none;
+  }
+}
+
+/* ---- 3. Readout rail: glass column beside the transcript ---- */
+
+.instrument-readout-rail {
+  display: none;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  width: 200px;
+  padding: 6px 0;
+  margin-bottom: 18px;
+  background: rgba(246, 235, 214, 0.035);
+  box-shadow: inset 0 0 0 1px rgba(246, 235, 214, 0.06);
+  border-radius: 2px;
+}
+
+/* Matches the composer-width and body-layout breakpoint in
+   session-workspace.css (search "1180" there) — the two must move
+   together. */
+@media (min-width: 1180px) {
+  .instrument-readout-rail {
+    display: flex;
+  }
+}
+
+.instrument-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.instrument-readout__key {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+/* .instrument-readout is a column flex container with the initial
+   align-items: stretch, which blockifies the Nixie span and stretches it
+   to the rail's full width — the opposite of a capsule that hugs its
+   value, like the composer timer's Nixie gets for free in a row-direction
+   flex head. Opt back out to a content-sized capsule, left-aligned. */
+.instrument-readout .instrument-nixie {
+  display: inline-flex;
+  align-self: flex-start;
+  width: max-content;
+}
+
+.instrument-readout__waiting-label {
+  font-family: var(--font-family-base);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.instrument-readout__bar {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(246, 235, 214, 0.07);
+  overflow: hidden;
+}
+
+.instrument-readout__bar-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(240, 138, 36, 0.5), #ffb25a);
+  box-shadow: 0 0 6px rgba(240, 138, 36, 0.5);
+}
+
+/* ---- 4. Status lamp: is the agent doing anything? ----
+ * StatusLamp.tsx. One bulb + one label at fixed insets in every state; only
+ * the treatment changes, so a session cooling from working to idle reads as
+ * the same lamp dimming, not one object swapped for another. Brightness
+ * ladder, loudest first: waiting (filled) > working (lit, moving) > idle
+ * (solid) > unknown (hollow) > ended (flat line). Never hue alone: fill,
+ * glow, motion, and bulb shape each separate the states, and the label is
+ * always text. The capsule chrome is transparent in quiet states rather than
+ * absent, so the bulb and label never shift when it lights. */
+
+.status-lamp {
+  --lamp-flame: var(--color-intent-warning, #f08a24);
+  --lamp-ember: var(--color-intent-error, #e4572e);
+  --lamp-ash: var(--color-state-cool, #7c8790);
+  --lamp-sage: var(--color-intent-success, #b9c48a);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  height: 22px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--color-text-secondary);
+  background-color: transparent;
+  box-shadow: inset 0 0 0 1px transparent;
+  transition:
+    color 320ms ease,
+    background-color 320ms ease,
+    box-shadow 320ms ease,
+    text-shadow 320ms ease;
+  background-repeat: no-repeat;
+}
+
+.status-lamp__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-lamp__bulb {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-state-cool, #7c8790) 85%, transparent);
+  transition: background-color 320ms ease, box-shadow 320ms ease, height 320ms ease;
+}
+
+/* Working: the lamp is lit. Glass capsule with a brass edge (the Nixie
+ * capsule's material), glowing amber label, flame bulb whose halo breathes.
+ * The light has a source: it spills from the bulb across the glass and
+ * falls off, where the waiting capsule is an even, flat fill. */
+.status-lamp[data-state="working"] {
+  color: #ffb25a;
+  text-shadow: 0 0 7px rgba(240, 138, 36, 0.45);
+  background-color: rgba(246, 235, 214, 0.04);
+  background-image: radial-gradient(
+    ellipse 64px 30px at 11px 50%,
+    rgba(240, 138, 36, 0.2),
+    rgba(240, 138, 36, 0) 100%
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(233, 185, 73, 0.3),
+    0 0 14px -6px rgba(240, 138, 36, 0.55);
+}
+
+.status-lamp__bulb[data-state="working"] {
+  background: var(--color-intent-warning, #f08a24);
+  box-shadow: 0 0 0 2px rgba(240, 138, 36, 0.18);
+}
+
+.status-lamp__bulb[data-state="working"]::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(240, 138, 36, 0.6) 0%, rgba(240, 138, 36, 0) 70%);
+  animation: status-lamp-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes status-lamp-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Waiting on you: the one filled capsule. An ember wash (tinted, never a
+ * solid sticker), steady — a stable state, so no motion and no alarm. */
+.status-lamp[data-state="waiting"] {
+  color: color-mix(in srgb, var(--color-intent-error, #e4572e) 55%, var(--color-text-primary, #f6ebd6));
+  background-color: color-mix(in srgb, var(--color-intent-error, #e4572e) 24%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-intent-error, #e4572e) 50%, transparent);
+}
+
+.status-lamp__bulb[data-state="waiting"] {
+  background: var(--color-intent-error, #e4572e);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-intent-error, #e4572e) 22%, transparent);
+}
+
+/* Idle: same bulb, cooled to ash and still. The default rules above. */
+
+/* Unknown / stale: a hollow ring — no current evidence either way. */
+.status-lamp[data-state="unknown"] {
+  color: color-mix(in srgb, var(--color-text-secondary, #c4b096) 78%, var(--color-text-muted, #8a7862));
+}
+
+.status-lamp__bulb[data-state="unknown"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.25px color-mix(in srgb, var(--color-state-cool, #7c8790) 90%, transparent);
+}
+
+/* Ended: the bulb flattens to a line, the most receded state. */
+.status-lamp[data-state="ended"] {
+  color: color-mix(in srgb, var(--color-text-secondary, #c4b096) 62%, var(--color-text-muted, #8a7862));
+}
+
+.status-lamp__bulb[data-state="ended"] {
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--color-state-cool, #7c8790) 75%, transparent);
+}
+
+/* Unread Console results: finished (sage) or failed (ember), both solid and
+ * still, with no capsule — a result to read, not a live request. */
+.status-lamp[data-state="done"] {
+  color: var(--color-text-primary, #f6ebd6);
+}
+
+.status-lamp__bulb[data-state="done"] {
+  background: var(--color-intent-success, #b9c48a);
+}
+
+.status-lamp[data-state="failed"] {
+  color: color-mix(in srgb, var(--color-intent-error, #e4572e) 70%, var(--color-text-primary, #f6ebd6));
+}
+
+.status-lamp__bulb[data-state="failed"] {
+  background: var(--color-intent-error, #e4572e);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-lamp,
+  .status-lamp__bulb {
+    transition: none;
+  }
+
+  .status-lamp__bulb[data-state="working"]::after {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* ---- 5. Hearth: the timeline row's fire ----
+ * hearth/Hearth.tsx. A fire cell (a placeholder the shared WebGL canvas
+ * lights, or a static SVG glyph without WebGL) and the state's text label.
+ * The label is always visible text in every state, so the fire never
+ * carries state alone. Label ladder: working glows amber, waiting on you is
+ * ember and heavier, idle is secondary, unknown and ended recede. */
+
+/* The list's positioned container: the canvas anchors inside it, in the
+ * scrolling content, never to the viewport. */
+.hearth-host {
+  position: relative;
+}
+
+.hearth-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  display: none;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.hearth-lamp {
+  --hearth-w: 26px;
+  --hearth-h: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--color-text-secondary);
+}
+
+.hearth-lamp__cell {
+  /* A placeholder, not a frame: no fill, border or radius. The shared
+   * canvas draws the fire as light on the row itself, a little taller and
+   * wider than this box so the flame tip and its glow fade into the page. */
+  position: relative;
+  flex: none;
+  display: block;
+  width: var(--hearth-w);
+  height: var(--hearth-h);
+}
+
+.hearth-glyph {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.hearth-lamp__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hearth-lamp[data-state="working"] {
+  color: #ffb25a;
+  text-shadow: 0 0 7px rgba(240, 138, 36, 0.45);
+}
+
+.hearth-lamp[data-state="waiting"] {
+  color: var(--color-intent-warning, #f08a24);
+  font-weight: 600;
+  text-shadow: 0 0 8px rgba(240, 138, 36, 0.35);
+}
+
+.hearth-lamp[data-state="unknown"] {
+  color: color-mix(in srgb, var(--color-text-secondary, #c4b096) 78%, var(--color-text-muted, #8a7862));
+}
+
+.hearth-lamp[data-state="ended"] {
+  color: color-mix(in srgb, var(--color-text-secondary, #c4b096) 62%, var(--color-text-muted, #8a7862));
+}
+
+.hearth-lamp[data-state="done"] {
+  color: var(--color-text-primary, #f6ebd6);
+}
+
+.hearth-lamp[data-state="failed"] {
+  color: color-mix(in srgb, var(--color-intent-error, #e4572e) 70%, var(--color-text-primary, #f6ebd6));
+}
+
+@media (max-width: 720px) {
+  .hearth-lamp {
+    --hearth-w: 20px;
+    --hearth-h: 28px;
+    gap: 6px;
+  }
+}

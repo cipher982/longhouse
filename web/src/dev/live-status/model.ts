@@ -1,7 +1,7 @@
 import type {
   AgentEvent,
   AgentSessionProjectionItem,
-} from "../../services/api/agents";
+} from "@/shared/api/agents";
 import type {
   ReceiptMark,
   ReplayFrame,

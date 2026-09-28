@@ -6,7 +6,7 @@
  *
  * == READINESS CONTRACT ==
  *
- * All pages follow a unified readiness contract (see frontend-web/src/lib/readiness-contract.ts):
+ * All pages follow a unified readiness contract (see frontend-web/src/shared/lib/readiness-contract.ts):
  *
  * 1. data-ready="true" on document.body
  *    Meaning: Page is INTERACTIVE - can click, type, interact

@@ -2427,19 +2427,14 @@
       ]
     },
     {
-      "path": "web/src/components/ProviderGlyph.tsx",
+      "path": "web/src/features/admin/__tests__/ProviderCapabilitiesPage.test.tsx",
       "providers": [
-        "antigravity",
-        "claude",
         "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
+        "cursor"
       ]
     },
     {
-      "path": "web/src/components/__tests__/LaunchSessionModal.test.tsx",
+      "path": "web/src/features/launch/__tests__/LaunchSessionModal.test.tsx",
       "providers": [
         "claude",
         "codex",
@@ -2448,7 +2443,54 @@
       ]
     },
     {
-      "path": "web/src/components/__tests__/ProviderGlyph.test.tsx",
+      "path": "web/src/features/marketing/docs/IntegrationsPage.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "web/src/features/observability/__tests__/ObservabilityPage.test.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "web/src/features/session/__tests__/useSessionWorkspace.test.tsx",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/features/session/chat/__tests__/SessionChat.test.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "web/src/features/timeline/__tests__/SessionsPage.test.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "web/src/shared/api/__tests__/launch.test.ts",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/shared/lib/__tests__/providers.test.ts",
       "providers": [
         "antigravity",
         "claude",
@@ -2460,22 +2502,7 @@
       ]
     },
     {
-      "path": "web/src/components/__tests__/SessionChat.test.tsx",
-      "providers": [
-        "claude",
-        "codex",
-        "cursor"
-      ]
-    },
-    {
-      "path": "web/src/hooks/__tests__/useSessionWorkspace.test.tsx",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "web/src/lib/__tests__/providers.test.ts",
+      "path": "web/src/shared/lib/providers.ts",
       "providers": [
         "antigravity",
         "claude",
@@ -2487,7 +2514,7 @@
       ]
     },
     {
-      "path": "web/src/lib/__tests__/sessionWorkspace.test.ts",
+      "path": "web/src/shared/session/model/__tests__/sessionWorkspace.test.ts",
       "providers": [
         "antigravity",
         "claude",
@@ -2495,7 +2522,15 @@
       ]
     },
     {
-      "path": "web/src/lib/providers.ts",
+      "path": "web/src/shared/session/sessionLabels.ts",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/shared/ui/ProviderGlyph.tsx",
       "providers": [
         "antigravity",
         "claude",
@@ -2507,50 +2542,15 @@
       ]
     },
     {
-      "path": "web/src/lib/sessionLabels.ts",
+      "path": "web/src/shared/ui/__tests__/ProviderGlyph.test.tsx",
       "providers": [
         "antigravity",
         "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "web/src/pages/__tests__/ObservabilityPage.test.tsx",
-      "providers": [
-        "claude",
         "codex",
-        "cursor"
-      ]
-    },
-    {
-      "path": "web/src/pages/__tests__/ProviderCapabilitiesPage.test.tsx",
-      "providers": [
-        "codex",
-        "cursor"
-      ]
-    },
-    {
-      "path": "web/src/pages/__tests__/SessionsPage.test.tsx",
-      "providers": [
-        "claude",
-        "codex",
-        "cursor"
-      ]
-    },
-    {
-      "path": "web/src/pages/docs/IntegrationsPage.tsx",
-      "providers": [
-        "claude",
-        "codex",
+        "cursor",
+        "omp",
         "opencode",
         "pi"
-      ]
-    },
-    {
-      "path": "web/src/services/api/__tests__/launch.test.ts",
-      "providers": [
-        "claude",
-        "codex"
       ]
     }
   ]

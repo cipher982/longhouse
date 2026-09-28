@@ -1,0 +1,59 @@
+import { Link } from "react-router";
+import { SwarmLogo } from "@/shared/ui/SwarmLogo";
+import { usePageMeta } from "@/shared/hooks/usePageMeta";
+import { usePublicPageScroll } from "../usePublicPageScroll";
+import "./info-pages.css";
+
+export default function ChangelogPage() {
+  const currentYear = new Date().getFullYear();
+
+  usePublicPageScroll();
+  usePageMeta({
+    title: "Changelog - Longhouse",
+    description:
+      "Track Longhouse's development progress. See new features, improvements, and fixes as we build the platform.",
+  });
+
+  return (
+    <div className="info-page">
+      <header className="info-page-header">
+        <div className="info-page-header-inner">
+          <Link to="/" className="info-page-back">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            Back to Home
+          </Link>
+          <Link to="/" className="info-page-brand">
+            <SwarmLogo size={28} />
+            <span className="info-page-brand-name">Longhouse</span>
+          </Link>
+        </div>
+      </header>
+
+      <main className="info-page-content">
+        <h1 className="info-page-title">Changelog</h1>
+        <p className="info-page-subtitle">
+          Track our progress as we build Longhouse.
+        </p>
+
+        <div className="docs-section changelog-empty-state">
+          <p className="changelog-empty-text">
+            Longhouse is in alpha. A detailed changelog will be available once we reach our first stable release.
+          </p>
+          <p className="changelog-empty-links">
+            Follow development on{" "}
+            <a href="https://github.com/cipher982/longhouse" target="_blank" rel="noopener noreferrer">
+              GitHub
+            </a>
+            {" "}to see commits and releases in real time.
+          </p>
+        </div>
+      </main>
+
+      <footer className="info-page-footer">
+        <p>&copy; {currentYear} Longhouse. All rights reserved.</p>
+      </footer>
+    </div>
+  );
+}

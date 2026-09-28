@@ -1,0 +1,764 @@
+import { describe, expect, it } from "vitest";
+import { buildInboxLayout, isOnShelf } from "../timelineInboxModel";
+import type {
+  AgentSession,
+  SessionCapabilities,
+  SessionRuntimeDisplay,
+  SessionStateFacts,
+  TimelineSessionCard,
+} from "@/shared/api/agents";
+import { makeSessionStateFacts } from "@/shared/test/sessionState";
+
+function makeRuntimeDisplay(overrides: Partial<SessionRuntimeDisplay> = {}): SessionRuntimeDisplay {
+  return {
+    truth_tier: "none",
+    signal_tier: "none",
+    state: null,
+    tone: "inactive",
+    headline: "Inactive",
+    detail: null,
+    phase_label: "Inactive",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    needs_attention: false,
+    is_idle: true,
+    is_stalled: false,
+    is_managed_local_truth: false,
+    has_signal: false,
+    control_path: "unmanaged",
+    activity_recency: "stale",
+    lifecycle: "open",
+    host_state: null,
+    terminal_reason: null,
+    ...overrides,
+  };
+}
+
+function makeSession(overrides: Partial<AgentSession> & { id: string }): AgentSession {
+  return {
+    id: overrides.id,
+    provider: "claude",
+    started_at: "2026-05-18T10:00:00Z",
+    ended_at: null,
+    last_activity_at: null,
+    timeline_anchor_at: null,
+    project: null,
+    cwd: null,
+    git_repo: null,
+    git_branch: null,
+    summary_title: null,
+    summary: null,
+    first_user_message: null,
+    user_messages: 0,
+    tool_calls: 0,
+    terminal_state: null,
+    session_state: makeSessionStateFacts(),
+    runtime_display: makeRuntimeDisplay(),
+    timeline_card: null,
+    capabilities: undefined,
+    ...overrides,
+  } as AgentSession;
+}
+
+function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+  return {
+    live_control_available: false,
+    host_reattach_available: false,
+    reply_to_live_session_available: false,
+    observe_only: false,
+    search_only: false,
+    ...overrides,
+  };
+}
+
+function makeCard(args: {
+  id: string;
+  repo: string;
+  startedAt: string;
+  closed?: boolean;
+  endedAt?: string;
+  lastActivityAt?: string;
+  capabilities?: SessionCapabilities;
+  project?: string | null;
+  cwd?: string | null;
+  gitRepo?: string | null;
+  launchActor?: string | null;
+  originKind?: string | null;
+  state?: SessionStateFacts;
+}): TimelineSessionCard {
+  const session = makeSession({
+    id: args.id,
+    started_at: args.startedAt,
+    ended_at: args.endedAt ?? null,
+    last_activity_at: args.lastActivityAt ?? null,
+    project: args.project === undefined ? args.repo : args.project,
+    cwd: args.cwd ?? null,
+    git_repo: args.gitRepo ?? null,
+    launch_actor: args.launchActor ?? null,
+    origin_kind: args.originKind ?? null,
+    capabilities: args.capabilities,
+    session_state: args.state ?? makeSessionStateFacts({
+      closed: args.closed,
+      access: args.capabilities?.live_control_available
+        ? "live_control"
+        : args.capabilities?.host_reattach_available
+          ? "reattach"
+          : "search_only",
+    }),
+    runtime_display: makeRuntimeDisplay(args.closed ? { lifecycle: "closed" } : {}),
+  });
+  return {
+    thread_id: args.id,
+    timeline_anchor_at: args.startedAt,
+    head: session,
+    continuation_count: 1,
+    started_origin_label: null,
+    head_origin_label: null,
+  };
+}
+
+describe("isOnShelf", () => {
+  const now = Date.parse("2026-05-18T12:00:00Z");
+
+  it("returns false for closed sessions", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-18T11:00:00Z",
+      closed: true,
+      capabilities: makeCapabilities({ live_control_available: true }),
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+
+  it("returns false for live-control sessions that are idle with no terminal", () => {
+    // Live control is capability, not presence. An unattended bridge keeps
+    // answering long after the user is done with it.
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+      capabilities: makeCapabilities({ live_control_available: true }),
+      state: makeSessionStateFacts({ access: "live_control", activity: "quiescent" }),
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+
+  it("returns false for reattachable sessions with no terminal, however recent", () => {
+    // The regression the working-set tier exists for. Reattach capability
+    // never expires, so promoting on it pinned every session ever launched to
+    // the top of the timeline.
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: new Date(now - 60000).toISOString(),
+      capabilities: makeCapabilities({ host_reattach_available: true }),
+      state: makeSessionStateFacts({ access: "reattach", activity: "quiescent" }),
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+
+  it("returns false for a recent session with no terminal and no work in flight", () => {
+    // Age is not evidence of being open. A session started a minute ago and
+    // already abandoned is history.
+    const recent = now - 60_000;
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: new Date(recent).toISOString(),
+      state: makeSessionStateFacts({ activity: "quiescent" }),
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+
+  it("returns true for an attached terminal however old the session is", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+      state: makeSessionStateFacts({ activity: "quiescent", terminalAttached: true }),
+    });
+    expect(isOnShelf(card, now)).toBe(true);
+  });
+
+  it("returns true for in-flight work with no terminal (Console)", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+      state: makeSessionStateFacts({ activity: "executing", mode: "console" }),
+    });
+    expect(isOnShelf(card, now)).toBe(true);
+  });
+
+  it("returns false for sessions with capabilities unset and old", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+});
+
+describe("buildInboxLayout", () => {
+  // Use a fixed now far enough past all session dates that non-shelf
+  // sessions (>24h old, no capabilities) stay in History.
+  const fixedNow = Date.parse("2026-05-20T12:00:00Z");
+
+  it("groups open and closed sessions into one history tier", () => {
+    const cards = [
+      makeCard({ id: "a1", repo: "floodmap", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({ id: "a2", repo: "floodmap", startedAt: "2026-05-18T11:00:00Z", closed: true }),
+      makeCard({ id: "a3", repo: "zerg", startedAt: "2026-05-18T13:00:00Z" }),
+    ];
+
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.history.map((g) => g.repo)).toEqual(["zerg", "floodmap"]);
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["a3"]);
+    expect(layout.history[1].sessions.map((s) => s.thread_id)).toEqual(["a1", "a2"]);
+    expect(layout.historyCount).toBe(3);
+  });
+
+  it("presents one history tier and keeps automation runs after project history", () => {
+    const cards = [
+      makeCard({ id: "project-open", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({
+        id: "automation-new",
+        repo: "agent-sessions",
+        startedAt: "2026-05-20T11:00:00Z",
+      }),
+      makeCard({
+        id: "project-closed",
+        repo: "zerg",
+        startedAt: "2026-05-18T11:00:00Z",
+        closed: true,
+        endedAt: "2026-05-20T10:00:00Z",
+      }),
+    ];
+
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.history.map((group) => group.label)).toEqual(["zerg", "Automation runs"]);
+    expect(layout.history[0].sessions.map((session) => session.thread_id)).toEqual([
+      "project-closed",
+      "project-open",
+    ]);
+    expect(layout.history[1].description).toBe("Background work");
+    expect(layout.historyCount).toBe(3);
+  });
+  it("uses source metadata and workspace path to identify automation runs", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "sauron-email",
+        repo: "sauron-email-agent",
+        startedAt: "2026-05-18T12:00:00Z",
+        cwd: "/data/agent-sessions",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0].label).toBe("Automation runs");
+    expect(layout.history[0].kind).toBe("automation");
+  });
+  it("preserves the git-derived automation fallback without provenance", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "legacy-git-agent-sessions",
+        repo: "agent-sessions",
+        project: null,
+        gitRepo: "https://github.com/example/agent-sessions.git",
+        startedAt: "2026-05-18T12:00:00Z",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0]).toMatchObject({
+      label: "Automation runs",
+      kind: "automation",
+      description: "Background work",
+    });
+  });
+  it("lets explicit human provenance override the automation workspace heuristic", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "human-agent-sessions",
+        repo: "agent-sessions",
+        startedAt: "2026-05-18T12:00:00Z",
+        cwd: "/data/agent-sessions",
+        launchActor: "human_shell",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0]).toMatchObject({
+      label: "agent-sessions",
+      kind: "project",
+      description: null,
+    });
+  });
+
+  it("classifies actor-only and origin-only automation without workspace heuristics", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "actor-automation",
+        repo: "scheduled-job",
+        startedAt: "2026-05-18T12:00:00Z",
+        launchActor: "automation",
+      }),
+      makeCard({
+        id: "origin-automation",
+        repo: "hatch-run",
+        startedAt: "2026-05-18T11:00:00Z",
+        originKind: "hatch_automation",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history.map((group) => group.kind)).toEqual(["automation", "automation"]);
+    expect(layout.history.map((group) => group.description)).toEqual(["Background work", "Background work"]);
+  });
+
+  it("keeps mixed human and legacy automation sessions in project history", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "legacy-background",
+        repo: "zerg",
+        startedAt: "2026-05-18T12:00:00Z",
+        cwd: "/data/agent-sessions",
+      }),
+      makeCard({
+        id: "human-project",
+        repo: "zerg",
+        startedAt: "2026-05-18T11:00:00Z",
+        cwd: "/Users/davidrose/git/zerg",
+        launchActor: "human_shell",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0]).toMatchObject({ label: "zerg", kind: "project" });
+  });
+  it("keeps automation runs last despite a stale saved repo order", () => {
+    const layout = buildInboxLayout([
+      makeCard({ id: "project", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({ id: "automation", repo: "agent-sessions", startedAt: "2026-05-20T11:00:00Z" }),
+    ], {
+      shelfOrder: [],
+      repoOrder: ["agent-sessions", "zerg"],
+      sessionOrder: {},
+    }, fixedNow);
+
+    expect(layout.history.map((group) => group.label)).toEqual(["zerg", "Automation runs"]);
+  });
+  it("sorts sessions within a repo by start time descending (frozen)", () => {
+    const cards = [
+      makeCard({ id: "old", repo: "zerg", startedAt: "2026-05-17T10:00:00Z" }),
+      makeCard({ id: "new", repo: "zerg", startedAt: "2026-05-18T10:00:00Z" }),
+      makeCard({ id: "mid", repo: "zerg", startedAt: "2026-05-18T05:00:00Z" }),
+    ];
+
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual([
+      "new",
+      "mid",
+      "old",
+    ]);
+  });
+
+  it("sorts closed sessions by close time descending, not start time", () => {
+    const cards = [
+      makeCard({
+        id: "long-runner",
+        repo: "zerg",
+        startedAt: "2026-05-18T01:00:00Z",
+        endedAt: "2026-05-18T02:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "just-closed",
+        repo: "zerg",
+        startedAt: "2026-05-18T09:00:00Z",
+        endedAt: "2026-05-18T12:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "mid-closed",
+        repo: "zerg",
+        startedAt: "2026-05-18T08:00:00Z",
+        endedAt: "2026-05-18T10:00:00Z",
+        closed: true,
+      }),
+    ];
+
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual([
+      "just-closed",
+      "mid-closed",
+      "long-runner",
+    ]);
+  });
+
+  it("orders closed repo groups by their most-recently-closed session", () => {
+    const cards = [
+      makeCard({
+        id: "z",
+        repo: "zerg",
+        startedAt: "2026-05-18T01:00:00Z",
+        endedAt: "2026-05-18T02:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "f",
+        repo: "floodmap",
+        startedAt: "2026-05-18T00:00:00Z",
+        endedAt: "2026-05-18T11:00:00Z",
+        closed: true,
+      }),
+    ];
+
+    expect(buildInboxLayout(cards, undefined, fixedNow).history.map((g) => g.repo)).toEqual([
+      "floodmap",
+      "zerg",
+    ]);
+  });
+
+  it("falls back to last_activity_at then start time when ended_at is null", () => {
+    const cards = [
+      makeCard({
+        id: "start-only",
+        repo: "zerg",
+        startedAt: "2026-05-18T09:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "activity-fallback",
+        repo: "zerg",
+        startedAt: "2026-05-18T07:00:00Z",
+        lastActivityAt: "2026-05-18T11:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "ended",
+        repo: "zerg",
+        startedAt: "2026-05-18T06:00:00Z",
+        endedAt: "2026-05-18T13:00:00Z",
+        closed: true,
+      }),
+    ];
+
+    expect(buildInboxLayout(cards, undefined, fixedNow).history[0].sessions.map((s) => s.thread_id)).toEqual([
+      "ended",
+      "activity-fallback",
+      "start-only",
+    ]);
+  });
+
+  it("orders project history by newest lifecycle activity", () => {
+    const cards = [
+      makeCard({ id: "f-old", repo: "floodmap", startedAt: "2026-05-17T10:00:00Z" }),
+      makeCard({ id: "z-newest", repo: "zerg", startedAt: "2026-05-18T13:00:00Z" }),
+      makeCard({ id: "s-mid", repo: "stopsign", startedAt: "2026-05-18T11:00:00Z" }),
+    ];
+
+    expect(buildInboxLayout(cards, undefined, fixedNow).history.map((g) => g.repo)).toEqual([
+      "zerg",
+      "stopsign",
+      "floodmap",
+    ]);
+  });
+
+  it("re-running on the same input is stable (jitter regression)", () => {
+    const cards = [
+      makeCard({ id: "a", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({ id: "b", repo: "zerg", startedAt: "2026-05-18T11:00:00Z" }),
+    ];
+
+    const first = buildInboxLayout(cards, undefined, fixedNow);
+    const second = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(second.history[0].sessions.map((s) => s.thread_id)).toEqual(
+      first.history[0].sessions.map((s) => s.thread_id),
+    );
+  });
+
+  it("returns empty layout for empty input", () => {
+    const layout = buildInboxLayout([]);
+    expect(layout.shelf).toEqual([]);
+    expect(layout.history).toEqual([]);
+    expect(layout.historyCount).toBe(0);
+  });
+
+  it("applies a repo order override on top of default sort", () => {
+    const cards = [
+      makeCard({ id: "a", repo: "alpha", startedAt: "2026-05-18T10:00:00Z" }),
+      makeCard({ id: "b", repo: "beta", startedAt: "2026-05-18T11:00:00Z" }),
+      makeCard({ id: "c", repo: "gamma", startedAt: "2026-05-18T12:00:00Z" }),
+    ];
+
+    const layout = buildInboxLayout(cards, {
+      shelfOrder: [],
+      repoOrder: ["alpha"],
+      sessionOrder: {},
+    }, fixedNow);
+
+    expect(layout.history.map((g) => g.repo)).toEqual(["alpha", "gamma", "beta"]);
+  });
+
+  it("applies a session order override within a repo", () => {
+    const cards = [
+      makeCard({ id: "first", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({ id: "second", repo: "zerg", startedAt: "2026-05-18T11:00:00Z" }),
+      makeCard({ id: "third", repo: "zerg", startedAt: "2026-05-18T10:00:00Z" }),
+    ];
+
+    const layout = buildInboxLayout(cards, {
+      shelfOrder: [],
+      repoOrder: [],
+      sessionOrder: { zerg: ["third"] },
+    }, fixedNow);
+
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual([
+      "third",
+      "first",
+      "second",
+    ]);
+  });
+
+  it("ignores override entries for repos/sessions that no longer exist", () => {
+    const cards = [
+      makeCard({ id: "a", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+    ];
+
+    const layout = buildInboxLayout(cards, {
+      shelfOrder: [],
+      repoOrder: ["ghost-repo", "zerg"],
+      sessionOrder: { zerg: ["ghost-session", "a"] },
+    }, fixedNow);
+
+    expect(layout.history.map((g) => g.repo)).toEqual(["zerg"]);
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["a"]);
+  });
+
+  describe("shelf", () => {
+    it("puts attached terminals on the shelf even if old", () => {
+      const cards = [
+        makeCard({
+          id: "steerable",
+          repo: "zerg",
+          startedAt: "2026-05-01T10:00:00Z",
+          capabilities: makeCapabilities({ live_control_available: true }),
+          state: makeSessionStateFacts({
+            access: "live_control",
+            activity: "quiescent",
+            terminalAttached: true,
+          }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["steerable"]);
+      expect(layout.history).toEqual([]);
+    });
+
+    it("puts in-flight work on the shelf even without a terminal", () => {
+      const cards = [
+        makeCard({
+          id: "reattachable",
+          repo: "zerg",
+          startedAt: "2026-05-01T10:00:00Z",
+          state: makeSessionStateFacts({ activity: "executing", mode: "console" }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["reattachable"]);
+      expect(layout.history).toEqual([]);
+    });
+
+    it("keeps a recent but abandoned session off the shelf", () => {
+      const recentIso = new Date(fixedNow - 60 * 60 * 1000).toISOString(); // 1h ago
+      const cards = [
+        makeCard({ id: "recent", repo: "zerg", startedAt: recentIso }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["recent"]);
+    });
+
+    it("puts old quiet Shadow in History, not shelf", () => {
+      const cards = [
+        makeCard({ id: "old-shadow", repo: "zerg", startedAt: "2026-05-01T10:00:00Z" }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["old-shadow"]);
+    });
+
+    it("never puts closed sessions on shelf", () => {
+      const cards = [
+        makeCard({
+          id: "closed-steerable",
+          repo: "zerg",
+          startedAt: "2026-05-18T11:59:00Z", // just before now
+          closed: true,
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["closed-steerable"]);
+    });
+
+    it("sorts shelf by start time desc by default", () => {
+      const cards = [
+        makeCard({
+          id: "old",
+          repo: "zerg",
+          startedAt: "2026-05-01T10:00:00Z",
+          state: makeSessionStateFacts({ terminalAttached: true }),
+        }),
+        makeCard({
+          id: "new",
+          repo: "zerg",
+          startedAt: "2026-05-18T10:00:00Z",
+          state: makeSessionStateFacts({ terminalAttached: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["new", "old"]);
+    });
+
+    it("applies shelf order override", () => {
+      const cards = [
+        makeCard({
+          id: "alpha",
+          repo: "zerg",
+          startedAt: "2026-05-18T10:00:00Z",
+          state: makeSessionStateFacts({ terminalAttached: true }),
+        }),
+        makeCard({
+          id: "beta",
+          repo: "zerg",
+          startedAt: "2026-05-18T11:00:00Z",
+          state: makeSessionStateFacts({ terminalAttached: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, {
+        shelfOrder: ["alpha"],
+        repoOrder: [],
+        sessionOrder: {},
+      }, fixedNow);
+      // beta is newer so default would be [beta, alpha], but override pins alpha first
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["alpha", "beta"]);
+    });
+
+    it("shelf plus History coexist correctly", () => {
+      const recentIso = new Date(fixedNow - 60 * 60 * 1000).toISOString();
+      const cards = [
+        makeCard({
+          id: "shelf-recent",
+          repo: "zerg",
+          startedAt: recentIso,
+          state: makeSessionStateFacts({ terminalAttached: true }),
+        }),
+        makeCard({
+          id: "shelf-steerable",
+          repo: "floodmap",
+          startedAt: "2026-05-01T10:00:00Z",
+          state: makeSessionStateFacts({ activity: "thinking" }),
+        }),
+        makeCard({ id: "active-old", repo: "stopsign", startedAt: "2026-05-01T10:00:00Z" }),
+        makeCard({ id: "closed", repo: "alpha", startedAt: "2026-05-01T10:00:00Z", closed: true }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["shelf-recent", "shelf-steerable"]);
+      expect(layout.history.map((g) => g.repo)).toEqual(["alpha", "stopsign"]);
+      expect(layout.history.flatMap((g) => g.sessions.map((s) => s.thread_id))).toEqual(["closed", "active-old"]);
+      expect(layout.shelfCount).toBe(2);
+    });
+
+    it("shelfCount is set even when zero", () => {
+      const cards = [
+        makeCard({ id: "old-shadow", repo: "zerg", startedAt: "2026-05-01T10:00:00Z" }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.shelfCount).toBe(0);
+    });
+  });
+});
+
+describe("unread band", () => {
+  const fixedNow = Date.parse("2026-05-18T12:00:00Z");
+
+  it("carves unread cards out of History, never the shelf", () => {
+    const cards = [
+      // Running unread session stays on the shelf, not the band.
+      makeCard({
+        id: "unread-running",
+        repo: "zerg",
+        startedAt: "2026-05-18T11:00:00Z",
+        state: makeSessionStateFacts({
+          activity: "executing",
+          unread: true,
+          lastResultAt: "2026-05-18T10:30:00Z",
+        }),
+      }),
+      // Open-disposition finished Console session: would land in History
+      // without the carve-out (the ghost the review flagged).
+      makeCard({
+        id: "unread-open",
+        repo: "zerg",
+        startedAt: "2026-05-18T09:00:00Z",
+        state: makeSessionStateFacts({
+          mode: "console",
+          unread: true,
+          lastResultAt: "2026-05-18T10:00:00Z",
+          lastResultOutcome: "completed",
+        }),
+      }),
+      // Closed unread sessions move out of History into the band.
+      makeCard({
+        id: "unread-closed",
+        repo: "alpha",
+        startedAt: "2026-05-18T08:00:00Z",
+        closed: true,
+        state: makeSessionStateFacts({
+          mode: "console",
+          closed: true,
+          unread: true,
+          lastResultAt: "2026-05-18T11:30:00Z",
+          lastResultOutcome: "failed",
+        }),
+      }),
+      makeCard({ id: "plain-active", repo: "zerg", startedAt: "2026-05-18T07:00:00Z" }),
+    ];
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.shelf.map((s) => s.thread_id)).toEqual(["unread-running"]);
+    // Sorted by result completion desc — the just-finished lands on top.
+    expect(layout.unread.map((s) => s.thread_id)).toEqual(["unread-closed", "unread-open"]);
+    // Never duplicated into History.
+    const historyIds = layout.history.flatMap((g) => g.sessions.map((s) => s.thread_id));
+    expect(historyIds).toEqual(["plain-active"]);
+  });
+
+  it("read sessions remain in History", () => {
+    const cards = [
+      makeCard({
+        id: "read-closed",
+        repo: "alpha",
+        startedAt: "2026-05-18T08:00:00Z",
+        closed: true,
+        state: makeSessionStateFacts({
+          mode: "console",
+          closed: true,
+          unread: false,
+          lastResultAt: "2026-05-18T09:00:00Z",
+          lastResultOutcome: "completed",
+        }),
+      }),
+    ];
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+    expect(layout.unread).toEqual([]);
+    expect(layout.history.flatMap((g) => g.sessions.map((s) => s.thread_id))).toEqual(["read-closed"]);
+  });
+});

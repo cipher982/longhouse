@@ -34,7 +34,7 @@ import {
  * ControlRoom — the EXPORT LANE of the hero demo (mp4 / poster / OG for
  * social embeds, where a fixed 16:9 frame is genuinely required). The
  * landing page itself runs a native DOM rendering of the same script:
- * web/src/components/landing/demo/. Both consume ../demo/script.ts —
+ * web/src/features/marketing/hero-demo/. Both consume ../demo/script.ts —
  * narrative or replay-window changes belong THERE, not here.
  *
  * Four beats:

@@ -3,7 +3,7 @@
 
 Single source of truth: config/tool-tiers.json.
 Outputs:
-  - web/src/lib/sessionWorkspace/toolTiers.generated.ts
+  - web/src/shared/session/model/toolTiers.generated.ts
   - ios/Sources/Shared/Generated/ToolTiers.generated.swift
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "tool-tiers.json"
-TS_OUT = REPO / "web" / "src" / "lib" / "sessionWorkspace" / "toolTiers.generated.ts"
+TS_OUT = REPO / "web" / "src" / "shared" / "session" / "model" / "toolTiers.generated.ts"
 SWIFT_OUT = REPO / "ios" / "Sources" / "Shared" / "Generated" / "ToolTiers.generated.swift"
 
 

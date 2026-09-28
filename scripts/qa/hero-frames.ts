@@ -102,7 +102,7 @@ try {
     });
     try {
       const page = await context.newPage();
-      // Only real API calls: a `**/api/**` glob also swallows Vite's src/services/api modules.
+      // Only real API calls: a `**/api/**` glob also swallows Vite's src/shared/api modules.
       await page.route((url) => url.pathname.startsWith("/api/"), (r) => r.abort());
       await page.goto(`${BASE_URL}/landing?demoT=1`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => "__heroDemoSeek" in window, null, { timeout: 30_000 });

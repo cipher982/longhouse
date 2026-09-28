@@ -15,7 +15,7 @@ import { buildSessionDetailStressFixture } from "../ui-fixtures/sessionDetailStr
 import type {
   AgentSession,
   AgentSessionWorkspaceResponse,
-} from "../../web/src/services/api/agents";
+} from "../../web/src/shared/api/agents";
 
 const args = process.argv.slice(2);
 function option(name: string, fallback = "") {

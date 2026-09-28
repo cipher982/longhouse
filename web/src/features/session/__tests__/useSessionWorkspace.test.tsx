@@ -1,0 +1,1450 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionWorkspace } from "../useSessionWorkspace";
+import { makeSessionStateFacts } from "@/shared/test/sessionState";
+
+const agentSessionMocks = vi.hoisted(() => ({
+  useAgentSessionWorkspace: vi.fn(),
+  useAgentSessionProjectionInfinite: vi.fn(),
+}));
+const visibilityMocks = vi.hoisted(() => ({
+  useDocumentVisible: vi.fn(),
+}));
+const streamMocks = vi.hoisted(() => ({
+  connectSessionWorkspaceStream: vi.fn(() => vi.fn()),
+}));
+const queryClientMocks = vi.hoisted(() => ({
+  invalidateQueries: vi.fn(),
+  setQueriesData: vi.fn(),
+  getQueryData: vi.fn(() => undefined),
+}));
+const renderBeaconMocks = vi.hoisted(() => ({
+  emitRenderBeacon: vi.fn(),
+  emitStateRenderBeacon: vi.fn(),
+  recordServerClockSkew: vi.fn(),
+}));
+
+vi.mock("@/shared/api/useAgentSessions", () => agentSessionMocks);
+vi.mock("@/shared/hooks/useDocumentVisible", () => visibilityMocks);
+vi.mock("@/shared/api/agents", () => streamMocks);
+vi.mock("../renderBeacon", () => renderBeaconMocks);
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => queryClientMocks,
+  // The hook also fetches this session's worker transcripts. They are optional
+  // context, so the mock reports none rather than modelling a second fetch.
+  useQuery: () => ({ data: undefined, isLoading: false, error: null }),
+}));
+
+const baseSession = {
+  id: "session-1",
+  thread_head_session_id: "session-1",
+  provider: "claude",
+  project: "session-workspace-test",
+  session_state: makeSessionStateFacts(),
+  runtime_display: {
+    truth_tier: "none",
+    signal_tier: "none",
+    state: null,
+    tone: "inactive",
+    headline: "Inactive",
+    detail: null,
+    phase_label: "Inactive",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    needs_attention: false,
+    is_idle: true,
+    is_stalled: false,
+    is_managed_local_truth: false,
+    has_signal: false,
+    control_path: "unmanaged",
+    activity_recency: "stale",
+    lifecycle: "open",
+    host_state: null,
+    terminal_reason: null,
+  },
+};
+
+function makeEvents(count: number) {
+  const startedAt = Date.parse("2026-03-14T12:00:00.000Z");
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    role: index % 2 === 0 ? "user" : "assistant",
+    timestamp: new Date(startedAt + index * 1_000).toISOString(),
+    content_text: `Session event ${index + 1}`,
+    tool_name: null,
+    tool_call_id: null,
+    tool_input_json: null,
+    tool_output_text: null,
+    in_active_context: true,
+  }));
+}
+
+function seedHookMocks(eventCount: number = 80, sessionOverrides: Record<string, unknown> = {}) {
+  const events = makeEvents(eventCount);
+  const session = { ...baseSession, ...sessionOverrides };
+  agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+    data: {
+      session,
+      thread: {
+        sessions: [session],
+        head_session_id: baseSession.id,
+        root_session_id: baseSession.id,
+      },
+      projection: {
+        root_session_id: baseSession.id,
+        focus_session_id: baseSession.id,
+        head_session_id: baseSession.id,
+        path_session_ids: [baseSession.id],
+        items: events.map((event) => ({
+          kind: "event",
+          session_id: baseSession.id,
+          timestamp: event.timestamp,
+          event,
+        })),
+        total: events.length,
+        abandoned_events: 0,
+      },
+      workspace_revision: {
+        latest_event_id: events.at(-1)?.id ?? 0,
+        runtime_version_sum: 0,
+        pause_request_count: 0,
+        managed_control_count: 0,
+        thread_session_count: 1,
+        fingerprint: "sha256:workspace",
+      },
+    },
+    isLoading: false,
+    error: null,
+  });
+  agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+    data: {
+      pages: [
+        {
+          page_offset: 0,
+          items: events.map((event) => ({
+            kind: "event",
+            session_id: baseSession.id,
+            timestamp: event.timestamp,
+            event,
+          })),
+          total: events.length,
+          abandoned_events: 0,
+        },
+      ],
+    },
+    isLoading: false,
+    error: null,
+    fetchPreviousPage: vi.fn(),
+    hasPreviousPage: false,
+    isFetchingPreviousPage: false,
+  });
+}
+
+function makeScrollableTimelineList({
+  clientHeight,
+  scrollHeight,
+}: {
+  clientHeight: number;
+  scrollHeight: number;
+}) {
+  const element = document.createElement("div");
+  let currentClientHeight = clientHeight;
+  let currentScrollHeight = scrollHeight;
+  let currentScrollTop = 0;
+
+  Object.defineProperty(element, "clientHeight", {
+    configurable: true,
+    get: () => currentClientHeight,
+  });
+  Object.defineProperty(element, "scrollHeight", {
+    configurable: true,
+    get: () => currentScrollHeight,
+  });
+  Object.defineProperty(element, "scrollTop", {
+    configurable: true,
+    get: () => currentScrollTop,
+    set: (value: number) => {
+      const maxScrollTop = Math.max(0, currentScrollHeight - currentClientHeight);
+      currentScrollTop = Math.max(0, Math.min(value, maxScrollTop));
+    },
+  });
+
+  return {
+    element,
+    get scrollTop() {
+      return currentScrollTop;
+    },
+    setLayout(nextLayout: { clientHeight?: number; scrollHeight?: number }) {
+      if (typeof nextLayout.clientHeight === "number") {
+        currentClientHeight = nextLayout.clientHeight;
+      }
+      if (typeof nextLayout.scrollHeight === "number") {
+        currentScrollHeight = nextLayout.scrollHeight;
+      }
+    },
+  };
+}
+
+describe("useSessionWorkspace", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = "";
+    visibilityMocks.useDocumentVisible.mockReturnValue(true);
+    seedHookMocks();
+  });
+
+  it("renders a fresh server transcript preview as a synthetic assistant event", () => {
+    seedHookMocks(1, {
+      transcript_preview: {
+        event_id: 99,
+        text: "Live preview text before durable transcript arrives",
+        event_origin: "live_provisional",
+        timestamp: "2026-03-14T12:00:05.000Z",
+        is_provisional: true,
+        is_complete: false,
+        content_cursor: "cursor-99",
+        is_stale: false,
+        stale_reason: null,
+      },
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(result.current.events.map((event) => event.content_text)).toContain(
+      "Live preview text before durable transcript arrives",
+    );
+    expect(result.current.items.at(-1)).toMatchObject({
+      kind: "message",
+      event: {
+        id: -99,
+        role: "assistant",
+      },
+    });
+  });
+
+  it("keeps action rows distinct when projection pages share timestamps", () => {
+    seedHookMocks(0);
+    const actionItems = ["action:interrupt-1", "action:interrupt-2"].map((id) => ({
+      kind: "action",
+      session_id: baseSession.id,
+      timestamp: "2026-03-14T12:00:00.000Z",
+      action: {
+        id,
+        kind: "turn_interrupted",
+        provider: "codex",
+        source: "user",
+        provider_reason: "interrupted",
+        event_id: null,
+      },
+    }));
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+      data: {
+        pages: [
+          {
+            page_offset: 0,
+            items: actionItems,
+            total: actionItems.length,
+            abandoned_events: 0,
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(result.current.items.map((item) => (item.kind === "action" ? item.action.key : item.kind))).toEqual([
+      "action:interrupt-1",
+      "action:interrupt-2",
+    ]);
+    expect(result.current.loadedEntryCount).toBe(2);
+  });
+
+  it("scrolls the timeline list to the latest context when the container is already scrollable", async () => {
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const list = makeScrollableTimelineList({
+      clientHeight: 320,
+      scrollHeight: 1800,
+    });
+
+    document.body.appendChild(list.element);
+
+    act(() => {
+      result.current.registerTimelineList(list.element);
+    });
+
+    await waitFor(() => {
+      expect(list.scrollTop).toBeGreaterThan(0);
+    });
+  });
+
+  it("keeps polling visible, open sessions to refresh workspace runtime metadata", () => {
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(agentSessionMocks.useAgentSessionWorkspace).toHaveBeenCalled();
+    expect(agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[0]).toBe(baseSession.id);
+    expect(agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1]).toMatchObject({
+      limit: 200,
+      branch_mode: "head",
+      refetchInterval: expect.any(Function),
+    });
+    expect(agentSessionMocks.useAgentSessionProjectionInfinite).toHaveBeenCalledWith(baseSession.id, {
+      limit: 200,
+      branch_mode: "head",
+      enabled: true,
+      initialPage: expect.objectContaining({
+        focus_session_id: baseSession.id,
+      }),
+      refetchInterval: 5_000,
+    });
+  });
+
+  it.each([
+    { closed: true, userState: "active" },
+    { closed: false, userState: "parked" },
+  ])("stops workspace and transcript polling for stale pending interactions when closed=$closed and user=$userState", ({ closed, userState }) => {
+    let handlers: { onConnected?: () => void } | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const activeSession = {
+      ...baseSession,
+      user_state: "active",
+      session_state: makeSessionStateFacts({
+        mode: "console",
+        pendingInteraction: true,
+        activity: "quiescent",
+        observedAt: "2026-07-20T12:00:00Z",
+      }),
+    };
+    seedHookMocks(0, activeSession);
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const interval = () => agentSessionMocks.useAgentSessionWorkspace.mock.calls.at(-1)?.[1]?.refetchInterval;
+    expect(interval()({ state: { data: { session: activeSession } } })).toBe(5_000);
+
+    const inactiveSession = {
+      ...activeSession,
+      user_state: userState,
+      session_state: {
+        ...activeSession.session_state,
+        disposition: { state: closed ? "closed" : "open" },
+      },
+    };
+    seedHookMocks(0, inactiveSession);
+    rerender();
+
+    expect(interval()({ state: { data: { session: inactiveSession } } })).toBe(false);
+    expect(agentSessionMocks.useAgentSessionProjectionInfinite.mock.calls.at(-1)?.[1]?.refetchInterval).toBe(false);
+
+    // The connected-Console reconciliation path must not revive either poll.
+    act(() => handlers?.onConnected?.());
+    expect(interval()({ state: { data: { session: inactiveSession } } })).toBe(false);
+    expect(agentSessionMocks.useAgentSessionProjectionInfinite.mock.calls.at(-1)?.[1]?.refetchInterval).toBe(false);
+  });
+
+  it("opens the stream conservatively when the first workspace snapshot errors", () => {
+    const error = new Error("workspace unavailable");
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error,
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    const options = agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1];
+    expect(options?.refetchInterval({ state: { data: undefined, error } } as never)).toBe(5_000);
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledWith(
+      baseSession.id,
+      expect.any(Object),
+      {
+        skipInitial: false,
+        knownWorkspaceFingerprint: null,
+      },
+    );
+  });
+
+  it("opens the workspace stream with the rendered revision fingerprint", () => {
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledWith(
+      baseSession.id,
+      expect.any(Object),
+      {
+        skipInitial: true,
+        knownWorkspaceFingerprint: "sha256:workspace",
+      },
+    );
+  });
+
+  it("does not reconnect the workspace stream when a refetch advances the fingerprint", () => {
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const firstResponse = agentSessionMocks.useAgentSessionWorkspace.mock.results.at(-1)?.value;
+
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      ...firstResponse,
+      data: {
+        ...firstResponse.data,
+        workspace_revision: {
+          ...firstResponse.data.workspace_revision,
+          fingerprint: "sha256:advanced",
+        },
+      },
+    });
+
+    rerender();
+
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Console control state polling after the workspace stream connects", () => {
+    let handlers: { onConnected?: () => void } | undefined;
+    const consoleSession = {
+      ...baseSession,
+      session_state: makeSessionStateFacts({ mode: "console", startTurnAvailable: true }),
+    };
+    seedHookMocks(0, { session_state: consoleSession.session_state });
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+    act(() => handlers?.onConnected?.());
+
+    const options = agentSessionMocks.useAgentSessionWorkspace.mock.calls.at(-1)?.[1];
+    expect(
+      options?.refetchInterval({
+        state: { data: { session: consoleSession }, error: null },
+      } as never),
+    ).toBe(5_000);
+  });
+
+  it("invalidates the workspace query itself when the SSE stream reports a change", () => {
+    let handlers:
+      | {
+          onConnected?: (data?: { session_id: string; server_now_ms?: number }) => void;
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
+            server_now_ms?: number;
+            pubsub_seq?: number;
+          }) => void;
+          onError?: () => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onConnected?.();
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 99,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-workspace", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
+  it("fully refreshes the workspace when the SSE stream reports a replay gap", () => {
+    let onReplayGap:
+      | ((data: {
+          session_id: string;
+          requested_seq: number;
+          earliest_seq: number | null;
+          latest_seq: number;
+          reason: string;
+        }) => void)
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      onReplayGap = nextHandlers.onReplayGap;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      onReplayGap?.({
+        session_id: baseSession.id,
+        requested_seq: 3,
+        earliest_seq: 8,
+        latest_seq: 12,
+        reason: "cursor_too_old",
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
+  it("keeps runtime wakes off transcript query families", () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 0,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+    expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
+      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
+  it("coalesces rapid SSE changes behind the active workspace refresh", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 99,
+        thread_session_count: 1,
+      });
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 100,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
+
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+
+    await waitFor(() => {
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(14);
+    });
+  });
+
+  it("does not lose a runtime-only wake while a workspace refresh is active", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 1,
+        thread_session_count: 1,
+      });
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 2,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+
+    await waitFor(() => {
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(8);
+    });
+  });
+
+  it("refetches the transcript on ingest without waiting for an active runtime refresh", async () => {
+    // F6: during a live Codex turn runtime wakes keep a workspace refetch in
+    // flight. The ingest wake carrying a send's durable echo must reach the
+    // transcript now, not after that round, or a slow Runtime Host leaves the
+    // send on "Sending…" under the reply it already got.
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 0,
+        thread_session_count: 1,
+      });
+    });
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "ingest",
+        latest_event_id: 0,
+        thread_session_count: 1,
+      });
+    });
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
+      { cancelRefetch: false },
+    );
+
+    // The workspace round that predates the ingest still owes one more
+    // snapshot; the transcript round it did not share owes nothing.
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+    await waitFor(() => {
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(11);
+    });
+    const projectionCalls = queryClientMocks.invalidateQueries.mock.calls.filter(
+      ([filters]) => filters.queryKey[0] === "agent-session-projection-infinite",
+    );
+    expect(projectionCalls).toHaveLength(1);
+  });
+
+  it("applies SSE transcript previews to the workspace cache before refetch", () => {
+    let handlers:
+      | {
+          onConnected?: (data?: { session_id: string; server_now_ms?: number }) => void;
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
+            server_now_ms?: number;
+            pubsub_seq?: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: null;
+            } | null;
+          }) => void;
+          onError?: () => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 321,
+          text: "Immediate live preview",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: false,
+          stale_reason: null,
+        },
+      });
+    });
+
+    expect(queryClientMocks.setQueriesData).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-workspace", baseSession.id] },
+      expect.any(Function),
+    );
+
+    const updater = queryClientMocks.setQueriesData.mock.calls[0]?.[1];
+    const current = agentSessionMocks.useAgentSessionWorkspace.mock.results[0]?.value.data;
+    const updated = updater(current);
+    expect(updated.session.transcript_preview).toMatchObject({
+      text: "Immediate live preview",
+      event_id: 321,
+    });
+    expect(updated.thread.sessions[0].transcript_preview).toMatchObject({
+      text: "Immediate live preview",
+    });
+  });
+
+  it("lets streamed transcript previews render before query refetch work starts", () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: null;
+            } | null;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 321,
+          text: "Paint before refetch",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: false,
+          stale_reason: null,
+        },
+      });
+    });
+
+    expect(queryClientMocks.setQueriesData).toHaveBeenCalled();
+    expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it("does not defer refetch for backend-stale streamed transcript previews", () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: string | null;
+            } | null;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 321,
+          text: "Expired preview must not delay durable refetch",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T11:50:00.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: true,
+          stale_reason: "freshness_window_expired",
+        },
+      });
+    });
+
+    expect(queryClientMocks.setQueriesData).toHaveBeenCalled();
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-workspace", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
+  it("keeps SSE transcript previews visible when query data is still stale", async () => {
+    seedHookMocks(1);
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: null;
+            } | null;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 321,
+          text: "Preview from SSE before refetch wins",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: false,
+          stale_reason: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.events.map((event) => event.content_text)).toContain(
+        "Preview from SSE before refetch wins",
+      );
+    });
+  });
+
+  it("keeps the live reply until the ingest's transcript refetch lands", async () => {
+    // F6: the ingest wake carries no preview. Clearing on arrival blanked the
+    // reply for the whole projection fetch; retire it after that round.
+    seedHookMocks(1);
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: Record<string, unknown> & { session_id: string; latest_event_id: number }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const texts = () => result.current.events.map((event) => event.content_text);
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "transcript_preview",
+        latest_event_id: -3,
+        transcript_preview: {
+          event_id: 3,
+          text: "STRANGER_STEERED",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: true,
+          is_stale: false,
+        },
+      });
+    });
+    await waitFor(() => expect(texts()).toContain("STRANGER_STEERED"));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "ingest",
+        latest_event_id: 0,
+        transcript_preview: null,
+      });
+    });
+    expect(texts()).toContain("STRANGER_STEERED");
+
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+    await waitFor(() => expect(texts()).not.toContain("STRANGER_STEERED"));
+  });
+
+  it("waits to emit render telemetry until the latest SSE event is in the rendered projection", async () => {
+    let handlers:
+      | {
+          onConnected?: (data?: { session_id: string; server_now_ms?: number }) => void;
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
+            server_now_ms?: number;
+            pubsub_seq?: number;
+          }) => void;
+          onError?: () => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    seedHookMocks(80);
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 81,
+        thread_session_count: 1,
+        latest_event_emitted_at_ms: 1_779_220_000_000,
+        server_fanout_at_ms: 1_779_220_000_150,
+        server_now_ms: 1_779_220_000_100,
+        pubsub_seq: 7,
+      });
+    });
+
+    expect(renderBeaconMocks.emitRenderBeacon).not.toHaveBeenCalled();
+
+    seedHookMocks(81);
+    rerender();
+
+    await waitFor(() => {
+      expect(renderBeaconMocks.emitRenderBeacon).toHaveBeenCalledWith({
+        sessionId: baseSession.id,
+        latestEventId: 81,
+        latestEventEmittedAtMs: 1_779_220_000_000,
+        managed: false,
+        serverFanoutAtMs: 1_779_220_000_150,
+        clientReceivedAtMs: expect.any(Number),
+        pubsubSeq: 7,
+      });
+    });
+  });
+
+  it("emits state telemetry only after the canonical catalog commit is rendered", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            server_fanout_at_ms?: number | null;
+            catalog_commit_seq?: number | null;
+            pubsub_seq?: number;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    seedHookMocks(80);
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        server_fanout_at_ms: 1_779_220_000_150,
+        catalog_commit_seq: 42,
+        pubsub_seq: 8,
+      });
+    });
+
+    expect(renderBeaconMocks.emitStateRenderBeacon).not.toHaveBeenCalled();
+
+    seedHookMocks(80, {
+      session_state: {
+        ...makeSessionStateFacts({ activity: "thinking", observedAt: "2026-03-14T12:01:22.000Z" }),
+        commit_seq: 42,
+      },
+    });
+    rerender();
+
+    await waitFor(() => {
+      expect(renderBeaconMocks.emitStateRenderBeacon).toHaveBeenCalledWith({
+        sessionId: baseSession.id,
+        catalogCommitSeq: 42,
+        statePhase: "thinking",
+        stateObservedAtMs: Date.parse("2026-03-14T12:01:22.000Z"),
+        managed: false,
+        serverFanoutAtMs: 1_779_220_000_150,
+        clientReceivedAtMs: expect.any(Number),
+        pubsubSeq: 8,
+      });
+    });
+  });
+
+  it("stops polling settled sessions when the document is hidden", () => {
+    visibilityMocks.useDocumentVisible.mockReturnValue(false);
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      data: {
+        session: {
+          ...baseSession,
+          ended_at: "2026-03-14T12:10:00.000Z",
+          terminal_state: "session_ended",
+          status: "completed",
+          session_state: makeSessionStateFacts({ closed: true }),
+          runtime_display: { ...baseSession.runtime_display, lifecycle: "closed" },
+        },
+        thread: {
+          sessions: [
+            {
+              ...baseSession,
+              ended_at: "2026-03-14T12:10:00.000Z",
+              terminal_state: "session_ended",
+              status: "completed",
+            },
+          ],
+          head_session_id: baseSession.id,
+          root_session_id: baseSession.id,
+        },
+        projection: {
+          root_session_id: baseSession.id,
+          focus_session_id: baseSession.id,
+          head_session_id: baseSession.id,
+          path_session_ids: [baseSession.id],
+          items: [],
+          total: 0,
+          abandoned_events: 0,
+        },
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    const refetchInterval = agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1]?.refetchInterval;
+    expect(
+      refetchInterval?.({
+        state: {
+          data: {
+            session: {
+              ...baseSession,
+              ended_at: "2026-03-14T12:10:00.000Z",
+              terminal_state: "session_ended",
+              status: "completed",
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("retries auto-scroll until the timeline list becomes scrollable", async () => {
+    const queuedFrames = new Map<number, FrameRequestCallback>();
+    let nextFrameId = 1;
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback: FrameRequestCallback) => {
+        const frameId = nextFrameId++;
+        queuedFrames.set(frameId, callback);
+        return frameId;
+      });
+    const cancelAnimationFrameSpy = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation((frameId: number) => {
+        queuedFrames.delete(frameId);
+      });
+
+    try {
+      const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+      const list = makeScrollableTimelineList({
+        clientHeight: 320,
+        scrollHeight: 320,
+      });
+
+      document.body.appendChild(list.element);
+
+      act(() => {
+        result.current.registerTimelineList(list.element);
+      });
+
+      expect(list.scrollTop).toBe(0);
+      expect(queuedFrames.size).toBeGreaterThan(0);
+
+      list.setLayout({ scrollHeight: 1800 });
+
+      act(() => {
+        const [frameId, nextFrame] = queuedFrames.entries().next().value ?? [];
+        if (!nextFrame || typeof frameId !== "number") {
+          throw new Error("Expected a queued animation frame callback");
+        }
+        queuedFrames.delete(frameId);
+        nextFrame(16);
+      });
+
+      await waitFor(() => {
+        expect(list.scrollTop).toBeGreaterThan(0);
+      });
+    } finally {
+      requestAnimationFrameSpy.mockRestore();
+      cancelAnimationFrameSpy.mockRestore();
+    }
+  });
+
+  it("builds a stitched seam row for cloud child sessions", () => {
+    const parentSession = {
+      ...baseSession,
+      id: "session-parent",
+      thread_head_session_id: "session-child",
+      continuation_kind: "local",
+      continued_from_session_id: null,
+      origin_label: "Local",
+      started_at: "2026-03-19T16:40:00Z",
+    };
+    const childSession = {
+      ...baseSession,
+      id: "session-child",
+      thread_head_session_id: "session-child",
+      continuation_kind: "cloud",
+      continued_from_session_id: "session-parent",
+      origin_label: "Cloud",
+      started_at: "2026-03-19T16:45:00Z",
+    };
+
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      data: {
+        session: childSession,
+        thread: {
+          sessions: [parentSession, childSession],
+          head_session_id: childSession.id,
+          root_session_id: parentSession.id,
+        },
+        projection: {
+          root_session_id: parentSession.id,
+          focus_session_id: childSession.id,
+          head_session_id: childSession.id,
+          path_session_ids: [parentSession.id, childSession.id],
+          items: [
+            {
+              kind: "event",
+              session_id: parentSession.id,
+              timestamp: "2026-03-19T16:40:00Z",
+              event: makeEvents(1)[0],
+            },
+            {
+              kind: "seam",
+              session_id: childSession.id,
+              timestamp: "2026-03-19T16:45:00Z",
+              continued_from_session_id: parentSession.id,
+              continuation_kind: "cloud",
+              origin_label: "Cloud",
+              parent_origin_label: "Local",
+              parent_continuation_kind: "local",
+              branched_from_event_id: 12,
+            },
+          ],
+          total: 2,
+          abandoned_events: 0,
+        },
+      },
+      isLoading: false,
+      error: null,
+    });
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+      data: {
+        pages: [
+          {
+            page_offset: 0,
+            items: [
+              {
+                kind: "event",
+                session_id: parentSession.id,
+                timestamp: "2026-03-19T16:40:00Z",
+                event: makeEvents(1)[0],
+              },
+              {
+                kind: "seam",
+                session_id: childSession.id,
+                timestamp: "2026-03-19T16:45:00Z",
+                continued_from_session_id: parentSession.id,
+                continuation_kind: "cloud",
+                origin_label: "Cloud",
+                parent_origin_label: "Local",
+                parent_continuation_kind: "local",
+                branched_from_event_id: 12,
+              },
+            ],
+            total: 2,
+            abandoned_events: 0,
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(childSession.id));
+
+    expect(result.current.items[1]).toEqual({
+      kind: "seam",
+      seam: {
+        key: "seam:session-child:2026-03-19T16:45:00Z",
+        sessionId: "session-child",
+        label: "Continuation begins",
+        description: "Synced Local history above. New continuation messages below.",
+        timestamp: "2026-03-19T16:45:00Z",
+      },
+    });
+  });
+
+  it("keeps older projection pages above the live tail window in display order", () => {
+    const events = makeEvents(4);
+
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+      data: {
+        pages: [
+          {
+            page_offset: 2,
+            items: events.slice(2).map((event) => ({
+              kind: "event",
+              session_id: baseSession.id,
+              timestamp: event.timestamp,
+              event,
+            })),
+            total: events.length,
+            abandoned_events: 0,
+          },
+          {
+            page_offset: 0,
+            items: events.slice(0, 2).map((event) => ({
+              kind: "event",
+              session_id: baseSession.id,
+              timestamp: event.timestamp,
+              event,
+            })),
+            total: events.length,
+            abandoned_events: 0,
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(
+      result.current.items
+        .filter((item) => item.kind === "message")
+        .map((item) => item.event.id),
+    ).toEqual([1, 2, 3, 4]);
+  });
+
+  it("preserves evicted tail items when the live window shifts forward", () => {
+    const events = makeEvents(5);
+    const olderPage = {
+      page_offset: 0,
+      items: events.slice(0, 2).map((event) => ({
+        kind: "event",
+        session_id: baseSession.id,
+        timestamp: event.timestamp,
+        event,
+      })),
+      total: events.length,
+      abandoned_events: 0,
+    };
+    const initialTailPage = {
+      page_offset: 2,
+      items: events.slice(2, 4).map((event) => ({
+        kind: "event",
+        session_id: baseSession.id,
+        timestamp: event.timestamp,
+        event,
+      })),
+      total: events.length,
+      abandoned_events: 0,
+    };
+    const shiftedTailPage = {
+      page_offset: 3,
+      items: events.slice(3, 5).map((event) => ({
+        kind: "event",
+        session_id: baseSession.id,
+        timestamp: event.timestamp,
+        event,
+      })),
+      total: events.length,
+      abandoned_events: 0,
+    };
+
+    let currentPages = [olderPage, initialTailPage];
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockImplementation(() => ({
+      data: {
+        pages: currentPages,
+      },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    }));
+
+    const { result, rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(
+      result.current.items
+        .filter((item) => item.kind === "message")
+        .map((item) => item.event.id),
+    ).toEqual([1, 2, 3, 4]);
+
+    currentPages = [olderPage, shiftedTailPage];
+    rerender();
+
+    expect(
+      result.current.items
+        .filter((item) => item.kind === "message")
+        .map((item) => item.event.id),
+    ).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("derives highlight selection from the projection model without mutating manual selection", () => {
+    const { result, rerender } = renderHook(
+      ({ highlightEventId }: { highlightEventId: number | null }) =>
+        useSessionWorkspace(baseSession.id, { highlightEventId }),
+      {
+        initialProps: { highlightEventId: null },
+      },
+    );
+
+    act(() => {
+      result.current.selectKey("message:4");
+    });
+
+    expect(result.current.selectedKey).toBe("message:4");
+
+    rerender({ highlightEventId: 2 });
+    expect(result.current.selectedKey).toBe("message:2");
+
+    rerender({ highlightEventId: null });
+    expect(result.current.selectedKey).toBe("message:4");
+  });
+
+  // Search/filter state tests moved to TimelinePane component tests —
+  // that state now lives inside TimelinePane, not the hook.
+});

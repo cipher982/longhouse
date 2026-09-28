@@ -1,13 +1,13 @@
 import type {
   AgentSessionProjectionItem,
   AgentSessionWorkspaceResponse,
-} from "../../services/api/agents";
+} from "@/shared/api/agents";
 import type {
   LedgerConnection,
   LedgerReceiptMark,
   LedgerTone,
   SessionLedgerState,
-} from "../../components/session-workspace/SessionLedger";
+} from "@/features/session/SessionLedger";
 
 export interface SessionCapture {
   schema: "longhouse.live-status-capture.v1";

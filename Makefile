@@ -337,7 +337,7 @@ historical-convergence-check: ## Read-only historical publication diagnosis or b
 	@cd server && uv run python -m zerg.cli.historical_convergence $(ARGS)
 
 test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
-	@cd web && bun run test -- --run src/components/session-workspace/__tests__/RenderTelemetryPanel.test.tsx src/pages/__tests__/SessionDetailPage.test.tsx
+	@cd web && bun run test -- --run src/features/session/__tests__/RenderTelemetryPanel.test.tsx src/features/session/__tests__/SessionDetailPage.test.tsx
 	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
 	DERIVED_DATA_PATH="$${IOS_DERIVED_DATA_PATH:-$$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-MobileChat}"; \
@@ -830,7 +830,7 @@ generate-provider-capabilities: ## @internal Regenerate the web provider capabil
 	@python3 scripts/generate/provider_capabilities_ts.py
 
 validate-provider-capabilities: ## @internal Guard the generated web provider capability claims
-	@# web/src/lib/providers.ts hand-mirrored the contract and drifted twice.
+	@# web/src/shared/lib/providers.ts hand-mirrored the contract and drifted twice.
 	@python3 scripts/generate/provider_capabilities_ts.py --check
 
 validate-provider-census: ## @internal Guard the provider-name-literal census artifact

@@ -8,11 +8,11 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
-import { ProviderGlyph } from "../../components/ProviderGlyph";
-import { TimelinePane } from "../../components/session-workspace/TimelinePane";
-import { getProviderLabel } from "../../lib/providers";
-import { getSessionCardText } from "../../lib/sessionLabels";
-import { buildTimelineModel } from "../../lib/sessionWorkspace";
+import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
+import { TimelinePane } from "@/features/session/TimelinePane";
+import { getProviderLabel } from "@/shared/lib/providers";
+import { getSessionCardText } from "@/shared/session/sessionLabels";
+import { buildTimelineModel } from "@/shared/session/model";
 import { LiveWorkRibbon } from "./LiveWorkRibbon";
 import {
   buildReplayFrame,
@@ -21,8 +21,8 @@ import {
   SCENES,
 } from "./model";
 import type { LiveSurface, Scene, SessionCapture } from "./types";
-import "../../styles/tokens.css";
-import "../../styles/session-workspace.css";
+import "@/app/styles/tokens.css";
+import "@/features/session/session-workspace.css";
 import "./App.css";
 
 function useMediaQuery(query: string): boolean {

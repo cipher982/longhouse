@@ -2,7 +2,7 @@
  * The demo script: single source of truth for the hero demo narrative.
  *
  * Pure data — no React, no Remotion. Two renderers consume it:
- *   - web/src/components/landing/demo/  (live DOM hero on the landing page)
+ *   - web/src/features/marketing/hero-demo/  (live DOM hero on the landing page)
  *   - video/src/compositions/ControlRoom.tsx  (mp4/OG export lane)
  *
  * Re-records change take-coupled numbers HERE and nowhere else.

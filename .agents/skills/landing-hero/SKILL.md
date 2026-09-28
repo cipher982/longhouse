@@ -64,13 +64,13 @@ providers.yml (pinned source + auth mode + sentinels)
 - `video/src/demo/recordings.ts` — typed grid-timeline exports
 - `video/src/terminal/TerminalGrid.tsx` — the grid renderer (pure React,
   shared by both renderers; no Remotion imports, keep it that way)
-- `web/src/components/landing/demo/` — the shipping hero: `HeroDemo.tsx`
+- `web/src/features/marketing/hero-demo/` — the shipping hero: `HeroDemo.tsx`
   (stage layers, relay, caption, seek dots), `heroLayout.ts` (rects per
   width: deck, timeline, thumbs, terminal, phone, relay path),
   `HeroTimeline.tsx`, `HeroPhone.tsx`, `useDemoClock.ts` (rAF loop,
   offscreen/hidden pause, reduced-motion poster freeze, `?demoT=` freeze),
   `ResponsiveTerminal.tsx` (ResizeObserver -> cell metrics)
-- `web/src/components/landing/HeroSection.tsx` — copy + HeroDemo mount
+- `web/src/features/marketing/landing/HeroSection.tsx` — copy + HeroDemo mount
 - `make landing-screenshots` — regenerates the "Every session" showcase
   images (desktop 16:9 + phone layout, webp + png masters) from the current
   web UI via `ui-capture` scenes `landing`/`landing-search`/`landing-session`
@@ -180,7 +180,7 @@ recording scrolling text away).
 Verify loop (never skip; this is the vision-check rule):
 1. `make hero-frames` and LOOK at both sheets and folds. Abort real API
    calls with a URL predicate (`url.pathname.startsWith("/api/")`) — a
-   `**/api/**` glob also swallows Vite's `src/services/api/*` modules and
+   `**/api/**` glob also swallows Vite's `src/shared/api/*` modules and
    blanks the page; the dev proxy otherwise forwards `/api` to the
    personal instance.
 2. `make test-frontend`; `make qa-landing-live` (layout + handoff causality).

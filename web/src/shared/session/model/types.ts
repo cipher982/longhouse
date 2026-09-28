@@ -1,0 +1,142 @@
+import type { AgentEvent, AgentEventId, AgentSessionTranscriptAction, AgentToolPresentation } from "@/shared/api/agents";
+
+export type EventFilter = "all" | "messages" | "tools";
+
+/**
+ * One worker transcript a tool call spawned. A subagent is a turn artifact of
+ * its parent, not a session: it is hidden from the timeline and reachable only
+ * from the row that spawned it.
+ */
+export type SubagentChild = {
+  session_id: string;
+  provider: string;
+  parent_tool_call_id: string | null;
+  run_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  user_messages: number;
+  assistant_messages: number;
+  tool_calls: number;
+  title: string | null;
+  first_user_message_preview: string | null;
+  last_visible_text_preview: string | null;
+};
+
+export type ToolInteraction = {
+  key: string;
+  toolName: string;
+  /** Workers this call spawned, when the provider bound them to it. */
+  children?: SubagentChild[];
+  callEvent: AgentEvent | null;
+  resultEvent: AgentEvent | null;
+  pairing: "id" | "fifo" | "orphan" | "pending";
+  anchorId: AgentEventId;
+  timestamp: string;
+  presentation?: AgentToolPresentation | null;
+};
+
+/**
+ * Run of 2+ consecutive exploration-eligible tool calls (search/read/list).
+ * Collapses into a semantic summary chip; expand reveals each call.
+ */
+export type ActivityGroup = {
+  key: string;
+  interactions: ToolInteraction[];
+  timestamp: string;
+  anchorId: AgentEventId;
+};
+
+export type TimelineSeam = {
+  key: string;
+  sessionId: string;
+  label: string;
+  description: string;
+  timestamp: string;
+};
+
+export type TimelineAction = {
+  key: string;
+  action: AgentSessionTranscriptAction;
+  label: string;
+  timestamp: string;
+};
+
+export type TimelineItem =
+  | { kind: "seam"; seam: TimelineSeam }
+  | { kind: "action"; action: TimelineAction }
+  | { kind: "provider_notification"; event: AgentEvent }
+  | { kind: "reasoning"; event: AgentEvent }
+  | { kind: "message"; event: AgentEvent }
+  | { kind: "tool"; interaction: ToolInteraction }
+  | { kind: "activity_group"; group: ActivityGroup };
+
+export type TimelineSelection =
+  | {
+      kind: "provider_notification";
+      key: string;
+      rowId: string;
+      event: AgentEvent;
+    }
+  | {
+      kind: "reasoning";
+      key: string;
+      rowId: string;
+      event: AgentEvent;
+    }
+  | {
+      kind: "message";
+      key: string;
+      rowId: string;
+      event: AgentEvent;
+    }
+  | {
+      kind: "tool";
+      key: string;
+      rowId: string;
+      interaction: ToolInteraction;
+      parentGroupKey: string | null;
+    }
+  | {
+      kind: "activity_group";
+      key: string;
+      rowId: string;
+      group: ActivityGroup;
+    };
+
+export type TimelineModel = {
+  events: AgentEvent[];
+  items: TimelineItem[];
+  toolItems: ToolInteraction[];
+  activityGroups: ActivityGroup[];
+  selectionMap: Map<string, TimelineSelection>;
+  eventIdToSelectionKey: Map<AgentEventId, string>;
+  eventIdToRowId: Map<AgentEventId, string>;
+};
+
+export type SessionInteractionMode =
+  | "managed_local"
+  | "managed_local_unavailable"
+  | "unsupported";
+
+export type ManagedLaunchSuggestion = {
+  title: string;
+  body: string;
+  command: string;
+};
+
+export type SessionInteractionCapabilities = {
+  mode: SessionInteractionMode;
+  providerLabel: string;
+  sourceOriginLabel: string;
+  isManagedLocalSession: boolean;
+  hostReattachAvailable: boolean;
+  managedLaunchSuggestion: ManagedLaunchSuggestion | null;
+  capabilityLabel: string;
+  composerDisabledReason: string | null;
+  submitLabel: string;
+  placeholder: string;
+  notice: {
+    title: string;
+    body: string;
+  } | null;
+};

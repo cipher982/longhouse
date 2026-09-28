@@ -17,7 +17,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 # Desktop views at 16:9 to match the showcase frame, and the app's own phone
 # layout for small screens; both at 2x for retina. Keep in step with the
-# aspect ratios in .app-screenshot-content (web/src/styles/landing.css).
+# aspect ratios in .app-screenshot-content (web/src/features/marketing/landing/landing.css).
 DESKTOP="1152x648@2"
 PHONE="390x720@2"
 
@@ -44,4 +44,4 @@ capture session-detail landing-session session-detail-preview "$DESKTOP"
 capture timeline landing timeline-preview-mobile "$PHONE"
 capture timeline landing-search search-preview-mobile "$PHONE"
 capture session-detail landing-session session-detail-preview-mobile "$PHONE"
-echo "Done. Bump the ?v= stamps in web/src/components/landing/ProductShowcase.tsx."
+echo "Done. Bump the ?v= stamps in web/src/features/marketing/landing/ProductShowcase.tsx."

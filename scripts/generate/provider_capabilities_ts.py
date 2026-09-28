@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the web's provider capability claims from the provider contract.
 
-`web/src/lib/providers.ts` held a hand-written `LAUNCH_PROVIDER_SUPPORT` table
+`web/src/shared/lib/providers.ts` held a hand-written `LAUNCH_PROVIDER_SUPPORT` table
 whose header simultaneously called itself "single source of truth for provider
 capability claims" and said it "mirrors managed_provider_contracts.json". Both
 cannot be true, and the mirror has drifted twice: `4402f99ea` fixed a matrix
@@ -106,7 +106,7 @@ def render_ts() -> str:
         "//",
         "// Only fields the provider contract can answer live here. Marketing name,",
         "// archive visibility, hooks support and telemetry quality have no contract",
-        "// counterpart and remain hand-maintained in ../lib/providers.ts.",
+        "// counterpart and remain hand-maintained in ../shared/lib/providers.ts.",
         "",
         f"export type GeneratedProviderId = {ids};",
         "",
