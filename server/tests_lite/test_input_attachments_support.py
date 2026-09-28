@@ -83,3 +83,13 @@ def test_normalize_strips_the_engine_attachment_block_so_receipts_still_link():
     )
     # Ordinary text is untouched beyond whitespace folding.
     assert normalize_input_text("  a \n b ") == "a b"
+
+
+def test_an_image_marker_in_the_echo_still_links_to_the_typed_text():
+    """OMP/Pi render an attached image as a trailing row marker; the receipt
+    holds only what the user typed, so the echo must still match it."""
+
+    assert normalize_input_text("What color is this?\n\n[image attached: image/webp]") == "What color is this?"
+    assert normalize_input_text("two\n\n[image attached: image/png]\n\n[image attached]") == "two"
+    # A user who literally types the marker mid-sentence still links on it.
+    assert normalize_input_text("see [image attached] above") == "see [image attached] above"

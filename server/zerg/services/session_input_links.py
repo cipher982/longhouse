@@ -44,9 +44,15 @@ _REPORT_EVIDENCE_BLOCK = re.compile(
 )
 
 
+# The engine renders an attached image in a user row as a trailing marker; the
+# receipt holds only the text the user typed.
+_IMAGE_MARKERS = re.compile(r"(?:\s*\[image attached(?:: [^\]\r\n]+)?\])+\s*\Z")
+
+
 def normalize_input_text(value: str | None) -> str:
     """Whitespace-insensitive equality, removing only engine-added prompt tails."""
     without_engine_blocks = _REPORT_EVIDENCE_BLOCK.sub("", _ATTACHMENT_BLOCK.sub("", value or ""))
+    without_engine_blocks = _IMAGE_MARKERS.sub("", without_engine_blocks)
     return _WHITESPACE.sub(" ", without_engine_blocks).strip()
 
 

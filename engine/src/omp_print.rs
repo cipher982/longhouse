@@ -755,12 +755,17 @@ pub fn build_omp_args(
     if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--model".into(), model.into()]);
     }
-    args.extend(["-p".into(), "--".into()]);
-    // `@<path>` messages are file attachments; images become image content.
+    args.push("-p".into());
+    // `@<path>` arguments before `--` are file arguments: OMP folds them into
+    // the first user message as image content. After `--` an `@<path>` is a
+    // message of its own, so an image and its text used to reach the model
+    // as two separate user turns, the path answered first.
     for image in image_paths {
         args.push(format!("@{}", image.to_string_lossy()));
     }
     if !prompt.trim().is_empty() {
+        // `--` keeps a prompt that starts with `-` from reading as a flag.
+        args.push("--".into());
         args.push(prompt.into());
     }
     args
@@ -1515,7 +1520,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_attachments_are_at_file_messages_after_the_separator() {
+    fn image_attachments_are_file_arguments_before_the_separator() {
         let args = build_omp_args(
             "what color",
             &[PathBuf::from("/w/.longhouse/attachments/r/a.png")],
@@ -1529,8 +1534,8 @@ mod tests {
             tail,
             [
                 "-p",
-                "--",
                 "@/w/.longhouse/attachments/r/a.png",
+                "--",
                 "what color"
             ]
         );
@@ -1544,7 +1549,7 @@ mod tests {
         );
         assert_eq!(
             &image_only[image_only.len() - 2..],
-            ["--", "@/w/.longhouse/attachments/r/a.png"]
+            ["-p", "@/w/.longhouse/attachments/r/a.png"]
         );
     }
 

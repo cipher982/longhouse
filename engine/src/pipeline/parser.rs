@@ -2748,6 +2748,33 @@ fn pi_value_text(value: &Value) -> Option<String> {
     }
 }
 
+/// OMP folds an `@<image>` file argument into the user message as a
+/// `<file name="...">[Image: ...]</file>` line beside the image block. The
+/// image block already becomes the row's marker and media, so the tag (and
+/// the staged path it names) is not something the user wrote.
+fn strip_omp_image_file_tags(text: &str) -> String {
+    const OPEN: &str = "<file name=\"";
+    const CLOSE: &str = "</file>";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        let after_open = &rest[start..];
+        let Some(tag_end) = after_open.find("\">") else { break };
+        let body = &after_open[tag_end + 2..];
+        let Some(close) = body.find(CLOSE) else { break };
+        if !body[..close].starts_with("[Image:") {
+            out.push_str(&rest[..start + tag_end + 2]);
+            rest = body;
+            continue;
+        }
+        out.push_str(&rest[..start]);
+        rest = &body[close + CLOSE.len()..];
+        rest = rest.strip_prefix('\n').unwrap_or(rest);
+    }
+    out.push_str(rest);
+    out
+}
+
 fn pi_image_placeholder(value: &Value, result: bool) -> Option<String> {
     if value.get("type").and_then(Value::as_str) != Some("image") {
         return None;
@@ -2849,8 +2876,9 @@ fn extract_pi_message_events(
                     match block.get("type").and_then(Value::as_str).unwrap_or("") {
                         "text" => {
                             if let Some(text) = block.get("text").and_then(Value::as_str) {
+                                let text = strip_omp_image_file_tags(text);
                                 if !text.trim().is_empty() {
-                                    parts.push(text.to_string());
+                                    parts.push(text);
                                 }
                             }
                         }
@@ -6420,6 +6448,18 @@ mod tests {
             user_events[0].content_text.as_deref(),
             Some("look at this\n\n[image attached: image/png]")
         );
+    }
+
+    #[test]
+    fn omp_image_file_tag_is_not_user_text() {
+        let text = "<file name=\"/w/.longhouse/attachments/r/a.jpg\">[Image: original 16x16, displayed at 200x200.]</file>\nWhat color is this?";
+        assert_eq!(strip_omp_image_file_tags(text), "What color is this?");
+        let two = "<file name=\"/a.png\">[Image: a]</file>\n<file name=\"/b.png\">[Image: b]</file>\nCompare";
+        assert_eq!(strip_omp_image_file_tags(two), "Compare");
+        // A text file's contents are what the user attached; keep them.
+        let text_file = "<file name=\"/notes.md\">hello</file>\nsummarize";
+        assert_eq!(strip_omp_image_file_tags(text_file), text_file);
+        assert_eq!(strip_omp_image_file_tags("plain words"), "plain words");
     }
 
     #[test]
