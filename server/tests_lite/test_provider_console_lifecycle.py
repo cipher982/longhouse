@@ -945,3 +945,21 @@ def test_source_retention_rejects_a_source_changed_during_copy(tmp_path, monkeyp
 
     assert retained[0]["retained"] is False
     assert source.read_bytes() == b"original source\nlate source bytes\n"
+
+
+def test_steer_cell_requires_every_steer_fact_and_stays_out_of_the_turn_start_gate():
+    passing = {
+        "steer_accepted": True,
+        "same_run_completed": True,
+        "steer_marker_answered": True,
+        "no_new_turn": True,
+        "tool_ran_to_completion": True,
+    }
+    assert lifecycle.console_steer_assertion(passing) is True
+    for fact in passing:
+        assert lifecycle.console_steer_assertion(passing | {fact: False}) is False, fact
+    assert lifecycle.console_steer_assertion(None) is False
+    # A steer failure never reaches the strict session.turn.start assertion.
+    assert "steer" not in " ".join(lifecycle.OBSERVED_ACTIVITY)
+    assert lifecycle.STEER_ASSERTION_ID != lifecycle.ASSERTION_ID
+    assert (lifecycle.STEER_ASSERTION_ID, None) in lifecycle.REGISTRATION.assertion_cells

@@ -33,10 +33,11 @@ _PROFILE = identity.IdentityProfile(
 )
 REGISTRATION = ProducerRegistration(
     producer_id="pi.console_tool.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=SCENARIO_ID,
-    scenario_revision=4,
-    assertion_cells=((ASSERTION_ID, None),),
+    # 5: the shared lifecycle adds a mid-turn steer step (its own cell).
+    scenario_revision=5,
+    assertion_cells=((ASSERTION_ID, None), (lifecycle.STEER_ASSERTION_ID, None)),
     providers=("pi",),
     platforms=("linux", "darwin"),
     architectures=("x86_64", "aarch64"),
@@ -106,8 +107,12 @@ def run_pi_console_tool(args: argparse.Namespace) -> dict[str, object]:
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
         "generated_at": now(),
+        # Status tracks the Console tool contract only; the steer cell is
+        # reported beside it and never gates it.
         "status": "pass" if generic.get("status") == "pass" and all(assertions.values()) else "fail",
-        "assertions": assertions,
+        "assertions": assertions
+        | {lifecycle.STEER_ASSERTION_ID: (generic.get("assertions") or {}).get(lifecycle.STEER_ASSERTION_ID) is True},
+        "steer": generic.get("steer"),
         "provider_binary": generic.get("provider_binary"),
         "observation": observation,
         "generic_lifecycle_result": generic,

@@ -203,6 +203,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "session.resume.helm",
         "session.transcript.search",
         "session.turn.start",
+        "session.turn.steer",
     }
     # Codex alone carries session.branch.console: branching forks the parent's
     # thread, and only Codex has a proven fork surface. It is a separate cell
@@ -214,6 +215,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "session.resume.helm",
         "session.transcript.search",
         "session.turn.start",
+        "session.turn.steer",
     }
     assert set(opencode.capabilities) == turn_boundary | {
         "session.launch.helm",

@@ -179,6 +179,33 @@
             }
           ]
         },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "codex_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "516ad7fa8be4be7b2cec77cc4846b906fb50c5bbc1a56246e84e453eca66990e"
+            }
+          ]
+        },
         "session.turn.start": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -203,7 +230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
+              "oracle_digest": "516ad7fa8be4be7b2cec77cc4846b906fb50c5bbc1a56246e84e453eca66990e"
             }
           ]
         },
@@ -1286,6 +1313,33 @@
             }
           ]
         },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "claude_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "516ad7fa8be4be7b2cec77cc4846b906fb50c5bbc1a56246e84e453eca66990e"
+            }
+          ]
+        },
         "session.turn.start": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -1310,7 +1364,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
+              "oracle_digest": "516ad7fa8be4be7b2cec77cc4846b906fb50c5bbc1a56246e84e453eca66990e"
             },
             {
               "id": "real_print_marker_returned",
@@ -1960,7 +2014,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
+              "oracle_digest": "516ad7fa8be4be7b2cec77cc4846b906fb50c5bbc1a56246e84e453eca66990e"
             }
           ]
         },
@@ -3075,7 +3129,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
+              "oracle_digest": "516ad7fa8be4be7b2cec77cc4846b906fb50c5bbc1a56246e84e453eca66990e"
             }
           ]
         },
@@ -3926,6 +3980,33 @@
             }
           ]
         },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "pi_console_tool_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_console_tool_producer.py",
+              "minimum_scenario_revision": 5,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ba9aea95ee312b87f142388be097b0d1f7ab25794d267c0d41a8a8603e1a019e"
+            }
+          ]
+        },
         "session.turn.start": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -3949,7 +4030,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b8ab9c8b473a1fc9a649bbccaeec4cf0618b0dc878a597de8c63497a45e7c9d7"
+              "oracle_digest": "ba9aea95ee312b87f142388be097b0d1f7ab25794d267c0d41a8a8603e1a019e"
             }
           ]
         }
@@ -4681,6 +4762,33 @@
             }
           ]
         },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "omp_console_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_console_producer.py",
+              "minimum_scenario_revision": 9,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "19fce8f2e04e9ea2540969cf81e2dc81e54b7b798ee6f43cd36097943419b21f"
+            }
+          ]
+        },
         "session.turn.start": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -4704,7 +4812,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d3bf569d71f05c4e71984ea5734d20b74e3f2ef8d965b617c283fc15b91fb3f1"
+              "oracle_digest": "19fce8f2e04e9ea2540969cf81e2dc81e54b7b798ee6f43cd36097943419b21f"
             }
           ]
         }
@@ -4802,7 +4910,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "848ac1f49de530b20e1715bc19969daea6f9bc9dd43f3043bb11347915904abc"
+      "adapter_digest": "bb94a49da1c7ca2db7934f05ff6e3efabc15f1cbf43145112e12f83a9e2c11a2"
     }
   ]
 }

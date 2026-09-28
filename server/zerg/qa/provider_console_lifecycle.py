@@ -52,6 +52,11 @@ INTERRUPT_UNSUPPORTED: frozenset[str] = frozenset()
 # their own Runtime Host/claim contracts.
 INTERRUPT_OUTPUT_TERMINAL_PROVIDERS = frozenset({"omp"})
 ASSERTION_ID = "console_adapter_release_contract_preserved"
+# Mid-turn steer is its own cell: it never folds into ASSERTION_ID, which is
+# the strict gate on session.turn.start, so a steer failure cannot switch off
+# Console turns (docs/specs/console-full-control.md, A2).
+STEER_ASSERTION_ID = "console_turn_steer_preserved"
+STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp"})
 SUPPORTED_VARIANT = "interrupt_supported"
 UNSUPPORTED_VARIANT = "interrupt_unsupported"
 SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
@@ -94,14 +99,16 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=14,
+    producer_revision=15,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
-    scenario_revision=5,
+    # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
+    scenario_revision=6,
     assertion_cells=(
         (ASSERTION_ID, SUPPORTED_VARIANT),
         (ASSERTION_ID, UNSUPPORTED_VARIANT),
+        (STEER_ASSERTION_ID, None),
     ),
     providers=PROVIDERS,
     platforms=("linux",),
@@ -1720,6 +1727,105 @@ def console_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str,
     return {ASSERTION_ID: all(observation.get(fact) is True for fact in OBSERVED_ACTIVITY)}
 
 
+def console_steer_assertion(steer: Mapping[str, object] | None) -> bool:
+    """A steer entered the running turn: the same run answered it, no new turn
+    was created, and the tool it interrupted nothing (its output is present)."""
+    return bool(
+        steer
+        and steer.get("steer_accepted") is True
+        and steer.get("same_run_completed") is True
+        and steer.get("steer_marker_answered") is True
+        and steer.get("no_new_turn") is True
+        and steer.get("tool_ran_to_completion") is True
+    )
+
+
+def _run_steer_step(
+    *,
+    api_url: str,
+    token: str,
+    session_id: str,
+    provider: str,
+    longhouse_home: Path,
+    claims: list[dict[str, Any]],
+    flush_for_projection: Any,
+) -> dict[str, Any]:
+    """Steer a running Console turn mid-tool and record what landed where."""
+
+    tag = uuid4().hex
+    tool_marker = f"LH_{provider.upper()}_STEER_TOOL_{tag}"
+    first_marker = f"LH_{provider.upper()}_STEER_FIRST_{tag}"
+    steer_marker = f"LH_{provider.upper()}_STEERED_{tag}"
+    message = f"Use the shell tool to run `sleep 15 && echo {tool_marker}`, then reply with exactly {first_marker} and nothing else."
+    request_id = f"console-steer-turn-{uuid4()}"
+    turn = _start_turn(api_url=api_url, token=token, session_id=session_id, message=message, request_id=request_id)
+    claim_path = _claim_path(longhouse_home, str(turn["run_id"]))
+    active = _wait_claim(claim_path, states=frozenset({"spawned", "terminal", "failed"}), timeout=60)
+    claims.append(active)
+    receipt: dict[str, Any] = {
+        "run_id": turn.get("run_id"),
+        "turn_id": turn.get("turn_id"),
+        "tool_marker": tool_marker,
+        "steer_marker": steer_marker,
+    }
+    if active.get("state") != "spawned":
+        receipt.update(status="fail", reason="turn_finished_before_steer")
+        return receipt
+    # Give the model time to plan and start the tool; a steer that lands during
+    # planning is still a valid steer (next boundary), and the tool check below
+    # proves nothing in flight was cancelled either way.
+    time.sleep(6)
+    steer_request_id = f"console-steer-{uuid4()}"
+    try:
+        steered = _request(
+            api_url,
+            token,
+            "POST",
+            f"/api/agents/sessions/{session_id}/input",
+            {
+                "text": f"Change of plan: when the command finishes, reply with exactly {steer_marker} and nothing else.",
+                "intent": "steer",
+                "client_request_id": steer_request_id,
+            },
+        )
+    except RuntimeError as exc:
+        steered = {"error": str(exc)[:500]}
+    receipt["steer_response"] = {key: steered.get(key) for key in ("outcome", "disposition", "turn", "error")}
+    receipt["steer_accepted"] = steered.get("outcome") == "sent" and steered.get("disposition") == "accepted"
+    receipt["no_new_turn"] = not steered.get("turn")
+    terminal = _wait_claim(claim_path, states=frozenset({"terminal", "failed"}), timeout=180)
+    claims[-1] = terminal
+    _wait_turn_terminal(
+        api_url=api_url,
+        token=token,
+        session_id=session_id,
+        message=message,
+        request_id=request_id,
+        turn_id=str(turn["turn_id"]),
+        run_id=str(turn["run_id"]),
+        timeout=180,
+    )
+    receipt["same_run_completed"] = (terminal.get("result") or {}).get("terminal_state") == "run_completed" and str(
+        terminal.get("run_id")
+    ) == str(turn["run_id"])
+    flush_for_projection("console-steer-turn")
+    try:
+        receipt["steer_marker_answered"] = len(_wait_exact_assistant_marker(api_url, token, session_id, steer_marker, timeout=120)) == 1
+    except RuntimeError as exc:
+        receipt["steer_marker_answered"] = False
+        receipt["steer_marker_error"] = str(exc)[:300]
+    events = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=200").get("events") or []
+    receipt["tool_ran_to_completion"] = any(
+        isinstance(event, dict)
+        and event.get("role") != "user"
+        and tool_marker in event_text(event)
+        and first_marker not in event_text(event)
+        for event in events
+    )
+    receipt["status"] = "pass" if console_steer_assertion(receipt) else "fail"
+    return receipt
+
+
 def _observation_from_receipts(
     *,
     dispatch: Mapping[str, object],
@@ -2181,6 +2287,21 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 raise RuntimeError("Console Pi continuation reused the first run identity")
             write_json(root / "console-continuation-receipt.json", continuation_receipt)
 
+        # Before the interrupt step: OMP's interrupt evidence requires the
+        # post-interrupt turn to be the last output in the retained source.
+        steer_receipt: dict[str, Any] | None = None
+        if provider in STEER_PROVIDERS:
+            steer_receipt = _run_steer_step(
+                api_url=api_url,
+                token=token,
+                session_id=session_id,
+                provider=provider,
+                longhouse_home=longhouse_home,
+                claims=claims,
+                flush_for_projection=flush_for_projection,
+            )
+            write_json(root / "steer-contract-receipt.json", steer_receipt)
+
         interrupt_marker = f"LH_{provider.upper()}_INTERRUPT_{uuid4().hex}"
         interrupt_message = f"Use the shell tool to run `sleep 8`, then reply with exactly {interrupt_marker} and nothing else."
         interrupt_request_id = f"console-interrupt-{uuid4()}"
@@ -2561,7 +2682,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "evidence_class": "live_token",
             "generated_at": now(),
             "status": "pass" if assertion else "fail",
-            "assertions": {ASSERTION_ID: assertion},
+            "assertions": {ASSERTION_ID: assertion}
+            | ({STEER_ASSERTION_ID: console_steer_assertion(steer_receipt)} if provider in STEER_PROVIDERS else {}),
+            "steer": steer_receipt,
             "provider_binary": binary_receipt,
             "observation": observation,
             "artifact_manifest": artifact_manifest(root),

@@ -355,8 +355,8 @@ def test_pi_native_tool_receipt_accepts_native_projected_id_equality(tmp_path) -
 def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
 
-    assert registration["producer_revision"] == 4
-    assert registration["scenario_revision"] == 4
+    assert registration["producer_revision"] == 5
+    assert registration["scenario_revision"] == 5
     assert "native_tool_receipt" in registration["required_artifacts"]
 
 

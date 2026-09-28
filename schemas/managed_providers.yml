@@ -150,6 +150,23 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+    # Mid-turn steer on a running Console turn (docs/specs/console-full-control.md).
+    # `ceiling`, not `strict`: a steer failure never gates session.turn.start.
+    session.turn.steer:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.turn_steer
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: console_turn_steer_preserved
+        scenario_id: codex_console_adapter_lifecycle
+        oracle_source: server/zerg/qa/provider_console_lifecycle.py
+        minimum_scenario_revision: 6
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.turn.start:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -788,6 +805,23 @@ providers:
       - id: claude_helm_terminate_owned
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
+        minimum_scenario_revision: 6
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+    # Mid-turn steer on a running Console turn (docs/specs/console-full-control.md).
+    # `ceiling`, not `strict`: a steer failure never gates session.turn.start.
+    session.turn.steer:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.turn_steer
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: console_turn_steer_preserved
+        scenario_id: claude_console_adapter_lifecycle
+        oracle_source: server/zerg/qa/provider_console_lifecycle.py
         minimum_scenario_revision: 6
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
@@ -2414,6 +2448,23 @@ providers:
         id: pi_helm_cold_resume_exact_file
       - <<: *pi_helm_lifecycle_assertion
         id: pi_helm_stale_owner_refused
+    # Mid-turn steer on a running Console turn (docs/specs/console-full-control.md).
+    # `ceiling`, not `strict`: a steer failure never gates session.turn.start.
+    session.turn.steer:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.pi.turn_steer
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: console_turn_steer_preserved
+        scenario_id: pi_console_tool_lifecycle
+        oracle_source: server/zerg/qa/pi_console_tool_producer.py
+        minimum_scenario_revision: 5
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.turn.start:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -2851,6 +2902,23 @@ providers:
         id: omp_helm_cold_resume_exact_file
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_stale_owner_refused
+    # Mid-turn steer on a running Console turn (docs/specs/console-full-control.md).
+    # `ceiling`, not `strict`: a steer failure never gates session.turn.start.
+    session.turn.steer:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.omp.turn_steer
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: console_turn_steer_preserved
+        scenario_id: omp_console_lifecycle
+        oracle_source: server/zerg/qa/omp_console_producer.py
+        minimum_scenario_revision: 9
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.turn.start:
       disposition: implemented
       reason_code: semantic_proof_missing

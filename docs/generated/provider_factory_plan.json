@@ -2408,6 +2408,19 @@
           "satisfiable": true
         },
         {
+          "assertion_id": "console_turn_steer_preserved",
+          "variant": null,
+          "scenario_id": "omp_console_lifecycle",
+          "minimum_scenario_revision": 9,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
           "assertion_id": "omp_console_turn_settled_and_bound",
           "variant": null,
           "scenario_id": "omp_console_lifecycle",
@@ -3245,6 +3258,19 @@
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
           "minimum_scenario_revision": 6,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "console_turn_steer_preserved",
+          "variant": null,
+          "scenario_id": "pi_console_tool_lifecycle",
+          "minimum_scenario_revision": 5,
           "acceptable_evidence": [
             "live_token"
           ],
