@@ -255,10 +255,10 @@ struct LaunchSessionSheet: View {
 
                     NavigationLink {
                         ModelSelectionView(
-                            models: recentModels,
+                            models: $recentModels,
                             selectedModel: normalizedModel,
-                            loading: loadingModels,
-                            errorMessage: modelError
+                            loading: $loadingModels,
+                            errorMessage: $modelError
                         ) { model in
                             selectedModel = model
                             submitError = nil

@@ -215,10 +215,10 @@ struct SessionView: View {
         .sheet(isPresented: $isShowingModelPicker) {
             NavigationStack {
                 ModelSelectionView(
-                    models: recentComposerModels,
+                    models: $recentComposerModels,
                     selectedModel: composerModel,
-                    loading: loadingComposerModels,
-                    errorMessage: composerModelError
+                    loading: $loadingComposerModels,
+                    errorMessage: $composerModelError
                 ) { model in
                     composerModel = model
                     composerModelSessionId = sessionId

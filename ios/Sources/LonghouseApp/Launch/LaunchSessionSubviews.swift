@@ -352,10 +352,13 @@ struct ProviderSelectionView: View {
 struct ModelSelectionView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let models: [RecentModel]
+    // Bound, not copied: a pushed destination keeps the values it was built
+    // with, so opening the picker before the async load finished froze it
+    // on an empty list with no spinner.
+    @Binding var models: [RecentModel]
     let selectedModel: String?
-    let loading: Bool
-    let errorMessage: String?
+    @Binding var loading: Bool
+    @Binding var errorMessage: String?
     let onSelect: (String?) -> Void
 
     @State private var manualModel = ""
