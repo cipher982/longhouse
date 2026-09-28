@@ -14,6 +14,7 @@ could not have corrected that: the timeline consumes these rows as the string ke
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -28,10 +29,9 @@ from sqlalchemy import String
 from sqlalchemy import and_
 from sqlalchemy import delete
 from sqlalchemy import func
-from sqlalchemy import literal
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy import tuple_
-from sqlalchemy import union_all
 from sqlalchemy import update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -488,21 +488,30 @@ def _candidate_scope(candidates: list[tuple[str, str, str, str]], *, name: str):
     """Materialize candidate keys so SQLite performs indexed seeks.
 
     SQLite plans a composite row-value ``IN (VALUES ...)`` as a full table
-    scan, even when the table has an exact composite index. Joining the same
-    bounded values relation makes the values the outer loop and probes that
-    index once per candidate.
+    scan, even when the table has an exact composite index. Joining a bounded
+    candidate relation makes it the outer loop and probes that index once per
+    candidate.
+
+    The relation is ``json_each`` over one bound JSON array, so the statement
+    text is the same for every batch. It was a UNION ALL of one literal SELECT
+    per candidate: SQLAlchemy compiled and SQLite parsed a new ~160-branch
+    statement for each of the fold's reads and prunes on every heartbeat, which
+    on david010 cost ~25 ms per statement against ~2.5 ms for this form with
+    the same indexed plan (console-full-control C1).
     """
 
-    rows = [
-        select(
-            literal(family, String(32)).label("family"),
-            literal(subject_key, String(1024)).label("subject_key"),
-            literal(source, String(64)).label("source"),
-            literal(source_epoch, String(255)).label("source_epoch"),
+    payload = json.dumps([list(candidate) for candidate in candidates], separators=(",", ":"))
+    parameter = f"{name}_json"
+    return (
+        text(
+            "SELECT json_extract(value, '$[0]') AS family, json_extract(value, '$[1]') AS subject_key, "
+            "json_extract(value, '$[2]') AS source, json_extract(value, '$[3]') AS source_epoch "
+            f"FROM json_each(:{parameter})"
         )
-        for family, subject_key, source, source_epoch in candidates
-    ]
-    return union_all(*rows).cte(name)
+        .bindparams(**{parameter: payload})
+        .columns(family=String(32), subject_key=String(1024), source=String(64), source_epoch=String(255))
+        .cte(name)
+    )
 
 
 def _candidate_scope_join(table, scope):
