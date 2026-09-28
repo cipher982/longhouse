@@ -112,7 +112,10 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
         XCTAssertEqual(final.benchmarkUpdates, 128, readProbe(probeURL, status: status))
         XCTAssertEqual(final.traceRepeats, 0, readProbe(probeURL, status: status))
         XCTAssertEqual(final.stick, 0, "Streaming snapped back to bottom after an intentional upward scroll. \(readProbe(probeURL, status: status))")
-        XCTAssertGreaterThanOrEqual(final.rows, 174, readProbe(probeURL, status: status))
+        // The trace is deterministic: 50 prepended + 120 initial + the streamed
+        // reply + one activity group (the three completed tool calls, grouped
+        // since 166afbb78) + the final reply.
+        XCTAssertEqual(final.rows, 173, readProbe(probeURL, status: status))
 
         let result = TranscriptBenchmarkResult(
             schemaVersion: 1,
