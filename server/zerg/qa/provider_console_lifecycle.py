@@ -1780,7 +1780,13 @@ def run_with_console_steer_fault(execute: Callable[[], dict[str, Any]], root: Pa
         if line.strip()
     )
     target = (result.get("assertions") or {}).get(STEER_ASSERTION_ID)
-    if result.get("failure_code") or not fired:
+    # The drop must be why the assertion failed: everything else about the
+    # steered turn held, and only the steer never reached it.
+    steer = result.get("steer") if isinstance(result.get("steer"), Mapping) else {}
+    preconditions_held = all(
+        steer.get(fact) is True for fact in ("steer_accepted", "no_new_turn", "same_run_completed", "tool_ran_to_completion")
+    )
+    if result.get("failure_code") or not fired or not preconditions_held:
         verdict = "inconclusive"
     elif target is not False:
         verdict = "undetected"
@@ -1790,6 +1796,7 @@ def run_with_console_steer_fault(execute: Callable[[], dict[str, Any]], root: Pa
         "fault": CONSOLE_STEER_FAULT,
         "target_assertion": STEER_ASSERTION_ID,
         "fault_fired": fired,
+        "preconditions_held": preconditions_held,
         "target_outcome": "semantic_fail" if target is False else "pass",
         "verdict": verdict,
     }
@@ -1798,13 +1805,25 @@ def run_with_console_steer_fault(execute: Callable[[], dict[str, Any]], root: Pa
     return result
 
 
-_STEER_RETRYABLE = ("HTTP 502", "HTTP 503", "HTTP 429", "turn_not_steerable")
+# Delivery unknown: the route says to re-send the same client_request_id.
+_STEER_SAME_ID_RETRY = ("HTTP 502", "HTTP 503", "HTTP 429")
 
 
-def _post_steer(api_url: str, token: str, session_id: str, *, text: str) -> tuple[dict[str, Any], int]:
-    """Send one steer, re-sent under the same client_request_id while the
-    answer is transient: a 502 may still have delivered it (the route says to
-    retry the same id), and a turn still planning is not yet steerable."""
+def _post_steer(
+    api_url: str,
+    token: str,
+    session_id: str,
+    *,
+    text: str,
+    turn_running: Callable[[], bool],
+) -> tuple[dict[str, Any], int]:
+    """Send one steer, retrying only what is transient.
+
+    A 502/503/429 may still have delivered it, so it is re-sent under the same
+    client_request_id. A 409 turn_ended while the turn's claim is still running
+    is the start race (the adapter has no steerable turn yet); that receipt is
+    already finished as failed and the same id would only replay it, so it is
+    re-sent under a fresh id. Anything else is the answer."""
 
     request_id = f"console-steer-{uuid4()}"
     deadline = time.monotonic() + 30
@@ -1823,8 +1842,13 @@ def _post_steer(api_url: str, token: str, session_id: str, *, text: str) -> tupl
                 attempts,
             )
         except RuntimeError as exc:
-            if not any(marker in str(exc) for marker in _STEER_RETRYABLE) or time.monotonic() >= deadline:
-                return {"error": str(exc)[:500]}, attempts
+            error = str(exc)
+            if time.monotonic() >= deadline:
+                return {"error": error[:500]}, attempts
+            if "HTTP 409" in error and '"turn_ended"' in error and turn_running():
+                request_id = f"console-steer-{uuid4()}"
+            elif not any(marker in error for marker in _STEER_SAME_ID_RETRY):
+                return {"error": error[:500]}, attempts
         time.sleep(1)
 
 
@@ -1876,6 +1900,7 @@ def _run_steer_step(
         token,
         session_id,
         text=f"Change of plan: when the command finishes, reply with exactly {steer_marker} and nothing else.",
+        turn_running=lambda: (_read_claim(claim_path) or {}).get("state") == "spawned",
     )
     receipt["steer_attempts"] = attempts
     receipt["steer_response"] = {key: steered.get(key) for key in ("outcome", "disposition", "turn", "error")}

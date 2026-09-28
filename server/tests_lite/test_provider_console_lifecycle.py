@@ -999,7 +999,8 @@ def test_console_steer_negative_control_verdict(tmp_path, monkeypatch, fires, st
             Path(os.environ["LONGHOUSE_QA_FAULT_RECEIPT"]).write_text(
                 json.dumps({"fault": lifecycle.CONSOLE_STEER_FAULT, "session_id": "s1"}) + "\n", encoding="utf-8"
             )
-        result = {"assertions": {lifecycle.STEER_ASSERTION_ID: steer_verdict}}
+        steer = dict.fromkeys(("steer_accepted", "no_new_turn", "same_run_completed", "tool_ran_to_completion"), True)
+        result = {"assertions": {lifecycle.STEER_ASSERTION_ID: steer_verdict}, "steer": steer}
         return result | ({"failure_code": failure_code} if failure_code else {})
 
     result = lifecycle.run_with_console_steer_fault(execute, tmp_path)
@@ -1021,15 +1022,15 @@ def test_console_steer_negative_control_is_accepted_by_every_steer_producer():
         assert action.choices == (lifecycle.CONSOLE_STEER_FAULT,)
 
 
-def test_steer_post_resends_the_same_request_id_while_transient(monkeypatch):
+def _steer_409_turn_ended() -> RuntimeError:
+    # The route's real body: an adapter's turn_not_steerable arrives as turn_ended.
+    detail = {"detail": {"error_code": "turn_ended", "retry_with_intent": "queue"}}
+    return RuntimeError(f"POST /api/agents/sessions/s1/input returned HTTP 409: {json.dumps(detail)}")
+
+
+def _fake_steer_route(monkeypatch, answers):
     calls: list[dict] = []
-    answers = iter(
-        [
-            RuntimeError("POST /input returned HTTP 502: accepted, delivery unknown"),
-            RuntimeError('POST /input returned HTTP 409: {"code": "turn_not_steerable"}'),
-            {"outcome": "sent", "disposition": "accepted"},
-        ]
-    )
+    answers = iter(answers)
 
     def fake_request(api_url, token, method, path, payload=None, **_kwargs):
         calls.append(dict(payload))
@@ -1040,21 +1041,49 @@ def test_steer_post_resends_the_same_request_id_while_transient(monkeypatch):
 
     monkeypatch.setattr(lifecycle, "_request", fake_request)
     monkeypatch.setattr(lifecycle.time, "sleep", lambda _seconds: None)
-
-    steered, attempts = lifecycle._post_steer("http://127.0.0.1:1", "t", "s1", text="steer")
-
-    assert steered["outcome"] == "sent"
-    assert attempts == 3
-    assert len({call["client_request_id"] for call in calls}) == 1
-    assert all(call["intent"] == "steer" for call in calls)
+    return calls
 
 
-def test_steer_post_does_not_retry_a_definite_refusal(monkeypatch):
-    def refuse(*_args, **_kwargs):
-        raise RuntimeError('POST /input returned HTTP 409: {"code": "turn_ended"}')
+def test_steer_post_resends_the_same_request_id_when_delivery_is_unknown(monkeypatch):
+    calls = _fake_steer_route(
+        monkeypatch,
+        [RuntimeError("POST /input returned HTTP 502: delivery unknown"), {"outcome": "sent", "disposition": "accepted"}],
+    )
 
-    monkeypatch.setattr(lifecycle, "_request", refuse)
-    steered, attempts = lifecycle._post_steer("http://127.0.0.1:1", "t", "s1", text="steer")
+    steered, attempts = lifecycle._post_steer("http://127.0.0.1:1", "t", "s1", text="x", turn_running=lambda: True)
+
+    assert steered["outcome"] == "sent" and attempts == 2
+    assert calls[0]["client_request_id"] == calls[1]["client_request_id"]
+
+
+def test_steer_post_retries_the_start_race_under_a_fresh_request_id(monkeypatch):
+    calls = _fake_steer_route(monkeypatch, [_steer_409_turn_ended(), {"outcome": "sent", "disposition": "accepted"}])
+
+    steered, attempts = lifecycle._post_steer("http://127.0.0.1:1", "t", "s1", text="x", turn_running=lambda: True)
+
+    assert steered["outcome"] == "sent" and attempts == 2
+    assert calls[0]["client_request_id"] != calls[1]["client_request_id"]
+
+
+def test_steer_post_takes_turn_ended_as_the_answer_once_the_turn_is_over(monkeypatch):
+    _fake_steer_route(monkeypatch, [_steer_409_turn_ended()])
+
+    steered, attempts = lifecycle._post_steer("http://127.0.0.1:1", "t", "s1", text="x", turn_running=lambda: False)
 
     assert attempts == 1
     assert "turn_ended" in steered["error"]
+
+
+def test_console_steer_negative_control_is_inconclusive_when_the_turn_itself_failed(tmp_path, monkeypatch):
+    def execute():
+        Path(os.environ["LONGHOUSE_QA_FAULT_RECEIPT"]).write_text(
+            json.dumps({"fault": lifecycle.CONSOLE_STEER_FAULT}) + "\n", encoding="utf-8"
+        )
+        steer = {"steer_accepted": True, "no_new_turn": True, "same_run_completed": False, "tool_ran_to_completion": True}
+        return {"assertions": {lifecycle.STEER_ASSERTION_ID: False}, "steer": steer}
+
+    result = lifecycle.run_with_console_steer_fault(execute, tmp_path)
+
+    assert result["negative_control"]["verdict"] == "inconclusive"
+    assert result["negative_control"]["preconditions_held"] is False
+    assert result["status"] == "fail"
