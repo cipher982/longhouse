@@ -11,7 +11,7 @@ if [ -z "$diff_output" ]; then
 fi
 
 # Look for added lines containing db.commit()
-matches=$(echo "$diff_output" | grep '^\+' | grep -v '^\+\+\+' | grep 'db\.commit()' || true)
+matches=$(echo "$diff_output" | grep '^[+]' | grep -v '^[+][+][+]' | grep 'db\.commit()' || true)
 
 if [ -n "$matches" ]; then
     echo ""
