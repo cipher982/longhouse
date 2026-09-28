@@ -61,16 +61,4 @@ struct TurnEndCopyTests {
         #expect(onStopped?.label == "Interrupted after 3h")
         #expect(onStopped?.doneAt.hasPrefix("stopped ") == true)
     }
-
-    @Test func usageChipCompactsTheModelLine() {
-        let usage = SessionUsageLatest(model: "claude-opus-5", effort: "high", contextTokens: 501_447, outputTokens: 177, thinkingTokens: 0, at: "2026-09-03T14:18:40Z")
-        #expect(usage.chipLabel == "opus 5 · high · 501k ctx")
-        #expect(SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: nil, contextTokens: 900, outputTokens: 1, thinkingTokens: nil, at: "").chipLabel == "gpt 5.6 sol · 900 ctx")
-        // Codex names its window, so the chip shows how full the context is.
-        #expect(SessionUsageLatest(model: "gpt-5.6-luna", effort: "xhigh", contextTokens: 25_210, outputTokens: 210, thinkingTokens: 90, at: "", contextWindow: 258_400).chipLabel == "gpt 5.6 luna · xhigh · 25k/258k ctx")
-        #expect(SessionUsageLatest.shortModelName("claude-fable-5-1") == "fable 5.1")
-        #expect(SessionUsageLatest.shortModelName("claude-opus-5") == "opus 5")
-        #expect(SessionUsageLatest.compactTokens(1_260_000) == "1.3M")
-        #expect(SessionUsageLatest.shortModelName("  ") == nil)
-    }
 }

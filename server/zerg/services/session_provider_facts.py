@@ -198,15 +198,64 @@ def usage_latest(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
             for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
             if type(payload.get(key)) is int
         )
+    model = payload.get("model") if isinstance(payload.get("model"), str) else None
+    effort = payload.get("effort") if isinstance(payload.get("effort"), str) else None
+    context_window = int(payload["context_window"]) if type(payload.get("context_window")) is int else None
     return {
-        "model": payload.get("model") if isinstance(payload.get("model"), str) else None,
-        "effort": payload.get("effort") if isinstance(payload.get("effort"), str) else None,
+        "model": model,
+        "effort": effort,
         "context_tokens": context_tokens,
-        "context_window": int(payload["context_window"]) if type(payload.get("context_window")) is int else None,
+        "context_window": context_window,
         "output_tokens": int(payload["output_tokens"]),
         "thinking_tokens": int(payload["thinking_tokens"]) if type(payload.get("thinking_tokens")) is int else None,
         "at": latest["at"].isoformat(),
+        "label": usage_label(model, effort, context_tokens, context_window),
     }
+
+
+def short_model_name(raw: str | None) -> str | None:
+    """'claude-fable-5-1' → 'fable 5.1', 'deepseek/deepseek-v4.1-flash' → 'deepseek v4.1 flash'.
+
+    Vendor and router paths are chrome: the provider glyph already says whose
+    session it is. A dash between two digits is a version separator.
+    """
+    name = (raw or "").strip().lower().rsplit("/", 1)[-1]
+    name = name.removeprefix("claude-")
+    if not name:
+        return None
+    out = []
+    for index, char in enumerate(name):
+        if char != "-":
+            out.append(char)
+            continue
+        previous = name[index - 1] if index > 0 else " "
+        following = name[index + 1] if index + 1 < len(name) else " "
+        out.append("." if previous.isdigit() and following.isdigit() else " ")
+    return "".join(out)
+
+
+def compact_tokens(tokens: int) -> str:
+    """501447 → '501k', 900 → '900', 1_260_000 → '1.3M', 999_500 → '1.0M'."""
+    thousands = int(tokens / 1_000 + 0.5)
+    if thousands >= 1_000:
+        return f"{tokens / 1_000_000:.1f}M"
+    if tokens >= 1_000:
+        return f"{thousands}k"
+    return str(tokens)
+
+
+def usage_label(model: str | None, effort: str | None, context_tokens: int, context_window: int | None) -> str:
+    """The one model/context line every client shows: 'opus 5 · high · 501k ctx'.
+
+    With a provider-reported window it reads '25k/258k ctx'. Clients render it
+    verbatim so web and iOS cannot drift.
+    """
+    parts = [part for part in (short_model_name(model), (effort or "").strip()) if part]
+    context = compact_tokens(context_tokens)
+    if context_window:
+        context = f"{context}/{compact_tokens(context_window)}"
+    parts.append(f"{context} ctx")
+    return " · ".join(parts)
 
 
 def provider_titles(facts: list[dict[str, Any]]) -> list[str]:
@@ -231,5 +280,6 @@ __all__ = [
     "recap",
     "session_provider_facts",
     "turn_ends_by_event",
+    "usage_label",
     "usage_latest",
 ]

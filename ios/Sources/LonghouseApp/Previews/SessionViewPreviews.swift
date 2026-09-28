@@ -976,7 +976,7 @@ private struct ProviderChromePreview: View {
             text: "Rebuilt the G55 tablet DRIVE page as a center-console instrument showing what the factory cluster can't. v35 is installed and pushed. Next: check it in the truck.",
             at: "2026-09-02T23:10:05.294000+00:00"
         ),
-        usage: SessionUsageLatest(model: "claude-opus-5", effort: "high", contextTokens: 501_447, outputTokens: 177, thinkingTokens: 0, at: "2026-09-02T23:07:00Z")
+        usage: SessionUsageLatest(label: "opus 5 · high · 501k ctx")
     )
     .preferredColorScheme(.dark)
     .emberChrome()
@@ -985,7 +985,7 @@ private struct ProviderChromePreview: View {
 #Preview("Usage chip alone · Light") {
     ProviderChromePreview(
         recap: nil,
-        usage: SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: "xhigh", contextTokens: 25_210, outputTokens: 80, thinkingTokens: 33, at: "2026-09-02T23:07:00Z", contextWindow: 258_400)
+        usage: SessionUsageLatest(label: "gpt 5.6 sol · xhigh · 25k/258k ctx")
     )
     .preferredColorScheme(.light)
     .emberChrome()

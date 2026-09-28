@@ -448,6 +448,7 @@ export function buildSessionDetailStressFixture(): SessionDetailFixture {
       output_tokens: 177,
       thinking_tokens: 0,
       at: "2026-04-15T14:44:20Z",
+      label: "opus 5 · high · 501k ctx",
     },
     first_user_message: "Let's workshop the session page layout.",
     thread_root_session_id: ROOT_SESSION_ID,
@@ -558,6 +559,7 @@ export function buildSessionDetailStressFixture(): SessionDetailFixture {
       output_tokens: 210,
       thinking_tokens: 90,
       at: "2026-04-15T15:22:34Z",
+      label: "gpt 5.6 luna · xhigh · 25k/258k ctx",
     },
     summary:
       "Fixture-backed session detail capture with branch seam, dense transcript rows, completed tools, a failing command, and one currently running shell command.",

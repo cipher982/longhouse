@@ -454,6 +454,7 @@ struct APIUsageLatestResponse: Codable, Hashable, Sendable {
     let outputTokens: Int
     let thinkingTokens: Int?
     let at: String
+    let label: String
 }
 
 struct APISessionResponse: Codable, Hashable, Sendable {

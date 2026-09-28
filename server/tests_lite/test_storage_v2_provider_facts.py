@@ -24,6 +24,7 @@ from zerg.services.session_provider_facts import last_turn
 from zerg.services.session_provider_facts import provider_facts_from_rows
 from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import turn_ends_by_event
+from zerg.services.session_provider_facts import usage_label
 from zerg.services.session_provider_facts import usage_latest
 from zerg.services.session_title import resolve_title_provenance
 from zerg.services.storage_v2_workspace import _workspace_envelope
@@ -542,6 +543,7 @@ def test_usage_latest_is_the_newest_turn_ending_usage_with_context_size():
         "output_tokens": 177,
         "thinking_tokens": 12,
         "at": t0.isoformat(),
+        "label": "opus 5 · high · 401k ctx",
     }
     assert usage_latest([]) is None
 
@@ -574,7 +576,24 @@ def test_usage_latest_trusts_the_providers_own_context_accounting():
         "output_tokens": 210,
         "thinking_tokens": 90,
         "at": t0.isoformat(),
+        "label": "gpt 5.6 luna · xhigh · 25k/258k ctx",
     }
+
+
+@pytest.mark.parametrize(
+    ("model", "effort", "context_tokens", "context_window", "label"),
+    [
+        # Router paths and vendor prefixes are chrome; OMP reports "deepseek/deepseek-v4.1-flash".
+        ("deepseek/deepseek-v4.1-flash", None, 226_400, None, "deepseek v4.1 flash · 226k ctx"),
+        ("openrouter/z-ai/glm-5.3-flash", "low", 900, None, "glm 5.3 flash · low · 900 ctx"),
+        ("claude-fable-5-1", "xhigh", 1_260_000, 1_000_000, "fable 5.1 · xhigh · 1.3M/1.0M ctx"),
+        # Rounding up to a thousand k reads as millions, never "1000k".
+        ("  ", "  ", 999_500, None, "1.0M ctx"),
+        (None, None, 1_500, None, "2k ctx"),
+    ],
+)
+def test_usage_label_is_the_one_line_clients_render(model, effort, context_tokens, context_window, label):
+    assert usage_label(model, effort, context_tokens, context_window) == label
 
 
 @pytest.mark.asyncio

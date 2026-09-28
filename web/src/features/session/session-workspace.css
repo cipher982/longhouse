@@ -293,6 +293,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.session-workspace-header__usage {
+  font-variant-numeric: tabular-nums;
+}
 .session-workspace-header__provider-glyph {
   vertical-align: -3px;
   margin-right: 5px;

@@ -10731,6 +10731,11 @@ export interface components {
              * @description When that response was written
              */
             at: string;
+            /**
+             * Label
+             * @description The model/context line every client renders verbatim, e.g. 'opus 5 · high · 501k ctx'
+             */
+            label: string;
         };
         /** UserClientPresenceHeartbeat */
         UserClientPresenceHeartbeat: {

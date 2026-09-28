@@ -44,10 +44,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var lastTurn: SessionLastTurn? = nil
     /// The provider's latest away recap, when it wrote one.
     var recap: SessionRecap? = nil
-    /// Model, effort and context size on the provider's last turn-ending response.
+    /// The model/context line from the provider's last turn-ending response.
     var usageLatest: SessionUsageLatest? = nil
     /// Selected model for new per-turn inputs. This is distinct from
-    /// ``usageLatest.model``, which describes the provider's last completed turn.
+    /// ``usageLatest``, which describes the provider's last completed turn.
     var selectedModel: String? = nil
 
     var displayTitle: String {
@@ -408,16 +408,10 @@ struct SessionRecap: Codable, Hashable, Sendable {
     let at: String
 }
 
-/// Model, effort and context size from the provider's last turn-ending response.
+/// The provider's last turn-ending response as the server words it:
+/// "opus 5 · high · 501k ctx". Rendered verbatim so iOS and web cannot drift.
 struct SessionUsageLatest: Codable, Hashable, Sendable {
-    let model: String?
-    let effort: String?
-    let contextTokens: Int
-    let outputTokens: Int
-    let thinkingTokens: Int?
-    let at: String
-    /// The model's context window when the provider reports it (Codex does).
-    var contextWindow: Int? = nil
+    let label: String
 }
 
 /// The most recent turn the provider reported as finished, for the session chrome.

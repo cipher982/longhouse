@@ -886,6 +886,10 @@ class UsageLatestResponse(BaseModel):
     output_tokens: int = Field(..., description="Output tokens on that response")
     thinking_tokens: Optional[int] = Field(None, description="Thinking tokens on that response, when reported")
     at: datetime = Field(..., description="When that response was written")
+    label: str = Field(
+        ...,
+        description="The model/context line every client renders verbatim, e.g. 'opus 5 · high · 501k ctx'",
+    )
 
 
 class LastTurnResponse(BaseModel):

@@ -69,6 +69,8 @@ export interface AgentSession {
     output_tokens: number;
     thinking_tokens?: number | null;
     at: string;
+    /** The model/context line every client renders verbatim: "opus 5 · high · 501k ctx". */
+    label: string;
   } | null;
   /** Server-resolved headline to render verbatim (no client fallback ladder). */
   timeline_title?: string | null;

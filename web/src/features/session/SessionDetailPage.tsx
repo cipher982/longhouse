@@ -371,11 +371,15 @@ function SessionDetailWorkspaceRoute({
     "host";
   // Who and where, once, under the title. The host is only named when the
   // server actually recorded a machine; home_label can be a phrase such as
-  // "On this Mac", and a placeholder would claim a machine.
-  const homeLabel = displaySession.home_label?.trim() || null;
+  // "On this Mac", and a placeholder would claim a machine. Same order as
+  // iOS (sessionIdentityHost): the recorded device before the home label.
   const identityHost =
     displaySession.control?.source_runner_name?.trim() ||
-    (homeLabel && !GENERIC_HOME_LABELS.has(homeLabel) ? homeLabel : null);
+    [displaySession.device_id, displaySession.home_label]
+      .map((candidate) => candidate?.trim() || null)
+      .find((candidate) => candidate && !GENERIC_HOME_LABELS.has(candidate)) ||
+    null;
+  const usageLabel = displaySession.usage_latest?.label ?? null;
   const runtime = resolveSessionRuntimeState(displaySession);
   const headerState = getSessionHeaderState(displaySession, nowMs, turnStartMs);
   // One sentence instead of a dot-joined fragment list and a separate
@@ -505,7 +509,7 @@ function SessionDetailWorkspaceRoute({
           <span
             className="session-workspace-header__identity"
             data-testid="session-identity"
-            title={identityLabel}
+            title={usageLabel ? `${identityLabel} · ${usageLabel}` : identityLabel}
           >
             {displaySession.provider ? (
               <ProviderGlyph
@@ -525,6 +529,12 @@ function SessionDetailWorkspaceRoute({
             ) : (
               identityLabel
             )}
+            {usageLabel ? (
+              <span className="session-workspace-header__usage" data-testid="session-usage">
+                {" · "}
+                {usageLabel}
+              </span>
+            ) : null}
           </span>
         ) : null}
         {shouldShowSharedByPill ? (
