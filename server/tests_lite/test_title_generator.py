@@ -78,6 +78,28 @@ async def test_generate_initial_session_title_rejects_dsml_tool_call_markup(monk
 
 
 @pytest.mark.asyncio
+async def test_generate_initial_session_title_rejects_conversational_reply(monkeypatch):
+    # Hosted session e425ca05 got title "Great to hear you simplified your..."
+    # (title_source=ai): the model answered the user's first message in prose
+    # instead of returning JSON, and the raw text was frozen as the anchor.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
+
+    async def _create(**_kwargs):
+        reply = "Great to hear you simplified your network! Let me review the Deco setup."
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=reply, tool_calls=None))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+
+    title = await generate_initial_session_title(
+        first_user_message="finally cleaned up my network, can you review it?",
+        client=client,
+        model="deepseek/deepseek-v4-flash",
+    )
+
+    assert title is None
+
+
+@pytest.mark.asyncio
 async def test_generate_initial_session_title_rejects_structured_tool_calls(monkeypatch):
     monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
 
