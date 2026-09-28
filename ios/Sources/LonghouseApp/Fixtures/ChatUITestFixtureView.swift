@@ -35,14 +35,24 @@ struct ChatUITestFixtureView: View {
         // last becomes the next one's opening transcript — including across
         // runs, so a suite passes or fails depending on what the simulator
         // still had on disk. Give each launch its own store instead; a fixture
-        // that never had a cache (no realtime stream) keeps having none.
+        // that never had a cache (no realtime stream) keeps having none. The
+        // pending-input outbox is durable for the same reason, so a row one
+        // fixture left unechoed would otherwise open under the next one.
         _viewModel = StateObject(
             wrappedValue: SessionViewModel(
                 apiFactory: { _ in client },
                 streamFactory: { _, _, _, _ in client.streamSource() },
                 enableRealtime: fixture.usesRealtimeStream,
-                snapshotStore: fixture.usesRealtimeStream ? Self.isolatedSnapshotStore() : nil
+                snapshotStore: fixture.usesRealtimeStream ? Self.isolatedSnapshotStore() : nil,
+                pendingInputStore: Self.isolatedPendingInputStore()
             )
+        )
+    }
+
+    static func isolatedPendingInputStore() -> PendingInputStore {
+        PendingInputStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("lh-ui-fixture-outbox-\(UUID().uuidString)", isDirectory: true)
         )
     }
 
@@ -355,7 +365,8 @@ struct TimelineOpenUITestFixtureView: View {
         let viewModel = SessionViewModel(
             apiFactory: { _ in client },
             streamFactory: { _, _, _, _ in client.streamSource() },
-            enableRealtime: false
+            enableRealtime: false,
+            pendingInputStore: ChatUITestFixtureView.isolatedPendingInputStore()
         )
         return SessionView(
             sessionId: session.id,
