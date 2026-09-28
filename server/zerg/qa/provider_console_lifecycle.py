@@ -1798,6 +1798,36 @@ def run_with_console_steer_fault(execute: Callable[[], dict[str, Any]], root: Pa
     return result
 
 
+_STEER_RETRYABLE = ("HTTP 502", "HTTP 503", "HTTP 429", "turn_not_steerable")
+
+
+def _post_steer(api_url: str, token: str, session_id: str, *, text: str) -> tuple[dict[str, Any], int]:
+    """Send one steer, re-sent under the same client_request_id while the
+    answer is transient: a 502 may still have delivered it (the route says to
+    retry the same id), and a turn still planning is not yet steerable."""
+
+    request_id = f"console-steer-{uuid4()}"
+    deadline = time.monotonic() + 30
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            return (
+                _request(
+                    api_url,
+                    token,
+                    "POST",
+                    f"/api/agents/sessions/{session_id}/input",
+                    {"text": text, "intent": "steer", "client_request_id": request_id},
+                ),
+                attempts,
+            )
+        except RuntimeError as exc:
+            if not any(marker in str(exc) for marker in _STEER_RETRYABLE) or time.monotonic() >= deadline:
+                return {"error": str(exc)[:500]}, attempts
+        time.sleep(1)
+
+
 def _run_steer_step(
     *,
     api_url: str,
@@ -1811,10 +1841,17 @@ def _run_steer_step(
     """Steer a running Console turn mid-tool and record what landed where."""
 
     tag = uuid4().hex
-    tool_marker = f"LH_{provider.upper()}_STEER_TOOL_{tag}"
+    # The shell computes the tool marker, so it appears only in the tool's
+    # output and never in its command text: a running or cancelled tool's call
+    # event cannot satisfy the completion check.
+    tool_prefix = f"LH_{provider.upper()}_STEER_TOOL_"
+    tool_marker = f"{tool_prefix}42_{tag}"
     first_marker = f"LH_{provider.upper()}_STEER_FIRST_{tag}"
     steer_marker = f"LH_{provider.upper()}_STEERED_{tag}"
-    message = f"Use the shell tool to run `sleep 15 && echo {tool_marker}`, then reply with exactly {first_marker} and nothing else."
+    message = (
+        f"Use the shell tool to run `sleep 15 && echo {tool_prefix}$((40+2))_{tag}`, "
+        f"then reply with exactly {first_marker} and nothing else."
+    )
     request_id = f"console-steer-turn-{uuid4()}"
     turn = _start_turn(api_url=api_url, token=token, session_id=session_id, message=message, request_id=request_id)
     claim_path = _claim_path(longhouse_home, str(turn["run_id"]))
@@ -1833,24 +1870,16 @@ def _run_steer_step(
     # planning is still a valid steer (next boundary), and the tool check below
     # proves nothing in flight was cancelled either way.
     time.sleep(6)
-    steer_request_id = f"console-steer-{uuid4()}"
-    try:
-        steered = _request(
-            api_url,
-            token,
-            "POST",
-            f"/api/agents/sessions/{session_id}/input",
-            {
-                "text": f"Change of plan: when the command finishes, reply with exactly {steer_marker} and nothing else.",
-                "intent": "steer",
-                "client_request_id": steer_request_id,
-            },
-        )
-    except RuntimeError as exc:
-        steered = {"error": str(exc)[:500]}
+    claims_before = {path.stem for path in claim_path.parent.glob("*.json")}
+    steered, attempts = _post_steer(
+        api_url,
+        token,
+        session_id,
+        text=f"Change of plan: when the command finishes, reply with exactly {steer_marker} and nothing else.",
+    )
+    receipt["steer_attempts"] = attempts
     receipt["steer_response"] = {key: steered.get(key) for key in ("outcome", "disposition", "turn", "error")}
     receipt["steer_accepted"] = steered.get("outcome") == "sent" and steered.get("disposition") == "accepted"
-    receipt["no_new_turn"] = not steered.get("turn")
     terminal = _wait_claim(claim_path, states=frozenset({"terminal", "failed"}), timeout=180)
     claims[-1] = terminal
     _wait_turn_terminal(
@@ -1872,6 +1901,11 @@ def _run_steer_step(
     except RuntimeError as exc:
         receipt["steer_marker_answered"] = False
         receipt["steer_marker_error"] = str(exc)[:300]
+    # A steer delivered as a follow-up starts its own Console run, and the
+    # Machine Agent writes a claim for every run it starts.
+    new_runs = sorted({path.stem for path in claim_path.parent.glob("*.json")} - claims_before)
+    receipt["new_runs_after_steer"] = new_runs
+    receipt["no_new_turn"] = not steered.get("turn") and not new_runs
     events = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=200").get("events") or []
     receipt["tool_ran_to_completion"] = any(
         isinstance(event, dict)
@@ -2791,7 +2825,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", choices=PROVIDERS)
-    parser.add_argument("--variant", choices=(SUPPORTED_VARIANT, UNSUPPORTED_VARIANT, *STEER_VARIANTS.values()))
+    parser.add_argument("--variant", choices=(SUPPORTED_VARIANT, *STEER_VARIANTS.values()))
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--engine", type=Path)

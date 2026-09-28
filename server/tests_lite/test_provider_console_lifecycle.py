@@ -1019,3 +1019,42 @@ def test_console_steer_negative_control_is_accepted_by_every_steer_producer():
     for producer in (pi_console_tool_producer, omp_console_producer):
         action = next(a for a in producer._parser()._actions if a.dest == "negative_control")
         assert action.choices == (lifecycle.CONSOLE_STEER_FAULT,)
+
+
+def test_steer_post_resends_the_same_request_id_while_transient(monkeypatch):
+    calls: list[dict] = []
+    answers = iter(
+        [
+            RuntimeError("POST /input returned HTTP 502: accepted, delivery unknown"),
+            RuntimeError('POST /input returned HTTP 409: {"code": "turn_not_steerable"}'),
+            {"outcome": "sent", "disposition": "accepted"},
+        ]
+    )
+
+    def fake_request(api_url, token, method, path, payload=None, **_kwargs):
+        calls.append(dict(payload))
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(lifecycle, "_request", fake_request)
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda _seconds: None)
+
+    steered, attempts = lifecycle._post_steer("http://127.0.0.1:1", "t", "s1", text="steer")
+
+    assert steered["outcome"] == "sent"
+    assert attempts == 3
+    assert len({call["client_request_id"] for call in calls}) == 1
+    assert all(call["intent"] == "steer" for call in calls)
+
+
+def test_steer_post_does_not_retry_a_definite_refusal(monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError('POST /input returned HTTP 409: {"code": "turn_ended"}')
+
+    monkeypatch.setattr(lifecycle, "_request", refuse)
+    steered, attempts = lifecycle._post_steer("http://127.0.0.1:1", "t", "s1", text="steer")
+
+    assert attempts == 1
+    assert "turn_ended" in steered["error"]
