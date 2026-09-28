@@ -1247,6 +1247,17 @@ async fn execute_command(
                         })?;
                     CLAUDE_PRINT_ADAPTER
                 }
+                "pi" => {
+                    crate::pi_print::steer_pi_print_turn(&run_id, &session_id, &text)
+                        .await
+                        .map_err(|reason| CommandError {
+                            code: reason.clone(),
+                            message: format!(
+                                "Pi Console turn {run_id} did not take the steer: {reason}"
+                            ),
+                        })?;
+                    PI_PRINT_ADAPTER
+                }
                 _ => {
                     return Err(CommandError {
                         code: "provider_unsupported".to_string(),
@@ -4008,6 +4019,7 @@ mod tests {
         ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("pi", "turn_start", COMMAND_TURN_START),
         ("pi", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("pi", "turn_steer", COMMAND_TURN_STEER),
         ("pi", "send", COMMAND_SEND_TEXT),
         ("pi", "steer", COMMAND_STEER_TEXT),
         ("pi", "interrupt", COMMAND_INTERRUPT),

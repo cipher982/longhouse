@@ -2530,6 +2530,8 @@ providers:
   - pi.terminate
   - pi.turn_start
   - pi.turn_interrupt
+  # Console steer: Pi Console runs in RPC mode and takes an RPC `steer`.
+  - pi.turn_steer
   transcript_signals:
     delegation.spawn:
       disposition: upstream_absent

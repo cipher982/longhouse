@@ -7,6 +7,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -141,13 +142,13 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     let stderr_file = private_output_file(&stderr_path)?;
     let runtime_events_outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
 
-    let args = build_pi_args(
-        &config.prompt,
-        &config.image_paths,
-        config.provider.as_deref(),
-        config.model.as_deref(),
-        &target,
-    );
+    let args = build_pi_args(config.provider.as_deref(), config.model.as_deref(), &target);
+    // RPC mode reads commands from stdin. Pi opens this FIFO read-write itself,
+    // so it never sees EOF: the turn survives a Machine Agent restart exactly
+    // as the print-mode turn did, and a steer can be written at any time.
+    let rpc_stdin = run_dir.join(PI_RPC_STDIN);
+    create_rpc_fifo(&rpc_stdin)?;
+    let prompt_command = pi_rpc_prompt_command(&config.prompt, &config.image_paths)?;
     let argv = std::iter::once(config.pi_bin.clone())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
@@ -162,11 +163,19 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     ManagedIdentity::new(ManagedProvider::Pi, &config.session_id)
         .with_run_id(&config.run_id)
         .apply(&mut command, &[]);
+    let rpc_stdin_c = std::ffi::CString::new(rpc_stdin.as_os_str().as_bytes())?;
     #[cfg(unix)]
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
+            }
+            let fd = libc::open(rpc_stdin_c.as_ptr(), libc::O_RDWR);
+            if fd < 0 || libc::dup2(fd, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if fd != 0 {
+                libc::close(fd);
             }
             Ok(())
         });
@@ -174,14 +183,14 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            return Err(error).with_context(|| format!("spawning `{}` -p", config.pi_bin))
+            return Err(error).with_context(|| format!("spawning `{}` --mode rpc", config.pi_bin))
         }
     };
     let pid = match child.id() {
         Some(pid) => pid,
         None => {
             let _ = child.kill().await;
-            return Err(anyhow::anyhow!("pi -p returned no pid"));
+            return Err(anyhow::anyhow!("pi --mode rpc returned no pid"));
         }
     };
     let process_group_id = i32::try_from(pid).context("Pi pid exceeds process-group range")?;
@@ -235,6 +244,19 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
         let _ = child.kill().await;
         return Err(error).context("persisting Pi Console spawn identity");
     }
+    // Identity first: RPC mode prints no session header, so `get_state`'s
+    // sessionId is what confirms the reserved native session.
+    let commands = [
+        json!({"id": PI_RPC_IDENTITY_ID, "type": "get_state"}),
+        prompt_command,
+    ];
+    for command in commands {
+        if let Err(error) = write_rpc_command(&rpc_stdin, &command).await {
+            cleanup_process_group(Some(process_group_id)).await;
+            let _ = child.kill().await;
+            return Err(error).context("sending the Pi Console prompt");
+        }
+    }
     let monitor_stderr = stderr_path.clone();
     tokio::spawn(async move {
         monitor_pi_print(&mut child, &monitor_stderr, sink).await;
@@ -254,6 +276,133 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
         session_file: exact_session_file.map(|path| path.to_string_lossy().to_string()),
         argv,
     })
+}
+
+const PI_RPC_STDIN: &str = "stdin.fifo";
+const PI_RPC_IDENTITY_ID: &str = "longhouse-identity";
+
+fn create_rpc_fifo(path: &Path) -> Result<()> {
+    let _ = std::fs::remove_file(path);
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    if unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("creating the Pi RPC stdin FIFO");
+    }
+    Ok(())
+}
+
+/// Write one RPC command. The open fails at once when no Pi process holds the
+/// FIFO (it has exited); the write then blocks only while Pi drains a large
+/// prompt, off the async runtime.
+async fn write_rpc_command(fifo: &Path, command: &Value) -> Result<()> {
+    let fifo = fifo.to_path_buf();
+    let mut line = serde_json::to_vec(command)?;
+    line.push(b'\n');
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .context("no Pi process is reading its RPC stdin")?;
+        use std::os::unix::io::AsRawFd;
+        let fd = file.as_raw_fd();
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
+        file.write_all(&line)?;
+        Ok(())
+    })
+    .await?
+}
+
+fn pi_rpc_prompt_command(prompt: &str, image_paths: &[PathBuf]) -> Result<Value> {
+    use base64::Engine as _;
+    let mut images = Vec::new();
+    for path in image_paths {
+        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let mime = match path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("png") => "image/png",
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            _ => "application/octet-stream",
+        };
+        images.push(json!({
+            "type": "image",
+            "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            "mimeType": mime,
+        }));
+    }
+    let mut command = json!({"id": "longhouse-prompt", "type": "prompt", "message": prompt});
+    if !images.is_empty() {
+        command["images"] = Value::Array(images);
+    }
+    Ok(command)
+}
+
+/// Enter the running Pi Console turn: an RPC `steer`, which Pi delivers after
+/// the current tool calls finish and before the next model call. Waits for
+/// Pi's own response to that command in the turn's stdout.
+pub async fn steer_pi_print_turn(
+    run_id: &str,
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<(), String> {
+    let not_steerable = || "turn_not_steerable".to_string();
+    let registry = crate::turn_claims::default_registry().map_err(|err| err.to_string())?;
+    let claim = registry.read(run_id).map_err(|_| not_steerable())?;
+    if claim.session_id != session_id
+        || claim.provider != "pi"
+        || claim.adapter.as_deref() != Some(PI_PRINT_ADAPTER)
+        || claim.state != "spawned"
+        || claim_process_liveness(&claim) != ClaimLiveness::Live
+    {
+        return Err(not_steerable());
+    }
+    let stdout_path = PathBuf::from(claim.stdout_path.clone().ok_or_else(not_steerable)?);
+    let fifo = stdout_path.with_file_name(PI_RPC_STDIN);
+    if !fifo.exists() {
+        return Err(not_steerable());
+    }
+    let id = format!("longhouse-steer-{}", Uuid::new_v4());
+    let start = std::fs::metadata(&stdout_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    write_rpc_command(&fifo, &json!({"id": id, "type": "steer", "message": text}))
+        .await
+        .map_err(|_| not_steerable())?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        if let Some(response) = find_rpc_response(&stdout_path, start, &id) {
+            return if response.get("success").and_then(Value::as_bool) == Some(true) {
+                Ok(())
+            } else {
+                Err(not_steerable())
+            };
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err("steer_outcome_unknown".to_string())
+}
+
+fn find_rpc_response(stdout_path: &Path, start: u64, id: &str) -> Option<Value> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = File::open(stdout_path).ok()?;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = String::new();
+    file.read_to_string(&mut tail).ok()?;
+    tail.lines()
+        .filter(|line| line.contains(id))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| {
+            event.get("type").and_then(Value::as_str) == Some("response")
+                && event.get("id").and_then(Value::as_str) == Some(id)
+        })
 }
 
 pub async fn recover_pi_print_turns(
@@ -388,6 +537,9 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPri
     let mut offset = 0_u64;
     let mut pending = Vec::new();
     let mut seq = 0_u64;
+    // An RPC process stays up after the run settles; Longhouse ends it, and
+    // that exit is the run's successful end rather than a failure.
+    let mut settled_shutdown = false;
     loop {
         if let Err(error) = publish_stdout_growth(
             &mut sink,
@@ -402,6 +554,10 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPri
             sink.post_terminal("run_failed", None, Some(error.to_string()))
                 .await;
             return;
+        }
+        if !settled_shutdown && (projection.agent_settled || projection.rpc_rejected) {
+            settled_shutdown = projection.agent_settled;
+            cleanup_process_group(sink.process_group_id).await;
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -433,7 +589,7 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPri
                 cleanup_process_group(sink.process_group_id).await;
                 let (terminal_state, reason) = terminal_state_for_projection(
                     &projection,
-                    if status.success() {
+                    if status.success() || settled_shutdown {
                         PiProcessExitEvidence::Succeeded
                     } else {
                         PiProcessExitEvidence::Failed
@@ -494,6 +650,12 @@ async fn monitor_recovered_claim(
             sink.post_terminal("run_failed", None, Some(error.to_string()))
                 .await;
             return;
+        }
+        if (projection.agent_settled || projection.rpc_rejected)
+            && claim.process_group_is_from_this_boot()
+            && claim_process_liveness(&claim) == ClaimLiveness::Live
+        {
+            cleanup_process_group(sink.process_group_id).await;
         }
         if claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
@@ -584,23 +746,12 @@ async fn settle_recovered_dead_claim(
 }
 
 fn build_pi_args(
-    prompt: &str,
-    image_paths: &[PathBuf],
     provider: Option<&str>,
     model: Option<&str>,
     target: &crate::pi_session::PiSessionTarget,
 ) -> Vec<String> {
-    // `pi [options] [--] [@files...] [messages...]`: files precede the
-    // message. Do not manufacture an empty positional message for an
-    // attachment-only turn; Pi treats that as a real blank user message.
-    let mut args = vec!["-p".to_string()];
-    for image in image_paths {
-        args.push(format!("@{}", image.to_string_lossy()));
-    }
-    if !prompt.trim().is_empty() {
-        args.push(prompt.to_string());
-    }
-    args.extend(["--mode".to_string(), "json".to_string()]);
+    // The prompt and any images go over stdin as an RPC `prompt` command.
+    let mut args = vec!["--mode".to_string(), "rpc".to_string()];
     if let Some(provider) = provider.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--provider".to_string(), provider.to_string()]);
     }
@@ -633,6 +784,8 @@ struct PiStreamProjection {
     final_stop_reason: Option<String>,
     agent_settled: bool,
     native_error: Option<String>,
+    /// Pi refused the prompt before accepting it: no run will follow.
+    rpc_rejected: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -716,6 +869,30 @@ impl PiStreamProjection {
                 }
             }
             Some("agent_settled") => self.agent_settled = true,
+            Some("response") => {
+                let command = event.get("command").and_then(Value::as_str);
+                let ok = event.get("success").and_then(Value::as_bool) == Some(true);
+                if event.get("id").and_then(Value::as_str) == Some(PI_RPC_IDENTITY_ID) && ok {
+                    let observed = event
+                        .pointer("/data/sessionId")
+                        .and_then(Value::as_str)
+                        .context("Pi get_state reported no sessionId")?;
+                    anyhow::ensure!(
+                        observed == expected_provider_thread_id,
+                        "Pi RPC session id {observed} does not match reserved provider thread {expected_provider_thread_id}"
+                    );
+                    self.identity_confirmed = true;
+                } else if command == Some("prompt") && !ok {
+                    self.rpc_rejected = true;
+                    self.native_error = Some(
+                        event
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Pi refused the prompt")
+                            .to_string(),
+                    );
+                }
+            }
             Some("error") => {
                 self.native_error = event
                     .get("message")
@@ -1285,36 +1462,58 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn image_attachments_precede_the_prompt_as_at_files() {
+    fn console_runs_pi_in_rpc_mode_with_the_prompt_on_stdin() {
         let target = crate::pi_session::PiSessionTarget {
             provider_thread_id: "thread-1".to_string(),
             session_dir: PathBuf::from("/sessions"),
             session_file: None,
         };
-        let args = build_pi_args(
-            "what color",
-            &[
-                PathBuf::from("/w/.longhouse/attachments/r/a.png"),
-                PathBuf::from("/w/.longhouse/attachments/r/b.jpg"),
-            ],
-            None,
-            None,
-            &target,
-        );
-        assert_eq!(
-            &args[..4],
-            [
-                "-p",
-                "@/w/.longhouse/attachments/r/a.png",
-                "@/w/.longhouse/attachments/r/b.jpg",
-                "what color"
-            ]
-        );
-        let plain = build_pi_args("what color", &[], None, None, &target);
-        assert_eq!(&plain[..2], ["-p", "what color"]);
-        let image_only = build_pi_args("", &[PathBuf::from("/w/a.png")], None, None, &target);
-        assert_eq!(&image_only[..3], ["-p", "@/w/a.png", "--mode"]);
-        assert!(!image_only.iter().any(|arg| arg.is_empty()));
+        let args = build_pi_args(None, None, &target);
+        assert_eq!(&args[..2], ["--mode", "rpc"]);
+        assert!(!args.iter().any(|arg| arg == "-p" || arg.starts_with('@')));
+
+        let temp = tempfile::tempdir().unwrap();
+        let image = temp.path().join("a.png");
+        std::fs::write(&image, [1u8, 2, 3]).unwrap();
+        let command = pi_rpc_prompt_command("what color", &[image]).unwrap();
+        assert_eq!(command["type"], "prompt");
+        assert_eq!(command["message"], "what color");
+        assert_eq!(command["images"][0]["mimeType"], "image/png");
+        assert_eq!(command["images"][0]["data"], "AQID");
+        let plain = pi_rpc_prompt_command("what color", &[]).unwrap();
+        assert!(plain.get("images").is_none());
+    }
+
+    #[test]
+    fn rpc_identity_comes_from_get_state_and_a_refused_prompt_ends_the_run() {
+        let mut projection = PiStreamProjection::default();
+        projection
+            .apply(
+                "thread-1",
+                &json!({"id": PI_RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "thread-1"}}),
+            )
+            .unwrap();
+        assert!(projection.identity_confirmed);
+        assert!(projection
+            .apply(
+                "thread-2",
+                &json!({"id": PI_RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "thread-1"}}),
+            )
+            .is_err());
+        projection
+            .apply(
+                "thread-1",
+                &json!({"id": "longhouse-prompt", "type": "response", "command": "prompt", "success": false, "error": "no model"}),
+            )
+            .unwrap();
+        assert!(projection.rpc_rejected);
+        assert_eq!(projection.native_error.as_deref(), Some("no model"));
+        // A steer's own response is not the prompt's.
+        let mut steering = PiStreamProjection::default();
+        steering
+            .apply("thread-1", &json!({"id": "longhouse-steer-x", "type": "response", "command": "steer", "success": true}))
+            .unwrap();
+        assert!(!steering.rpc_rejected);
     }
 
     #[test]
@@ -1495,7 +1694,7 @@ mod tests {
 
     fn write_fake_pi(path: &Path, sleep_secs: u32) {
         let sleep_line = if sleep_secs > 0 {
-            format!("    time.sleep({sleep_secs})\n")
+            format!("        time.sleep({sleep_secs})\n")
         } else {
             String::new()
         };
@@ -1503,31 +1702,45 @@ mod tests {
             path,
             format!(
                 r#"#!/usr/bin/env python3
-import json, os, sys, time, uuid
+import json, os, sys, threading, time, uuid
 if "--version" in sys.argv:
     print("0.84.1")
     sys.exit(0)
 args = sys.argv[1:]
-if "-p" in args:
+def out(event):
+    print(json.dumps(event), flush=True)
+if args[:2] == ["--mode", "rpc"]:
     session_dir = args[args.index("--session-dir") + 1]
     os.makedirs(session_dir, exist_ok=True)
     sid = args[args.index("--session-id") + 1]
     path = os.path.join(session_dir, f"1723200000_{{sid}}.jsonl")
     header = {{"type": "session", "version": 3, "id": sid, "cwd": os.getcwd(), "timestamp": "2026-08-10T00:00:00Z"}}
-    with open(path, "w") as f:
-        f.write(json.dumps(header) + "\n")
-        f.write(json.dumps({{"type": "message", "id": str(uuid.uuid4()), "parentId": None, "timestamp": "2026-08-10T00:00:01Z", "message": {{"role": "assistant", "content": [{{"type": "text", "text": "fake pi reply"}}], "stopReason": "stop"}}}}) + "\n")
-    events = [
-        header,
-        {{"type": "message_start", "message": {{"role": "assistant", "content": []}}}},
-        {{"type": "message_update", "assistantMessageEvent": {{"type": "text_delta", "delta": "fake pi reply"}}}},
-        {{"type": "message_end", "message": {{"role": "assistant", "content": [{{"type": "text", "text": "fake pi reply"}}], "stopReason": "stop"}}}},
-        {{"type": "agent_end", "messages": []}},
-        {{"type": "agent_settled"}},
-    ]
-    for event in events:
-        print(json.dumps(event), flush=True)
-{sleep_line}sys.exit(0)
+    def run():
+{sleep_line}        with open(path, "w") as f:
+            f.write(json.dumps(header) + "\n")
+            f.write(json.dumps({{"type": "message", "id": str(uuid.uuid4()), "parentId": None, "timestamp": "2026-08-10T00:00:01Z", "message": {{"role": "assistant", "content": [{{"type": "text", "text": "fake pi reply"}}], "stopReason": "stop"}}}}) + "\n")
+        for event in [
+            {{"type": "message_start", "message": {{"role": "assistant", "content": []}}}},
+            {{"type": "message_update", "assistantMessageEvent": {{"type": "text_delta", "delta": "fake pi reply"}}}},
+            {{"type": "message_end", "message": {{"role": "assistant", "content": [{{"type": "text", "text": "fake pi reply"}}], "stopReason": "stop"}}}},
+            {{"type": "agent_end", "messages": []}},
+            {{"type": "agent_settled"}},
+        ]:
+            out(event)
+    # RPC mode never exits on its own: Longhouse ends it after agent_settled.
+    for line in sys.stdin:
+        command = json.loads(line)
+        kind = command["type"]
+        if kind == "get_state":
+            out({{"id": command.get("id"), "type": "response", "command": "get_state", "success": True, "data": {{"sessionId": sid}}}})
+        elif kind == "prompt":
+            out({{"id": command.get("id"), "type": "response", "command": "prompt", "success": True}})
+            out({{"type": "agent_start"}})
+            threading.Thread(target=run, daemon=True).start()
+        elif kind == "steer":
+            with open(os.path.join(session_dir, "steer.log"), "a") as f:
+                f.write(command["message"])
+            out({{"id": command.get("id"), "type": "response", "command": "steer", "success": True}})
 "#,
                 sleep_line = sleep_line
             ),
@@ -1653,6 +1866,88 @@ if "-p" in args:
         assert_eq!(wake["wake_reason"], "turn_completed");
         assert_eq!(wake["provider_turn_id"], provider_session_id);
         assert_eq!(wake["session_id"], session_id);
+
+        if let Some(value) = previous_home {
+            unsafe {
+                std::env::set_var("LONGHOUSE_HOME", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("LONGHOUSE_HOME");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_pi_takes_a_steer_mid_run_and_still_completes() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse"));
+        }
+        std::fs::create_dir_all(temp.path().join("longhouse").join("agent")).unwrap();
+        let fake_pi = temp.path().join("pi");
+        write_fake_pi(&fake_pi, 3);
+
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(
+                &run_id,
+                &session_id,
+                &thread_id,
+                None,
+                Some(&format!("canary-{run_id}")),
+                "pi",
+            )
+            .unwrap();
+        let config = run_config(
+            fake_pi.to_str().unwrap(),
+            &session_id,
+            &thread_id,
+            &run_id,
+            temp.path(),
+            "Run long",
+        );
+        start_pi_print_turn(config).await.unwrap();
+
+        steer_pi_print_turn(&run_id, &session_id, "change of plan")
+            .await
+            .unwrap();
+        let steer_log = temp.path().join("pi-sessions").join("steer.log");
+        assert_eq!(
+            std::fs::read_to_string(&steer_log).unwrap(),
+            "change of plan"
+        );
+        assert_eq!(
+            steer_pi_print_turn(&run_id, &Uuid::new_v4().to_string(), "wrong session").await,
+            Err("turn_not_steerable".to_string())
+        );
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(&run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "steered Pi run did not settle"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        // Settled RPC turns are ended by Longhouse, so nothing lingers.
+        assert_eq!(
+            steer_pi_print_turn(&run_id, &session_id, "late").await,
+            Err("turn_not_steerable".to_string())
+        );
 
         if let Some(value) = previous_home {
             unsafe {
