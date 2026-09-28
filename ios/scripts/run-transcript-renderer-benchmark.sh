@@ -70,7 +70,7 @@ xcodebuild \
   -derivedDataPath "$derived_data" \
   -resultBundlePath "$result_bundle" \
   -only-testing:LonghouseChatStressUITests/TranscriptRendererBenchmarkUITests/testAgentCoreV1 \
-  "${build_settings[@]}" \
+  ${build_settings[@]+"${build_settings[@]}"} \
   "${metadata_settings[@]}" \
   test 2>&1 | tee "$console_log"
 test_status=${PIPESTATUS[0]}
