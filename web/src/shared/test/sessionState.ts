@@ -16,7 +16,7 @@ type SessionStateOptions = {
   lastResultAt?: string | null;
   lastResultOutcome?: string | null;
   activityValidUntil?: string | null;
-  hostState?: string;
+  hostState?: NonNullable<SessionStateFacts["host"]>["state"];
   launchState?: NonNullable<SessionStateFacts["launch"]>["state"] | null;
   launchErrorCode?: string | null;
   launchErrorMessage?: string | null;
