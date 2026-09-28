@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Promote a dogfood-soaked release to every production hosted tenant, the
+# Promote a dogfood-run release to every production hosted tenant, the
 # public demo, and the new-tenant default image pointer.
 #
 # See control-plane/docs/specs/release-rings.md change 2. Production only
-# ever runs an image dogfood has already run for at least SOAK_HOURS: this
-# script never inspects or trusts a caller-supplied digest, it re-derives one
-# from the exact successful `promote-dogfood` deployment for VERSION's commit.
+# ever runs an image dogfood has already run: this script never inspects or
+# trusts a caller-supplied digest, it re-derives one from the exact successful
+# `promote-dogfood` deployment for VERSION's commit. SOAK_HOURS is how long
+# that deployment must have run first; it is 0 until Longhouse has real users
+# (David, 2026-09-28), then 24.
 #
 # Requires CONTROL_PLANE_ADMIN_TOKEN (or ADMIN_TOKEN); operators get it with:
 #   python3 ~/git/me/scripts/infisical-get.py CONTROL_PLANE_ADMIN_TOKEN --project ops-infra --env prod
@@ -15,7 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO="${GITHUB_REPOSITORY:-cipher982/longhouse}"
 PUBLISH_WORKFLOW="Publish Runtime Image"
 VERSION="${1:-}"
-SOAK_HOURS="${SOAK_HOURS:-24}"
+SOAK_HOURS="${SOAK_HOURS:-0}"
 DOGFOOD_SUBDOMAIN="${SUBDOMAIN:-${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}}"
 DEMO_SSH_HOST="${DEMO_SSH_HOST:-zerg}"
 DEMO_ENV_PATH="${DEMO_ENV_PATH:-/home/zerg/manual-apps/longhouse-demo/.env}"
@@ -243,7 +245,7 @@ fi
 export LH_DEPLOYMENT_SOURCE_WORKFLOW="$PUBLISH_WORKFLOW"
 export LH_DEPLOYMENT_SOURCE_ORDER="$publish_run_number"
 export LH_DEPLOYMENT_QUALIFICATION_ID="runtime-image-${publish_run_id}-${publish_run_attempt}"
-export LH_DEPLOYMENT_REASON="production promotion of dogfood-soaked source ${SHA} (release ${VERSION}, dogfood deployment ${DEPLOYMENT_ID})"
+export LH_DEPLOYMENT_REASON="production promotion of dogfood-run source ${SHA} (release ${VERSION}, dogfood deployment ${DEPLOYMENT_ID}, soak ${SOAK_HOURS}h)"
 export LH_DEPLOYMENT_IDEMPOTENCY_KEY="promote-production-${VERSION}-${SHA}"
 
 lh_hosted_reprovision_production "$PROD_IMAGE" "$TARGET_IDS_JSON"

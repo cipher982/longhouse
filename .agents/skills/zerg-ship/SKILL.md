@@ -22,7 +22,9 @@ Do not blur these lanes:
   lane (`control-plane/docs/specs/release-rings.md`): `make promote-dogfood`
   moves the maintainer's personal dogfood instance on demand; `make
   promote-production VERSION=` moves every other hosted tenant and the
-  public demo, only after that exact SHA has soaked on dogfood for 24h. The
+  public demo to the exact image dogfood already ran for that SHA. There is
+  no soak wait until Longhouse has real users (`SOAK_HOURS` defaults to 0;
+  it becomes 24 at launch). The
   control plane itself is an external private service, not shipped here.
 - **CLI/package release** — updates the user-installed `longhouse` CLI from
   the GitHub release wheel used by `scripts/install.sh`. Existing users do not
@@ -86,7 +88,7 @@ What ships:
   using the exact immutable digest
 - Canary smoke/functional acceptance. Dogfood and production promotion are
   separate rings (`make promote-dogfood`, then `make promote-production
-  VERSION=` after a 24h soak), and both name the selected verified release
+  VERSION=` once dogfood has run that SHA), and both name the selected verified release
 
 Primary automation:
 
@@ -125,7 +127,7 @@ When the maintainer says `cowbell`, the agent owns the whole ship loop:
 the hosted canary, and qualifies it with a fast smoke. Its “Deploy public demo
 runtime” job verifies the image and prints promotion instructions; it does
 **not** mutate the demo container. The demo moves on the production ring
-(`make promote-production VERSION=`, only after a dogfood soak), not on every
+(`make promote-production VERSION=`, after dogfood has run the SHA), not on every
 push, so `make ship`/`ship-monitor` no longer require it to match the pushed
 SHA — a stale demo SHA there is expected, not `live_drift`; it is still
 printed in `make deploy-status`/`ship-watch` output. Broad
@@ -155,8 +157,9 @@ the exception because it is not a control-plane tenant.
 
 The demo is on the production ring, not the per-push hosted-deploy lane
 (`control-plane/docs/specs/release-rings.md`): it moves only via
-`make promote-production VERSION=vX.Y.Z`, which requires that exact SHA to
-have already soaked on dogfood (`make promote-dogfood`) for 24h, then pins
+`make promote-production VERSION=vX.Y.Z`, which requires dogfood to have
+already run that exact SHA (`make promote-dogfood`; no soak wait pre-launch),
+then pins
 the demo's Compose stack to the same qualified digest and verifies it. The
 public demo is an operator-managed Compose stack, **not** a control-plane
 tenant — `promote-production.sh` updates its durable image pin over SSH and

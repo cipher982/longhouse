@@ -136,6 +136,7 @@ class PromoteProductionTests(unittest.TestCase):
         instance_entries: list[dict] | None = None,
         dogfood_status: str = "healthy",
         demo_commit: str | None = None,
+        soak_hours: str | None = None,
     ):
         if deployment_rows is None:
             deployment_rows = [_soaked_row()]
@@ -200,6 +201,8 @@ class PromoteProductionTests(unittest.TestCase):
                 "CONTROL_PLANE_ADMIN_TOKEN": "fixture-not-a-credential",
                 "GH_TOKEN": "fixture-not-a-credential",
             }
+            if soak_hours is not None:
+                environment["SOAK_HOURS"] = soak_hours
             result = subprocess.run(
                 ["bash", str(ops / "promote-production.sh"), VERSION],
                 env=environment,
@@ -239,7 +242,7 @@ class PromoteProductionTests(unittest.TestCase):
         self.assertIn("targets=0", result.stdout)
 
     def test_soak_too_young_is_refused(self) -> None:
-        result, promotions, ssh_calls = self.run_promotion(deployment_rows=[_soaked_row(hours_ago=2)])
+        result, promotions, ssh_calls = self.run_promotion(deployment_rows=[_soaked_row(hours_ago=2)], soak_hours="24")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(promotions, [])
