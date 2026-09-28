@@ -19,6 +19,7 @@ import { HearthLamp } from "@/shared/instruments/hearth/Hearth";
 import { hearthModeForLamp, hearthSnapshotFromSession } from "@/shared/instruments/hearth/signals";
 import { formatRelativeTime } from "@/shared/lib/dateUtils";
 import { getBranchLabel, getDriftTitle, getSessionCardText } from "@/shared/session/sessionLabels";
+import { ACTIVITY_UNCERTAIN_LABEL, workClaimExpired } from "@/shared/session/sessionStatus";
 import { renderHighlightedText } from "./searchHighlight";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 
@@ -99,11 +100,19 @@ export function SessionRow({
   });
   const ageText = getRowAgeText({ seenAt: seenAtForTime, startedAt: startedAtIso, relativeNowMs });
 
-  const statusTone = unread ? (unreadOutcome === "failed" ? "blocked" : "idle") : isClosed ? "closed" : (timelineStatus?.tone ?? "inactive");
-  const statusLabel = unread ? unreadOutcomeLabel : isClosed ? "Closed" : (timelineStatus?.label ?? "");
+  // The same freshness gate as the session header: a work claim whose
+  // `valid_until` has passed on this clock may no longer speak, so a cached
+  // row can never keep saying "Using Bash".
+  const claimExpired = !unread && !isClosed && workClaimExpired(session.session_state, relativeNowMs);
+  const statusTone = unread
+    ? (unreadOutcome === "failed" ? "blocked" : "idle")
+    : isClosed ? "closed" : claimExpired ? "unknown" : (timelineStatus?.tone ?? "inactive");
+  const statusLabel = unread
+    ? unreadOutcomeLabel
+    : isClosed ? "Closed" : claimExpired ? ACTIVITY_UNCERTAIN_LABEL : (timelineStatus?.label ?? "");
   // Attention signal shared with iOS (waiting / working / quiet / unknown /
   // closed). Drives the row's one status instrument.
-  const signal = resolveTimelineSignal(session);
+  const signal: TimelineSignal = claimExpired ? "unknown" : resolveTimelineSignal(session);
   const lampState = getRowLampState({ signal, isClosed, unread, unreadOutcome });
   const hearthSnapshot = hearthSnapshotFromSession(session, hearthModeForLamp(lampState));
 

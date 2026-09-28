@@ -46,4 +46,29 @@ describe("SessionRow status label", () => {
     renderRow(card(facts));
     expect(screen.getByTestId("session-row").querySelector(".inbox-row-activity")).toHaveTextContent("Using Shell");
   });
+
+  it("demotes an expired work claim instead of repeating the served label", () => {
+    const facts = makeSessionStateFacts({
+      activity: "executing",
+      observedAt: "2026-05-19T15:40:00Z",
+      activityValidUntil: "2026-05-19T15:45:00Z",
+    });
+    renderRow(card(facts));
+    const row = screen.getByTestId("session-row");
+    const activity = row.querySelector(".inbox-row-activity");
+    expect(activity).toHaveTextContent("Activity uncertain");
+    expect(activity).not.toHaveTextContent("Using Shell");
+    expect(row).toHaveAttribute("data-status", "unknown");
+    expect(activity).toHaveAttribute("data-signal", "unknown");
+  });
+
+  it("keeps the served label while the claim is still fresh", () => {
+    const facts = makeSessionStateFacts({
+      activity: "executing",
+      observedAt: "2026-05-19T15:59:00Z",
+      activityValidUntil: "2026-05-19T16:05:00Z",
+    });
+    renderRow(card(facts));
+    expect(screen.getByTestId("session-row").querySelector(".inbox-row-activity")).toHaveTextContent("Using Shell");
+  });
 });
