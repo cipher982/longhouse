@@ -767,9 +767,7 @@ async def test_console_steer_is_refused_for_a_provider_without_a_console_steer_a
     from zerg.services.console_turns import ConsoleTurnUnavailable
     from zerg.services.console_turns import console_steer_target
 
-    monkeypatch.setattr(
-        "zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _steer_catalog(_running_turn(provider="cursor"))
-    )
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _steer_catalog(_running_turn(provider="cursor")))
     registry = SimpleNamespace(supports=lambda **_kwargs: True)
     with pytest.raises(ConsoleTurnUnavailable) as refused:
         await console_steer_target(owner_id=1, session_id=uuid4(), registry=registry)

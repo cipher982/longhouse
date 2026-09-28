@@ -1227,17 +1227,24 @@ async fn execute_command(
                         .await
                         .map_err(|reason| CommandError {
                             code: reason.clone(),
-                            message: format!("Codex Console turn {run_id} did not take the steer: {reason}"),
+                            message: format!(
+                                "Codex Console turn {run_id} did not take the steer: {reason}"
+                            ),
                         })?;
                     CODEX_EXEC_ADAPTER
                 }
                 "claude" => {
-                    crate::claude_print::steer_claude_print_turn(&run_id, &session_id, &text).map_err(|reason| {
-                        CommandError {
-                            code: if reason == "turn_not_steerable" { reason.clone() } else { "steer_failed".to_string() },
-                            message: format!("Claude Console turn {run_id} did not take the steer: {reason}"),
-                        }
-                    })?;
+                    crate::claude_print::steer_claude_print_turn(&run_id, &session_id, &text)
+                        .map_err(|reason| CommandError {
+                            code: if reason == "turn_not_steerable" {
+                                reason.clone()
+                            } else {
+                                "steer_failed".to_string()
+                            },
+                            message: format!(
+                                "Claude Console turn {run_id} did not take the steer: {reason}"
+                            ),
+                        })?;
                     CLAUDE_PRINT_ADAPTER
                 }
                 _ => {

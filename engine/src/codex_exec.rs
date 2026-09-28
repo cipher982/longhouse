@@ -49,7 +49,8 @@ struct ConsoleSteer {
 /// Registered once `turn/start` returns the provider turn id and removed when
 /// the turn loop exits, so a run the daemon recovered after a restart (no live
 /// app-server connection) is correctly not steerable.
-fn console_steer_registry() -> &'static Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleSteer>>> {
+fn console_steer_registry() -> &'static Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleSteer>>>
+{
     static REGISTRY: OnceLock<Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleSteer>>>> =
         OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
@@ -1148,8 +1149,10 @@ async fn run_app_server_turn(
     // A steer's reply arrives on the same stream as the turn's events, so it
     // is matched here instead of through `request`, which would swallow a
     // `turn/completed` that lands before the reply.
-    let mut pending_steers: HashMap<u64, tokio::sync::oneshot::Sender<std::result::Result<(), String>>> =
-        HashMap::new();
+    let mut pending_steers: HashMap<
+        u64,
+        tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+    > = HashMap::new();
 
     let turn_outcome = tokio::time::timeout(APP_SERVER_TURN_TIMEOUT, async {
         loop {

@@ -290,7 +290,11 @@ pub async fn recover_claude_print_turns(
 /// Enter a running Claude Console turn with `text` (see
 /// `claude_channel_control::record_console_steer`). `Err("turn_not_steerable")`
 /// unless this run's recorded Claude process is still the live one.
-pub fn steer_claude_print_turn(run_id: &str, session_id: &str, text: &str) -> std::result::Result<(), String> {
+pub fn steer_claude_print_turn(
+    run_id: &str,
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<(), String> {
     let not_steerable = || "turn_not_steerable".to_string();
     let registry = crate::turn_claims::default_registry().map_err(|err| err.to_string())?;
     let claim = registry.read(run_id).map_err(|_| not_steerable())?;
@@ -310,7 +314,8 @@ pub fn steer_claude_print_turn(run_id: &str, session_id: &str, text: &str) -> st
     if !alive {
         return Err(not_steerable());
     }
-    crate::claude_channel_control::record_console_steer(session_id, text).map_err(|err| err.to_string())
+    crate::claude_channel_control::record_console_steer(session_id, text)
+        .map_err(|err| err.to_string())
 }
 
 pub fn interrupt_claude_print_turn(

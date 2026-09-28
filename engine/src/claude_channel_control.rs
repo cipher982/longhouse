@@ -193,14 +193,21 @@ pub fn record_console_steer(session_id: &str, text: &str) -> Result<(), ClaudeCh
     let state_path = state_file_path(session_id, None)?;
     if let Some(parent) = state_path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| {
-            ClaudeChannelControlError::CommandFailed(format!("failed to prepare Claude steer path: {err}"))
+            ClaudeChannelControlError::CommandFailed(format!(
+                "failed to prepare Claude steer path: {err}"
+            ))
         })?;
     }
     std::fs::write(
         state_path.with_extension(STEER_REQUEST_EXTENSION),
-        serde_json::to_vec(&json!({"text": text, "requested_at": Utc::now().to_rfc3339()})).unwrap_or_default(),
+        serde_json::to_vec(&json!({"text": text, "requested_at": Utc::now().to_rfc3339()}))
+            .unwrap_or_default(),
     )
-    .map_err(|err| ClaudeChannelControlError::CommandFailed(format!("failed to record Claude steer request: {err}")))
+    .map_err(|err| {
+        ClaudeChannelControlError::CommandFailed(format!(
+            "failed to record Claude steer request: {err}"
+        ))
+    })
 }
 
 async fn inject(

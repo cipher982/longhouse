@@ -833,7 +833,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "a341d890cfb1347ebd2374102d7bade161a30f31bde7bcabaa0521a25ecc17ee"
+      "adapter_digest": "bdd1c607e1cf58c57410f8722048a3b3c4d7fd4721bbe1cfc3fb307660452c50"
     },
     {
       "provider": "claude",
@@ -1754,7 +1754,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "781cbbfd7d192a94df762b6433f8a526e23047ca9191c4777befe1f82abf4f2d"
+      "adapter_digest": "5a0421e557a54e578def9dff9abb97e67f3133c574411c7d96906c6c2f83fb2c"
     },
     {
       "provider": "opencode",
