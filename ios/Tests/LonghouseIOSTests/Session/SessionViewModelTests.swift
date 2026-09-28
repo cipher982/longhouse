@@ -846,9 +846,11 @@ struct SessionViewModelTests {
         #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.text == "do not lose this")
-        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
+        // Never reached the server: keep sending under the same request ID
+        // instead of asking the user to retry.
+        #expect(model.submittedInputs.first?.phase == .submitting)
+        #expect(model.submittedInputs.first?.lastError == SessionViewModel.reconnectingDetail)
         #expect(model.errorMessage == nil)
-        #expect(model.refreshErrorMessage?.contains("confirm delivery") == true)
         #expect(model.refreshErrorMessage?.contains("Send failed") != true)
     }
 

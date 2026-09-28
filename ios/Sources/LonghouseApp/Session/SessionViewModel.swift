@@ -1226,10 +1226,68 @@ final class SessionViewModel: ObservableObject {
         )
     }
 
+    /// A send that never reached the server (network drop, a deploy
+    /// restart's 502/503, a draining runtime) is re-sent under the same
+    /// request ID; server idempotency makes it land at most once. The row
+    /// keeps "Sending…" meanwhile; an exhausted budget becomes "Not confirmed".
+    private static let automaticResendDelays: [Duration] = [
+        .seconds(1), .seconds(2), .seconds(3), .seconds(5), .seconds(8),
+        .seconds(10), .seconds(10), .seconds(15), .seconds(15), .seconds(20),
+    ]
+    static let reconnectingDetail = "reconnecting to Longhouse"
+
+    private func transportNeverReachedServer(_ error: Error) -> Bool {
+        switch error {
+        case let apiError as LonghouseAPIError:
+            switch apiError {
+            case .structured(_, _, _):
+                return apiError.isRuntimeDraining
+            case .upstreamFailed, .serviceUnavailable:
+                return true
+            default:
+                return false
+            }
+        case let urlError as URLError:
+            return [.notConnectedToInternet, .networkConnectionLost, .timedOut,
+                    .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed].contains(urlError.code)
+        default:
+            return false
+        }
+    }
+
+    private func scheduleAutomaticResend(
+        _ pending: PendingInputIntent,
+        sessionId: String,
+        appState: AppState,
+        attempt: Int
+    ) -> Bool {
+        guard attempt < Self.automaticResendDelays.count else { return false }
+        updateSubmittedInput(
+            pending.clientRequestId,
+            phase: .submitting,
+            serverInputId: nil,
+            lastError: Self.reconnectingDetail
+        )
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.automaticResendDelays[attempt])
+            guard let self,
+                  self.submittedInputs.first(where: { $0.clientRequestId == pending.clientRequestId })?.phase == .submitting
+            else { return }
+            _ = await self.dispatchPendingInput(
+                pending,
+                sessionId: sessionId,
+                appState: appState,
+                automaticResendAttempt: attempt + 1
+            )
+        }
+        return true
+    }
+
     private func dispatchPendingInput(
         _ pending: PendingInputIntent,
         sessionId: String,
-        appState: AppState
+        appState: AppState,
+        automaticResendAttempt: Int = 0
     ) async -> SessionInputSendResult {
         guard let api = apiFactory(appState.serverURL) else {
             updateSubmittedInput(
@@ -1399,6 +1457,12 @@ final class SessionViewModel: ObservableObject {
                 errorMessage = nil
                 return .rejected
             }
+            if inputError.errorCode?.lowercased() == "runtime_draining",
+               inputError.inputId == nil, inputError.liveInputId == nil,
+               scheduleAutomaticResend(pending, sessionId: sessionId, appState: appState, attempt: automaticResendAttempt) {
+                errorMessage = nil
+                return .unknown
+            }
             let ambiguousDelivery = isUncertainDeliveryError(inputError.errorCode)
             let cancelled = ["cancelled", "canceled"].contains(
                 inputError.deliveryStatus?.lowercased() ?? ""
@@ -1433,6 +1497,11 @@ final class SessionViewModel: ObservableObject {
             return .rejected
         } catch {
             let failureMessage = sendFailureMessage(for: error)
+            if transportNeverReachedServer(error),
+               scheduleAutomaticResend(pending, sessionId: sessionId, appState: appState, attempt: automaticResendAttempt) {
+                errorMessage = nil
+                return .unknown
+            }
             if sendConfirmationMayHaveLanded(error) {
                 updateSubmittedInput(
                     pending.clientRequestId,

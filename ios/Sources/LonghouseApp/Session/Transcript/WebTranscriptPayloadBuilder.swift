@@ -709,7 +709,7 @@ extension WebTranscriptView {
         // One vocabulary with web: "Sending…" only while the POST is in
         // flight. A running Console turn means the server has the input, so
         // it reads "Sent"; turn progress belongs to the activity dock.
-        case .submitting: return "Sending…"
+        case .submitting: return lastError.map { "Sending… — \($0)" } ?? "Sending…"
         case .working, .sent: return "Sent"
         case .queued: return "Queued · sends after this turn"
         case .couldNotConfirm: return "Not confirmed"
