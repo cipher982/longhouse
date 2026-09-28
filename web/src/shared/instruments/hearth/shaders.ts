@@ -248,7 +248,8 @@ precision highp float; in vec2 v_uv; flat in vec4 v_glow; flat in vec4 v_clip; o
 void main(){
  if(gl_FragCoord.x<v_clip.x||gl_FragCoord.y<v_clip.y||gl_FragCoord.x>v_clip.z||gl_FragCoord.y>v_clip.w) discard;
  vec2 d=(v_uv-vec2(0.5,0.3))*vec2(2.0,1.7);
- float g=exp(-dot(d,d)*2.6)*(1.0-smoothstep(0.75,1.0,length(d)));
+ // Fade out toward the rect's bottom edge, which otherwise cuts the pool off in a line.
+ float g=exp(-dot(d,d)*2.6)*(1.0-smoothstep(0.75,1.0,length(d)))*smoothstep(0.0,0.3,v_uv.y);
  o=vec4(v_glow.rgb*g,0.0);}`;
   // flame height probe: one fragment per tile reports the height below which
   // 96% of its luminous emission lies, plus the total

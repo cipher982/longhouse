@@ -1,0 +1,81 @@
+/* Hearth reel: sized in viewport units so any recording size frames the same. */
+
+html,
+body,
+#hearth-reel-root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-surface-page);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+#hearth-reel-root > .hearth-host {
+  height: 100%;
+}
+
+.hearth-reel {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: end;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 3vw 13vh;
+}
+
+.hearth-reel__station {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  text-align: center;
+}
+
+.hearth-reel .hearth-lamp {
+  --hearth-w: 15vw;
+  --hearth-h: 48vh;
+  flex-direction: column;
+  gap: 4.5vh;
+  font-size: 2.35vw;
+  letter-spacing: 0;
+}
+
+.hearth-reel .hearth-lamp[data-state="working"] {
+  text-shadow: 0 0 1.2vw rgba(240, 138, 36, 0.5);
+}
+
+.hearth-reel__title {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+  margin-top: 2.2vh;
+  max-width: 100%;
+  font-size: 1.45vw;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.hearth-reel__title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hearth-reel__detail {
+  margin-top: 0.9vh;
+  font-size: 1.2vw;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.hearth-reel__mark {
+  position: fixed;
+  left: 3vw;
+  top: 4.5vh;
+  font-size: 1.35vw;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+}
