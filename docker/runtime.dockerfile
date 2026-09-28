@@ -278,4 +278,7 @@ EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]
 # Start server - serves both API and frontend
-CMD ["sh", "-lc", "/app/.venv/bin/python -m zerg.cli.main serve --host 0.0.0.0 --port ${LONGHOUSE_RUNTIME_PORT}"]
+# `exec` so the server replaces the shell as PID 1 and receives SIGTERM. A
+# shell PID 1 does not forward it: every stop waited out Docker's full stop
+# timeout and SIGKILLed the server (20 s of dead time per tenant deploy).
+CMD ["sh", "-lc", "exec /app/.venv/bin/python -m zerg.cli.main serve --host 0.0.0.0 --port ${LONGHOUSE_RUNTIME_PORT}"]
