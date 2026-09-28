@@ -3197,3 +3197,40 @@ def test_startup_reconciliation_returns_queued_sessions_for_boot_drain_idempoten
         assert retry_refreshed.delivery_request_id is None
         assert steer_refreshed.status == INPUT_STATUS_FAILED
         assert steer_refreshed.last_error == "steer interrupted by restart"
+
+
+def test_idle_send_parks_when_the_control_channel_drops_at_dispatch(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
+    """A channel that drops between the capability check and the dispatch makes
+    the send late, never lost: the receipt parks for the drain."""
+
+    from fastapi.responses import JSONResponse
+
+    import zerg.routers.session_chat as route
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+
+    email = "live-idle-channel-drop@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+
+    async def channel_dropped(**_kwargs):
+        return JSONResponse(status_code=409, content={"error": MANAGED_CONTROL_UNAVAILABLE_ERROR})
+
+    monkeypatch.setattr(route, "_build_managed_local_chat_response", channel_dropped)
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "hello while reconnecting", "intent": "auto", "client_request_id": "idle-drop-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["outcome"] == "queued"
+        receipt = live_catalog_client.get(
+            f"/sessions/{session_id}/inputs",
+            params={"client_request_id": "idle-drop-1"},
+            cookies=cookies,
+        ).json()
+        assert receipt and receipt[0]["status"] == "queued", receipt
+    finally:
+        asyncio.run(_clear_machine_control_registry())

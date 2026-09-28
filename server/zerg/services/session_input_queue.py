@@ -90,9 +90,12 @@ def _resolve_session_owner_id(db: Session) -> int:
     return int(owner[0])
 
 
-def _is_transient_managed_control_unavailable(error_code: str | None, error_message: str | None) -> bool:
-    if error_code != SESSION_TURN_ERROR_SEND_FAILED:
-        return False
+def managed_control_momentarily_unavailable(error_message: str | None) -> bool:
+    """The machine's control channel was not there for this dispatch.
+
+    Channels drop and reconnect (a Machine Agent restart, a network blip), so
+    this is late delivery, not a failed input.
+    """
     message = str(error_message or "")
     transient_fragments = (
         MANAGED_CONTROL_UNAVAILABLE_ERROR,
@@ -100,6 +103,12 @@ def _is_transient_managed_control_unavailable(error_code: str | None, error_mess
         "Failed to send command to Machine Agent control channel",
     )
     return any(fragment in message for fragment in transient_fragments)
+
+
+def _is_transient_managed_control_unavailable(error_code: str | None, error_message: str | None) -> bool:
+    if error_code != SESSION_TURN_ERROR_SEND_FAILED:
+        return False
+    return managed_control_momentarily_unavailable(error_message)
 
 
 def _latest_runtime_phase(db: Session, session_id: UUID) -> str | None:

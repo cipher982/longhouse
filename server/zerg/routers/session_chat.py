@@ -2831,6 +2831,27 @@ async def _create_catalog_session_input_response(
                         delivery_status="unknown",
                     ),
                 )
+            from zerg.services.session_input_queue import managed_control_momentarily_unavailable
+
+            if managed_control_momentarily_unavailable(error):
+                # The channel dropped between the capability check and the
+                # dispatch. Park the input for the drain, which retries queued
+                # receipts and delivers once the machine reconnects: late,
+                # never lost, and the sender is told it is queued.
+                await _finish_catalog_input_receipt(
+                    receipt_id=receipt_id,
+                    delivery_request_id=delivery_request_id,
+                    status_value="queued",
+                    error=error,
+                )
+                return SessionInputResponse(
+                    outcome="queued",
+                    input_id=None,
+                    live_input_id=receipt_id,
+                    client_request_id=client_request_id,
+                    intent=body.intent,
+                    queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+                )
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
                 delivery_request_id=delivery_request_id,
