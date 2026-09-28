@@ -1,8 +1,9 @@
 import XCTest
 
 /// Frames of the inbox gallery fixture in both appearances, for before/after
-/// visual comparison (`make ios-ui-shot TEST=InboxCaptureUITests`). Skipped by
-/// the smoke plan: they capture, they do not gate.
+/// visual comparison (`make ios-ui-shot TEST=InboxCaptureUITests/<test>`). Skipped by
+/// the smoke plan method by method: a class-level skip would also swallow an
+/// explicit -only-testing selection. They capture, they do not gate.
 @MainActor
 final class InboxCaptureUITests: XCTestCase {
     override func setUpWithError() throws {
