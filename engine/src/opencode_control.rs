@@ -1224,7 +1224,23 @@ mod tests {
                 });
             }
         }
-        let mut child = TestChild::new(command.spawn().unwrap());
+        // A parallel test that forks while fs::write above still held its
+        // write fd leaves a child briefly holding that fd until its own exec
+        // closes it (O_CLOEXEC). Exec during that window fails with ETXTBSY,
+        // so retry: the window is microseconds wide.
+        let mut attempts = 0;
+        let spawned = loop {
+            match command.spawn() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 =>
+                {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
+        let mut child = TestChild::new(spawned);
         for _ in 0..30 {
             let status = child.child.try_wait().unwrap();
             assert!(
