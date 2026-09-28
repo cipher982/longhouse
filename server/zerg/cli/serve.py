@@ -691,6 +691,11 @@ def serve(
         # pings have been flaky behind hosted proxies for non-browser clients,
         # and the control route has its own receive timeout for stale sockets.
         ws_ping_interval=None,
+        # Session event streams never close on their own, so an unbounded
+        # graceful shutdown waited out the whole deploy stop timeout (20 s)
+        # before SIGKILL. Writes are already drained by then; cut the streams
+        # and let clients reconnect to the new process.
+        timeout_graceful_shutdown=5,
     )
 
 
