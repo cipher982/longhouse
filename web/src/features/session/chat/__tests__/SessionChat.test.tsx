@@ -986,6 +986,111 @@ describe("SessionChat", () => {
     second.unmount();
   });
 
+  it("keeps other stored sends when one attachment payload is missing", async () => {
+    window.localStorage.setItem(
+      "longhouse:session-input:sess-1:web-lost-images",
+      JSON.stringify({
+        sessionId: "sess-1",
+        text: "images were here",
+        intent: "auto",
+        clientRequestId: "web-lost-images",
+        attachments: [{ filename: "shot.png", type: "image/png", size: 10 }],
+        createdAt: 1,
+      }),
+    );
+    window.localStorage.setItem(
+      "longhouse:session-input:sess-1:web-text-only",
+      JSON.stringify({
+        sessionId: "sess-1",
+        text: "plain text survives",
+        intent: "auto",
+        clientRequestId: "web-text-only",
+        attachments: [],
+        createdAt: 2,
+      }),
+    );
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs")) return Promise.resolve([]);
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({ id: "sess-1" }),
+    });
+
+    expect(await screen.findByText("plain text survives")).toBeInTheDocument();
+    expect(await screen.findByText("images were here")).toBeInTheDocument();
+    expect(
+      screen.getByText(/this browser lost its images/),
+    ).toBeInTheDocument();
+    // Only the text-only row may offer a same-ID retry.
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+  });
+
+  it("rejects a send whose request ID already belongs to a different payload", async () => {
+    const user = userEvent.setup();
+    const onOutboxChange = vi.fn();
+    let exactLookupCount = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      const requestPath = String(path);
+      if (requestPath.endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (requestPath.includes("/inputs?client_request_id=")) {
+        exactLookupCount += 1;
+        return Promise.resolve({ id: 7, status: "delivered" });
+      }
+      if (requestPath.endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (requestPath.endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        return Promise.reject(
+          new ApiError({
+            url: requestPath,
+            status: 409,
+            body: {
+              detail: {
+                error_code: "idempotency_conflict",
+                message: "Request ID reused with a different payload.",
+                disposition: "accepted",
+                delivery_status: "delivered",
+                client_request_id: payload.client_request_id,
+                live_input_id: "earlier-input",
+              },
+            },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      timelineItems: [],
+      onOutboxChange,
+      session: makeSession({ provider: "codex" }),
+    });
+    await user.type(screen.getByRole("textbox"), "a different message");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      const calls = onOutboxChange.mock.calls;
+      const entries = (calls[calls.length - 1]?.[0] ?? []) as OutboxEntry[];
+      expect(entries[0]).toMatchObject({
+        text: "a different message",
+        state: "failed",
+        detail: expect.stringMatching(/already belongs to a different message/),
+      });
+    });
+    // The earlier input's receipt must not stand in for this one.
+    expect(exactLookupCount).toBe(0);
+  });
+
   it("keeps runtime-draining refusal retryable with the same operation ID", async () => {
     const user = userEvent.setup();
     const { ApiError } = await import("@/shared/api/base");

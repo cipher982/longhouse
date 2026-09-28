@@ -1522,7 +1522,7 @@ def _console_turn_response(turn) -> ConsoleTurnReceiptResponse:
         receipt_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
         run_id=str(turn.run_id) if getattr(turn, "run_id", None) is not None else None,
         state=str(turn.state),
-        is_fresh=True,
+        is_fresh=bool(getattr(turn, "is_fresh", True)),
     )
 
 

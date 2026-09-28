@@ -69,6 +69,9 @@ interface PendingManagedLocalInput {
   legacyModelMissing?: boolean;
   attachments: { blob: Blob; filename: string }[];
   attachmentSummaries?: { filename: string; mimeType: string | null; byteSize: number }[];
+  /** The stored images were lost from this browser, so a same-ID retry would
+   * resend text without them. Recovery comes only from the server receipt. */
+  attachmentsLost?: boolean;
   /** Server ownership phase; Console turns remain here until terminal. */
   phase:
     | "submitting"
@@ -98,6 +101,10 @@ interface ManagedSendOptions {
 }
 
 /** A delivered input keeps a lightweight row until its exact transcript echo. */
+const IDEMPOTENCY_CONFLICT_ERROR =
+  "Not sent: this request ID already belongs to a different message.";
+const ATTACHMENTS_LOST_ERROR =
+  "Not confirmed, and this browser lost its images; send it again with the images.";
 const UNCONFIRMED_DELIVERY_ERROR =
   "Delivery is not confirmed; retry with the same request.";
 const STALE_CONSOLE_TURN_DETAIL =
@@ -443,24 +450,32 @@ async function loadInputOutboxes(
   {
     metadata: StoredInputOutbox;
     attachments: { blob: Blob; filename: string }[];
+    attachmentsLost: boolean;
   }[]
 > {
   const metadata = readInputOutboxes(sessionId);
   const loaded: {
     metadata: StoredInputOutbox;
     attachments: { blob: Blob; filename: string }[];
+    attachmentsLost: boolean;
   }[] = [];
   for (const entry of metadata) {
     if (entry.deliveryConfirmed || entry.attachments.length === 0) {
-      loaded.push({ metadata: entry, attachments: [] });
+      loaded.push({ metadata: entry, attachments: [], attachmentsLost: false });
       continue;
     }
     const payload = await readInputOutboxPayload(
       sessionId,
       entry.clientRequestId,
     );
-    if (!payload) throw new Error("Stored attachment payload is missing");
-    loaded.push({ metadata: entry, attachments: payload.attachments });
+    // One lost IndexedDB record must not drop every other stored send. Keep
+    // the operation so its row can still settle from the server's receipt,
+    // but never offer a retry that would silently drop its images.
+    loaded.push({
+      metadata: entry,
+      attachments: payload?.attachments ?? [],
+      attachmentsLost: !payload,
+    });
   }
   return loaded;
 }
@@ -638,7 +653,7 @@ export function SessionChat({
       .then((stored) => {
         if (!mounted || stored.length === 0) return;
         setPendingManagedLocalInputs(
-          stored.map(({ metadata, attachments }) => ({
+          stored.map(({ metadata, attachments, attachmentsLost }) => ({
             text: metadata.text,
             clientRequestId: metadata.clientRequestId,
             serverInputId: null,
@@ -653,6 +668,8 @@ export function SessionChat({
               byteSize: attachment.size,
             })),
             phase: metadata.deliveryConfirmed ? "delivered" : "unknown",
+            attachmentsLost,
+            detail: attachmentsLost ? ATTACHMENTS_LOST_ERROR : undefined,
           })),
         );
       })
@@ -1467,6 +1484,14 @@ export function SessionChat({
             error: UNCONFIRMED_DELIVERY_ERROR,
           };
         }
+        if (
+          structured?.error_code === "idempotency_conflict" ||
+          structured?.error_code === "input_conflict"
+        ) {
+          // The request ID already belongs to a different payload. Its receipt
+          // confirms that earlier input, not this one, so this send failed.
+          return setRejected(IDEMPOTENCY_CONFLICT_ERROR);
+        }
         let exactReceipt: QueuedInputSummary | null = null;
         try {
           exactReceipt = await fetchSessionInput(session.id, clientRequestId);
@@ -1980,7 +2005,7 @@ export function SessionChat({
           ...base,
           state: "unconfirmed",
           detail: pending.detail || UNCONFIRMED_DELIVERY_ERROR,
-          actions: [
+          actions: pending.attachmentsLost ? [] : [
             {
               label: "Retry",
               disabled: isSubmitting,
@@ -2531,7 +2556,9 @@ export function SessionChat({
                       </span>
                       <span className="session-chat-pending-message__status">
                         {pendingInput.phase === "unknown"
-                          ? "Not confirmed — retry with the same request"
+                          ? pendingInput.attachmentsLost
+                            ? ATTACHMENTS_LOST_ERROR
+                            : "Not confirmed — retry with the same request"
                           : pendingInput.phase === "failed"
                             ? pendingInput.detail || "Not delivered"
                             : pendingInput.phase === "queued"
@@ -2552,7 +2579,8 @@ export function SessionChat({
                             .join(", ")}
                         </span>
                       ) : null}
-                      {pendingInput.phase === "unknown" ? (
+                      {pendingInput.phase === "unknown" &&
+                      !pendingInput.attachmentsLost ? (
                         <Button
                           type="button"
                           variant="secondary"

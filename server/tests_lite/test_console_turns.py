@@ -231,6 +231,7 @@ async def test_console_enqueue_persists_attachment_refs_and_compares_their_diges
     first = live_catalog.rpc("session.console.turn.enqueue.v2", {"turn": turn})
     assert first["found"] is True and first["created"] is True
     assert first["turn"]["attachments"] == [ref]
+    assert first["turn"]["is_fresh"] is True
     initial_turn = first["turn"]
     update = live_catalog.rpc(
         "session.console.turn.update.v2",
@@ -668,3 +669,39 @@ async def test_replayed_terminal_turn_reports_launch_failures_only(monkeypatch, 
     assert replayed.state == stored["state"]
     assert replayed.error_code == expected_error_code
     assert replayed.error == expected_error
+
+
+@pytest.mark.asyncio
+async def test_replayed_stale_nonterminal_turn_is_not_presented_as_current(monkeypatch):
+    """An idempotent replay returns the stored row unchanged, so the POST
+    response must carry catalogd's freshness verdict rather than claim fresh."""
+    from zerg.routers.session_chat import _console_turn_response
+    from zerg.services.console_turns import enqueue_catalog_console_turn
+
+    turn = {
+        "turn_id": str(uuid4()),
+        "session_id": str(uuid4()),
+        "thread_id": str(uuid4()),
+        "run_id": str(uuid4()),
+        "provider": "claude",
+        "device_id": "cube",
+        "state": "active",
+        "is_fresh": False,
+    }
+
+    class Catalog:
+        async def call(self, method, params):
+            assert method == "session.console.turn.enqueue.v2"
+            return {"found": True, "created": False, "turn": turn, "commit_seq": "9"}
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: Catalog())
+
+    replayed = await enqueue_catalog_console_turn(
+        owner_id=1,
+        session_id=uuid4(),
+        message="hello",
+        client_request_id="console-stale-replay",
+    )
+
+    assert replayed.is_fresh is False
+    assert _console_turn_response(replayed).is_fresh is False

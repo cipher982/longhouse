@@ -72,6 +72,9 @@ class CatalogConsoleTurn:
     receipt_id: UUID | None = None
     error_code: str | None = None
     error: str | None = None
+    #: catalogd's freshness verdict for the stored row. A newly written turn
+    #: is fresh; an idempotent replay may return an old nonterminal one.
+    is_fresh: bool = True
 
 
 @dataclass(frozen=True)
@@ -304,6 +307,7 @@ async def enqueue_catalog_console_turn(
             receipt_id=receipt_id,
             error_code=error_code,
             error=(str(turn.get("error") or "") or None) if error_code else None,
+            is_fresh=bool(turn.get("is_fresh", True)),
         )
     control = registry or get_machine_control_channel_registry()
     provider = str(turn["provider"])

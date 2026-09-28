@@ -736,6 +736,9 @@ def _live_console_turn_dto(
         # without consuming the starting-state TTL.
         "created_at": _encode_datetime(turn.created_at),
         "updated_at": _encode_datetime(turn.updated_at),
+        # An idempotent replay returns this row unchanged; the caller must not
+        # present an old nonterminal turn as current work.
+        "is_fresh": _console_turn_state_is_fresh(turn),
     }
 
 
