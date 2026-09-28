@@ -523,6 +523,11 @@ function hasProviderDeliveryUnknownError(error?: string | null): boolean {
   );
 }
 
+// The server has the input: a Console turn is running on it, or delivery
+// finished. The user's row reads "Sent" and clears once its echo appears;
+// what the agent is doing belongs to the activity headline, not the row.
+const ACCEPTED_INPUT_PHASES = new Set(["starting", "active", "draining", "delivered"]);
+
 const NONTERMINAL_CONSOLE_TURN_STATES = new Set([
   "queued",
   "starting",
@@ -739,7 +744,7 @@ export function SessionChat({
   useEffect(() => {
     if (pendingManagedLocalInputs.length === 0 || !timelineItems) return;
     const resolvedIds = pendingManagedLocalInputs
-      .filter((pending) => pending.phase === "delivered")
+      .filter((pending) => ACCEPTED_INPUT_PHASES.has(pending.phase))
       .filter((pending) => durableSubmittedInputRowId(timelineItems, pending) != null)
       .map((pending) => pending.clientRequestId);
     if (resolvedIds.length === 0) return;
@@ -837,8 +842,8 @@ export function SessionChat({
     staleTime: 10_000,
   });
 
-  const hasDeliveredLocalInput = pendingManagedLocalInputs.some(
-    (pending) => pending.phase === "delivered",
+  const hasDeliveredLocalInput = pendingManagedLocalInputs.some((pending) =>
+    ACCEPTED_INPUT_PHASES.has(pending.phase),
   );
   useEffect(() => {
     if (!hasDeliveredLocalInput || !timelineItems?.length) return;
@@ -908,7 +913,7 @@ export function SessionChat({
 
   useEffect(() => {
     const linkedIds = pendingManagedLocalInputs
-      .filter((pending) => pending.phase === "delivered")
+      .filter((pending) => ACCEPTED_INPUT_PHASES.has(pending.phase))
       .filter((pending) => {
         const receipt =
           exactInputRows.get(pending.clientRequestId) ??
@@ -1942,18 +1947,21 @@ export function SessionChat({
           state: "unconfirmed",
           detail: STALE_CONSOLE_TURN_DETAIL,
         });
+      } else if (turnState === "queued") {
+        queued.push({
+          key,
+          text: row.text,
+          attachments,
+          state: "queued",
+          actions: [cancelAction(row)],
+        });
       } else if (
         turnState &&
         NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)
       ) {
-        (turnState === "queued" ? queued : inFlight).push({
-          key,
-          text: row.text,
-          attachments,
-          state: turnState === "queued" ? "queued" : "sending",
-          detail: `Console turn ${turnState}`,
-          actions: turnState === "queued" ? [cancelAction(row)] : undefined,
-        });
+        if (!row.durable_event_id) {
+          inFlight.push({ key, text: row.text, attachments, state: "sent" });
+        }
       } else if (row.status === "delivering") {
         inFlight.push({ key, text: row.text, attachments, state: "sending" });
       } else if (row.status === "queued") {
@@ -2043,20 +2051,14 @@ export function SessionChat({
             },
           ],
         });
-      } else if (
-        pending.phase === "queued" ||
-        pending.phase === "starting" ||
-        pending.phase === "active" ||
-        pending.phase === "draining"
-      ) {
-        const isQueued = pending.phase === "queued";
-        (isQueued ? queued : inFlight).push({
+      } else if (pending.phase === "queued") {
+        queued.push({
           ...base,
-          state: isQueued ? "queued" : "sending",
-          detail: `Console turn ${pending.phase}`,
-          actions:
-            isQueued && receipt ? [cancelAction(receipt)] : undefined,
+          state: "queued",
+          actions: receipt ? [cancelAction(receipt)] : undefined,
         });
+      } else if (ACCEPTED_INPUT_PHASES.has(pending.phase)) {
+        inFlight.push({ ...base, state: "sent" });
       } else {
         inFlight.push({
           ...base,

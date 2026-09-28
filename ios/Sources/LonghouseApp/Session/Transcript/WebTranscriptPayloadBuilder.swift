@@ -706,11 +706,11 @@ extension WebTranscriptView {
 
     private nonisolated static func submittedStatus(_ phase: SubmittedInputPhase, lastError: String?) -> String {
         switch phase {
-        // One vocabulary with web: the durable echo replacing this row is the
-        // confirmation, and turn progress belongs to the composer, so every
-        // in-flight phase reads the same.
-        case .submitting, .working: return "Sending…"
-        case .sent: return "Sent"
+        // One vocabulary with web: "Sending…" only while the POST is in
+        // flight. A running Console turn means the server has the input, so
+        // it reads "Sent"; turn progress belongs to the activity dock.
+        case .submitting: return "Sending…"
+        case .working, .sent: return "Sent"
         case .queued: return "Queued · sends after this turn"
         case .couldNotConfirm: return "Not confirmed"
         case .failed: return lastError.map { "Not delivered — \($0)" } ?? "Not delivered"

@@ -169,8 +169,8 @@ final class HTTPOutboxUITests: XCTestCase {
         XCTAssertEqual(retryPost.attachmentSha256, firstPost.attachmentSha256)
         XCTAssertEqual(retryPost.attachmentBytes, firstPost.attachmentBytes)
         XCTAssertTrue(
-            waitForWebViewText(liveWebView, containing: "Sending…", timeout: Self.timeout),
-            "an active Console turn is not a completed Sent state"
+            waitForWebViewText(liveWebView, containing: "Sent", timeout: Self.timeout),
+            "the server accepted the retry; turn progress belongs to the activity dock"
         )
         XCTAssertFalse(retrySend.exists, "active Console work must not offer another send retry")
         XCTAssertFalse(

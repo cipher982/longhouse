@@ -57,9 +57,19 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
-    func activeConsoleReceiptDoesNotResolveBeforeCompletion() {
+    func activeConsoleReceiptResolvesOnceItsEchoIsLinked() {
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
             submittedInputs: [input("req-1", phase: .working, turnId: "turn-1")],
+            events: [],
+            receipts: [receipt("req-1", eventId: "echo-1")]
+        )
+        #expect(resolved == ["req-1"])
+    }
+
+    @Test
+    func queuedConsoleTurnKeepsItsRowUntilItStarts() {
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("req-1", phase: .queued, turnId: "turn-1")],
             events: [],
             receipts: [receipt("req-1", eventId: "echo-1")]
         )

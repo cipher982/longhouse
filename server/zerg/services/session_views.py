@@ -501,7 +501,9 @@ def project_compat_capabilities_from_state(
             "host_reattach_available": reattach_available,
             "reply_to_live_session_available": send_available,
             "can_queue_next_input": send_available,
-            "can_steer_active_turn": send_available and session_state.activity.state == "executing",
+            # A Console turn cannot be steered: the server refuses steer and
+            # queues the next turn instead, so never offer it to a client.
+            "can_steer_active_turn": not console and send_available and session_state.activity.state == "executing",
             "display_label": compatibility_label,
             "display_detail": (
                 "Messages start or queue a turn on the selected machine." if console and send_available else capabilities.display_detail

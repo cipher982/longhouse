@@ -86,8 +86,7 @@ body {
   background: var(--user-pending);
 }
 
-.submitted.submitting .bubble,
-.submitted.working .bubble {
+.submitted.submitting .bubble {
   animation: submitted-breathe 1.8s ease-in-out infinite;
 }
 
@@ -148,8 +147,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .submitted.submitting .bubble,
-  .submitted.working .bubble {
+  .submitted.submitting .bubble {
     animation: none;
     opacity: 0.65;
   }

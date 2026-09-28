@@ -2770,7 +2770,7 @@ describe("SessionChat", () => {
       await user.click(screen.getByRole("button", { name: /send/i }));
       await waitFor(() =>
         expect(lastOutbox(onOutboxChange)).toMatchObject([
-          { state: "sending", text: "keep this Console turn" },
+          { state: "sent", text: "keep this Console turn" },
         ]),
       );
       const outboxKey = `longhouse:session-input:sess-1:${clientRequestId}`;
@@ -2847,7 +2847,7 @@ describe("SessionChat", () => {
           () =>
             expect(lastOutbox(onOutboxChange)).toMatchObject([
               {
-                state: "sending",
+                state: "sent",
                 text: "",
                 attachments: [
                   {
@@ -3149,10 +3149,9 @@ describe("SessionChat", () => {
       fireEvent.click(screen.getByRole("button", { name: /send/i }));
       await waitFor(() => {
         expect(lastOutbox(onOutboxChange)).toMatchObject([
-          { state: "sending", text: "keep bytes" },
+          { state: "sent", text: "keep bytes" },
         ]);
       });
-      expect(screen.queryByText("Sent")).not.toBeInTheDocument();
       expect(
         window.localStorage.getItem(
           `longhouse:session-input:sess-1:${clientRequestId}`,

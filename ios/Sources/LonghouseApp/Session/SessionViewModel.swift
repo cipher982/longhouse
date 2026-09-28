@@ -3266,10 +3266,10 @@ final class SessionViewModel: ObservableObject {
                 || input.phase == .working
                 || input.phase == .couldNotConfirm
             else { continue }
-            // A Console turn's receipt/event may link before provider
-            // execution finishes. Keep its bytes through queued/working
-            // states; only a completed turn is represented as .sent.
-            if input.turnId != nil && input.phase != .sent { continue }
+            // A Console turn's echo can land while the turn still runs; once
+            // the server accepted it (.working or .sent) the echo replaces the
+            // row. A queued turn has not started, so it keeps its row.
+            if input.turnId != nil && input.phase != .sent && input.phase != .working { continue }
             if linkedRequestIds.contains(input.clientRequestId) {
                 resolved.insert(input.id)
                 continue
