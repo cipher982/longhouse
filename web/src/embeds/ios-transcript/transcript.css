@@ -1,0 +1,597 @@
+/* __LH_ROOT_BLOCK__ */
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  background: var(--page);
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font: -apple-system-body;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-wrap: anywhere;
+}
+
+#root {
+  min-height: 100vh;
+  /* SwiftUI lays the WebView out inside the safe area, so its frame already
+     stops above the floating control card. This is only the comfort gap. */
+  padding: 12px 16px 18px;
+  /* A short tail hugs the composer like a conversation, instead of
+     floating at the top over a blank band. Rows space themselves with
+     bottom margins only, so the flex column changes nothing else. */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.empty, .error {
+  min-height: 48vh;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--secondary);
+  padding: 24px;
+}
+
+.error {
+  color: var(--attention);
+}
+
+.row {
+  width: 100%;
+  margin: 0 0 10px;
+}
+
+.message {
+  max-width: 100%;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.message.user {
+  display: flex;
+  justify-content: flex-end;
+  padding-left: 48px;
+}
+
+/* Assistant prose: a plain document paragraph, no card, generous leading. */
+.message.assistant {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+
+/* The human message: a quiet neutral capsule. Right-alignment + fill is the
+   "this is you" signal — no outline needed, and no borrowed signal color. */
+.bubble {
+  display: inline-block;
+  max-width: 100%;
+  padding: 9px 14px 10px;
+  border-radius: 17px;
+  background: var(--user);
+  white-space: pre-wrap;
+}
+
+/* An unsent message sits exactly where its durable row will land, in
+   the same capsule; only its ink and the status line say it is unsent. */
+.submitted .bubble {
+  background: var(--user-pending);
+}
+
+.submitted.submitting .bubble,
+.submitted.working .bubble,
+.submitted.sent .bubble {
+  animation: submitted-breathe 1.8s ease-in-out infinite;
+}
+
+.submitted.queued .bubble {
+  background: transparent;
+  /* Outline, not border: the capsule keeps its size when it sends. */
+  outline: 1px dashed var(--rule);
+  outline-offset: -1px;
+  color: var(--secondary);
+}
+
+.submitted.couldNotConfirm .bubble,
+.submitted.failed .bubble {
+  opacity: 0.6;
+}
+
+.submitted-status {
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.submitted.couldNotConfirm .submitted-status,
+.submitted.failed .submitted-status {
+  color: var(--attention);
+}
+
+@keyframes submitted-breathe {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.85; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .submitted.submitting .bubble,
+  .submitted.working .bubble,
+  .submitted.sent .bubble {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.action-rule {
+  width: 22px;
+  height: 1px;
+  background: var(--rule);
+  flex-shrink: 0;
+}
+
+.action-title {
+  color: var(--primary);
+  font-weight: 650;
+}
+
+.provider-notification {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.provider-notification-mark {
+  color: var(--accent);
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.provider-notification-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.turn-end {
+  margin-top: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.origin {
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: right;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.message-content {
+  line-height: 1.45;
+}
+
+.media-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  max-width: 100%;
+}
+
+.message.user .media-strip {
+  justify-content: end;
+}
+
+.media-item {
+  display: block;
+  min-width: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  background: var(--code);
+}
+
+.media-item img {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.media-animated {
+  display: block;
+  padding: 4px 8px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.media-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--rule);
+  color: var(--secondary);
+  background: var(--code);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+p {
+  margin: 0 0 0.75em;
+}
+
+p:last-child {
+  margin-bottom: 0;
+}
+
+h1, h2, h3 {
+  margin: 0.35em 0 0.45em;
+  line-height: 1.18;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 17px;
+}
+
+h3 {
+  font-size: 15px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0.5em 0 0.75em;
+  border-radius: 7px;
+  border: 1px solid var(--rule);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9em;
+}
+
+th, td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+  white-space: normal;
+  vertical-align: top;
+}
+
+th {
+  font-weight: 650;
+  background: var(--code);
+  white-space: nowrap;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+td[align="center"], th[align="center"] { text-align: center; }
+td[align="right"],  th[align="right"]  { text-align: right; }
+
+ul {
+  margin: 0.25em 0 0.75em 1.25em;
+  padding: 0;
+}
+
+li {
+  margin: 0.22em 0;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.88em;
+  background: var(--code);
+  border-radius: 5px;
+  padding: 1px 4px;
+}
+
+pre {
+  margin: 8px 0 0;
+  padding: 9px;
+  border-radius: 7px;
+  background: var(--code);
+  overflow-x: auto;
+  white-space: pre;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+  white-space: pre;
+}
+
+a {
+  color: var(--link);
+}
+
+.expand {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--link);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  padding: 8px 0 0;
+}
+
+/* Tool rows demoted to footnotes: no box, no purple. A faint left rule
+   groups them under the turn; they read as quiet metadata, not cards.
+   Still fully expandable (preserve, never erase). */
+details.tool, details.passive {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  margin-left: 2px;
+  /* The brass trace down the left edge, the web's tool line. */
+  border-left: 1.5px solid var(--trace);
+  overflow: hidden;
+}
+
+summary {
+  min-height: 28px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 10px;
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-title {
+  /* A long edit list must trail off with an ellipsis, not run under the
+     right edge and take the count with it. */
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-subtitle {
+  min-width: 0;
+  flex: 1;
+  color: var(--tertiary);
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-meta {
+  color: var(--tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-meta.running {
+  color: var(--secondary);
+}
+
+/* A dropped or orphaned result is the loud tool signal — attention color.
+   Both mean "the result is missing/unexpected", the trust case we never
+   want to silently hide. */
+.tool-meta.dropped,
+.tool-meta.orphan {
+  color: var(--attention);
+  font-style: normal;
+}
+
+.tool-meta.failed {
+  color: var(--attention);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Bounded, tap-free preview of a failed call's output (R4). */
+.failure-preview {
+  margin: 0 10px 8px;
+  border: 1px solid rgba(200, 80, 70, 0.28);
+  border-radius: 6px;
+  background: rgba(40, 12, 10, 0.35);
+  padding: 6px 8px;
+  overflow-x: auto;
+}
+
+.failure-preview pre {
+  margin: 0;
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--secondary);
+}
+
+/* Edit diffs (R3). */
+.diff {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.diff-line {
+  display: flex;
+  gap: 6px;
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.diff-gutter { opacity: 0.6; user-select: none; }
+.diff-line--add { color: var(--diff-add); }
+.diff-line--remove { color: var(--diff-remove); }
+.diff-line--equal { opacity: 0.75; }
+
+.details-body {
+  border-top: 1px solid var(--rule);
+  margin: 4px 10px 0;
+  padding: 8px 0 8px;
+}
+
+.question {
+  border-left: 2px solid var(--attention);
+  padding: 8px 0 8px 10px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.question-eyebrow {
+  color: var(--attention);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.question-title {
+  margin-top: 2px;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.question-subtitle {
+  margin-top: 2px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.question-body {
+  margin-top: 8px;
+  color: var(--primary);
+  font-size: 14px;
+  line-height: 1.42;
+  white-space: pre-wrap;
+}
+
+.question-options {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--secondary);
+}
+
+.question-option-title {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.question-option-subtitle {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.section-label {
+  margin: 10px 0 4px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.section-label:first-child {
+  margin-top: 0;
+}
+
+.passive-call {
+  padding: 8px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.passive-call:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.passive-call-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--secondary);
+}
+
+.passive-call-subtitle {
+  color: var(--tertiary);
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 2px;
+}

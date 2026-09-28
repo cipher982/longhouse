@@ -36,6 +36,13 @@ targets:
       - path: ../Resources/build-identity.json
         buildPhase: resources
         createIntermediateGroups: true
+      # The WebKit transcript document, generated from
+      # web/src/embeds/ios-transcript (make generate-ios-transcript) and
+      # checked in, so this build never needs bun. App target only: the
+      # widget renders no transcript.
+      - path: ../Resources/Transcript
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: LonghouseWidgetExtension
         embed: true

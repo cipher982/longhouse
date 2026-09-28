@@ -1,0 +1,1166 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <style>
+/* __LH_ROOT_BLOCK__ */
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  background: var(--page);
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font: -apple-system-body;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-wrap: anywhere;
+}
+
+#root {
+  min-height: 100vh;
+  /* SwiftUI lays the WebView out inside the safe area, so its frame already
+     stops above the floating control card. This is only the comfort gap. */
+  padding: 12px 16px 18px;
+  /* A short tail hugs the composer like a conversation, instead of
+     floating at the top over a blank band. Rows space themselves with
+     bottom margins only, so the flex column changes nothing else. */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.empty, .error {
+  min-height: 48vh;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--secondary);
+  padding: 24px;
+}
+
+.error {
+  color: var(--attention);
+}
+
+.row {
+  width: 100%;
+  margin: 0 0 10px;
+}
+
+.message {
+  max-width: 100%;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.message.user {
+  display: flex;
+  justify-content: flex-end;
+  padding-left: 48px;
+}
+
+/* Assistant prose: a plain document paragraph, no card, generous leading. */
+.message.assistant {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+
+/* The human message: a quiet neutral capsule. Right-alignment + fill is the
+   "this is you" signal — no outline needed, and no borrowed signal color. */
+.bubble {
+  display: inline-block;
+  max-width: 100%;
+  padding: 9px 14px 10px;
+  border-radius: 17px;
+  background: var(--user);
+  white-space: pre-wrap;
+}
+
+/* An unsent message sits exactly where its durable row will land, in
+   the same capsule; only its ink and the status line say it is unsent. */
+.submitted .bubble {
+  background: var(--user-pending);
+}
+
+.submitted.submitting .bubble,
+.submitted.working .bubble,
+.submitted.sent .bubble {
+  animation: submitted-breathe 1.8s ease-in-out infinite;
+}
+
+.submitted.queued .bubble {
+  background: transparent;
+  /* Outline, not border: the capsule keeps its size when it sends. */
+  outline: 1px dashed var(--rule);
+  outline-offset: -1px;
+  color: var(--secondary);
+}
+
+.submitted.couldNotConfirm .bubble,
+.submitted.failed .bubble {
+  opacity: 0.6;
+}
+
+.submitted-status {
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.submitted.couldNotConfirm .submitted-status,
+.submitted.failed .submitted-status {
+  color: var(--attention);
+}
+
+@keyframes submitted-breathe {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.85; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .submitted.submitting .bubble,
+  .submitted.working .bubble,
+  .submitted.sent .bubble {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.action-rule {
+  width: 22px;
+  height: 1px;
+  background: var(--rule);
+  flex-shrink: 0;
+}
+
+.action-title {
+  color: var(--primary);
+  font-weight: 650;
+}
+
+.provider-notification {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.provider-notification-mark {
+  color: var(--accent);
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.provider-notification-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.turn-end {
+  margin-top: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.origin {
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: right;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.message-content {
+  line-height: 1.45;
+}
+
+.media-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  max-width: 100%;
+}
+
+.message.user .media-strip {
+  justify-content: end;
+}
+
+.media-item {
+  display: block;
+  min-width: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  background: var(--code);
+}
+
+.media-item img {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.media-animated {
+  display: block;
+  padding: 4px 8px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.media-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--rule);
+  color: var(--secondary);
+  background: var(--code);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+p {
+  margin: 0 0 0.75em;
+}
+
+p:last-child {
+  margin-bottom: 0;
+}
+
+h1, h2, h3 {
+  margin: 0.35em 0 0.45em;
+  line-height: 1.18;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 17px;
+}
+
+h3 {
+  font-size: 15px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0.5em 0 0.75em;
+  border-radius: 7px;
+  border: 1px solid var(--rule);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9em;
+}
+
+th, td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+  white-space: normal;
+  vertical-align: top;
+}
+
+th {
+  font-weight: 650;
+  background: var(--code);
+  white-space: nowrap;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+td[align="center"], th[align="center"] { text-align: center; }
+td[align="right"],  th[align="right"]  { text-align: right; }
+
+ul {
+  margin: 0.25em 0 0.75em 1.25em;
+  padding: 0;
+}
+
+li {
+  margin: 0.22em 0;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.88em;
+  background: var(--code);
+  border-radius: 5px;
+  padding: 1px 4px;
+}
+
+pre {
+  margin: 8px 0 0;
+  padding: 9px;
+  border-radius: 7px;
+  background: var(--code);
+  overflow-x: auto;
+  white-space: pre;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+  white-space: pre;
+}
+
+a {
+  color: var(--link);
+}
+
+.expand {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--link);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  padding: 8px 0 0;
+}
+
+/* Tool rows demoted to footnotes: no box, no purple. A faint left rule
+   groups them under the turn; they read as quiet metadata, not cards.
+   Still fully expandable (preserve, never erase). */
+details.tool, details.passive {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  margin-left: 2px;
+  /* The brass trace down the left edge, the web's tool line. */
+  border-left: 1.5px solid var(--trace);
+  overflow: hidden;
+}
+
+summary {
+  min-height: 28px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 10px;
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-title {
+  /* A long edit list must trail off with an ellipsis, not run under the
+     right edge and take the count with it. */
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-subtitle {
+  min-width: 0;
+  flex: 1;
+  color: var(--tertiary);
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-meta {
+  color: var(--tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-meta.running {
+  color: var(--secondary);
+}
+
+/* A dropped or orphaned result is the loud tool signal — attention color.
+   Both mean "the result is missing/unexpected", the trust case we never
+   want to silently hide. */
+.tool-meta.dropped,
+.tool-meta.orphan {
+  color: var(--attention);
+  font-style: normal;
+}
+
+.tool-meta.failed {
+  color: var(--attention);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Bounded, tap-free preview of a failed call's output (R4). */
+.failure-preview {
+  margin: 0 10px 8px;
+  border: 1px solid rgba(200, 80, 70, 0.28);
+  border-radius: 6px;
+  background: rgba(40, 12, 10, 0.35);
+  padding: 6px 8px;
+  overflow-x: auto;
+}
+
+.failure-preview pre {
+  margin: 0;
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--secondary);
+}
+
+/* Edit diffs (R3). */
+.diff {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.diff-line {
+  display: flex;
+  gap: 6px;
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.diff-gutter { opacity: 0.6; user-select: none; }
+.diff-line--add { color: var(--diff-add); }
+.diff-line--remove { color: var(--diff-remove); }
+.diff-line--equal { opacity: 0.75; }
+
+.details-body {
+  border-top: 1px solid var(--rule);
+  margin: 4px 10px 0;
+  padding: 8px 0 8px;
+}
+
+.question {
+  border-left: 2px solid var(--attention);
+  padding: 8px 0 8px 10px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.question-eyebrow {
+  color: var(--attention);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.question-title {
+  margin-top: 2px;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.question-subtitle {
+  margin-top: 2px;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.question-body {
+  margin-top: 8px;
+  color: var(--primary);
+  font-size: 14px;
+  line-height: 1.42;
+  white-space: pre-wrap;
+}
+
+.question-options {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--secondary);
+}
+
+.question-option-title {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.question-option-subtitle {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.section-label {
+  margin: 10px 0 4px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.section-label:first-child {
+  margin-top: 0;
+}
+
+.passive-call {
+  padding: 8px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.passive-call:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.passive-call-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--secondary);
+}
+
+.passive-call-subtitle {
+  color: var(--tertiary);
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 2px;
+}
+  </style>
+</head>
+<body>
+  <main id="root" aria-live="polite"></main>
+  <script>
+(function() {
+	//#region src/embeds/ios-transcript/escape.ts
+	function escapeHtml(value) {
+		return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/markdown.ts
+	function inlineMarkdown(value) {
+		let html = escapeHtml(value);
+		html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "<a href=\"$2\" rel=\"noreferrer noopener\">$1</a>");
+		html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+		html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+		html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+		return html;
+	}
+	function paragraphHtml(lines) {
+		if (!lines.length) return "";
+		return "<p>" + inlineMarkdown(lines.join("\n")).replace(/\n/g, "<br>") + "</p>";
+	}
+	function isTableSeparator(line) {
+		return /^\|?[\s\-:]+(\|[\s\-:]+)*\|?$/.test(line.trim());
+	}
+	function isTableRow(line) {
+		const t = line.trim();
+		return t.startsWith("|") || /\S\|\S/.test(t) || t.endsWith("|") && t.includes("|");
+	}
+	function splitCells(line) {
+		return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+	}
+	function parseAligns(sepLine) {
+		return splitCells(sepLine).map((cell) => {
+			if (cell.startsWith(":") && cell.endsWith(":")) return "center";
+			if (cell.endsWith(":")) return "right";
+			return "";
+		});
+	}
+	function tableToHtml(rows) {
+		if (rows.length < 2 || !isTableSeparator(rows[1])) return rows.map((r) => paragraphHtml([r])).join("");
+		const aligns = parseAligns(rows[1]);
+		const alignAttr = (i) => aligns[i] ? ` align="${aligns[i]}"` : "";
+		const header = splitCells(rows[0]);
+		const h = "<thead><tr>" + header.map((c, i) => `<th${alignAttr(i)}>${inlineMarkdown(c)}</th>`).join("") + "</tr></thead>";
+		let b = "<tbody>";
+		for (let ri = 2; ri < rows.length; ri++) {
+			const cells = splitCells(rows[ri]);
+			b += "<tr>" + header.map((_, i) => `<td${alignAttr(i)}>${inlineMarkdown(cells[i] ?? "")}</td>`).join("") + "</tr>";
+		}
+		b += "</tbody>";
+		return "<div class=\"table-wrap\"><table>" + h + b + "</table></div>";
+	}
+	function markdownToHtml(value) {
+		const lines = String(value ?? "").split(/\r?\n/);
+		let html = "";
+		let paragraph = [];
+		let code = null;
+		let tableRows = null;
+		let pendingTableLine = null;
+		function flushParagraph() {
+			html += paragraphHtml(paragraph);
+			paragraph = [];
+		}
+		function flushCode() {
+			if (code !== null) {
+				html += "<pre><code>" + escapeHtml(code.join("\n")) + "</code></pre>";
+				code = null;
+			}
+		}
+		function flushTable() {
+			if (tableRows !== null) {
+				html += tableToHtml(tableRows);
+				tableRows = null;
+			}
+		}
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+				if (code === null) {
+					if (pendingTableLine !== null) {
+						paragraph.push(pendingTableLine);
+						pendingTableLine = null;
+					}
+					flushParagraph();
+					flushTable();
+					code = [];
+				} else flushCode();
+				continue;
+			}
+			if (code !== null) {
+				code.push(line);
+				continue;
+			}
+			if (isTableRow(line)) {
+				if (tableRows !== null) {
+					tableRows.push(line);
+					continue;
+				}
+				if (pendingTableLine !== null) {
+					if (isTableSeparator(line)) {
+						flushParagraph();
+						tableRows = [pendingTableLine, line];
+						pendingTableLine = null;
+					} else {
+						paragraph.push(pendingTableLine);
+						pendingTableLine = line;
+					}
+					continue;
+				}
+				if (isTableSeparator(line)) paragraph.push(line);
+				else pendingTableLine = line;
+				continue;
+			}
+			if (pendingTableLine !== null) {
+				paragraph.push(pendingTableLine);
+				pendingTableLine = null;
+			}
+			if (tableRows !== null) flushTable();
+			if (trimmed === "") {
+				flushParagraph();
+				continue;
+			}
+			if (trimmed.startsWith("### ")) {
+				flushParagraph();
+				html += "<h3>" + inlineMarkdown(trimmed.slice(4)) + "</h3>";
+				continue;
+			}
+			if (trimmed.startsWith("## ")) {
+				flushParagraph();
+				html += "<h2>" + inlineMarkdown(trimmed.slice(3)) + "</h2>";
+				continue;
+			}
+			if (trimmed.startsWith("# ")) {
+				flushParagraph();
+				html += "<h1>" + inlineMarkdown(trimmed.slice(2)) + "</h1>";
+				continue;
+			}
+			if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+				flushParagraph();
+				html += "<ul><li>" + inlineMarkdown(trimmed.slice(2)) + "</li></ul>";
+				continue;
+			}
+			paragraph.push(line);
+		}
+		if (pendingTableLine !== null) {
+			paragraph.push(pendingTableLine);
+			pendingTableLine = null;
+		}
+		flushParagraph();
+		flushCode();
+		flushTable();
+		return html;
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/media.ts
+	function mediaStrip(media) {
+		const items = (media || []).map((ref) => {
+			if (!ref || !ref.url) return `<span class="media-placeholder">${escapeHtml(ref && ref.mediaState === "pending" ? "Media pending" : "Media unavailable")}</span>`;
+			const href = ref.blobUrl || ref.url;
+			const alt = "Session media " + String(ref.sha256 || "").slice(0, 12);
+			const dimensions = Number.isInteger(ref.width) && ref.width > 0 && Number.isInteger(ref.height) && ref.height > 0 ? ` width="${ref.width}" height="${ref.height}"` : "";
+			const animated = String(ref.mimeType || "").toLowerCase().startsWith("image/gif") ? "<span class=\"media-animated\">Animated still</span>" : "";
+			return `
+          <a class="media-item" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">
+            <img src="${escapeHtml(ref.url)}" alt="${escapeHtml(alt)}" loading="lazy"${dimensions} onerror="this.outerHTML='&lt;span class=&quot;media-placeholder&quot;&gt;Media unavailable&lt;/span&gt;'">
+            ${animated}
+          </a>
+        `;
+		}).join("");
+		return items ? `<div class="media-strip">${items}</div>` : "";
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/diffs.ts
+	function renderDiff(lines) {
+		if (!lines || !lines.length) return "";
+		return "<div class=\"section-label\">Diff</div><div class=\"diff\">" + lines.map((line) => {
+			const gutter = line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " ";
+			return "<div class=\"diff-line diff-line--" + line.kind + "\"><span class=\"diff-gutter\">" + gutter + "</span><span class=\"diff-text\">" + escapeHtml(line.text || " ") + "</span></div>";
+		}).join("") + "</div>";
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/bridge.ts
+	function postToNative(message) {
+		try {
+			window.webkit.messageHandlers.longhouse.postMessage(message);
+		} catch {}
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/subagents.ts
+	function subagentNode(item) {
+		const children = item.subagents || [];
+		if (!children.length) return "";
+		const rows = children.map((child) => "<li><button type=\"button\" class=\"subagent-link\" data-subagent-session=\"" + escapeHtml(child.sessionId) + "\"><span class=\"subagent-label\">" + escapeHtml(child.label) + "</span><span class=\"subagent-meta\">" + String(child.toolCalls) + (child.toolCalls === 1 ? " call" : " calls") + "</span></button></li>").join("");
+		return "<details class=\"subagents\" data-subagent-key=\"" + escapeHtml(item.id) + "\"><summary>" + escapeHtml(item.subagentSummary || "") + "</summary><ul class=\"subagent-list\">" + rows + "</ul></details>";
+	}
+	function captureOpenSubagentKeys(root) {
+		return new Set(Array.from(root.querySelectorAll("details.subagents[data-subagent-key][open]")).map((node) => node.getAttribute("data-subagent-key")).filter((key) => Boolean(key)));
+	}
+	function restoreOpenSubagentKeys(root, keys) {
+		if (!keys.size) return;
+		root.querySelectorAll("details.subagents[data-subagent-key]").forEach((node) => {
+			if (keys.has(node.getAttribute("data-subagent-key") ?? "")) node.open = true;
+		});
+	}
+	function attachSubagentHandlers(scope = document) {
+		for (const button of scope.querySelectorAll("[data-subagent-session]")) button.addEventListener("click", () => {
+			const sessionId = button.getAttribute("data-subagent-session");
+			if (!sessionId) return;
+			postToNative({
+				type: "openSubagent",
+				sessionId
+			});
+		});
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/toolCards.ts
+	function toolDetails(item) {
+		const isFailure = !!item.failurePreview || typeof item.status === "string" && (item.status.indexOf("exit ") === 0 || item.status === "failed");
+		const meta = item.status === "running" ? "running" : item.status === "dropped" ? "dropped" : item.status === "orphan" ? "orphan" : isFailure ? "failed" : "";
+		const status = isFailure ? item.status || "failed" : item.duration || item.status || "";
+		const diffHtml = renderDiff(item.diff);
+		const input = diffHtml ? diffHtml : item.input ? "<div class=\"section-label\">Input</div><pre><code>" + escapeHtml(item.input) + "</code></pre>" : "";
+		const media = mediaStrip(item.media || []);
+		const provenance = (item.calls || []).map((call) => {
+			const childInput = call.input ? "<pre><code>" + escapeHtml(call.input) + "</code></pre>" : "";
+			const rawInput = call.rawInput ? "<pre><code>" + escapeHtml(call.rawInput) + "</code></pre>" : "";
+			return "<details class=\"raw-disclosure\"><summary>" + escapeHtml(call.title || "Provider evidence") + "</summary>" + childInput + rawInput + "</details>";
+		}).join("");
+		let output = "";
+		if (item.output) output = "<div class=\"section-label\">Output</div><pre><code>" + escapeHtml(item.output) + "</code></pre>";
+		else if (item.status === "running") output = "<div class=\"section-label\">Output</div><p>Running...</p>";
+		else if (item.status === "dropped") output = "<p>No result recorded, likely dropped during ingest.</p>";
+		const preview = item.failurePreview ? "<div class=\"failure-preview\" role=\"note\"><span class=\"sr-only\">Error output: </span><pre>" + escapeHtml(item.failurePreview) + "</pre></div>" : "";
+		return `
+        <details class="tool row">
+          <summary>
+            <span class="tool-title">${escapeHtml(item.title || "Tool")}</span>
+            <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
+            <span class="tool-meta ${meta}">${escapeHtml(status)}</span>
+          </summary>
+          <div class="details-body">${input}${provenance}${output}${media}</div>
+        </details>
+        ${preview}
+        ${subagentNode(item)}
+      `;
+	}
+	function activityGroup(item) {
+		const all = item.calls || [];
+		const earlierCount = Math.max(0, all.length - 8);
+		const renderCall = (call) => {
+			const input = call.input ? "<div class=\"section-label\">Input</div><pre><code>" + escapeHtml(call.input) + "</code></pre>" : "";
+			const rawInput = call.rawInput ? "<details class=\"raw-disclosure\"><summary>Raw enclosing wrapper</summary><pre><code>" + escapeHtml(call.rawInput) + "</code></pre></details>" : "";
+			const output = call.output ? "<div class=\"section-label\">Output</div><pre><code>" + escapeHtml(call.output) + "</code></pre>" : "";
+			const media = mediaStrip(call.media || []);
+			return `
+          <div class="passive-call">
+            <div class="passive-call-title">${escapeHtml(call.title || "Tool")}</div>
+            <div class="passive-call-subtitle">${escapeHtml(call.subtitle || "")}</div>
+            ${input}${rawInput}${output}${media}
+          </div>
+        `;
+		};
+		const earlierHtml = earlierCount > 0 ? all.slice(0, earlierCount).map(renderCall).join("") : "";
+		const latestHtml = all.slice(earlierCount).map(renderCall).join("");
+		const earlierControl = earlierCount > 0 ? `<button type="button" class="passive-earlier-btn" onclick="this.nextElementSibling.hidden=false;this.remove();">Show ${earlierCount} earlier</button><div class="passive-earlier" hidden>${earlierHtml}</div>` : "";
+		return `
+        <details class="passive row">
+          <summary>
+            <span class="tool-title">${escapeHtml(item.title || "Activity")}</span>
+            <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
+          </summary>
+          <div class="details-body">${earlierControl}${latestHtml}</div>
+        </details>
+        ${subagentNode(item)}
+      `;
+	}
+	function question(item) {
+		const options = (item.calls || []).map((call) => `
+        <div class="question-option" aria-disabled="true">
+          <span class="question-option-title">${escapeHtml(call.title || "")}</span>
+          ${call.subtitle ? `<span class="question-option-subtitle">${escapeHtml(call.subtitle)}</span>` : ""}
+        </div>
+      `).join("");
+		return `
+        <article class="row question">
+          <div class="question-eyebrow">Needs answer</div>
+          <div class="question-title">${escapeHtml(item.title || "Question")}</div>
+          <div class="question-subtitle">${escapeHtml(item.subtitle || "Answer in terminal")}</div>
+          <div class="question-body">${escapeHtml(item.body || "Claude is waiting for your answer.")}</div>
+          ${options ? `<div class="question-options" aria-label="Answer options">${options}</div>` : ""}
+        </article>
+      `;
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/rows.ts
+	function message(item, index) {
+		const body = item.role === "assistant" ? markdownToHtml(item.body || "") : escapeHtml(item.body || "");
+		const expand = item.collapsed ? `<button class="expand" data-expand-index="${index}">Show full message</button>` : "";
+		const media = mediaStrip(item.media || []);
+		if (item.role === "user") return `
+          <div class="row message user">
+            <div>
+              <div class="bubble">${body}</div>
+              ${media}
+              ${expand}
+              ${item.origin === "longhouse" ? "<div id=\"session-chat-input-origin-longhouse\" class=\"origin\" aria-label=\"Sent via Longhouse\">Longhouse</div>" : ""}
+            </div>
+          </div>
+        `;
+		return `
+        <article class="row message assistant" data-message-index="${index}">
+          <div class="message-content">${body}</div>
+          ${media}
+          ${expand}
+        </article>
+      `;
+	}
+	function submitted(item) {
+		return `
+        <div class="row message user submitted ${escapeHtml(item.status || "")}">
+          <div>
+            <div class="bubble">${escapeHtml(item.body || "")}</div>
+            <div class="submitted-status">${escapeHtml(item.subtitle || "")}</div>
+          </div>
+        </div>
+      `;
+	}
+	function action(item) {
+		const subtitle = item.subtitle ? `<span>${escapeHtml(item.subtitle)}</span>` : "";
+		return `
+        <div class="row action">
+          <span class="action-rule"></span>
+          <span class="action-title">${escapeHtml(item.title || "Session action")}</span>
+          ${subtitle}
+        </div>
+      `;
+	}
+	function providerNotification(item) {
+		return `
+        <div class="row provider-notification" data-testid="session-provider-notification">
+          <span class="provider-notification-mark" aria-hidden="true">•</span>
+          <span class="provider-notification-body">${escapeHtml(item.body || "Provider update")}</span>
+        </div>
+      `;
+	}
+	function renderItemBody(item, index) {
+		if (item.kind === "message") return message(item, index);
+		if (item.kind === "submitted") return submitted(item);
+		if (item.kind === "action") return action(item);
+		if (item.kind === "providerNotification") return providerNotification(item);
+		if (item.kind === "question") return question(item);
+		if (item.kind === "tool") return toolDetails(item);
+		if (item.kind === "activityGroup") return activityGroup(item);
+		return "";
+	}
+	function renderItem(item, index) {
+		const html = renderItemBody(item, index);
+		if (!html || !item.turnEnd) return html;
+		const template = document.createElement("template");
+		template.innerHTML = html.trim();
+		const root = template.content.firstElementChild;
+		if (!root) return html;
+		root.insertAdjacentHTML("beforeend", `<div class="turn-end" data-testid="session-turn-end">✻ ${escapeHtml(item.turnEnd.label)} · ${escapeHtml(item.turnEnd.doneAt)}</div>`);
+		return template.innerHTML;
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/scroll.ts
+	var stickToBottom = true;
+	function isStickingToBottom() {
+		return stickToBottom;
+	}
+	function setStickToBottom(stick) {
+		stickToBottom = !!stick;
+	}
+	function scrollToBottom() {
+		const pin = () => {
+			if (stickToBottom && window.innerHeight > 0) window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
+		};
+		pin();
+		requestAnimationFrame(pin);
+	}
+	function repinIfSticky() {
+		if (stickToBottom) requestAnimationFrame(scrollToBottom);
+	}
+	function installRepinObservers(root) {
+		window.addEventListener("resize", repinIfSticky);
+		if (window.visualViewport) window.visualViewport.addEventListener("resize", repinIfSticky);
+		if (typeof ResizeObserver !== "undefined") new ResizeObserver(repinIfSticky).observe(root);
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/render.ts
+	var currentItems = [];
+	var transcriptFrames = /* @__PURE__ */ new Map();
+	var retainedItems = /* @__PURE__ */ new Map();
+	async function waitForTranscriptFrame(sequence) {
+		const frame = transcriptFrames.get(sequence);
+		if (!frame) throw new Error(`missing transcript frame ${sequence}`);
+		const metrics = await frame;
+		transcriptFrames.delete(sequence);
+		return metrics;
+	}
+	function decodePayload(base64) {
+		const binary = atob(base64);
+		const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+		return JSON.parse(new TextDecoder().decode(bytes));
+	}
+	function attachExpandHandlers(scope = document) {
+		attachSubagentHandlers(scope);
+		for (const button of scope.querySelectorAll("[data-expand-index]")) button.addEventListener("click", () => {
+			const index = Number(button.getAttribute("data-expand-index"));
+			const item = currentItems[index];
+			if (!item || !item.fullBody) return;
+			const article = button.closest("[data-message-index]");
+			if (article) {
+				const content = article.querySelector(".message-content");
+				content.innerHTML = markdownToHtml(item.fullBody);
+			} else {
+				const bubble = button.parentElement.querySelector(".bubble");
+				bubble.textContent = item.fullBody;
+			}
+			button.remove();
+		});
+	}
+	function updateRetainedIndices(node, index) {
+		if (node.hasAttribute("data-message-index")) node.setAttribute("data-message-index", String(index));
+		for (const button of node.querySelectorAll("[data-expand-index]")) button.setAttribute("data-expand-index", String(index));
+	}
+	function retainedHTML(payload, root) {
+		let htmlMs = 0;
+		if (payload.errorMessage && currentItems.length === 0) {
+			retainedItems.clear();
+			const startedAt = performance.now();
+			const html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
+			htmlMs += performance.now() - startedAt;
+			const domStartedAt = performance.now();
+			root.innerHTML = html;
+			return {
+				html_ms: htmlMs,
+				dom_ms: performance.now() - domStartedAt
+			};
+		}
+		if (currentItems.length === 0) {
+			retainedItems.clear();
+			const domStartedAt = performance.now();
+			root.innerHTML = "<div class=\"empty\">No messages yet</div>";
+			return {
+				html_ms: htmlMs,
+				dom_ms: performance.now() - domStartedAt
+			};
+		}
+		const nextItems = /* @__PURE__ */ new Map();
+		const fragment = document.createDocumentFragment();
+		if (payload.errorMessage) {
+			const startedAt = performance.now();
+			const error = document.createElement("div");
+			error.className = "error row";
+			error.textContent = payload.errorMessage;
+			htmlMs += performance.now() - startedAt;
+			fragment.appendChild(error);
+		}
+		currentItems.forEach((item, index) => {
+			const signature = JSON.stringify(item);
+			const cached = retainedItems.get(item.id);
+			let node;
+			if (cached && cached.signature === signature) {
+				node = cached.node;
+				updateRetainedIndices(node, index);
+			} else {
+				const startedAt = performance.now();
+				const template = document.createElement("template");
+				template.innerHTML = renderItem(item, index).trim();
+				node = template.content.firstElementChild;
+				htmlMs += performance.now() - startedAt;
+				if (!node) return;
+				attachExpandHandlers(node);
+			}
+			nextItems.set(item.id, {
+				signature,
+				node
+			});
+			fragment.appendChild(node);
+		});
+		const domStartedAt = performance.now();
+		root.replaceChildren(fragment);
+		const domMs = performance.now() - domStartedAt;
+		retainedItems.clear();
+		for (const [id, entry] of nextItems) retainedItems.set(id, entry);
+		return {
+			html_ms: htmlMs,
+			dom_ms: domMs
+		};
+	}
+	function renderTranscript(base64, shouldStickToBottom, sequence, renderMode) {
+		const startedAt = performance.now();
+		setStickToBottom(shouldStickToBottom);
+		const wasAtBottom = isStickingToBottom();
+		const previousItems = currentItems;
+		const previousFirstId = previousItems.length > 0 ? previousItems[0].id : null;
+		const previousScrollHeight = document.documentElement.scrollHeight;
+		const previousScrollY = window.scrollY;
+		const decodeStartedAt = performance.now();
+		const payload = decodePayload(base64);
+		const decodeMs = performance.now() - decodeStartedAt;
+		currentItems = payload.items || [];
+		const newFirstId = currentItems.length > 0 ? currentItems[0].id : null;
+		const prepended = previousFirstId && newFirstId && previousFirstId !== newFirstId && currentItems.some((item) => item.id === previousFirstId);
+		const root = document.getElementById("root");
+		const openSubagentKeys = captureOpenSubagentKeys(root);
+		let htmlMs;
+		let domMs;
+		if (renderMode === "retained") {
+			const retainedMetrics = retainedHTML(payload, root);
+			htmlMs = retainedMetrics.html_ms;
+			domMs = retainedMetrics.dom_ms;
+		} else {
+			retainedItems.clear();
+			const htmlStartedAt = performance.now();
+			let html;
+			if (payload.errorMessage && currentItems.length === 0) html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
+			else if (currentItems.length === 0) html = "<div class=\"empty\">No messages yet</div>";
+			else html = (payload.errorMessage ? `<div class="error row">${escapeHtml(payload.errorMessage)}</div>` : "") + currentItems.map(renderItem).join("");
+			htmlMs = performance.now() - htmlStartedAt;
+			const domStartedAt = performance.now();
+			root.innerHTML = html;
+			attachExpandHandlers(root);
+			domMs = performance.now() - domStartedAt;
+		}
+		restoreOpenSubagentKeys(root, openSubagentKeys);
+		if (wasAtBottom) scrollToBottom();
+		else if (prepended) {
+			const delta = document.documentElement.scrollHeight - previousScrollHeight;
+			window.scrollTo(0, previousScrollY + delta);
+		}
+		const rafStartedAt = performance.now();
+		const frame = new Promise((resolve) => {
+			requestAnimationFrame(() => {
+				resolve({
+					raf_ms: performance.now() - rafStartedAt,
+					total_ms: performance.now() - startedAt
+				});
+			});
+		});
+		transcriptFrames.set(sequence, frame);
+		return {
+			decode_ms: decodeMs,
+			html_ms: htmlMs,
+			dom_ms: domMs
+		};
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/main.ts
+	window.waitForTranscriptFrame = waitForTranscriptFrame;
+	window.setStickToBottom = setStickToBottom;
+	window.renderTranscript = renderTranscript;
+	installRepinObservers(document.getElementById("root"));
+	//#endregion
+})();
+  </script>
+</body>
+</html>

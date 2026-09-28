@@ -160,8 +160,11 @@ canvas renders bar materials and secondary text as nothing, and you get a
 blank PNG with one divider on it.
 
 ### Transcript rows are HTML
-The phone transcript is a `WKWebView` rendered by the JS in
-`WebTranscriptView.swift`. Each item renders as one root element and the
+The phone transcript is a `WKWebView` document whose TypeScript and CSS live
+in `web/src/embeds/ios-transcript/` (Vitest covers it: `make test-frontend`).
+`make generate-ios-transcript` builds it into the checked-in
+`ios/Resources/Transcript/transcript.html`, and `make validate` fails when that
+file is stale, so rebuild and commit both together. Each item renders as one root element and the
 retained-node reconciler keys on `JSON.stringify(item)`, so a footer or badge
 belongs inside the item's root, and any new field on `WebTranscriptPayloadItem`
 re-renders the row when it arrives. The view model's diagnostics line

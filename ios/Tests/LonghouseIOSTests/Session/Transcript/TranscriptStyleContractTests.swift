@@ -1,146 +1,71 @@
+import WebKit
 import XCTest
 @testable import Longhouse
 
-/// Locks the Commit 3 WebKit CSS restyle decisions so they can't silently
-/// revert: assistant prose is a plain document (no card), chat bubbles are
-/// gone, the palette is monochrome (no purple/blue tool/user tints), tool rows
-/// are demoted (no boxed purple background), and a dropped tool result is
-/// flagged in attention color. Asserted against the static document HTML so it
-/// runs without a WebView.
+/// The native half of the transcript document contract. What the document
+/// renders is tested where its source lives (web/src/embeds/ios-transcript,
+/// Vitest); here only what Swift owns: the bundled resource loads, the palette
+/// is spliced in at its marker, and the bridge functions native calls exist
+/// once WebKit has loaded it.
 @MainActor
-final class TranscriptStyleContractTests: XCTestCase {
+final class TranscriptStyleContractTests: XCTestCase, WKNavigationDelegate {
+    private var navigationFinished = false
+    private var navigationError: Error?
 
-    private var css: String { WebTranscriptView.documentHTMLForTesting }
-
-    // MARK: Monochrome palette — the old decorative tints are gone
-
-    func testNoPurpleToolTint() {
-        XCTAssertFalse(css.contains("120, 82, 180"), "Light purple tool tint must be removed")
-        XCTAssertFalse(css.contains("167, 139, 250"), "Dark purple tool tint must be removed")
-    }
-
-    func testNoBlueUserBubbleTint() {
-        XCTAssertFalse(css.contains("0, 122, 255"), "Blue user-bubble tint must be removed")
-        XCTAssertFalse(css.contains("10, 132, 255"), "Dark blue user-bubble tint must be removed")
-    }
-
-    func testOldTokensRemoved() {
-        XCTAssertFalse(css.contains("--assistant:"), "Assistant card token must be gone (prose has no card)")
-        XCTAssertFalse(css.contains("--tool:"), "Tool tint token must be gone")
-        XCTAssertFalse(css.contains("--tool-border:"), "Tool border token must be gone")
-    }
-
-    // MARK: New monochrome / signal tokens exist
-
-    func testNeutralAndSignalTokensPresent() {
-        XCTAssertTrue(css.contains("--rule:"), "Neutral rule token should drive separators")
-        XCTAssertTrue(css.contains("--attention:"), "Attention signal token should exist for dropped results")
-    }
-
-    // The human-message capsule must NOT borrow the live-signal (green) color —
-    // right-alignment + neutral fill is the "this is you" signal, not an outline.
-    func testHumanMessageHasNoGreenSignalOutline() {
-        XCTAssertFalse(css.contains("--user-hairline"), "Green hairline token must be removed")
-        guard let block = css.range(of: #"\.bubble \{[^}]*\}"#, options: .regularExpression).map({ String(css[$0]) }) else {
-            return XCTFail(".bubble rule not found")
-        }
-        XCTAssertFalse(block.contains("box-shadow"), "Human capsule must not carry a signal-color outline")
-    }
-
-    // MARK: Assistant prose is a plain document — no card background
-
-    func testAssistantHasNoCardBackground() {
-        // The assistant rule must explicitly null out padding+background.
-        XCTAssertTrue(
-            css.contains(".message.assistant {") &&
-            css.range(of: #"\.message\.assistant \{[^}]*background: transparent;"#, options: .regularExpression) != nil,
-            "Assistant prose must render without a card background"
+    func testBundledDocumentLoads() throws {
+        let url = try XCTUnwrap(
+            Bundle.main.url(forResource: "transcript", withExtension: "html", subdirectory: "Transcript"),
+            "Transcript/transcript.html must be bundled with the app"
+        )
+        let bundled = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(bundled.isEmpty)
+        XCTAssertEqual(
+            WebTranscriptView.documentHTMLForTesting,
+            bundled.replacingOccurrences(of: "/* __LH_ROOT_BLOCK__ */", with: TranscriptPalette.cssRootBlock),
+            "The WebView loads the bundled resource with only the palette spliced in"
         )
     }
 
-    // MARK: Tool rows demoted — no boxed/filled background, grouped by a rule
+    func testPaletteMarkerIsReplaced() {
+        let document = WebTranscriptView.documentHTMLForTesting
+        XCTAssertFalse(document.contains("__LH_ROOT_BLOCK__"), "Palette marker must be replaced, not shipped raw")
+        XCTAssertTrue(document.contains(TranscriptPalette.cssRootBlock), "The palette block must be in the document")
+    }
 
-    func testToolRowsAreDemotedNotBoxed() {
-        guard let block = css.range(of: #"details\.tool, details\.passive \{[^}]*\}"#, options: .regularExpression).map({ String(css[$0]) }) else {
-            return XCTFail("tool/passive details block not found")
+    func testBridgeFunctionsExistOnceLoaded() async throws {
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+        webView.navigationDelegate = self
+        defer { webView.navigationDelegate = nil }
+        XCTAssertNotNil(webView.loadHTMLString(WebTranscriptView.documentHTMLForTesting, baseURL: nil))
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
+        while !navigationFinished && navigationError == nil && clock.now < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
         }
-        XCTAssertTrue(block.contains("background: transparent;"), "Tool rows must not have a filled background")
-        XCTAssertTrue(block.contains("border-left"), "Tool rows should be grouped by a left rule, not a box")
-        XCTAssertFalse(block.contains("var(--tool)"), "Tool rows must not use the old purple tint")
+        if let navigationError { throw navigationError }
+        XCTAssertTrue(navigationFinished, "Timed out loading the transcript document")
+
+        let types = try await webView.evaluateJavaScript(
+            "[typeof window.renderTranscript, typeof window.setStickToBottom, typeof window.waitForTranscriptFrame].join(',')"
+        )
+        XCTAssertEqual(types as? String, "function,function,function")
+
+        // The palette reached the page as live CSS, not just text.
+        let attention = try await webView.evaluateJavaScript(
+            "getComputedStyle(document.documentElement).getPropertyValue('--attention').trim()"
+        )
+        XCTAssertFalse((attention as? String ?? "").isEmpty, "The palette's --attention variable must resolve")
     }
 
-    // MARK: Dropped AND orphan results are loud (attention color)
-
-    func testDroppedAndOrphanToolResultsUseAttentionColor() {
-        // Both dropped and orphan share one attention rule — "result missing".
-        guard let block = css.range(
-            of: #"\.tool-meta\.dropped[^{]*\{[^}]*\}"#,
-            options: .regularExpression
-        ).map({ String(css[$0]) }) else {
-            return XCTFail(".tool-meta.dropped rule not found")
-        }
-        XCTAssertTrue(block.contains("var(--attention)"), "Dropped/orphan must be flagged in attention color")
-        XCTAssertTrue(css.contains(".tool-meta.orphan"), "Orphan results must share the attention treatment, not render grey")
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        navigationFinished = true
     }
 
-    // MARK: Table rendering — CSS tokens and JS helpers
-
-    func testTableCSSPresent() {
-        XCTAssertTrue(css.contains(".table-wrap {"), "Scrollable table wrapper CSS must exist")
-        XCTAssertTrue(css.contains("border-collapse: collapse;"), "Table must collapse borders")
-        XCTAssertTrue(css.contains("var(--rule)"), "Table borders must use the --rule palette token")
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        navigationError = error
     }
 
-    func testH3StylePresent() {
-        XCTAssertTrue(css.contains("h3 {"), "h3 CSS rule must exist")
-        XCTAssertTrue(css.contains("font-size: 15px;"), "h3 must have a distinct font size")
-    }
-
-    func testTableJSHelpersPresent() {
-        XCTAssertTrue(css.contains("function isTableSeparator"), "isTableSeparator JS helper must be present")
-        XCTAssertTrue(css.contains("function isTableRow"), "isTableRow JS helper must be present")
-        XCTAssertTrue(css.contains("function tableToHtml"), "tableToHtml JS helper must be present")
-        XCTAssertTrue(css.contains("function splitCells"), "splitCells JS helper must be present")
-    }
-
-    func testMarkdownToHtmlHandlesTableAndH3() {
-        // Verify the JS function body references table state and h3
-        XCTAssertTrue(css.contains("tableRows"), "markdownToHtml must accumulate table rows")
-        XCTAssertTrue(css.contains("### "), "markdownToHtml must handle h3 prefix")
-    }
-
-    // MARK: The DOM re-pins itself when the viewport or content resizes
-
-    func testTranscriptRepinsOnViewportAndContentResize() {
-        // SwiftUI resizes the WebView (control card, keyboard, safe area) and
-        // UIScrollView does not re-clamp contentOffset when its bounds change.
-        // Behaviour is covered by WebTranscriptScrollPinningTests; this only
-        // guards the wiring from being deleted as "unused".
-        XCTAssertTrue(css.contains("window.setStickToBottom"), "Native must be able to publish scroll intent to the DOM")
-        XCTAssertTrue(css.contains("addEventListener('resize', repinIfSticky)"), "Viewport resize must re-pin a sticky transcript")
-        XCTAssertTrue(css.contains("new ResizeObserver(repinIfSticky)"), "Content-height changes outside a render must re-pin too")
-    }
-
-    // MARK: Shared design tokens — the palette is the single source of truth
-
-    func testPaletteBlockIsSplicedNotLeftAsMarker() {
-        XCTAssertFalse(css.contains("__LH_ROOT_BLOCK__"), "Palette marker must be replaced, not shipped raw")
-        XCTAssertTrue(css.contains(":root {"), "Assembled doc must contain the :root block")
-    }
-
-    func testAttentionColorComesFromPalette() {
-        // The CSS attention var must match the Swift palette's declared hexes,
-        // proving the Swift/CSS double-definition is actually unified.
-        XCTAssertTrue(css.contains("--attention: \(TranscriptPalette.attentionHexLight)"))
-        XCTAssertTrue(css.contains("--attention: \(TranscriptPalette.attentionHexDark)"))
-    }
-
-    // MARK: The human-message capsule still exists (preserved, neutral fill)
-
-    func testHumanMessageCapsulePreserved() {
-        guard let block = css.range(of: #"\.bubble \{[^}]*\}"#, options: .regularExpression).map({ String(css[$0]) }) else {
-            return XCTFail(".bubble rule not found")
-        }
-        XCTAssertTrue(block.contains("var(--user)"), "Human message keeps a neutral capsule fill")
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        navigationError = error
     }
 }
