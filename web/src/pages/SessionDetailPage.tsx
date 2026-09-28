@@ -60,7 +60,7 @@ import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { getSessionStartedLabel } from "../lib/sessionTiming";
-import { getSessionCardText } from "../lib/sessionUtils";
+import { getSessionCardText } from "../lib/sessionLabels";
 import { useMarkSessionRead } from "../hooks/useMarkSessionRead";
 import {
   createSessionResumeIntent,

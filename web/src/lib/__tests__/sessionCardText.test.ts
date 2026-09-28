@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSession } from "../../services/api/agents";
-import { getDriftTitle, getSessionCardText } from "../sessionUtils";
+import { getDriftTitle, getSessionCardText } from "../sessionLabels";
 
 // Minimal AgentSession stub — getSessionCardText only reads title-related fields.
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {

@@ -17,13 +17,9 @@ import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel, type Timel
 import type { StatusLampState } from "../instruments/StatusLamp";
 import { HearthLamp } from "../instruments/hearth/Hearth";
 import { hearthModeForLamp, hearthSnapshotFromSession } from "../instruments/hearth/signals";
-import {
-  formatRelativeTime,
-  getBranchLabel,
-  getDriftTitle,
-  getSessionCardText,
-  renderHighlightedText,
-} from "../../lib/sessionUtils";
+import { formatRelativeTime } from "../../lib/dateUtils";
+import { getBranchLabel, getDriftTitle, getSessionCardText } from "../../lib/sessionLabels";
+import { renderHighlightedText } from "../../lib/searchHighlight";
 import { ProviderGlyph } from "../ProviderGlyph";
 
 const HOVER_PREFETCH_DELAY_MS = 180;

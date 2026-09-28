@@ -14,7 +14,8 @@ import config from "../lib/config";
 import { parseUTC } from "../lib/dateUtils";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { formatCompactDuration } from "../lib/runnerPresentation";
-import { buildSessionDetailPath, toTitleCaseWords } from "../lib/sessionUtils";
+import { buildSessionDetailPath } from "../lib/sessionLabels";
+import { toTitleCaseWords } from "../lib/text";
 import type {
   MachineHealthItemResponse,
   ManagedTurnProviderSummaryResponse,

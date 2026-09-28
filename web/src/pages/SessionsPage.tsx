@@ -42,13 +42,13 @@ import LaunchSessionModal from "../components/LaunchSessionModal";
 import ConnectMachine from "../components/ConnectMachine";
 import { Sparkline } from "../components/instruments/Sparkline";
 import { bucketTimestamps } from "../components/instruments/activityBuckets";
+import { buildSessionDetailPath } from "../lib/sessionLabels";
 import {
   type SortOrder,
   type SessionsUrlState,
-  buildSessionDetailPath,
   readSessionsUrlState,
   buildSessionsSearchParams,
-} from "../lib/sessionUtils";
+} from "../lib/sessionsUrlState";
 import "../styles/sessions.css";
 import "../styles/inbox.css";
 

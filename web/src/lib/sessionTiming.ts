@@ -1,5 +1,5 @@
 import type { AgentSession } from "../services/api/agents";
-import { formatRelativeTime } from "./sessionUtils";
+import { formatRelativeTime } from "./dateUtils";
 
 /**
  * How long ago this session started, coarse and static.

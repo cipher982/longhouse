@@ -2507,7 +2507,7 @@
       ]
     },
     {
-      "path": "web/src/lib/sessionUtils.tsx",
+      "path": "web/src/lib/sessionLabels.ts",
       "providers": [
         "antigravity",
         "claude",

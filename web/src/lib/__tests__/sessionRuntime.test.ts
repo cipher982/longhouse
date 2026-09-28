@@ -7,7 +7,7 @@ import {
   resolveTimelineSignal,
   timelineSignalLabel,
 } from "../sessionRuntime";
-import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
+import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionRuntimeDisplay";
 import { makeSessionStateFacts } from "../../test/sessionState";
 
 function makeRuntimeDisplay(

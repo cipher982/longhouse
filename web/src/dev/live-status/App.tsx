@@ -11,7 +11,7 @@ import { BrowserRouter } from "react-router";
 import { ProviderGlyph } from "../../components/ProviderGlyph";
 import { TimelinePane } from "../../components/session-workspace/TimelinePane";
 import { getProviderLabel } from "../../lib/providers";
-import { getSessionCardText } from "../../lib/sessionUtils";
+import { getSessionCardText } from "../../lib/sessionLabels";
 import { buildTimelineModel } from "../../lib/sessionWorkspace";
 import { LiveWorkRibbon } from "./LiveWorkRibbon";
 import {

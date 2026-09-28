@@ -2,7 +2,7 @@ import { Badge, Button } from "../ui";
 import type { AgentSession } from "../../services/api/agents";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import { isSessionClosed } from "../../lib/sessionRuntime";
-import { getBranchLabel } from "../../lib/sessionUtils";
+import { getBranchLabel } from "../../lib/sessionLabels";
 import {
   formatContinuationStamp,
   formatDuration,

@@ -10,7 +10,7 @@ import {
   getRuntimeDisplayCopy,
   getRuntimeMetaLabel,
   getRuntimeOutcomeLabel,
-} from "../../lib/sessionUtils";
+} from "../../lib/sessionRuntimeDisplay";
 import { SessionLedger, type SessionLedgerState } from "./SessionLedger";
 import "./SessionLedger.css";
 

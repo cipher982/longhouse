@@ -1,5 +1,5 @@
 import { type TimelineSessionCard } from "../services/api/agents";
-import { getProjectLabel } from "./sessionUtils";
+import { getProjectLabel } from "./sessionLabels";
 import { isSessionClosed } from "./sessionRuntime";
 import { applyOrder, type InboxOrderState } from "./inboxOrder";
 

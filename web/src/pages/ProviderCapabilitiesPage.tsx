@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge, Card, EmptyState, PageShell, SectionHeader, Spinner, Table } from "../components/ui";
 import config from "../lib/config";
 import { parseUTC } from "../lib/dateUtils";
-import { toTitleCaseWords } from "../lib/sessionUtils";
+import { toTitleCaseWords } from "../lib/text";
 
 // Capability projection from the managed-provider declarations with proof
 // status attached separately. This page is the human-facing mirror of
