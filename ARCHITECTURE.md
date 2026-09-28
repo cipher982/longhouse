@@ -204,7 +204,7 @@ Features import across folders with `@/`; within a folder, relative.
 | `ios/Sources/LonghouseApp/Fixtures/` | UI-test fixture screens, including the transcript benchmark run |
 | `ios/Sources/LonghouseApp/DesignSystem/` | Ember chrome |
 | `ios/Sources/Shared/API/` | `LonghouseAPI.swift` and DTO adapters |
-| `ios/Sources/Shared/Models/` | `SessionModels.swift` (session facts, `TimelineSignal`), runtime copy, subagents |
+| `ios/Sources/Shared/Models/` | Session DTOs, one file per family (`SessionStateFacts.swift`, `SessionSummary.swift`, `SessionDetail.swift`, `SessionEvent.swift`, `SessionInputModels.swift`, ...), `TimelineSignal.swift`, runtime copy, subagents |
 | `ios/Sources/Shared/Streams/` | SSE reader, timeline and workspace streams |
 | `ios/Sources/Shared/Transcript/` | `TimelineBuilder.swift` (turns events into transcript rows), final answer, edit summary |
 | `ios/Sources/Shared/Auth/` | Hosted auth flow, keychain, shared auth store |
@@ -277,9 +277,9 @@ Python projector, OpenAPI and both clients.
 
 | Topic | Server | Web | iOS |
 | --- | --- | --- | --- |
-| Status wording ("Thinking", "Using Bash") | `_primary` in `server/zerg/services/session_state_contract.py` authors it; `server/zerg/services/session_state_facts_projector.py` serves it | `web/src/shared/session/sessionStatus.ts` (freshness gate, served label) | `TimelineSignal` in `ios/Sources/Shared/Models/SessionModels.swift`, `ios/Sources/Shared/Models/SessionRuntimeCopy.swift`, `ios/Sources/LonghouseApp/Session/Runtime/SessionRuntimeDock.swift`, `ios/Sources/Shared/LiveActivity/` |
+| Status wording ("Thinking", "Using Bash") | `_primary` in `server/zerg/services/session_state_contract.py` authors it; `server/zerg/services/session_state_facts_projector.py` serves it | `web/src/shared/session/sessionStatus.ts` (freshness gate, served label) | `ios/Sources/Shared/Models/TimelineSignal.swift`, `ios/Sources/Shared/Models/SessionRuntimeCopy.swift`, `ios/Sources/LonghouseApp/Session/Runtime/SessionRuntimeDock.swift`, `ios/Sources/Shared/LiveActivity/` |
 | Transcript rendering | `server/zerg/services/transcript_content.py`, `server/zerg/services/tool_presentation.py` | `web/src/features/session/TimelinePane.tsx` over `web/src/shared/session/model/timelineModel.ts` | `ios/Sources/Shared/Transcript/TimelineBuilder.swift` builds the payload; `ios/Sources/LonghouseApp/Session/Transcript/WebTranscriptView.swift` renders it in the document from `web/src/embeds/ios-transcript/` |
-| Session titles | `server/zerg/services/title_generator.py`, `server/zerg/services/session_title.py`, `server/zerg/services/storage_session_titles.py`; engine `engine/src/state/session_title.rs` | `web/src/shared/session/sessionLabels.ts` | `ios/Sources/Shared/Models/SessionModels.swift` |
+| Session titles | `server/zerg/services/title_generator.py`, `server/zerg/services/session_title.py`, `server/zerg/services/storage_session_titles.py`; engine `engine/src/state/session_title.rs` | `web/src/shared/session/sessionLabels.ts` | `ios/Sources/Shared/Models/SessionSummary.swift` (`driftTitle`), `ios/Sources/Shared/Models/SessionDetail.swift` (`displayTitle`) |
 | Timeline stream | `server/zerg/services/timeline_session_stream.py`, `server/zerg/routers/timeline.py` | `web/src/features/timeline/useTimelineSessionStream.ts` | `ios/Sources/Shared/Streams/TimelineSessionsStream.swift` |
 | Launch | `server/zerg/services/session_launch_lifecycle.py`, `server/zerg/services/managed_local_launcher.py`; engine `engine/src/managed_launch_lifecycle.rs` | `web/src/features/launch/` | `ios/Sources/LonghouseApp/Launch/` |
 | Hearth (row flame) | none: reads served facts | `web/src/shared/instruments/hearth/` (`signals.ts` maps facts to flame) | `ios/Sources/LonghouseApp/DesignSystem/EmberChrome.swift` (background light only) |

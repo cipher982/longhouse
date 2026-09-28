@@ -30,7 +30,7 @@ export function getSessionInteractionCapabilities({
   // anything to be wrong with. Every branch below this reads a control axis
   // that only means something after a launch succeeded, which is why launch
   // outranks all of them. iOS has ranked it this way since Console launch
-  // shipped (`SessionModels.swift`, `controlBlock`); web read a compat alias
+  // shipped (`SessionDetail.swift`, `controlBlock`); web read a compat alias
   // for its banner and nothing here, so a starting session drew a spinner and
   // a "Longhouse can't confirm the control link" warning at the same time.
   const launchState = facts.launch?.state ?? null;
