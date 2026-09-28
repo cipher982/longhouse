@@ -83,6 +83,18 @@ _QUICK_SYSTEM = (
     "Be specific about files, features, or bugs. JSON only, no markdown fences."
 )
 
+# Constrained by the provider; see llm_request_policy_kwargs.
+_SUMMARY_SCHEMA = {
+    "name": "session_summary",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {"title": {"type": "string"}, "summary": {"type": "string"}},
+        "required": ["title", "summary"],
+        "additionalProperties": False,
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -168,7 +180,7 @@ def safe_parse_json(text: str | None) -> dict | None:
 
 
 def _parse_quick_summary_raw(raw: str, session_id: str) -> SessionSummary:
-    """Parse quick-summary JSON output with robust fallback behavior."""
+    """Parse summary JSON; unparseable output becomes the discarded placeholder."""
     parsed = safe_parse_json(raw)
     if isinstance(parsed, dict):
         title = parsed.get("title")
@@ -185,20 +197,11 @@ def _parse_quick_summary_raw(raw: str, session_id: str) -> SessionSummary:
             summary=summary_str,
         )
 
-    # Could not parse JSON at all — use raw text (not JSON) as summary
-    stripped = raw.strip()
-    # Guard: if it looks like unparsed JSON, don't store it verbatim
-    if stripped.startswith("{"):
-        return SessionSummary(
-            session_id=session_id,
-            title="Untitled Session",
-            summary="No summary generated.",
-        )
-
+    # Prose is never a summary: it is the model answering the transcript.
     return SessionSummary(
         session_id=session_id,
         title="Untitled Session",
-        summary=stripped[:500] if stripped else "No summary generated.",
+        summary="No summary generated.",
     )
 
 
@@ -241,7 +244,7 @@ async def quick_summary(
             {"role": "system", "content": _QUICK_SYSTEM},
             {"role": "user", "content": user_prompt},
         ],
-        **llm_request_policy_kwargs(client),
+        **llm_request_policy_kwargs(client, json_schema=_SUMMARY_SCHEMA),
     )
 
     if not response.choices:
@@ -422,7 +425,7 @@ async def incremental_summary(
                 {"role": "system", "content": _INCREMENTAL_SYSTEM},
                 {"role": "user", "content": user_prompt},
             ],
-            **llm_request_policy_kwargs(client),
+            **llm_request_policy_kwargs(client, json_schema=_SUMMARY_SCHEMA),
         ),
         timeout=timeout_seconds,
     )

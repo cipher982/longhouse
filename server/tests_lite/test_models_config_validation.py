@@ -139,6 +139,30 @@ def test_openrouter_client_enforces_provider_data_collection_deny(tmp_path, monk
         asyncio.run(client.close())
 
 
+def test_openrouter_structured_call_requires_endpoints_that_honor_the_schema(tmp_path, monkeypatch):
+    # Most OpenRouter endpoints for a model ignore response_format. Without
+    # require_parameters a schema-constrained call can land on one and come
+    # back as prose (hosted session e425ca05's title).
+    cfg = _write_test_config(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    mc = _reload_models_config(monkeypatch, cfg)
+    schema = {"name": "t", "strict": True, "schema": {"type": "object"}}
+
+    client, _model, _provider = mc.get_llm_client_for_use_case("summarization")
+    try:
+        kwargs = mc.llm_request_policy_kwargs(client, json_schema=schema, reasoning=False)
+        assert kwargs == {
+            "response_format": {"type": "json_schema", "json_schema": schema},
+            "extra_body": {
+                "provider": {"data_collection": "deny", "require_parameters": True},
+                "reasoning": {"enabled": False},
+            },
+        }
+        assert "require_parameters" not in mc.llm_request_policy_kwargs(client)["extra_body"]["provider"]
+    finally:
+        asyncio.run(client.close())
+
+
 def test_is_capability_available_embedding_requires_local_contract_not_key(tmp_path, monkeypatch):
     cfg = _write_test_config(tmp_path)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)

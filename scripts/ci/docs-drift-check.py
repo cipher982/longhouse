@@ -27,7 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_DIR = REPO_ROOT / "web" / "src" / "features" / "marketing" / "docs"
 
-MODEL = "deepseek/deepseek-v4-flash-0731"
+MODEL = "deepseek/deepseek-v4.1-flash"
 
 SYSTEM_PROMPT = """\
 You are a documentation accuracy reviewer for an open-source project called Longhouse.

@@ -802,7 +802,7 @@ def test_is_resume_seed_marker_matches_only_well_formed_token():
 def _dependency_identity(generation: str = "a" * 64) -> dict[str, str]:
     return {
         "provider": "openrouter",
-        "model": "deepseek/deepseek-v4-flash-0731",
+        "model": "deepseek/deepseek-v4.1-flash",
         "credential_binding": "OPENROUTER_API_KEY",
         "credential_generation": generation,
     }

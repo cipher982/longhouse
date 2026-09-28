@@ -222,24 +222,40 @@ def build_openai_compatible_client_kwargs(
     return kwargs
 
 
-def llm_request_policy_kwargs(client: object) -> dict:
-    """Return provider policy fields bound by the shared client factory."""
+def llm_request_policy_kwargs(
+    client: object,
+    *,
+    json_schema: dict | None = None,
+    reasoning: bool = True,
+) -> dict:
+    """Return request fields for one call through the shared client factory.
 
+    ``json_schema`` is an OpenAI ``json_schema`` object (``name``, ``strict``,
+    ``schema``); the reply is then constrained to it rather than parsed out of
+    prose. On OpenRouter it also sets ``require_parameters`` because most
+    endpoints for a model silently ignore ``response_format``; without it the
+    request can land on one and come back as free text.
+
+    ``reasoning=False`` turns off thinking tokens for short structured calls
+    (a title does not need 300 reasoning tokens and 4 s of latency).
+    """
+
+    kwargs: dict = {}
+    if json_schema is not None:
+        kwargs["response_format"] = {"type": "json_schema", "json_schema": json_schema}
     extra_body = getattr(client, "_longhouse_request_extra_body", None)
-    if not isinstance(extra_body, dict):
-        return {}
+    if not isinstance(extra_body, dict) or not isinstance(extra_body.get("provider"), dict):
+        return kwargs
     # Each SDK call may normalize its input in place. Return a fresh nested
     # object so one request cannot weaken the next request's routing policy.
-    provider = extra_body.get("provider")
-    return (
-        {
-            "extra_body": {
-                "provider": dict(provider),
-            }
-        }
-        if isinstance(provider, dict)
-        else {}
-    )
+    provider = dict(extra_body["provider"])
+    if json_schema is not None:
+        provider["require_parameters"] = True
+    body: dict = {"provider": provider}
+    if not reasoning:
+        body["reasoning"] = {"enabled": False}
+    kwargs["extra_body"] = body
+    return kwargs
 
 
 # =============================================================================

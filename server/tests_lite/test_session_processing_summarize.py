@@ -181,15 +181,15 @@ class TestQuickSummary:
         assert result.summary == "Fixed auth."
 
     @pytest.mark.asyncio
-    async def test_quick_summary_fallback_on_bad_json(self):
-        """quick_summary should fall back to raw text if JSON parsing fails."""
-        client = _mock_client("This is just a plain text summary without JSON.")
+    async def test_quick_summary_discards_prose_reply(self):
+        """Prose is the model answering the transcript, never a summary to store."""
+        client = _mock_client("Great to hear you simplified your network! Let me look.")
         transcript = _make_transcript()
 
         result = await quick_summary(transcript, client)
 
         assert result.title == "Untitled Session"
-        assert "plain text summary" in result.summary
+        assert result.summary == "No summary generated."
 
     @pytest.mark.asyncio
     async def test_quick_summary_passes_model(self):

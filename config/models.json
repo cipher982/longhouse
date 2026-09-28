@@ -4,16 +4,16 @@
   "text": {
     "$comment": "Text/chat completion models (Zerg agent orchestration)",
     "tiers": {
-      "TIER_1": "deepseek/deepseek-v4-flash-0731",
-      "TIER_2": "deepseek/deepseek-v4-flash-0731",
-      "TIER_3": "deepseek/deepseek-v4-flash-0731"
+      "TIER_1": "deepseek/deepseek-v4.1-flash",
+      "TIER_2": "deepseek/deepseek-v4.1-flash",
+      "TIER_3": "deepseek/deepseek-v4.1-flash"
     },
     "models": {
-      "deepseek/deepseek-v4-flash-0731": {
-        "displayName": "DeepSeek v4 Flash (OpenRouter)",
+      "deepseek/deepseek-v4.1-flash": {
+        "displayName": "DeepSeek v4.1 Flash (OpenRouter)",
         "provider": "openrouter",
         "tier": "TIER_1",
-        "description": "DeepSeek v4 Flash via OpenRouter - standard text and automation lane (dated 0731 slug; the bare deepseek-v4-flash alias resolves to the retired 20260423 build)",
+        "description": "DeepSeek v4.1 Flash via OpenRouter - standard text and automation lane. Structured calls set provider.require_parameters, since only some endpoints honor response_format.",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -54,7 +54,7 @@
   "useCases": {
     "$comment": "Maps active text use cases to the two standard Longhouse lanes. session_title, summarization and summary_update send transcript text to a third-party provider, so they only run when AI_TITLES_AND_SUMMARIES_ENABLED=1; the default is off and titles fall back to the first user message.",
     "text": {
-      "session_title": "deepseek/deepseek-v4-flash-0731",
+      "session_title": "deepseek/deepseek-v4.1-flash",
       "summarization": "TIER_2",
       "summary_update": "TIER_3"
     },
