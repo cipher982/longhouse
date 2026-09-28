@@ -272,8 +272,8 @@ struct SessionModelsTests {
             timelineCard: summary.timelineCard,
             stateFacts: makeSessionStateFacts(activity: "unknown")
         )
-        let signal = TimelineSignal.resolve(for: unknown)
-        #expect(signal.accessibilityState == "Activity unknown")
+        #expect(TimelineSignal.resolve(for: unknown) == .unknown)
+        #expect(unknown.spokenStatusLabel() == "Activity unknown")
     }
 
     @Test
@@ -301,7 +301,7 @@ struct SessionModelsTests {
         )
         let signal = TimelineSignal.resolve(for: helmIdle)
         #expect(signal == .quiet)
-        #expect(signal.accessibilityState == "Idle")
+        #expect(helmIdle.spokenStatusLabel() == "Idle")
 
         // Without the override (ordinary stale activity, e.g. a stale
         // "thinking"/"running"), the row still reads unknown.
@@ -317,6 +317,40 @@ struct SessionModelsTests {
             stateFacts: makeSessionStateFacts(activity: "unknown")
         )
         #expect(TimelineSignal.resolve(for: ordinaryStale) == .unknown)
+    }
+
+    /// VoiceOver says the server's label verbatim while the work claim is
+    /// fresh, and the ledger's "Activity uncertain" once its window passed on
+    /// the reader's clock -- never a cached "Using Bash".
+    @Test
+    func spokenStatusIsTheServedLabelWhileItsEvidenceIsFresh() {
+        let base = timelineSummary(activityRecency: "none")
+        func summary(_ facts: SessionStateFacts) -> SessionSummary {
+            SessionSummary(
+                id: base.id,
+                title: base.title,
+                presenceState: base.presenceState,
+                provider: base.provider,
+                project: base.project,
+                lastActivityAt: base.lastActivityAt,
+                runtimeDisplay: base.runtimeDisplay,
+                timelineCard: base.timelineCard,
+                stateFacts: facts
+            )
+        }
+        let now = LonghouseDateParser.parse("2026-08-23T12:05:00Z")!
+        let fresh = summary(makeSessionStateFacts(activity: "executing", tool: "Bash", activityValidUntil: "2026-08-23T12:10:00Z"))
+        #expect(fresh.spokenStatusLabel(asOf: now) == "Using Bash")
+        let thinking = summary(makeSessionStateFacts(activity: "thinking", activityValidUntil: "2026-08-23T12:10:00Z"))
+        #expect(thinking.spokenStatusLabel(asOf: now) == "Thinking")
+
+        let later = LonghouseDateParser.parse("2026-08-23T22:10:00Z")!
+        #expect(fresh.spokenStatusLabel(asOf: later) == "Activity uncertain")
+        // Quiet states carry no work claim to expire.
+        let idle = summary(makeSessionStateFacts(activity: "quiescent", activityValidUntil: "2026-08-23T12:10:00Z"))
+        #expect(idle.spokenStatusLabel(asOf: later) == "Idle")
+        let closed = summary(makeSessionStateFacts(activity: "executing", closed: true, activityValidUntil: "2026-08-23T12:10:00Z"))
+        #expect(closed.spokenStatusLabel(asOf: later) == "Closed")
     }
 
     @Test

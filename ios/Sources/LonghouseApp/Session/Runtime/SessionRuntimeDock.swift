@@ -805,7 +805,9 @@ struct SessionRuntimeDock: View {
            !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return state == .uncertain ? "Last observed: \(tail)" : tail
         }
-        guard let tool = detail.stateFacts.activityTool,
+        // The server's normalized display label for the tool, not the raw
+        // activity fact: one vocabulary with web's runtime strip.
+        guard let tool = detail.runtimeDisplay.compactToolLabel,
               !tool.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }

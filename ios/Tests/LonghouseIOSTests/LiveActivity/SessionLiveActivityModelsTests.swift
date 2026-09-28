@@ -173,4 +173,56 @@ struct SessionLiveActivityModelsTests {
         #expect(state.isAttention == false)
     }
 
+    private func contentState(_ presence: String, attention: Bool = false) -> SessionWatchAttributes.ContentState {
+        SessionWatchAttributes.ContentState(
+            presenceState: presence,
+            displayPhase: "",
+            activeTool: nil,
+            updatedAt: 1_777_140_000,
+            isAttention: attention
+        )
+    }
+
+    /// Every served activity state, as the app writes it, gets the app's own
+    /// signal and a real word -- never "?".
+    @Test(arguments: [
+        ("thinking", TimelineSignal.working, "Think"),
+        ("executing", TimelineSignal.working, "Run"),
+        ("quiescent", TimelineSignal.quiet, "Idle"),
+        ("blocked", TimelineSignal.attention, "Hold"),
+        ("stalled", TimelineSignal.attention, "Stall"),
+        ("unknown", TimelineSignal.unknown, "Unknown"),
+    ])
+    func everyActivityStateMapsLikeTheApp(presence: String, signal: TimelineSignal, word: String) {
+        let state = contentState(presence)
+        #expect(state.activityState == presence)
+        #expect(state.signal == signal)
+        #expect(state.signal == TimelineSignal.forActivityState(presence))
+        #expect(state.compactStateLabel == word)
+        #expect(state.compactStateLabel != "?")
+    }
+
+    /// The server's Live Activity push renames executing and quiescent to
+    /// presence words; they fold back to the same state the app writes.
+    @Test(arguments: [
+        ("running", "executing", "Run"),
+        ("idle", "quiescent", "Idle"),
+        ("needs_user", "quiescent", "Idle"),
+    ])
+    func serverPushAliasesFoldBackToActivityStates(presence: String, activity: String, word: String) {
+        let state = contentState(presence)
+        #expect(state.activityState == activity)
+        #expect(state.signal == TimelineSignal.forActivityState(activity))
+        #expect(state.compactStateLabel == word)
+    }
+
+    @Test
+    func aPendingInteractionIsAttentionWhateverTheActivity() {
+        for presence in ["thinking", "executing", "quiescent", "unknown"] {
+            let state = contentState(presence, attention: true)
+            #expect(state.signal == .attention)
+            #expect(state.compactStateLabel == "Needs you")
+        }
+    }
+
 }

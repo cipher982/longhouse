@@ -82,6 +82,9 @@ private extension SessionDetail {
         transcriptPreviewJSON: String? = nil,
         pauseRequestJSON: String? = nil
     ) -> SessionDetail {
+        // The server projects the same tool into both places
+        // (session_views: compact_tool_label = activity.tool).
+        let tool = (try? JSONDecoder().decode(SessionStateFacts.self, from: Data(stateFactsJSON.utf8)))?.activityTool
         let json = """
         {
           "id": "preview-1",
@@ -107,7 +110,7 @@ private extension SessionDetail {
             "headline": "",
             "detail": null,
             "phaseLabel": "",
-            "compactToolLabel": null,
+            "compactToolLabel": \(tool.map { "\"\($0)\"" } ?? "null"),
             "isLive": true,
             "isExecuting": \(executing),
             "needsAttention": false,

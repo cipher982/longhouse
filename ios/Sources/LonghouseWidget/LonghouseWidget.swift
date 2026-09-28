@@ -177,13 +177,13 @@ struct SessionWatchLiveActivityWidget: Widget {
                 }
             } compactLeading: {
                 Image(systemName: context.state.isAttention ? "exclamationmark.circle.fill" : "dot.radiowaves.left.and.right")
-                    .foregroundStyle(context.state.isAttention ? Ember.uiHex(0xE4572E) : Ember.uiHex(0xF08A24))
+                    .foregroundStyle(liveActivitySignalColor(context.state.signal))
             } compactTrailing: {
-                Text(shortState(context.state.presenceState))
+                Text(context.state.compactStateLabel)
                     .font(.caption2.weight(.semibold))
             } minimal: {
                 Image(systemName: context.state.isAttention ? "exclamationmark.circle.fill" : "dot.radiowaves.left.and.right")
-                    .foregroundStyle(context.state.isAttention ? Ember.uiHex(0xE4572E) : Ember.uiHex(0xF08A24))
+                    .foregroundStyle(liveActivitySignalColor(context.state.signal))
             }
             .widgetURL(sessionURL(context.attributes.sessionId))
         }
@@ -197,7 +197,7 @@ private struct SessionWatchLiveActivityView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(context.state.isAttention ? Ember.uiHex(0xE4572E) : liveActivityStateColor(context.state.presenceState))
+                    .fill(liveActivitySignalColor(context.state.signal))
                     .frame(width: 9, height: 9)
                 Text(context.state.displayPhase)
                     .font(.headline.weight(.semibold))
@@ -228,34 +228,13 @@ private func sessionURL(_ sessionId: String) -> URL? {
     URL(string: "ai.longhouse.ios://session/\(sessionId)")
 }
 
-private func shortState(_ state: String) -> String {
-    switch state {
-    case "needs_user":
-        return "Idle"
-    case "unknown":
-        return "Inactive"
-    case "blocked":
-        return "Hold"
-    case "running":
-        return "Run"
-    case "thinking":
-        return "Think"
-    case "idle":
-        return "Idle"
-    default:
-        return "?"
-    }
-}
-
-private func liveActivityStateColor(_ state: String) -> Color {
-    // The fire ramp: live work is flame, a hold is ember, rest cools to ash.
-    switch state {
-    case "running", "thinking", "executing":
-        return Ember.uiHex(0xF08A24)
-    case "blocked", "stalled":
-        return Ember.uiHex(0xE4572E)
-    default:
-        return Ember.uiHex(0x7C8790)
+/// The Live Activity is dark on every surface, so it takes the dark stop of
+/// the app's signal colors (Ember.flame, Ember.ember, Ember.ash).
+private func liveActivitySignalColor(_ signal: TimelineSignal) -> Color {
+    switch signal {
+    case .working: return Ember.uiHex(0xF08A24)
+    case .attention: return Ember.uiHex(0xE4572E)
+    case .quiet, .unknown, .closed: return Ember.uiHex(0x7C8790)
     }
 }
 

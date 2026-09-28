@@ -807,7 +807,7 @@ struct TimelineSessionCardRow: View {
                 // VoiceOver announces "Waiting on you" / "Working" rather than
                 // leaving amber as the sole, invisible-to-VoiceOver code.
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel(rowAccessibilityLabel(session: session, role: role, signal: signal))
+                .accessibilityLabel(rowAccessibilityLabel(session: session, role: role))
 
                 if isNewResult {
                     NewResultLine(session: session)
@@ -1625,16 +1625,15 @@ private func newResultStatusColor(for session: SessionSummary) -> Color {
 
 private func rowAccessibilityLabel(
     session: SessionSummary,
-    role: TimelineRowRole,
-    signal: TimelineSignal
+    role: TimelineRowRole
 ) -> String {
     if role == .newResult {
         return "\(session.title), new result, \(newResultStatusText(for: session))"
     }
     if role == .needsYou {
-        return "\(session.title), needs you, \(signal.accessibilityState)"
+        return "\(session.title), needs you, \(session.spokenStatusLabel())"
     }
-    return "\(session.title), \(signal.accessibilityState)"
+    return "\(session.title), \(session.spokenStatusLabel())"
 }
 
 private func highlightedSnippet(_ value: String, query: String) -> AttributedString {

@@ -179,7 +179,7 @@ struct SessionRow: View {
             Spacer()
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(session.title), \(signal.accessibilityState)")
+        .accessibilityLabel("\(session.title), \(session.spokenStatusLabel())")
     }
 }
 

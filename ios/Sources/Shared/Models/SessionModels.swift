@@ -644,15 +644,20 @@ enum TimelineSignal {
     /// state, so attention is steady, not pulsing - avoids alarm fatigue.
     var pulses: Bool { self == .working }
 
-    /// Spoken equivalent of the dot color, so the attention axis reaches
-    /// VoiceOver instead of being color-only.
-    var accessibilityState: String {
-        switch self {
-        case .attention: return "Waiting on you"
-        case .working: return "Working"
-        case .quiet: return "Idle"
-        case .unknown: return "Activity unknown"
-        case .closed: return "Closed"
+    /// The signal one activity state carries on its own, before the row-level
+    /// facts (closed, suppressed, pending interaction, the Helm idle override)
+    /// that `resolve` layers on top. The widget and Live Activity read the
+    /// same mapping, so a state never looks different there than in the app.
+    static func forActivityState(_ activityState: String) -> TimelineSignal {
+        switch activityState {
+        case "thinking", "executing":
+            return .working
+        case "blocked", "stalled":
+            return .attention
+        case "quiescent":
+            return .quiet
+        default:
+            return .unknown
         }
     }
 
@@ -665,23 +670,33 @@ enum TimelineSignal {
         if suppressed { return .quiet }
         if session.needsAttention { return .attention }
 
-        switch session.stateFacts.activityState {
-        case "thinking", "executing":
-            return .working
-        case "blocked", "stalled":
-            return .attention
-        case "quiescent":
-            return .quiet
-        default:
-            // A managed Helm session's idle/needs_user activity observation can
-            // expire while its control lease or attached terminal stays fresh;
-            // the server already presents that as plain "Idle" rather than
-            // "Activity unknown" (session_state_contract._primary, the Helm
-            // idle-persistence override). Mirror that here instead of
-            // re-deriving "unknown" from the raw, now-expired activity state,
-            // matching web's `resolveTimelineSignal`.
-            return session.stateFacts.primary?.key == "idle" ? .quiet : .unknown
+        let signal = forActivityState(session.stateFacts.activityState)
+        guard signal == .unknown else { return signal }
+        // A managed Helm session's idle/needs_user activity observation can
+        // expire while its control lease or attached terminal stays fresh;
+        // the server already presents that as plain "Idle" rather than
+        // "Activity unknown" (session_state_contract._primary, the Helm
+        // idle-persistence override). Mirror that here instead of
+        // re-deriving "unknown" from the raw, now-expired activity state,
+        // matching web's `resolveTimelineSignal`.
+        return session.stateFacts.primary?.key == "idle" ? .quiet : .unknown
+    }
+}
+
+extension SessionSummary {
+    /// What VoiceOver says for the row's status: the server's primary label,
+    /// verbatim, the same words the row shows. The client adds nothing but the
+    /// freshness gate: a work claim whose evidence window has passed on the
+    /// reader's clock is spoken as "Activity uncertain", never as the cached
+    /// "Using Bash" (the ledger's `.uncertain` verdict).
+    func spokenStatusLabel(asOf now: Date = Date()) -> String {
+        if !isClosed,
+           ["thinking", "executing"].contains(stateFacts.activityState),
+           !stateFacts.activityEvidenceIsLive(asOf: now) {
+            return "Activity uncertain"
         }
+        let label = timelineStatusLabel
+        return label.isEmpty ? "Activity unknown" : label
     }
 }
 
