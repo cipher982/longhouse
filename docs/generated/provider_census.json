@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 293,
+  "file_count": 294,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -442,7 +442,14 @@
       ]
     },
     {
-      "path": "ios/Sources/LonghouseApp/Fixtures/ChatUITestFixtureView.swift",
+      "path": "ios/Sources/LonghouseApp/Fixtures/ChatUITestWorkspaceClient.swift",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/Fixtures/TimelineOpenUITestFixtureView.swift",
       "providers": [
         "claude",
         "codex"

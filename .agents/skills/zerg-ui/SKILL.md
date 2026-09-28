@@ -135,7 +135,7 @@ make ios-ui-shot TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderRe
 ```
 Write the test like the ones in `ios/Tests/LonghouseIOSUITests/SessionChatUITests.swift`:
 launch a chat fixture (`launchChatFixture(eventCount:)` or a named fixture from
-`ios/Sources/LonghouseApp/Fixtures/ChatUITestFixtureView.swift`), wait for the element, then
+`ios/Sources/LonghouseApp/Fixtures/ChatUITestWorkspaceClient.swift`), wait for the element, then
 `add(XCTAttachment(screenshot: app.screenshot()))` with `lifetime = .keepAlways`.
 WebKit exposes transcript text as `staticTexts`, so a DOM footer is
 queryable with `staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for"))`.
