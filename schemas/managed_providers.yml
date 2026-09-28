@@ -989,6 +989,8 @@ providers:
   - claude.answer_pause
   - claude.turn_start
   - claude.turn_interrupt
+  # Console steer: the lifecycle hook delivers it at the next tool boundary or Stop.
+  - claude.turn_steer
   # Transcript signals: what the provider's own terminal shows that lives on
   # transcript lines the render surface never renders. Each cell names the raw
   # source, the golden fixture that proves the parser, the live canary that

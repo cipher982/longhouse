@@ -1231,6 +1231,15 @@ async fn execute_command(
                         })?;
                     CODEX_EXEC_ADAPTER
                 }
+                "claude" => {
+                    crate::claude_print::steer_claude_print_turn(&run_id, &session_id, &text).map_err(|reason| {
+                        CommandError {
+                            code: if reason == "turn_not_steerable" { reason.clone() } else { "steer_failed".to_string() },
+                            message: format!("Claude Console turn {run_id} did not take the steer: {reason}"),
+                        }
+                    })?;
+                    CLAUDE_PRINT_ADAPTER
+                }
                 _ => {
                     return Err(CommandError {
                         code: "provider_unsupported".to_string(),
@@ -3977,6 +3986,7 @@ mod tests {
         ("claude", "answer_pause", COMMAND_ANSWER_PAUSE),
         ("claude", "turn_start", COMMAND_TURN_START),
         ("claude", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("claude", "turn_steer", COMMAND_TURN_STEER),
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "steer", COMMAND_STEER_TEXT),

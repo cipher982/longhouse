@@ -1603,7 +1603,8 @@
         "claude.terminate",
         "claude.answer_pause",
         "claude.turn_start",
-        "claude.turn_interrupt"
+        "claude.turn_interrupt",
+        "claude.turn_steer"
       ],
       "transcript_signals": {
         "delegation.spawn": {
@@ -1753,7 +1754,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "69970250c4610d36ff718f2ef44fc213cee7a7a5b10d70b7df404f9d0980c0be"
+      "adapter_digest": "781cbbfd7d192a94df762b6433f8a526e23047ca9191c4777befe1f82abf4f2d"
     },
     {
       "provider": "opencode",

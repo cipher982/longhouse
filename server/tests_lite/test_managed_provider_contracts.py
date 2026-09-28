@@ -468,6 +468,7 @@ def test_claude_contract_is_first_class_channel_control_provider():
         "claude.answer_pause",
         "claude.turn_start",
         "claude.turn_interrupt",
+        "claude.turn_steer",
     )
 
 
