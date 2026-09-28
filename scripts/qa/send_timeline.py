@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRATCH = Path("/tmp/agents/send-timeline")
 STATE = SCRATCH / "state.json"
 DEVICE = "send-timeline-mac"
-SCENARIOS = {"single", "midturn", "midtool", "restart"}
+SCENARIOS = {"single", "midturn", "midtool", "restart", "steer"}
 
 
 def free_port() -> int:
@@ -87,7 +87,9 @@ def up() -> dict:
 
 
 def _up() -> dict:
-    for tool in ("longhouse", "longhouse-engine", "codex", "bun", "node"):
+    # SEND_TIMELINE_ENGINE runs a freshly built engine instead of the installed one.
+    engine = os.environ.get("SEND_TIMELINE_ENGINE") or shutil.which("longhouse-engine") or "longhouse-engine"
+    for tool in ("longhouse", engine, "codex", "bun", "node"):
         if shutil.which(tool) is None:
             sys.exit(f"{tool} is not on PATH")
     codex_auth = Path.home() / ".codex" / "auth.json"
@@ -144,7 +146,7 @@ def _up() -> dict:
     )
     start(
         "engine_pid",
-        ["longhouse-engine", "connect", "--url", api, "--token", token, "--db", str(SCRATCH / "agent.db"),
+        [engine, "connect", "--url", api, "--token", token, "--db", str(SCRATCH / "agent.db"),
          "--machine-name", DEVICE, "--fallback-scan-secs", "2", "--spool-replay-secs", "1"],
         agent_env, "engine.log", project, state,
     )

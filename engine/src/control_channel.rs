@@ -37,7 +37,7 @@ use crate::codex_bridge::{
     cmd_codex_bridge_steer, validate_codex_bridge_attached, BridgeInterruptConfig,
     BridgePauseResponseConfig, BridgeSendConfig, BridgeSteerConfig, BridgeSteerError,
 };
-use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
+use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig, CODEX_EXEC_ADAPTER};
 use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
@@ -59,6 +59,7 @@ const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_TURN_START: &str = "session.turn.start";
 const COMMAND_TURN_INTERRUPT: &str = "session.turn.interrupt";
+const COMMAND_TURN_STEER: &str = "session.turn.steer";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_PROVIDER_SIGN_IN_START: &str = "provider.sign_in.start";
 const COMMAND_PROVIDER_SIGN_IN_CODE: &str = "provider.sign_in.code";
@@ -506,7 +507,9 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
                 .flatten()
                 .filter_map(Value::as_str)
                 .any(|support| {
-                    support.ends_with(".turn_start") || support.ends_with(".turn_interrupt")
+                    support.ends_with(".turn_start")
+                        || support.ends_with(".turn_interrupt")
+                        || support.ends_with(".turn_steer")
                 });
             if console_adapter || turn_start || console_support {
                 return Err(format!(
@@ -1214,6 +1217,34 @@ async fn execute_command(
 
     match command_type.as_str() {
         COMMAND_TURN_START => execute_turn_start(frame, &payload, &session_id, config).await,
+        COMMAND_TURN_STEER => {
+            let run_id = payload_required_string(&payload, "run_id")?;
+            let provider = payload_required_string(&payload, "provider")?;
+            let text = payload_required_string(&payload, "text")?;
+            let transport = match provider.as_str() {
+                "codex" => {
+                    crate::codex_exec::steer_codex_console_turn(&run_id, &text)
+                        .await
+                        .map_err(|reason| CommandError {
+                            code: reason.clone(),
+                            message: format!("Codex Console turn {run_id} did not take the steer: {reason}"),
+                        })?;
+                    CODEX_EXEC_ADAPTER
+                }
+                _ => {
+                    return Err(CommandError {
+                        code: "provider_unsupported".to_string(),
+                        message: format!("provider={provider} has no Console steer adapter"),
+                    });
+                }
+            };
+            Ok(json!({
+                "provider": provider,
+                "transport": transport,
+                "run_id": run_id,
+                "steered": true,
+            }))
+        }
         COMMAND_TURN_INTERRUPT => {
             let run_id = payload_required_string(&payload, "run_id")?;
             let provider = payload_required_string(&payload, "provider")?;
@@ -3329,6 +3360,7 @@ fn command_requires_restart_fence(frame: &Value) -> bool {
                 | COMMAND_ANSWER_PAUSE
                 | COMMAND_TERMINATE
                 | COMMAND_TURN_INTERRUPT
+                | COMMAND_TURN_STEER
         )
     )
 }
@@ -3934,6 +3966,7 @@ mod tests {
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("codex", "turn_start", COMMAND_TURN_START),
+        ("codex", "turn_steer", COMMAND_TURN_STEER),
         ("opencode", "turn_start", COMMAND_TURN_START),
         ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "answer_pause", COMMAND_ANSWER_PAUSE),

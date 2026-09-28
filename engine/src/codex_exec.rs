@@ -38,6 +38,57 @@ pub const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
 pub const DEFAULT_CONSOLE_SANDBOX: &str = "danger-full-access";
 pub const CODEX_EXEC_ADAPTER: &str = "codex_exec";
 
+/// A mid-turn message for a running Codex Console turn and the channel its
+/// outcome goes back on.
+struct ConsoleSteer {
+    text: String,
+    reply: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+}
+
+/// Running Codex Console turns that can take a steer, by Longhouse run id.
+/// Registered once `turn/start` returns the provider turn id and removed when
+/// the turn loop exits, so a run the daemon recovered after a restart (no live
+/// app-server connection) is correctly not steerable.
+fn console_steer_registry() -> &'static Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleSteer>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleSteer>>>> =
+        OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+struct ConsoleSteerRegistration(String);
+
+impl Drop for ConsoleSteerRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = console_steer_registry().lock() {
+            registry.remove(&self.0);
+        }
+    }
+}
+
+/// Enter the running Codex Console turn for `run_id` with `text`, through the
+/// same app-server connection that started it (`turn/steer`, the Helm path).
+/// `Err("turn_not_steerable")` means no turn of that run is running here.
+pub async fn steer_codex_console_turn(run_id: &str, text: &str) -> std::result::Result<(), String> {
+    let sender = console_steer_registry()
+        .lock()
+        .map_err(|_| "steer registry poisoned".to_string())?
+        .get(run_id)
+        .cloned()
+        .ok_or_else(|| "turn_not_steerable".to_string())?;
+    let (reply, outcome) = tokio::sync::oneshot::channel();
+    sender
+        .send(ConsoleSteer {
+            text: text.to_string(),
+            reply,
+        })
+        .map_err(|_| "turn_not_steerable".to_string())?;
+    match tokio::time::timeout(Duration::from_secs(15), outcome).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("turn_not_steerable".to_string()),
+        Err(_) => Err("steer_outcome_unknown".to_string()),
+    }
+}
+
 struct AppServerRpc {
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
@@ -1089,9 +1140,61 @@ async fn run_app_server_turn(
     sink.post_phase("thinking", None).await;
     sink.post_live_user_item(prompt).await;
 
-    tokio::time::timeout(APP_SERVER_TURN_TIMEOUT, async {
+    let (steer_tx, mut steer_rx) = mpsc::unbounded_channel::<ConsoleSteer>();
+    if let Ok(mut registry) = console_steer_registry().lock() {
+        registry.insert(sink.run_id.clone(), steer_tx);
+    }
+    let _steer_registration = ConsoleSteerRegistration(sink.run_id.clone());
+    // A steer's reply arrives on the same stream as the turn's events, so it
+    // is matched here instead of through `request`, which would swallow a
+    // `turn/completed` that lands before the reply.
+    let mut pending_steers: HashMap<u64, tokio::sync::oneshot::Sender<std::result::Result<(), String>>> =
+        HashMap::new();
+
+    let turn_outcome = tokio::time::timeout(APP_SERVER_TURN_TIMEOUT, async {
         loop {
-            let value = rpc.next_value().await?;
+            let value = tokio::select! {
+                value = rpc.next_value() => value?,
+                Some(steer) = steer_rx.recv() => {
+                    let id = rpc.next_id;
+                    rpc.next_id += 1;
+                    let request = json!({
+                        "id": id,
+                        "method": "turn/steer",
+                        "params": {
+                            "threadId": provider_thread_id,
+                            "expectedTurnId": expected_turn_id,
+                            "input": crate::codex_attachments::build_user_input_items_from_paths(&steer.text, &[]),
+                        },
+                    });
+                    match rpc.write(&request).await {
+                        Ok(()) => {
+                            pending_steers.insert(id, steer.reply);
+                        }
+                        Err(error) => {
+                            let _ = steer.reply.send(Err(format!("steer write failed: {error}")));
+                        }
+                    }
+                    continue;
+                }
+            };
+            if value.get("method").is_none() {
+                if let Some(reply) = value
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .and_then(|id| pending_steers.remove(&id))
+                {
+                    let outcome = match value.get("error") {
+                        Some(error) => Err(format!("turn/steer failed: {error}")),
+                        None => Ok(()),
+                    };
+                    if outcome.is_ok() {
+                        sink.post_phase("thinking", None).await;
+                    }
+                    let _ = reply.send(outcome);
+                    continue;
+                }
+            }
             if value.get("id").is_some() && value.get("method").is_some() {
                 rpc.respond_to_server_request(&value).await?;
                 continue;
@@ -1127,8 +1230,15 @@ async fn run_app_server_turn(
         }
         Ok::<(), anyhow::Error>(())
     })
-    .await
-    .context("Codex app-server turn timed out")??;
+    .await;
+    drop(_steer_registration);
+    for (_, reply) in pending_steers.drain() {
+        let _ = reply.send(Err("turn_ended".to_string()));
+    }
+    while let Ok(steer) = steer_rx.try_recv() {
+        let _ = steer.reply.send(Err("turn_ended".to_string()));
+    }
+    turn_outcome.context("Codex app-server turn timed out")??;
 
     rpc.stdin.shutdown().await?;
     drop(rpc);

@@ -26,6 +26,7 @@ COMMAND_TERMINATE = "session.terminate"
 COMMAND_RUN_ONCE = "session.run_once"
 COMMAND_TURN_START = "session.turn.start"
 COMMAND_TURN_INTERRUPT = "session.turn.interrupt"
+COMMAND_TURN_STEER = "session.turn.steer"
 
 _MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
     COMMAND_SEND_TEXT: "send",
@@ -36,6 +37,7 @@ _MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
     COMMAND_RUN_ONCE: "run_once",
     COMMAND_TURN_START: "turn_start",
     COMMAND_TURN_INTERRUPT: "turn_interrupt",
+    COMMAND_TURN_STEER: "turn_steer",
 }
 
 

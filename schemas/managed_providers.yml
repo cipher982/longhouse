@@ -484,6 +484,8 @@ providers:
   - codex.run_once
   - codex.resume_run_once
   - codex.turn_start
+  # Console steer: the running `turn/start` connection takes `turn/steer`.
+  - codex.turn_steer
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented

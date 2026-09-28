@@ -1049,6 +1049,7 @@
       "providers": [
         "claude",
         "codex",
+        "cursor",
         "pi"
       ]
     },
@@ -1635,7 +1636,8 @@
       "path": "server/tests_lite/test_session_input_presentation.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {

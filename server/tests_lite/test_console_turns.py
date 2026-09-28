@@ -82,8 +82,8 @@ async def test_create_empty_console_session_has_target_but_no_run(live_catalog):
 
 
 @pytest.mark.asyncio
-async def test_console_session_refuses_steer_before_enqueueing_a_turn(live_catalog):
-    """A Console session starts a turn; it has no running turn to steer.
+async def test_console_steer_without_a_running_turn_is_refused_before_enqueueing(live_catalog):
+    """STEER enters the running turn; with none running it is refused.
 
     Enqueuing here would create a new turn while answering a request to change
     the current one, so the intent is refused before any turn row exists.
@@ -114,7 +114,7 @@ async def test_console_session_refuses_steer_before_enqueueing_a_turn(live_catal
         )
 
     assert refused.value.status_code == 409
-    assert refused.value.detail["error_code"] == "steer_unsupported"
+    assert refused.value.detail["error_code"] == "steer_requires_active_turn"
     assert refused.value.detail["retry_with_intent"] == "queue"
     facts = live_catalog.rpc("session.read.v2", {"session_id": str(created.session_id)})["facts"]
     assert not facts.get("latest_console_turn")
@@ -705,3 +705,98 @@ async def test_replayed_stale_nonterminal_turn_is_not_presented_as_current(monke
 
     assert replayed.is_fresh is False
     assert _console_turn_response(replayed).is_fresh is False
+
+
+def _steer_catalog(turn):
+    class Catalog:
+        async def call(self, method, params, **_kwargs):
+            assert method == "session.console.turn.current.v2"
+            return {"found": True, "turn": turn}
+
+    return Catalog()
+
+
+def _running_turn(provider="codex", state="active"):
+    return {
+        "turn_id": str(uuid4()),
+        "run_id": str(uuid4()),
+        "state": state,
+        "provider": provider,
+        "device_id": "cinder",
+    }
+
+
+@pytest.mark.asyncio
+async def test_console_steer_enters_the_running_codex_turn(monkeypatch):
+    from zerg.services.console_turns import console_steer_target
+    from zerg.services.console_turns import steer_console_turn
+
+    turn = _running_turn()
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _steer_catalog(turn))
+
+    class Registry:
+        command = None
+
+        def supports(self, *, capability, **_kwargs):
+            return capability == "codex.turn_steer"
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {"steered": True}}, error=None)
+
+    registry = Registry()
+    session_id = uuid4()
+    target = await console_steer_target(owner_id=1, session_id=session_id, registry=registry)
+    failure = await steer_console_turn(
+        target, owner_id=1, session_id=session_id, text="also check the logs", client_request_id="steer-1", registry=registry
+    )
+
+    assert failure is None
+    assert registry.command["command_type"] == "session.turn.steer"
+    assert registry.command["payload"] == {
+        "provider": "codex",
+        "run_id": turn["run_id"],
+        "turn_id": turn["turn_id"],
+        "text": "also check the logs",
+    }
+    assert registry.command["command_id"] == f"{turn['run_id']}:steer:steer-1"
+
+
+@pytest.mark.asyncio
+async def test_console_steer_is_refused_for_a_provider_without_a_console_steer_adapter(monkeypatch):
+    from zerg.services.console_turns import ConsoleTurnUnavailable
+    from zerg.services.console_turns import console_steer_target
+
+    monkeypatch.setattr(
+        "zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _steer_catalog(_running_turn(provider="cursor"))
+    )
+    registry = SimpleNamespace(supports=lambda **_kwargs: True)
+    with pytest.raises(ConsoleTurnUnavailable) as refused:
+        await console_steer_target(owner_id=1, session_id=uuid4(), registry=registry)
+    assert refused.value.code == "steer_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_console_steer_reports_a_turn_that_ended_before_it_arrived(monkeypatch):
+    from zerg.services.console_turns import console_steer_target
+    from zerg.services.console_turns import steer_console_turn
+
+    turn = _running_turn()
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _steer_catalog(turn))
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(
+                transport_ok=True,
+                message={"ok": False, "error": {"code": "turn_not_steerable", "message": "gone"}},
+                error=None,
+            )
+
+    registry = Registry()
+    session_id = uuid4()
+    target = await console_steer_target(owner_id=1, session_id=session_id, registry=registry)
+    failure = await steer_console_turn(target, owner_id=1, session_id=session_id, text="x", client_request_id="c", registry=registry)
+    assert failure == ("turn_not_steerable", "gone")

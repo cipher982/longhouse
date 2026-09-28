@@ -96,6 +96,9 @@ MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "resume_run_once": "run_once",
     "turn_start": "turn_start",
     "turn_interrupt": "interrupt",
+    # A Console steer enters a running Console turn, so it rides on Console
+    # turn support rather than the Helm-only steer_active_turn flag.
+    "turn_steer": "turn_start",
 }
 _MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS = {
     "resume_run_once": ("can_resume",),

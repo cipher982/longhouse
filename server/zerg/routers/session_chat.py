@@ -2209,6 +2209,144 @@ def _provider_supports_steer(session) -> bool:
     return bool(contract is not None and contract.steer_active_turn)
 
 
+async def _steer_console_session_input(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    db: Session,
+) -> SessionInputResponse:
+    """Enter a running Console turn, with a durable receipt like a Helm steer."""
+    from zerg.services.console_turns import console_steer_target
+    from zerg.services.console_turns import steer_console_turn
+
+    client_request_id = body.client_request_id
+    try:
+        existing = await load_live_input_receipt_by_client_request(
+            owner_id=owner_id,
+            session_id=source_session.id,
+            client_request_id=client_request_id,
+        )
+    except LiveInputReceiptUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        ) from exc
+    if existing is not None:
+        if existing.text != body.text or existing.intent != body.intent:
+            raise HTTPException(
+                status_code=409,
+                detail=_augment_receipt_error(
+                    {"error_code": "input_conflict", "reason": "different_payload"},
+                    client_request_id=client_request_id,
+                    live_input_id=existing.id,
+                    disposition="accepted",
+                    delivery_status=existing.status,
+                ),
+            )
+        state = await _catalog_recent_input_summaries(source_session.id)
+        return _live_receipt_response(source_session=source_session, db=db, receipt=existing, recent=state[0] if state else [])
+
+    session_uuid = uuid.UUID(str(source_session.id))
+    try:
+        target = await console_steer_target(owner_id=owner_id, session_id=session_uuid)
+    except ConsoleTurnUnavailable as exc:
+        unknown = exc.code == "catalog_unavailable"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE if unknown else status.HTTP_409_CONFLICT,
+            detail=_input_error_detail(
+                exc.code,
+                str(exc),
+                disposition="unknown" if unknown else "rejected",
+                client_request_id=client_request_id,
+            )
+            | ({} if unknown else {"retry_with_intent": INPUT_INTENT_QUEUE}),
+        ) from exc
+
+    delivery_request_id = uuid.uuid4().hex
+    receipt_id = await _record_live_input_receipt_for_body(
+        source_session=source_session,
+        owner_id=owner_id,
+        body=body,
+        client_request_id=client_request_id,
+        intent=INPUT_INTENT_STEER,
+        status_value=INPUT_STATUS_DELIVERING,
+        delivery_request_id=delivery_request_id,
+    )
+    if receipt_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not persist this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        )
+    failure = await steer_console_turn(
+        target,
+        owner_id=owner_id,
+        session_id=session_uuid,
+        text=body.text,
+        client_request_id=client_request_id,
+    )
+    if failure is None:
+        await _finish_catalog_input_receipt(receipt_id=receipt_id, delivery_request_id=delivery_request_id)
+        return SessionInputResponse(
+            outcome="sent",
+            disposition="accepted",
+            input_id=None,
+            live_input_id=receipt_id,
+            client_request_id=client_request_id,
+            intent=INPUT_INTENT_STEER,
+            queued=[],
+        )
+    code, message = failure
+    if code == "delivery_unknown":
+        await _set_catalog_live_receipt_error(
+            receipt_id=receipt_id,
+            source_session=source_session,
+            owner_id=owner_id,
+            text=body.text,
+            intent=INPUT_INTENT_STEER,
+            client_request_id=client_request_id,
+            delivery_request_id=delivery_request_id,
+            error={"code": "delivery_unknown", "message": message},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=_input_error_detail(
+                "delivery_unknown",
+                message,
+                disposition="accepted",
+                delivery_status="unknown",
+                client_request_id=client_request_id,
+                live_input_id=receipt_id,
+            ),
+        )
+    await _finish_catalog_input_receipt(receipt_id=receipt_id, delivery_request_id=delivery_request_id, error=message)
+    # The turn finished between the check and the adapter: the client offers
+    # "Queue instead" for exactly this code.
+    ended = code in {"turn_ended", "turn_not_steerable"}
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=_input_error_detail(
+            "turn_ended" if ended else code,
+            "The turn ended before your update arrived; nothing was sent." if ended else message,
+            disposition="accepted",
+            delivery_status="failed",
+            client_request_id=client_request_id,
+            live_input_id=receipt_id,
+        )
+        | {"retry_with_intent": INPUT_INTENT_QUEUE},
+    )
+
+
 async def _create_catalog_session_input_response(
     *,
     source_session,
@@ -2230,19 +2368,9 @@ async def _create_catalog_session_input_response(
 
     if getattr(source_session, "command_family", None) == "console_turn":
         if body.intent == INPUT_INTENT_STEER:
-            # A Console session runs one headless turn at a time and has no
-            # adapter to enter a running one, so enqueuing here would create a
-            # turn while reporting a steer.
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_input_error_detail(
-                    "steer_unsupported",
-                    "A Console session starts a turn rather than steering one; nothing was sent.",
-                    disposition="rejected",
-                    client_request_id=body.client_request_id,
-                )
-                | {"retry_with_intent": INPUT_INTENT_QUEUE},
-            )
+            # STEER enters the running Console turn through its adapter. It is
+            # never turned into a new turn: that is what SEND is for.
+            return await _steer_console_session_input(source_session=source_session, owner_id=owner_id, body=body, db=db)
         client_request_id = body.client_request_id
         try:
             enqueue_kwargs = {

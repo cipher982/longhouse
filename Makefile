@@ -307,7 +307,7 @@ simlab-run: ## Golden paths through a scratch runtime, engine, and the simulator
 	@python3 scripts/qa/simlab.py up --build >/dev/null
 	@python3 scripts/qa/simlab.py run --deploy $(SCENARIOS); STATUS=$$?; python3 scripts/qa/simlab.py down >/dev/null 2>&1; exit $$STATUS
 
-send-timeline: ## Step-by-step web send timeline against a disposable local host + Codex Console (SCENARIO=single|midtool|midturn|restart)
+send-timeline: ## Step-by-step web send timeline against a disposable local host + Codex Console (SCENARIO=single|midtool|midturn|restart|steer)
 	@python3 scripts/qa/send_timeline.py run $(or $(SCENARIO),single)
 
 .PHONY: test-terminal-fidelity-web test-terminal-fidelity-ios test-terminal-fidelity-gate test-terminal-fidelity-gate-helper historical-convergence-check

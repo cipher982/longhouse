@@ -421,7 +421,7 @@ def _pending_response_from_catalog(
         pause_request=_pending_interaction(catalog_facts),
         now=now,
     )
-    capabilities = project_compat_capabilities_from_state(capabilities, session_state)
+    capabilities = project_compat_capabilities_from_state(capabilities, session_state, provider=session.provider)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
@@ -546,7 +546,7 @@ def _response_from_catalog(
         kernel_capabilities=capability_flags,
         session_mode=session_state.mode,
     )
-    capabilities = project_compat_capabilities_from_state(capabilities, session_state)
+    capabilities = project_compat_capabilities_from_state(capabilities, session_state, provider=session.provider)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
     title, title_state, title_source = _title_projection(session, card)
     return SessionResponse(

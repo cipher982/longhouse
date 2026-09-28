@@ -726,7 +726,8 @@
         "codex.answer_pause",
         "codex.run_once",
         "codex.resume_run_once",
-        "codex.turn_start"
+        "codex.turn_start",
+        "codex.turn_steer"
       ],
       "transcript_signals": {
         "delegation.spawn": {
@@ -832,7 +833,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "b2aac12776c1484aca1e7fce64334147d65737581c1fda6be99897a422615d1e"
+      "adapter_digest": "a341d890cfb1347ebd2374102d7bade161a30f31bde7bcabaa0521a25ecc17ee"
     },
     {
       "provider": "claude",

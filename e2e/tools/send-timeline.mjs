@@ -31,6 +31,7 @@ for (const url of [WEB, API]) {
 }
 
 const t0 = Date.now();
+let scenarioFailed = false;
 const events = [];
 const fs = await import("node:fs");
 function record(source, what, detail = {}) {
@@ -74,7 +75,9 @@ async function snapshot() {
     const userRows = [...document.querySelectorAll(".tl-msg--user:not(.tl-msg--outbox)")].map((el) =>
       text(el).slice(0, 40),
     );
-    const assistantRows = document.querySelectorAll(".tl-msg--assistant, [data-role=assistant]").length;
+    const assistantEls = [...document.querySelectorAll(".tl-msg--assistant, [data-role=assistant]")];
+    const assistantRows = assistantEls.length;
+    const lastAssistant = assistantEls.length ? text(assistantEls.at(-1)).slice(-60) : null;
     const head = text(document.querySelector("[data-testid=session-chat-composer-head] .session-chat-composer__head-label"));
     const turnEnded = !!document.querySelector("[data-testid=session-chat-turn-ended]");
     const sendButton = [...document.querySelectorAll(".session-chat-composer button")]
@@ -82,7 +85,7 @@ async function snapshot() {
       .filter((t) => t && /send|queue|update|stop/i.test(t))
       .join("|");
     const notice = text(document.querySelector(".session-chat-sent-notice"));
-    return { outbox: outbox.join(" ; "), assistantRows, userRows: userRows.length, lastUser: userRows.at(-1) ?? null, head, turnEnded, sendButton, notice };
+    return { outbox: outbox.join(" ; "), assistantRows, lastAssistant, userRows: userRows.length, lastUser: userRows.at(-1) ?? null, head, turnEnded, sendButton, notice };
   });
 }
 
@@ -148,6 +151,16 @@ const assistantBefore = last.assistantRows ?? 0;
 if (SCENARIO === "single") {
   await send("Run `ls -la` in the working directory using your shell tool, then reply with one short sentence naming the files.");
   await waitFor(() => last.turnEnded || /idle/i.test(last.head ?? ""), 180000, "turn end");
+} else if (SCENARIO === "steer") {
+  // Enter the running turn mid-tool: the same turn must answer the steer.
+  await send("Run the shell command `sleep 20 && echo first-done`, then reply with exactly: FIRST DONE");
+  await waitFor(() => /using|running|shell|exec/i.test(last.head ?? ""), 60000, "agent running a tool");
+  await new Promise((r) => setTimeout(r, 1500));
+  await send("Change of plan: when the command finishes, reply with exactly STEERED OK instead.", /^Send update$/);
+  await waitFor(() => /idle/i.test(last.head ?? "") && !last.outbox, 180000, "settled after steer");
+  const steered = /STEERED OK/.test(last.lastAssistant ?? "");
+  record("driver", steered ? "steer answered in-turn" : "steer NOT reflected in the answer", { lastAssistant: last.lastAssistant });
+  if (!steered) scenarioFailed = true;
 } else if (SCENARIO === "restart") {
   // A deploy: the Runtime Host goes away just before the send and comes back
   // a few seconds later. --down / --up are shell commands that do that.
@@ -198,7 +211,9 @@ for (const [index, click] of clicks.entries()) {
   // The ordering rule: a send that started a turn reads "Sent" (or its echo
   // already replaced it) no later than the agent first shows activity.
   let sentBeforeBusy = true;
-  if (accepted?.status === 200 && /"outcome":"sent"/.test(accepted.body ?? "")) {
+  const headAtClick = [...events].reverse().find((e) => e.t < click.t && e.what === "head");
+  const idleAtClick = !headAtClick || /^idle$/i.test(headAtClick.value ?? "");
+  if (idleAtClick && accepted?.status === 200 && /"outcome":"sent"/.test(accepted.body ?? "")) {
     // Anchor on the click: the DOM can flip before Playwright reports the
     // response, and "Sending…" can be shorter than one sample.
     const settled = firstAfter(click.t, (e) => e.what === "outbox" && /(^|; )(sent|queued):/.test(e.value ?? ""));
@@ -219,4 +234,4 @@ for (const [index, click] of clicks.entries()) {
 const ok = verdicts.every((v) => v.status === 200 && v.sending_after_accept === 0 && !v.failed && v.sent_before_busy);
 record("driver", ok ? "PASS" : "FAIL", { verdicts });
 record("driver", "done", { out: OUT });
-process.exitCode = ok ? 0 : 1;
+process.exitCode = ok && !scenarioFailed ? 0 : 1;

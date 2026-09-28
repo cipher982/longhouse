@@ -24,6 +24,7 @@ from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 
 CONSOLE_TURN_START_COMMAND = "session.turn.start"
 CONSOLE_TURN_INTERRUPT_COMMAND = "session.turn.interrupt"
+CONSOLE_TURN_STEER_COMMAND = "session.turn.steer"
 CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS = 10
 # A starting turn is durable across a lost control reply, but it cannot remain
 # in FIFO limbo forever when the provider never reaches a settled launch state.
@@ -193,6 +194,94 @@ async def interrupt_console_turn(
         dispatched=error is None,
         error=error,
     )
+
+
+@dataclass(frozen=True)
+class ConsoleSteerTarget:
+    turn_id: str
+    run_id: str
+    provider: str
+    device_id: str
+
+
+def console_provider_supports_steer(provider: str | None) -> bool:
+    """Whether this provider's Console adapter can enter a running turn."""
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider(provider)
+    return bool(contract is not None and contract.machine_control_capability_for_operation("turn_steer"))
+
+
+async def console_steer_target(*, owner_id: int, session_id: UUID, registry=None) -> ConsoleSteerTarget:
+    """The running Console turn a steer would enter, or why there is none."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+
+    client = get_catalogd_client()
+    if client is None:
+        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+    result = await client.call(
+        "session.console.turn.current.v2",
+        {"session_id": str(session_id), "owner_id": owner_id},
+    )
+    if result.get("found") is not True:
+        raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
+    turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
+    if turn is None or not turn.get("run_id") or turn.get("state") not in {"active", "draining"}:
+        raise ConsoleTurnUnavailable("steer_requires_active_turn", "This session has no running turn to steer; nothing was sent.")
+    provider = str(turn.get("provider") or "").strip()
+    device_id = str(turn.get("device_id") or "").strip()
+    if not console_provider_supports_steer(provider):
+        raise ConsoleTurnUnavailable("steer_unsupported", f"{provider} Console cannot enter a running turn yet; nothing was sent.")
+    control = registry or get_machine_control_channel_registry()
+    capability = f"{provider}.turn_steer"
+    if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        raise ConsoleTurnUnavailable("adapter_unavailable", f"Machine Agent does not advertise {capability}")
+    return ConsoleSteerTarget(
+        turn_id=str(turn.get("turn_id") or ""),
+        run_id=str(turn["run_id"]),
+        provider=provider,
+        device_id=device_id,
+    )
+
+
+async def steer_console_turn(
+    target: ConsoleSteerTarget,
+    *,
+    owner_id: int,
+    session_id: UUID,
+    text: str,
+    client_request_id: str,
+    registry=None,
+) -> tuple[str, str] | None:
+    """Enter the running Console turn. Returns None, or (code, message) on failure.
+
+    `delivery_unknown` means the Machine Agent may have taken it.
+    """
+
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+
+    control = registry or get_machine_control_channel_registry()
+    response = await control.send_command(
+        owner_id=owner_id,
+        device_id=target.device_id,
+        session_id=str(session_id),
+        command_type=CONSOLE_TURN_STEER_COMMAND,
+        payload={"provider": target.provider, "run_id": target.run_id, "turn_id": target.turn_id, "text": text},
+        command_id=f"{target.run_id}:steer:{client_request_id}",
+        timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS + 10,
+    )
+    if not response.transport_ok:
+        return ("delivery_unknown", str(response.error or "Console steer outcome is unknown"))
+    message = dict(response.message or {})
+    if message.get("ok") is True:
+        return None
+    detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+    code = str(detail.get("code") or "steer_failed")
+    if code == "steer_outcome_unknown":
+        code = "delivery_unknown"
+    return (code, str(detail.get("message") or response.error or "Console steer failed"))
 
 
 async def enqueue_catalog_console_turn(

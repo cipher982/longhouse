@@ -435,8 +435,12 @@ def _control_unavailable_sentence(session_state: SessionStateFacts) -> str:
 def project_compat_capabilities_from_state(
     capabilities: SessionCapabilitiesResponse,
     session_state: SessionStateFacts,
+    *,
+    provider: str | None = None,
 ) -> SessionCapabilitiesResponse:
     """Keep old capability aliases read-only and derived from action facts."""
+
+    from zerg.services.console_turns import console_provider_supports_steer
 
     actions = session_state.control.actions
     access = session_state.presentation.access
@@ -501,9 +505,13 @@ def project_compat_capabilities_from_state(
             "host_reattach_available": reattach_available,
             "reply_to_live_session_available": send_available,
             "can_queue_next_input": send_available,
-            # A Console turn cannot be steered: the server refuses steer and
-            # queues the next turn instead, so never offer it to a client.
-            "can_steer_active_turn": not console and send_available and session_state.activity.state == "executing",
+            # A Console turn is steerable only through its provider's Console
+            # steer adapter; offering it otherwise ends in a refusal.
+            "can_steer_active_turn": (
+                send_available
+                and session_state.activity.state == "executing"
+                and (not console or console_provider_supports_steer(provider))
+            ),
             "display_label": compatibility_label,
             "display_detail": (
                 "Messages start or queue a turn on the selected machine." if console and send_available else capabilities.display_detail
@@ -2421,7 +2429,7 @@ def build_live_launch_placeholder_response(
         pause_request=None,
         now=current_now,
     )
-    capabilities = project_compat_capabilities_from_state(capabilities, session_state)
+    capabilities = project_compat_capabilities_from_state(capabilities, session_state, provider=provider)
     return SessionResponse(
         id=session_id,
         provider=provider,

@@ -269,7 +269,7 @@ def test_unknown_control_state_is_explicitly_offline():
     assert response.display_label == "Control unknown"
 
 
-def test_executing_console_session_never_offers_steer():
+def test_executing_console_session_offers_steer_only_with_a_console_steer_adapter():
     state = _state(activity_state="executing")
     state.mode = "console"
     state.control.actions.start_turn = SimpleNamespace(state="available", reason=None)
@@ -278,3 +278,21 @@ def test_executing_console_session_never_offers_steer():
 
     assert response.can_queue_next_input is True
     assert response.can_steer_active_turn is False
+
+    # A provider with a Console steer adapter offers it mid-turn.
+    codex = project_compat_capabilities_from_state(
+        build_session_capabilities_response(
+            session=_session(), capability_flags=build_session_capabilities(_session()), session_state=state
+        ),
+        state,
+        provider="codex",
+    )
+    assert codex.can_steer_active_turn is True
+    cursor = project_compat_capabilities_from_state(
+        build_session_capabilities_response(
+            session=_session(), capability_flags=build_session_capabilities(_session()), session_state=state
+        ),
+        state,
+        provider="cursor",
+    )
+    assert cursor.can_steer_active_turn is False
