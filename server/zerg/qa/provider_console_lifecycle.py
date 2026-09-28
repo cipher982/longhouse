@@ -22,6 +22,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,10 @@ def steer_execution_variant(provider: str, scenario_id: str) -> str:
 
     return execution_variant_key(provider=provider, assertion_id=STEER_ASSERTION_ID, scenario_id=scenario_id, variant=None)
 
+
+# Negative control for every steer cell: a qa-fault-injection Machine Agent
+# acknowledges the steer and drops it (engine/src/qa_fault.rs).
+CONSOLE_STEER_FAULT = "console_steer_noop"
 
 STEER_VARIANTS = {
     provider: steer_execution_variant(provider, f"{provider}_console_adapter_lifecycle")
@@ -1756,6 +1761,43 @@ def console_steer_assertion(steer: Mapping[str, object] | None) -> bool:
     )
 
 
+def run_with_console_steer_fault(execute: Callable[[], dict[str, Any]], root: Path) -> dict[str, Any]:
+    """Run one steer invocation against a Machine Agent that acknowledges and
+    drops the steer. It passes only when the fault fired and the steer
+    assertion failed; anything else is inconclusive or undetected."""
+
+    receipt_path = root / "qa-fault-receipt.jsonl"
+    os.environ["LONGHOUSE_QA_FAULT"] = CONSOLE_STEER_FAULT
+    os.environ["LONGHOUSE_QA_FAULT_RECEIPT"] = str(receipt_path)
+    try:
+        result = execute()
+    finally:
+        os.environ.pop("LONGHOUSE_QA_FAULT", None)
+        os.environ.pop("LONGHOUSE_QA_FAULT_RECEIPT", None)
+    fired = receipt_path.is_file() and any(
+        json.loads(line).get("fault") == CONSOLE_STEER_FAULT
+        for line in receipt_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+    target = (result.get("assertions") or {}).get(STEER_ASSERTION_ID)
+    if result.get("failure_code") or not fired:
+        verdict = "inconclusive"
+    elif target is not False:
+        verdict = "undetected"
+    else:
+        verdict = "rejected"
+    result["negative_control"] = {
+        "fault": CONSOLE_STEER_FAULT,
+        "target_assertion": STEER_ASSERTION_ID,
+        "fault_fired": fired,
+        "target_outcome": "semantic_fail" if target is False else "pass",
+        "verdict": verdict,
+    }
+    result["status"] = "pass" if verdict == "rejected" else "fail"
+    write_json(root / "result.json", result)
+    return result
+
+
 def _run_steer_step(
     *,
     api_url: str,
@@ -2758,6 +2800,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-version")
     parser.add_argument("--model", required=True)
     parser.add_argument("--registration", action="store_true")
+    parser.add_argument("--negative-control", choices=(CONSOLE_STEER_FAULT,))
     return parser
 
 
@@ -2791,10 +2834,23 @@ def main(argv: list[str] | None = None) -> int:
     if steer and args.variant != STEER_VARIANTS.get(args.provider):
         print(json.dumps({"status": "fail", "failure_code": "steer_variant_provider_mismatch"}))
         return 2
+    if args.negative_control and not steer:
+        print(json.dumps({"status": "fail", "failure_code": "negative_control_requires_steer_variant"}))
+        return 2
+    if args.negative_control:
+        result = run_with_console_steer_fault(lambda: _execute(args, root, steer), root)
+    else:
+        result = _execute(args, root, steer)
+        write_json(root / "result.json", result)
+    print(json.dumps(result, sort_keys=True, default=str))
+    return 0 if result.get("status") == "pass" else 1
+
+
+def _execute(args: argparse.Namespace, root: Path, steer: bool) -> dict[str, Any]:
     try:
-        result = _run_live(args.provider, _expected_variant(args.provider) if steer else args.variant, args, root, steer=steer)
+        return _run_live(args.provider, _expected_variant(args.provider) if steer else args.variant, args, root, steer=steer)
     except Exception as exc:  # noqa: BLE001 - producer must retain one typed failure artifact
-        result = {
+        return {
             "schema_version": 1,
             "artifact_kind": "provider_console_lifecycle_result",
             "producer": REGISTRATION.to_dict(),
@@ -2809,9 +2865,6 @@ def main(argv: list[str] | None = None) -> int:
             "error": f"{type(exc).__name__}: {exc}",
             "artifact_manifest": artifact_manifest(root),
         }
-    write_json(root / "result.json", result)
-    print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "pass" else 1
 
 
 if __name__ == "__main__":

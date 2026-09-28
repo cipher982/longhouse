@@ -87,6 +87,7 @@ def pi_console_tool_assertions(observation: dict[str, object]) -> dict[str, bool
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_factory_provider_arguments(parser, variants=(_VARIANT, _STEER_VARIANT))
+    parser.add_argument("--negative-control", choices=(lifecycle.CONSOLE_STEER_FAULT,))
     parser.add_argument("--model", required=True)
     return parser
 
@@ -200,26 +201,37 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{missing[0].replace('_', '-')}"}))
         return 2
-    try:
-        result = run_pi_console_tool(args)
-    except Exception as exc:  # noqa: BLE001 - keep a typed failure artifact
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "pi_console_tool_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "pi",
-            "variant": None,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "pi_console_tool_lifecycle_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        result["artifact_manifest"] = artifact_manifest(args.evidence_root)
-        lifecycle.write_json(args.evidence_root / "result.json", result)
+
+    def execute() -> dict[str, object]:
+        try:
+            return run_pi_console_tool(args)
+        except Exception as exc:  # noqa: BLE001 - keep a typed failure artifact
+            result = {
+                "schema_version": 1,
+                "artifact_kind": "pi_console_tool_lifecycle_result",
+                "producer": REGISTRATION.to_dict(),
+                "provider": "pi",
+                "variant": None,
+                "scenario_id": SCENARIO_ID,
+                "scenario_revision": REGISTRATION.scenario_revision,
+                "evidence_class": "live_token",
+                "generated_at": now(),
+                "status": "fail",
+                "failure_code": "pi_console_tool_lifecycle_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            result["artifact_manifest"] = artifact_manifest(args.evidence_root)
+            lifecycle.write_json(args.evidence_root / "result.json", result)
+            return result
+
+    if args.negative_control:
+        if args.variant != _STEER_VARIANT:
+            print(json.dumps({"status": "fail", "failure_code": "negative_control_requires_steer_variant"}))
+            return 2
+        result = lifecycle.run_with_console_steer_fault(execute, args.evidence_root.resolve())
+    else:
+        result = execute()
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 

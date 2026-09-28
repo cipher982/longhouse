@@ -202,7 +202,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "73722b0ffd49f6d63ce9f309f29d822f9b0c6ccb6992f8faee40e165d97161df"
+              "oracle_digest": "665cc09c3d71d3f80a0b602594614dabfc513f21753457f77ea417053ba21214"
             }
           ]
         },
@@ -230,7 +230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "73722b0ffd49f6d63ce9f309f29d822f9b0c6ccb6992f8faee40e165d97161df"
+              "oracle_digest": "665cc09c3d71d3f80a0b602594614dabfc513f21753457f77ea417053ba21214"
             }
           ]
         },
@@ -861,7 +861,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "18b4e550570f2187ca89b8e43a5e423cdd6824824732762ce6a9aaa1f7ee4743"
+      "adapter_digest": "93576b8b1732eabf4b34269781ec9938c406ba615b2f78291c17884c115dfb2c"
     },
     {
       "provider": "claude",
@@ -1336,7 +1336,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "73722b0ffd49f6d63ce9f309f29d822f9b0c6ccb6992f8faee40e165d97161df"
+              "oracle_digest": "665cc09c3d71d3f80a0b602594614dabfc513f21753457f77ea417053ba21214"
             }
           ]
         },
@@ -1364,7 +1364,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "73722b0ffd49f6d63ce9f309f29d822f9b0c6ccb6992f8faee40e165d97161df"
+              "oracle_digest": "665cc09c3d71d3f80a0b602594614dabfc513f21753457f77ea417053ba21214"
             },
             {
               "id": "real_print_marker_returned",
@@ -2014,7 +2014,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "73722b0ffd49f6d63ce9f309f29d822f9b0c6ccb6992f8faee40e165d97161df"
+              "oracle_digest": "665cc09c3d71d3f80a0b602594614dabfc513f21753457f77ea417053ba21214"
             }
           ]
         },
@@ -3129,7 +3129,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "73722b0ffd49f6d63ce9f309f29d822f9b0c6ccb6992f8faee40e165d97161df"
+              "oracle_digest": "665cc09c3d71d3f80a0b602594614dabfc513f21753457f77ea417053ba21214"
             }
           ]
         },
@@ -4003,7 +4003,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "871d7418d7a0bd471212aa2d0dbe7fc2beeda25116f3cf563dfae38df2526cc4"
+              "oracle_digest": "b65593f973d5d363895187f1e388b304e7d7c4f98840202837a65a47d4d10480"
             }
           ]
         },
@@ -4030,7 +4030,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "871d7418d7a0bd471212aa2d0dbe7fc2beeda25116f3cf563dfae38df2526cc4"
+              "oracle_digest": "b65593f973d5d363895187f1e388b304e7d7c4f98840202837a65a47d4d10480"
             }
           ]
         }
@@ -4785,7 +4785,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "bb77ddd3cf7a9eeddb6f05d43f3fb096d066a9d59cd439df79f29a66e99883a2"
+              "oracle_digest": "46702104722198590049e6c626c32794b7110b7c889223ece245ca1a799e1cdc"
             }
           ]
         },
@@ -4812,7 +4812,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "bb77ddd3cf7a9eeddb6f05d43f3fb096d066a9d59cd439df79f29a66e99883a2"
+              "oracle_digest": "46702104722198590049e6c626c32794b7110b7c889223ece245ca1a799e1cdc"
             }
           ]
         }
@@ -4910,7 +4910,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "b9624ebd17a62f7f82741b8ca1773120b3abdfd49cdc55eff2cc1d2bc545e345"
+      "adapter_digest": "cf4b424a1f04ab0ede0ab8b606587829a69772d4d1be80d60faa79012dc1cc7e"
     }
   ]
 }

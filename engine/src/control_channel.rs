@@ -1221,6 +1221,19 @@ async fn execute_command(
             let run_id = payload_required_string(&payload, "run_id")?;
             let provider = payload_required_string(&payload, "provider")?;
             let text = payload_required_string(&payload, "text")?;
+            if crate::qa_fault::console_steer_noop() {
+                crate::qa_fault::record_fired_named(
+                    "console_steer_noop",
+                    &session_id,
+                    json!({"run_id": run_id, "provider": provider}),
+                );
+                return Ok(json!({
+                    "provider": provider,
+                    "transport": "qa_fault_noop",
+                    "run_id": run_id,
+                    "steered": true,
+                }));
+            }
             let transport = match provider.as_str() {
                 "codex" => {
                     crate::codex_exec::steer_codex_console_turn(&run_id, &text)

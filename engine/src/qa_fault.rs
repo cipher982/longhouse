@@ -74,6 +74,19 @@ pub fn helm_extension_fault(_provider: &str) -> Option<HelmExtensionFault> {
     None
 }
 
+/// Console fault: acknowledge a mid-turn steer without delivering it into the
+/// running turn, so the caller is told it landed and the turn never sees it --
+/// the silent-drop shape the Console steer oracle must reject.
+#[cfg(feature = "qa-fault-injection")]
+pub fn console_steer_noop() -> bool {
+    std::env::var("LONGHOUSE_QA_FAULT").ok().as_deref() == Some("console_steer_noop")
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn console_steer_noop() -> bool {
+    false
+}
+
 /// Ingest fault: the Machine Agent ships the transcript normally but blanks one
 /// marker token out of every render record before the envelope is persisted.
 /// The raw bytes, envelope identity and acknowledgement are untouched, so the

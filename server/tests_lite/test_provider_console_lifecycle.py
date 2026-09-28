@@ -979,3 +979,43 @@ def test_steer_cell_is_its_own_factory_invocation():
     for producer in (pi_console_tool_producer, omp_console_producer):
         assert producer._STEER_VARIANT != producer._VARIANT
         assert producer._STEER_VARIANT.endswith(f":{lifecycle.STEER_ASSERTION_ID}:{producer.SCENARIO_ID}")
+
+
+@pytest.mark.parametrize(
+    ("fires", "steer_verdict", "failure_code", "expected"),
+    [
+        (True, False, None, "rejected"),
+        (True, True, None, "undetected"),
+        (False, False, None, "inconclusive"),
+        (True, False, "provider_console_lifecycle_failed", "inconclusive"),
+    ],
+)
+def test_console_steer_negative_control_verdict(tmp_path, monkeypatch, fires, steer_verdict, failure_code, expected):
+    monkeypatch.delenv("LONGHOUSE_QA_FAULT", raising=False)
+
+    def execute():
+        assert os.environ["LONGHOUSE_QA_FAULT"] == lifecycle.CONSOLE_STEER_FAULT
+        if fires:
+            Path(os.environ["LONGHOUSE_QA_FAULT_RECEIPT"]).write_text(
+                json.dumps({"fault": lifecycle.CONSOLE_STEER_FAULT, "session_id": "s1"}) + "\n", encoding="utf-8"
+            )
+        result = {"assertions": {lifecycle.STEER_ASSERTION_ID: steer_verdict}}
+        return result | ({"failure_code": failure_code} if failure_code else {})
+
+    result = lifecycle.run_with_console_steer_fault(execute, tmp_path)
+
+    assert result["negative_control"]["verdict"] == expected
+    assert result["status"] == ("pass" if expected == "rejected" else "fail")
+    assert "LONGHOUSE_QA_FAULT" not in os.environ
+    assert json.loads((tmp_path / "result.json").read_text())["negative_control"]["fault"] == "console_steer_noop"
+
+
+def test_console_steer_negative_control_is_accepted_by_every_steer_producer():
+    from zerg.qa import omp_console_producer
+    from zerg.qa import pi_console_tool_producer
+
+    fault = ["--negative-control", lifecycle.CONSOLE_STEER_FAULT]
+    assert lifecycle._parser().parse_args(["--model", "m", *fault]).negative_control == lifecycle.CONSOLE_STEER_FAULT
+    for producer in (pi_console_tool_producer, omp_console_producer):
+        action = next(a for a in producer._parser()._actions if a.dest == "negative_control")
+        assert action.choices == (lifecycle.CONSOLE_STEER_FAULT,)

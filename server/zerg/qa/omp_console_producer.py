@@ -786,6 +786,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_factory_provider_arguments(parser, variants=(_VARIANT, _STEER_VARIANT))
+    parser.add_argument("--negative-control", choices=(lifecycle.CONSOLE_STEER_FAULT,))
     parser.add_argument("--model", required=True)
     return parser
 
@@ -796,27 +797,38 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
         return 0
     args = _parser().parse_args(arguments)
-    try:
-        result = run_omp_console(args)
-    except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "omp_console_lifecycle_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": "omp",
-            "variant": SUPPORTED_VARIANT,
-            "observation_scope": "scenario",
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": now(),
-            "status": "fail",
-            "failure_code": "omp_console_lifecycle_failed",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        result["artifact_manifest"] = artifact_manifest(args.evidence_root)
-        lifecycle.write_json(args.evidence_root / "result.json", result)
+
+    def execute() -> dict[str, object]:
+        try:
+            return run_omp_console(args)
+        except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
+            result = {
+                "schema_version": 1,
+                "artifact_kind": "omp_console_lifecycle_result",
+                "producer": REGISTRATION.to_dict(),
+                "provider": "omp",
+                "variant": SUPPORTED_VARIANT,
+                "observation_scope": "scenario",
+                "scenario_id": SCENARIO_ID,
+                "scenario_revision": REGISTRATION.scenario_revision,
+                "evidence_class": "live_token",
+                "generated_at": now(),
+                "status": "fail",
+                "failure_code": "omp_console_lifecycle_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            result["artifact_manifest"] = artifact_manifest(args.evidence_root)
+            lifecycle.write_json(args.evidence_root / "result.json", result)
+            return result
+
+    if args.negative_control:
+        if args.variant != _STEER_VARIANT:
+            print(json.dumps({"status": "fail", "failure_code": "negative_control_requires_steer_variant"}))
+            return 2
+        result = lifecycle.run_with_console_steer_fault(execute, args.evidence_root.resolve())
+    else:
+        result = execute()
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 
