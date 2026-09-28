@@ -728,6 +728,7 @@ def reduce_fact_batch_setwise(
         raise ValueError(f"reducer batch exceeds {MAX_REDUCER_FACTS} facts")
     received_at = _aware(received_at, "received_at")
     prepared, batch_duplicates, batch_conflicts = _prepare_batch(facts)
+    prepared_at = time.perf_counter()
     current_commit = _current_commit_seq(connection)
     if commit_seq_override is not None and commit_seq_override != current_commit:
         raise ValueError("reducer commit_seq_override must equal the current catalog commit")
@@ -804,6 +805,7 @@ def reduce_fact_batch_setwise(
     ):
         known_conflicts.add(((row[0], row[1], row[2], row[3]), str(row[4]), str(row[5])))
 
+    read_at = time.perf_counter()
     pending_heads: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     pending_receipts: list[dict[str, Any]] = []
     pending_conflicts: list[dict[str, Any]] = []
@@ -962,6 +964,7 @@ def reduce_fact_batch_setwise(
         )
         touched_candidates[_candidate_key(incoming)] = incoming
 
+    decided_at = time.perf_counter()
     # Three writes for the whole batch. Receipt insertion order is preserved
     # because retention keeps the highest ids, so a reordered insert would
     # silently change which receipts survive pruning.
@@ -987,8 +990,10 @@ def reduce_fact_batch_setwise(
             },
         )
         connection.execute(statement)
+    heads_written_at = time.perf_counter()
     if pending_receipts:
         connection.execute(receipts.insert(), pending_receipts)
+    receipts_written_at = time.perf_counter()
     if pending_conflicts:
         connection.execute(conflict_table.insert(), pending_conflicts)
 
@@ -1037,15 +1042,24 @@ def reduce_fact_batch_setwise(
     total_ms = (time.perf_counter() - started_at) * 1000.0
     if total_ms >= _REDUCER_SLOW_MS:
         logging.getLogger(__name__).warning(
-            "reduce_fact_batch_setwise took %.0fms: fold=%.0fms prune_candidates=%.0fms "
-            "prune_families=%.0fms (facts=%d candidates=%d families=%d)",
+            "reduce_fact_batch_setwise took %.0fms: fold=%.0fms (prepare=%.0fms read=%.0fms decide=%.0fms "
+            "write_heads=%.0fms write_receipts=%.0fms write_conflicts=%.0fms) prune_candidates=%.0fms "
+            "prune_families=%.0fms (facts=%d candidates=%d families=%d heads=%d receipts=%d)",
             total_ms,
             (fold_finished_at - started_at) * 1000.0,
+            (prepared_at - started_at) * 1000.0,
+            (read_at - prepared_at) * 1000.0,
+            (decided_at - read_at) * 1000.0,
+            (heads_written_at - decided_at) * 1000.0,
+            (receipts_written_at - heads_written_at) * 1000.0,
+            (fold_finished_at - receipts_written_at) * 1000.0,
             (candidate_pruned_at - fold_finished_at) * 1000.0,
             (time.perf_counter() - candidate_pruned_at) * 1000.0,
             len(prepared),
             len(touched_candidates),
             len({fact.family for fact in touched_candidates.values()}),
+            len(pending_heads),
+            len(pending_receipts),
         )
 
     return ReducerResult(
