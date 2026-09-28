@@ -1257,23 +1257,8 @@ export async function fetchAgentFilters(
 }
 
 // ---------------------------------------------------------------------------
-// Semantic Search & Recall Types
+// Recall Types
 // ---------------------------------------------------------------------------
-
-export interface SemanticSearchFilters {
-  query: string;
-  project?: string;
-  provider?: string;
-  environment?: string;
-  days_back?: number;
-  limit?: number;
-}
-
-export interface SemanticSearchResponse {
-  sessions: AgentSession[];
-  total: number;
-  has_real_sessions: boolean;
-}
 
 export type RecallSearchResult = components["schemas"]["RecallSearchResult"];
 export type RecallExpandedTurn = components["schemas"]["RecallExpandedTurn"];
@@ -1293,28 +1278,8 @@ export interface RecallFilters {
 }
 
 // ---------------------------------------------------------------------------
-// Semantic Search & Recall API Functions
+// Recall API Functions
 // ---------------------------------------------------------------------------
-
-/**
- * Semantic search for sessions using embeddings.
- */
-export async function fetchSemanticSearch(
-  filters: SemanticSearchFilters,
-): Promise<SemanticSearchResponse> {
-  const params = new URLSearchParams();
-  params.set("query", filters.query);
-  if (filters.project) params.set("project", filters.project);
-  if (filters.provider) params.set("provider", filters.provider);
-  if (filters.environment) params.set("environment", filters.environment);
-  if (filters.days_back) params.set("days_back", String(filters.days_back));
-  if (filters.limit) params.set("limit", String(filters.limit));
-
-  return request<SemanticSearchResponse>(
-    `${TIMELINE_SESSIONS_PREFIX}/semantic?${params.toString()}`,
-    { method: "GET" },
-  );
-}
 
 /**
  * Recall: compact turn-level search cards.

@@ -82,10 +82,6 @@ export function resolveTimelineSignal(
   return "quiet";
 }
 
-export function getPrimaryPresentation(facts: SessionStateFacts) {
-  return facts.presentation.primary;
-}
-
 /** Spoken equivalent of the signal, so the dot's meaning reaches a11y. */
 export function timelineSignalLabel(signal: TimelineSignal): string {
   switch (signal) {

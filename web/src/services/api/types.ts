@@ -33,13 +33,6 @@ export interface AvailableToolsResponse {
   mcp: Record<string, string[]>;
 }
 
-export interface ModelConfig {
-  id: string;
-  display_name: string;
-  provider: string;
-  is_default: boolean;
-}
-
 export type Runner = Schemas["RunnerResponse"];
 export type EnrollTokenResponse = Schemas["EnrollTokenResponse"];
 export type RunnerRegisterRequest = Schemas["RunnerRegisterRequest"];

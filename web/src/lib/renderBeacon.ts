@@ -37,10 +37,6 @@ export function recordServerClockSkew(serverNowMs: number | undefined): void {
   _skewMs = Date.now() - serverNowMs;
 }
 
-export function getClockSkewMs(): number {
-  return _skewMs;
-}
-
 /**
  * Emit a render beacon for the latest workspace event. Scheduled via rAF so
  * we measure after the browser actually paints the new state, not just after

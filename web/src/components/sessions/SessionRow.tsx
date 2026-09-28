@@ -387,32 +387,6 @@ export function getRowControlPresentation(facts: SessionStateFacts): RowControlP
   };
 }
 
-function liveControlPresentation(): RowControlPresentation {
-  return {
-    label: "Live control",
-    tone: "live",
-    title: "Managed session with live control available",
-  };
-}
-
-function reattachControlPresentation(): RowControlPresentation {
-  return {
-    label: "Reattach",
-    tone: "reattach",
-    title: "Managed session can be reattached from its host",
-  };
-}
-
-function observeOnlyPresentation(): RowControlPresentation {
-  // Kernel "search-only" covers observe-only tails: readable transcript output,
-  // but no steerable control path.
-  return {
-    label: "Observe only",
-    tone: "observe",
-    title: "Transcript output is observable, but this session is not steerable",
-  };
-}
-
 function searchOnlyPresentation(): RowControlPresentation {
   return {
     label: "Search only",

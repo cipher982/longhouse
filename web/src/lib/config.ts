@@ -270,26 +270,6 @@ export function validateConfig(): { valid: boolean; errors: string[] } {
   };
 }
 
-// Environment-specific configuration getters
-export const getApiConfig = () => ({
-  baseUrl: config.apiBaseUrl,
-  timeout: config.isProduction ? 10000 : 30000,
-  retries: config.isProduction ? 3 : 1,
-});
-
-export const getWebSocketConfig = () => ({
-  baseUrl: config.wsBaseUrl,
-  reconnectInterval: config.wsReconnectInterval,
-  maxReconnectAttempts: config.wsMaxReconnectAttempts,
-  includeAuth: config.authEnabled && !config.demoMode,
-});
-
-export const getPerformanceConfig = () => ({
-  enableMonitoring: config.enablePerformanceMonitoring,
-  enableMemoryMonitoring: config.enableMemoryMonitoring,
-  enableBundleSizeWarning: config.isDevelopment,
-});
-
 // Development-only configuration validator
 if (config.isDevelopment) {
   const validation = validateConfig();

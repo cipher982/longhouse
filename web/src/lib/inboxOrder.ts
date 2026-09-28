@@ -61,16 +61,6 @@ export function writeInboxOrder(state: InboxOrderState): void {
   }
 }
 
-/** Reorder a list by moving `from` to `to`. Pure. */
-export function moveItem<T>(list: T[], from: number, to: number): T[] {
-  if (from === to || from < 0 || from >= list.length) return list;
-  const next = list.slice();
-  const [item] = next.splice(from, 1);
-  const insertAt = Math.max(0, Math.min(next.length, to));
-  next.splice(insertAt, 0, item);
-  return next;
-}
-
 /**
  * Apply a stored override to a default-ordered list of keys.
  * Keys present in `override` keep that order. Keys missing from `override`

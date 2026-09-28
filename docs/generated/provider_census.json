@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 294,
+  "file_count": 293,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2465,13 +2465,6 @@
         "claude",
         "codex",
         "cursor"
-      ]
-    },
-    {
-      "path": "web/src/components/__tests__/SessionPickerModal.test.tsx",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {

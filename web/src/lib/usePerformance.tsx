@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 // Performance monitoring hook
 export function usePerformanceMonitoring(
@@ -80,11 +79,6 @@ export function usePerformanceMonitoring(
     measureAsync,
     renderTime: mountTimeRef.current ? mountTimeRef.current - renderStartTime.current : 0,
   };
-}
-
-// Debounce hook for performance optimization
-export function useDebounce<T>(value: T, delay: number): T {
-  return useDebouncedValue(value, delay);
 }
 
 export default usePerformanceMonitoring;

@@ -28,30 +28,6 @@ export function formatRelativeTime(
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function getDateKey(
-  dateStr: string,
-  nowMs: number = Date.now(),
-): string {
-  const date = parseUTC(dateStr);
-  const now = new Date(nowMs);
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const sessionDate = new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate(),
-  );
-
-  if (sessionDate.getTime() === today.getTime()) return "Today";
-  if (sessionDate.getTime() === yesterday.getTime()) return "Yesterday";
-  return sessionDate.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Navigation helpers
 // ---------------------------------------------------------------------------
@@ -206,23 +182,6 @@ export function getBranchLabel(
   return branch;
 }
 
-export function getSessionFallbackSummary(
-  session: AgentSession,
-  maxChars = 180,
-): string {
-  const firstUser = compactText(session.first_user_message);
-  if (firstUser) {
-    return truncateText(firstUser, maxChars);
-  }
-
-  const project = getProjectLabel(session);
-  const provider = formatProviderName(session.provider);
-  if (project && project !== session.provider) {
-    return `New ${provider} session in ${project}.`;
-  }
-  return `New ${provider} session.`;
-}
-
 function compactText(value: string | null | undefined): string {
   return (value || "").trim().replace(/\s+/g, " ");
 }
@@ -315,13 +274,6 @@ export function getRuntimeDisplayCopy(
       runtime.stateFacts.presentation.primary?.label ?? "Activity unknown",
     detail: runtime.stateFacts.presentation.transcript?.label ?? null,
   };
-}
-
-export function getTurnsColor(turns: number): string | undefined {
-  if (turns < 5) return undefined;
-  if (turns < 15) return "var(--color-brand-primary)";
-  if (turns < 30) return "var(--color-brand-accent)";
-  return "var(--color-intent-error)";
 }
 
 // ---------------------------------------------------------------------------

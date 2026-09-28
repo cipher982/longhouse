@@ -5,7 +5,6 @@ import { BrowserRouter } from "react-router";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
-import { SessionPickerProvider } from "./components/SessionPickerProvider";
 import config from "./lib/config";
 import { shouldRetryQuery } from "./lib/queryRetry";
 
@@ -156,7 +155,6 @@ ReactDOM.createRoot(container).render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ConfirmProvider>
-          <SessionPickerProvider>
           <BrowserRouter>
             <App />
             <Toaster
@@ -188,7 +186,6 @@ ReactDOM.createRoot(container).render(
             }}
           />
           </BrowserRouter>
-          </SessionPickerProvider>
         </ConfirmProvider>
       </AuthProvider>
     </QueryClientProvider>
