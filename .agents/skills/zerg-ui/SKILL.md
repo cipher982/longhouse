@@ -135,7 +135,7 @@ make ios-ui-shot TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderRe
 ```
 Write the test like the ones in `ios/Tests/LonghouseIOSUITests/SessionChatUITests.swift`:
 launch a chat fixture (`launchChatFixture(eventCount:)` or a named fixture from
-`ChatUITestFixtureView.swift`), wait for the element, then
+`ios/Sources/LonghouseApp/Fixtures/ChatUITestFixtureView.swift`), wait for the element, then
 `add(XCTAttachment(screenshot: app.screenshot()))` with `lifetime = .keepAlways`.
 WebKit exposes transcript text as `staticTexts`, so a DOM footer is
 queryable with `staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for"))`.
@@ -155,7 +155,7 @@ Add a `#Preview` in `*Previews.swift` for every new view, in dark and light
 when it uses materials or secondary text. Put the view in the shell it
 really lives in (a `NavigationStack` with a scrolling body, the way
 `SessionScreenPreview` and `ProviderChromePreview` in
-`SessionViewPreviews.swift` do): a bare view over the harness's transparent
+`Previews/SessionViewPreviews.swift` do): a bare view over the harness's transparent
 canvas renders bar materials and secondary text as nothing, and you get a
 blank PNG with one divider on it.
 

@@ -5355,7 +5355,7 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
     provider_report = report.get("providers", {}).get(adapter.config.provider)
     generated_surfaces = (
         default_repo_root() / "web" / "src" / "lib" / "sessionWorkspace" / "toolTiers.generated.ts",
-        default_repo_root() / "ios" / "Sources" / "Shared" / "ToolTiers.generated.swift",
+        default_repo_root() / "ios" / "Sources" / "Shared" / "Generated" / "ToolTiers.generated.swift",
     )
     parity_fixture = default_repo_root() / "tests" / "fixtures" / "session-projection" / "codex-wrapper-presentation.json"
     parity_payload = json.loads(parity_fixture.read_text(encoding="utf-8")) if parity_fixture.is_file() else {}
@@ -5400,7 +5400,7 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
         "fixture_projection_matches_server": fixture_projection_matches,
     }
     web_parity_test = default_repo_root() / "web" / "src" / "lib" / "__tests__" / "sharedProjectionFixtures.test.ts"
-    ios_parity_test = default_repo_root() / "ios" / "Tests" / "LonghouseIOSTests" / "SharedProjectionFixtureTests.swift"
+    ios_parity_test = default_repo_root() / "ios" / "Tests" / "LonghouseIOSTests" / "Models" / "SharedProjectionFixtureTests.swift"
     parity_consumed_by_clients = all(
         path.is_file() and parity_fixture.name in path.read_text(encoding="utf-8") for path in (web_parity_test, ios_parity_test)
     )
@@ -5447,7 +5447,7 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
             "path": str(parity_fixture.relative_to(default_repo_root())),
             "sha256": hashlib.sha256(parity_fixture.read_bytes()).hexdigest() if parity_fixture.is_file() else None,
             "web_test": "web/src/lib/__tests__/sharedProjectionFixtures.test.ts",
-            "ios_test": "ios/Tests/LonghouseIOSTests/SharedProjectionFixtureTests.swift",
+            "ios_test": "ios/Tests/LonghouseIOSTests/Models/SharedProjectionFixtureTests.swift",
         },
         "concision_proof": concision_proof,
         "action_proofs": action_proofs,

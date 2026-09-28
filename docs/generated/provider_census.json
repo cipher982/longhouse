@@ -442,22 +442,14 @@
       ]
     },
     {
-      "path": "ios/Sources/LonghouseApp/ChatUITestFixtureView.swift",
+      "path": "ios/Sources/LonghouseApp/Fixtures/ChatUITestFixtureView.swift",
       "providers": [
         "claude",
         "codex"
       ]
     },
     {
-      "path": "ios/Sources/LonghouseApp/InboxViewPreviews.swift",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "ios/Sources/LonghouseApp/LaunchSessionSheet.swift",
+      "path": "ios/Sources/LonghouseApp/Launch/LaunchSessionSheet.swift",
       "providers": [
         "claude",
         "codex",
@@ -466,14 +458,22 @@
       ]
     },
     {
-      "path": "ios/Sources/LonghouseApp/SessionPauseRequestPreviews.swift",
+      "path": "ios/Sources/LonghouseApp/Previews/InboxViewPreviews.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/Previews/SessionPauseRequestPreviews.swift",
       "providers": [
         "claude",
         "codex"
       ]
     },
     {
-      "path": "ios/Sources/LonghouseApp/SessionViewPreviews.swift",
+      "path": "ios/Sources/LonghouseApp/Previews/SessionViewPreviews.swift",
       "providers": [
         "claude",
         "codex"
@@ -487,7 +487,7 @@
       ]
     },
     {
-      "path": "ios/Sources/Shared/ProviderBrands.generated.swift",
+      "path": "ios/Sources/Shared/Design/ProviderGlyph.swift",
       "providers": [
         "antigravity",
         "claude",
@@ -499,7 +499,7 @@
       ]
     },
     {
-      "path": "ios/Sources/Shared/ProviderGlyph.swift",
+      "path": "ios/Sources/Shared/Generated/ProviderBrands.generated.swift",
       "providers": [
         "antigravity",
         "claude",
@@ -511,7 +511,7 @@
       ]
     },
     {
-      "path": "ios/Tests/LonghouseIOSTests/LonghouseAPITests.swift",
+      "path": "ios/Tests/LonghouseIOSTests/API/LonghouseAPITests.swift",
       "providers": [
         "claude",
         "codex",
@@ -521,14 +521,14 @@
       ]
     },
     {
-      "path": "ios/Tests/LonghouseIOSTests/SessionLiveActivityModelsTests.swift",
+      "path": "ios/Tests/LonghouseIOSTests/LiveActivity/SessionLiveActivityModelsTests.swift",
       "providers": [
         "claude",
         "codex"
       ]
     },
     {
-      "path": "ios/Tests/LonghouseIOSTests/SessionModelsTests.swift",
+      "path": "ios/Tests/LonghouseIOSTests/Models/SessionModelsTests.swift",
       "providers": [
         "claude",
         "codex",
@@ -537,7 +537,7 @@
       ]
     },
     {
-      "path": "ios/Tests/LonghouseIOSTests/SessionViewModelTests.swift",
+      "path": "ios/Tests/LonghouseIOSTests/Session/SessionViewModelTests.swift",
       "providers": [
         "claude",
         "codex"

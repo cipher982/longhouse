@@ -128,7 +128,7 @@ targets:
     sources:
       - path: ../Tests/LonghouseIOSTests
         excludes:
-          - PreviewSnapshots.swift
+          - Previews/PreviewSnapshots.swift
         createIntermediateGroups: true
     dependencies:
       - target: Longhouse
@@ -150,7 +150,7 @@ targets:
     platform: iOS
     supportedDestinations: [iOS]
     sources:
-      - path: ../Tests/LonghouseIOSTests/PreviewSnapshots.swift
+      - path: ../Tests/LonghouseIOSTests/Previews/PreviewSnapshots.swift
     dependencies:
       - target: Longhouse
       - package: SnapshotPreviews

@@ -10,7 +10,7 @@
  * while a mutation can only demote by passing an explicit read-only shape.
  *
  * The grammar is handwritten here and mirrored in
- * ios/Sources/Shared/ShellSalience.swift. Behavioral parity is enforced by
+ * ios/Sources/Shared/Transcript/ShellSalience.swift. Behavioral parity is enforced by
  * config/shell-salience-fixtures.json, which both test suites run in full.
  * Change the fixtures first, then both implementations.
  */

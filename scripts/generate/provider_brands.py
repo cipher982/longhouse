@@ -6,7 +6,7 @@ generated manifest. config/provider-brands.json supplies visual treatment,
 aliases, and identity for non-managed archive providers.
 Outputs:
   - web/src/generated/provider-brands.ts
-  - ios/Sources/Shared/ProviderBrands.generated.swift
+  - ios/Sources/Shared/Generated/ProviderBrands.generated.swift
   - desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift
   - server/zerg/generated/provider_brands.py
 """
@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "provider-brands.json"
 MANAGED_CONTRACTS = REPO / "server" / "zerg" / "config" / "managed_provider_contracts.json"
 TS_OUT = REPO / "web" / "src" / "generated" / "provider-brands.ts"
-SWIFT_OUT_IOS = REPO / "ios" / "Sources" / "Shared" / "ProviderBrands.generated.swift"
+SWIFT_OUT_IOS = REPO / "ios" / "Sources" / "Shared" / "Generated" / "ProviderBrands.generated.swift"
 SWIFT_OUT_DESKTOP = REPO / "desktop" / "LonghouseMenuBarHarness" / "Sources" / "LonghouseMenuBarCore" / "ProviderBrands.generated.swift"
 PYTHON_OUT = REPO / "server" / "zerg" / "generated" / "provider_brands.py"
 

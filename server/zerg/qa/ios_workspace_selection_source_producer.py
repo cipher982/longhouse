@@ -26,7 +26,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "ios_workspace_selection_source_contract"
 ASSERTION_ID = "ios_fresh_ranking_replaces_implicit_cache"
-SOURCE_PATH = Path("ios/Sources/LonghouseApp/LaunchSessionSheet.swift")
+SOURCE_PATH = Path("ios/Sources/LonghouseApp/Launch/LaunchSessionSheet.swift")
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.ios_workspace_selection_source.v1",

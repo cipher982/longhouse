@@ -1047,7 +1047,7 @@ validate-ios-api: ## @internal iOS OpenAPI DTO drift check
 
 validate-provider-brands: ## @internal Provider brand config drift check
 	@$(MAKE) generate-provider-brands >/dev/null
-	@if ! git diff --quiet -- web/src/generated/provider-brands.ts ios/Sources/Shared/ProviderBrands.generated.swift desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift server/zerg/generated/provider_brands.py; then \
+	@if ! git diff --quiet -- web/src/generated/provider-brands.ts ios/Sources/Shared/Generated/ProviderBrands.generated.swift desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift server/zerg/generated/provider_brands.py; then \
 		echo "Provider brands out of sync — run 'make generate-provider-brands'"; \
 		exit 1; \
 	fi
