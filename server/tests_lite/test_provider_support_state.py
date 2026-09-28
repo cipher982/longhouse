@@ -171,7 +171,7 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue", "turn_steer"],
+                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue", "turn_steer", "turn_interrupt"],
             },
         },
     )
@@ -188,6 +188,7 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
         "launch",
         "continue",
         "turn_steer",
+        "turn_interrupt",
     ]
     assert codex["capabilities"]["missing_live_control_operations"] == []
     assert codex["proof"]["state"] == "mixed"
@@ -358,7 +359,7 @@ def test_support_state_keeps_one_shot_support_out_of_live_control_readiness() ->
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue", "turn_steer"],
+                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue", "turn_steer", "turn_interrupt"],
             },
         },
     )

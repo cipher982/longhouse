@@ -167,7 +167,7 @@ def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(receipt_index
 @pytest.mark.parametrize(
     ("provider", "variant"),
     [
-        ("codex", lifecycle.UNSUPPORTED_VARIANT),
+        ("codex", lifecycle.SUPPORTED_VARIANT),
         ("claude", lifecycle.SUPPORTED_VARIANT),
         ("opencode", lifecycle.SUPPORTED_VARIANT),
         ("cursor", lifecycle.SUPPORTED_VARIANT),

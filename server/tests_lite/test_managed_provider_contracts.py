@@ -422,6 +422,7 @@ def test_codex_contract_keeps_helm_and_console_controls():
         "codex.resume_run_once",
         "codex.turn_start",
         "codex.turn_steer",
+        "codex.turn_interrupt",
     )
     assert codex.machine_control_operations == (
         "send",
@@ -432,6 +433,7 @@ def test_codex_contract_keeps_helm_and_console_controls():
         "resume_run_once",
         "turn_start",
         "turn_steer",
+        "turn_interrupt",
     )
     # Antigravity joined on 2026-08-20 with a live-token canary that drives the
     # Console adapter's own argv, so this set is derived, not curated.

@@ -159,12 +159,13 @@ providers:
         modes: [console]
       runtime_prerequisites: [session_context]
       required_assertions:
-      - &console_release_interrupt_unsupported
-        id: console_adapter_release_contract_preserved
-        variant: interrupt_unsupported
+      # Codex Console stops through `turn/interrupt` on its live connection
+      # (revision 5 of the oracle); older evidence proved "unsupported".
+      - id: console_adapter_release_contract_preserved
+        variant: interrupt_supported
         scenario_id: codex_console_adapter_lifecycle
         oracle_source: server/zerg/qa/provider_console_lifecycle.py
-        minimum_scenario_revision: 1
+        minimum_scenario_revision: 5
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
     # Branching is its own operation, not a flavour of resume. Its assertion is
@@ -484,8 +485,10 @@ providers:
   - codex.run_once
   - codex.resume_run_once
   - codex.turn_start
-  # Console steer: the running `turn/start` connection takes `turn/steer`.
+  # Console steer and stop: the running `turn/start` connection takes
+  # `turn/steer` and `turn/interrupt`.
   - codex.turn_steer
+  - codex.turn_interrupt
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -2719,7 +2722,7 @@ providers:
   turn_start: true
   fork_thread: false
   live_proof: false
-  machine_control_supports: [omp.send, omp.interrupt, omp.steer, omp.terminate, omp.turn_start, omp.turn_interrupt]
+  machine_control_supports: [omp.send, omp.interrupt, omp.steer, omp.terminate, omp.turn_start, omp.turn_interrupt, omp.turn_steer]
   operation_evidence:
     launch_local:
       disposition: implemented

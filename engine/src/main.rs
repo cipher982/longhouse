@@ -21,6 +21,7 @@ mod commands;
 mod config;
 mod console_adapter;
 mod console_prompt;
+mod console_rpc;
 mod control_channel;
 mod cursor_helm_control;
 mod cursor_helm_launcher;

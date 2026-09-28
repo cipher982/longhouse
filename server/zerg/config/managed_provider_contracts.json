@@ -195,15 +195,15 @@
           "required_assertions": [
             {
               "id": "console_adapter_release_contract_preserved",
-              "variant": "interrupt_unsupported",
+              "variant": "interrupt_supported",
               "scenario_id": "codex_console_adapter_lifecycle",
               "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b99916538e487906917d975acc8cdcb4f8208e0e09362a7368c4dd8052ef6fc1"
+              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
             }
           ]
         },
@@ -727,7 +727,8 @@
         "codex.run_once",
         "codex.resume_run_once",
         "codex.turn_start",
-        "codex.turn_steer"
+        "codex.turn_steer",
+        "codex.turn_interrupt"
       ],
       "transcript_signals": {
         "delegation.spawn": {
@@ -833,7 +834,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "bdd1c607e1cf58c57410f8722048a3b3c4d7fd4721bbe1cfc3fb307660452c50"
+      "adapter_digest": "18b4e550570f2187ca89b8e43a5e423cdd6824824732762ce6a9aaa1f7ee4743"
     },
     {
       "provider": "claude",
@@ -1309,7 +1310,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b99916538e487906917d975acc8cdcb4f8208e0e09362a7368c4dd8052ef6fc1"
+              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
             },
             {
               "id": "real_print_marker_returned",
@@ -1959,7 +1960,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b99916538e487906917d975acc8cdcb4f8208e0e09362a7368c4dd8052ef6fc1"
+              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
             }
           ]
         },
@@ -3074,7 +3075,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b99916538e487906917d975acc8cdcb4f8208e0e09362a7368c4dd8052ef6fc1"
+              "oracle_digest": "b0817ba27a86a5added5a122f64c381a5b69ce9b181ae3964124ad8ee3556a8a"
             }
           ]
         },
@@ -4208,7 +4209,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "ff90bba1190281f11566dfe4ab189ea26a9226754d6d21999ddeb0dda30148d0"
+      "adapter_digest": "a86dd749a3fc76e5cdbdd373303b7fff38a014367d3ba8265634af94a6c23371"
     },
     {
       "provider": "omp",
@@ -4365,7 +4366,8 @@
         "omp.steer",
         "omp.terminate",
         "omp.turn_start",
-        "omp.turn_interrupt"
+        "omp.turn_interrupt",
+        "omp.turn_steer"
       ],
       "operation_evidence": {
         "launch_local": {
@@ -4800,7 +4802,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "04fdb68300bcdaff584ef0668df4ae949fe03751c4ab3489105ba3aa86816a5a"
+      "adapter_digest": "848ac1f49de530b20e1715bc19969daea6f9bc9dd43f3043bb11347915904abc"
     }
   ]
 }

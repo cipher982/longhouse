@@ -146,9 +146,9 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     // RPC mode reads commands from stdin. Pi opens this FIFO read-write itself,
     // so it never sees EOF: the turn survives a Machine Agent restart exactly
     // as the print-mode turn did, and a steer can be written at any time.
-    let rpc_stdin = run_dir.join(PI_RPC_STDIN);
-    create_rpc_fifo(&rpc_stdin)?;
-    let prompt_command = pi_rpc_prompt_command(&config.prompt, &config.image_paths)?;
+    let rpc_stdin = run_dir.join(crate::console_rpc::RPC_STDIN);
+    crate::console_rpc::create_fifo(&rpc_stdin)?;
+    let prompt_command = crate::console_rpc::prompt_command(&config.prompt, &config.image_paths)?;
     let argv = std::iter::once(config.pi_bin.clone())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
@@ -170,14 +170,7 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
             if libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            let fd = libc::open(rpc_stdin_c.as_ptr(), libc::O_RDWR);
-            if fd < 0 || libc::dup2(fd, 0) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if fd != 0 {
-                libc::close(fd);
-            }
-            Ok(())
+            crate::console_rpc::adopt_fifo_as_stdin(&rpc_stdin_c)
         });
     }
     let mut child = match command.spawn() {
@@ -247,11 +240,11 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     // Identity first: RPC mode prints no session header, so `get_state`'s
     // sessionId is what confirms the reserved native session.
     let commands = [
-        json!({"id": PI_RPC_IDENTITY_ID, "type": "get_state"}),
+        json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "get_state"}),
         prompt_command,
     ];
     for command in commands {
-        if let Err(error) = write_rpc_command(&rpc_stdin, &command).await {
+        if let Err(error) = crate::console_rpc::write_command(&rpc_stdin, &command).await {
             cleanup_process_group(Some(process_group_id)).await;
             let _ = child.kill().await;
             return Err(error).context("sending the Pi Console prompt");
@@ -278,73 +271,6 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     })
 }
 
-const PI_RPC_STDIN: &str = "stdin.fifo";
-const PI_RPC_IDENTITY_ID: &str = "longhouse-identity";
-
-fn create_rpc_fifo(path: &Path) -> Result<()> {
-    let _ = std::fs::remove_file(path);
-    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-    if unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("creating the Pi RPC stdin FIFO");
-    }
-    Ok(())
-}
-
-/// Write one RPC command. The open fails at once when no Pi process holds the
-/// FIFO (it has exited); the write then blocks only while Pi drains a large
-/// prompt, off the async runtime.
-async fn write_rpc_command(fifo: &Path, command: &Value) -> Result<()> {
-    let fifo = fifo.to_path_buf();
-    let mut line = serde_json::to_vec(command)?;
-    line.push(b'\n');
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(&fifo)
-            .context("no Pi process is reading its RPC stdin")?;
-        use std::os::unix::io::AsRawFd;
-        let fd = file.as_raw_fd();
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
-        }
-        file.write_all(&line)?;
-        Ok(())
-    })
-    .await?
-}
-
-fn pi_rpc_prompt_command(prompt: &str, image_paths: &[PathBuf]) -> Result<Value> {
-    use base64::Engine as _;
-    let mut images = Vec::new();
-    for path in image_paths {
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        let mime = match path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("png") => "image/png",
-            Some("jpg" | "jpeg") => "image/jpeg",
-            Some("gif") => "image/gif",
-            Some("webp") => "image/webp",
-            _ => "application/octet-stream",
-        };
-        images.push(json!({
-            "type": "image",
-            "data": base64::engine::general_purpose::STANDARD.encode(bytes),
-            "mimeType": mime,
-        }));
-    }
-    let mut command = json!({"id": "longhouse-prompt", "type": "prompt", "message": prompt});
-    if !images.is_empty() {
-        command["images"] = Value::Array(images);
-    }
-    Ok(command)
-}
-
 /// Enter the running Pi Console turn: an RPC `steer`, which Pi delivers after
 /// the current tool calls finish and before the next model call. Waits for
 /// Pi's own response to that command in the turn's stdout.
@@ -365,44 +291,8 @@ pub async fn steer_pi_print_turn(
         return Err(not_steerable());
     }
     let stdout_path = PathBuf::from(claim.stdout_path.clone().ok_or_else(not_steerable)?);
-    let fifo = stdout_path.with_file_name(PI_RPC_STDIN);
-    if !fifo.exists() {
-        return Err(not_steerable());
-    }
-    let id = format!("longhouse-steer-{}", Uuid::new_v4());
-    let start = std::fs::metadata(&stdout_path)
-        .map(|meta| meta.len())
-        .unwrap_or(0);
-    write_rpc_command(&fifo, &json!({"id": id, "type": "steer", "message": text}))
-        .await
-        .map_err(|_| not_steerable())?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while tokio::time::Instant::now() < deadline {
-        if let Some(response) = find_rpc_response(&stdout_path, start, &id) {
-            return if response.get("success").and_then(Value::as_bool) == Some(true) {
-                Ok(())
-            } else {
-                Err(not_steerable())
-            };
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    Err("steer_outcome_unknown".to_string())
-}
-
-fn find_rpc_response(stdout_path: &Path, start: u64, id: &str) -> Option<Value> {
-    use std::io::{Seek, SeekFrom};
-    let mut file = File::open(stdout_path).ok()?;
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut tail = String::new();
-    file.read_to_string(&mut tail).ok()?;
-    tail.lines()
-        .filter(|line| line.contains(id))
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|event| {
-            event.get("type").and_then(Value::as_str) == Some("response")
-                && event.get("id").and_then(Value::as_str) == Some(id)
-        })
+    let fifo = stdout_path.with_file_name(crate::console_rpc::RPC_STDIN);
+    crate::console_rpc::steer(&fifo, &stdout_path, text).await
 }
 
 pub async fn recover_pi_print_turns(
@@ -872,7 +762,10 @@ impl PiStreamProjection {
             Some("response") => {
                 let command = event.get("command").and_then(Value::as_str);
                 let ok = event.get("success").and_then(Value::as_bool) == Some(true);
-                if event.get("id").and_then(Value::as_str) == Some(PI_RPC_IDENTITY_ID) && ok {
+                if event.get("id").and_then(Value::as_str)
+                    == Some(crate::console_rpc::RPC_IDENTITY_ID)
+                    && ok
+                {
                     let observed = event
                         .pointer("/data/sessionId")
                         .and_then(Value::as_str)
@@ -1475,12 +1368,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let image = temp.path().join("a.png");
         std::fs::write(&image, [1u8, 2, 3]).unwrap();
-        let command = pi_rpc_prompt_command("what color", &[image]).unwrap();
+        let command = crate::console_rpc::prompt_command("what color", &[image]).unwrap();
         assert_eq!(command["type"], "prompt");
         assert_eq!(command["message"], "what color");
         assert_eq!(command["images"][0]["mimeType"], "image/png");
         assert_eq!(command["images"][0]["data"], "AQID");
-        let plain = pi_rpc_prompt_command("what color", &[]).unwrap();
+        let plain = crate::console_rpc::prompt_command("what color", &[]).unwrap();
         assert!(plain.get("images").is_none());
     }
 
@@ -1490,14 +1383,14 @@ mod tests {
         projection
             .apply(
                 "thread-1",
-                &json!({"id": PI_RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "thread-1"}}),
+                &json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "thread-1"}}),
             )
             .unwrap();
         assert!(projection.identity_confirmed);
         assert!(projection
             .apply(
                 "thread-2",
-                &json!({"id": PI_RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "thread-1"}}),
+                &json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "thread-1"}}),
             )
             .is_err());
         projection

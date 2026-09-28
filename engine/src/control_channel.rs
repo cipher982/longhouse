@@ -1258,6 +1258,17 @@ async fn execute_command(
                         })?;
                     PI_PRINT_ADAPTER
                 }
+                "omp" => {
+                    crate::omp_print::steer_omp_print_turn(&run_id, &session_id, &text)
+                        .await
+                        .map_err(|reason| CommandError {
+                            code: reason.clone(),
+                            message: format!(
+                                "OMP Console turn {run_id} did not take the steer: {reason}"
+                            ),
+                        })?;
+                    OMP_PRINT_ADAPTER
+                }
                 _ => {
                     return Err(CommandError {
                         code: "provider_unsupported".to_string(),
@@ -1278,6 +1289,17 @@ async fn execute_command(
             let turn_id = payload_required_string(&payload, "turn_id")?;
             let thread_id = payload_required_string(&payload, "thread_id")?;
             let transport = match provider.as_str() {
+                "codex" => {
+                    crate::codex_exec::interrupt_codex_console_turn(&run_id)
+                        .await
+                        .map_err(|reason| CommandError {
+                            code: reason.clone(),
+                            message: format!(
+                                "Codex Console turn {run_id} was not interrupted: {reason}"
+                            ),
+                        })?;
+                    CODEX_EXEC_ADAPTER
+                }
                 "cursor" => {
                     crate::cursor_print::interrupt_cursor_print_turn(
                         &run_id,
@@ -3994,6 +4016,7 @@ mod tests {
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("codex", "turn_start", COMMAND_TURN_START),
         ("codex", "turn_steer", COMMAND_TURN_STEER),
+        ("codex", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "turn_start", COMMAND_TURN_START),
         ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "answer_pause", COMMAND_ANSWER_PAUSE),
@@ -4030,6 +4053,7 @@ mod tests {
         ("omp", "terminate", COMMAND_TERMINATE),
         ("omp", "turn_start", COMMAND_TURN_START),
         ("omp", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("omp", "turn_steer", COMMAND_TURN_STEER),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {

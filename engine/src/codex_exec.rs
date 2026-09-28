@@ -38,20 +38,35 @@ pub const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
 pub const DEFAULT_CONSOLE_SANDBOX: &str = "danger-full-access";
 pub const CODEX_EXEC_ADAPTER: &str = "codex_exec";
 
-/// A mid-turn message for a running Codex Console turn and the channel its
-/// outcome goes back on.
-struct ConsoleSteer {
-    text: String,
-    reply: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+type ConsoleReply = tokio::sync::oneshot::Sender<std::result::Result<(), String>>;
+
+/// Live control of a running Codex Console turn, answered on `reply`.
+enum ConsoleControl {
+    /// Enter the turn at its next boundary (`turn/steer`).
+    Steer { text: String, reply: ConsoleReply },
+    /// Stop the turn now (`turn/interrupt`); it completes as `interrupted`.
+    Interrupt { reply: ConsoleReply },
 }
+
+/// The turn ended because Longhouse interrupted it: a cancellation, not a failure.
+#[derive(Debug)]
+struct CodexTurnInterrupted;
+
+impl std::fmt::Display for CodexTurnInterrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Codex turn interrupted from Longhouse")
+    }
+}
+
+impl std::error::Error for CodexTurnInterrupted {}
 
 /// Running Codex Console turns that can take a steer, by Longhouse run id.
 /// Registered once `turn/start` returns the provider turn id and removed when
 /// the turn loop exits, so a run the daemon recovered after a restart (no live
 /// app-server connection) is correctly not steerable.
-fn console_steer_registry() -> &'static Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleSteer>>>
+fn console_steer_registry() -> &'static Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleControl>>>
 {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleSteer>>>> =
+    static REGISTRY: OnceLock<Mutex<HashMap<String, mpsc::UnboundedSender<ConsoleControl>>>> =
         OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -70,18 +85,32 @@ impl Drop for ConsoleSteerRegistration {
 /// same app-server connection that started it (`turn/steer`, the Helm path).
 /// `Err("turn_not_steerable")` means no turn of that run is running here.
 pub async fn steer_codex_console_turn(run_id: &str, text: &str) -> std::result::Result<(), String> {
+    console_control(run_id, |reply| ConsoleControl::Steer {
+        text: text.to_string(),
+        reply,
+    })
+    .await
+}
+
+/// Stop the running Codex Console turn for `run_id` (`turn/interrupt` on its
+/// live connection); the run then settles as cancelled.
+pub async fn interrupt_codex_console_turn(run_id: &str) -> std::result::Result<(), String> {
+    console_control(run_id, |reply| ConsoleControl::Interrupt { reply }).await
+}
+
+async fn console_control(
+    run_id: &str,
+    control: impl FnOnce(ConsoleReply) -> ConsoleControl,
+) -> std::result::Result<(), String> {
     let sender = console_steer_registry()
         .lock()
-        .map_err(|_| "steer registry poisoned".to_string())?
+        .map_err(|_| "console control registry poisoned".to_string())?
         .get(run_id)
         .cloned()
         .ok_or_else(|| "turn_not_steerable".to_string())?;
     let (reply, outcome) = tokio::sync::oneshot::channel();
     sender
-        .send(ConsoleSteer {
-            text: text.to_string(),
-            reply,
-        })
+        .send(control(reply))
         .map_err(|_| "turn_not_steerable".to_string())?;
     match tokio::time::timeout(Duration::from_secs(15), outcome).await {
         Ok(Ok(result)) => result,
@@ -815,6 +844,9 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 exit_code,
                 Some(format!("Codex app-server exited with code {exit_code:?}")),
             ),
+            Err(err) if err.chain().any(|cause| cause.is::<CodexTurnInterrupted>()) => {
+                ("run_cancelled", None, None)
+            }
             Err(err) => (
                 "run_failed",
                 worker
@@ -1141,7 +1173,8 @@ async fn run_app_server_turn(
     sink.post_phase("thinking", None).await;
     sink.post_live_user_item(prompt).await;
 
-    let (steer_tx, mut steer_rx) = mpsc::unbounded_channel::<ConsoleSteer>();
+    let (steer_tx, mut steer_rx) = mpsc::unbounded_channel::<ConsoleControl>();
+    let mut interrupt_requested = false;
     if let Ok(mut registry) = console_steer_registry().lock() {
         registry.insert(sink.run_id.clone(), steer_tx);
     }
@@ -1158,24 +1191,40 @@ async fn run_app_server_turn(
         loop {
             let value = tokio::select! {
                 value = rpc.next_value() => value?,
-                Some(steer) = steer_rx.recv() => {
+                Some(control) = steer_rx.recv() => {
                     let id = rpc.next_id;
                     rpc.next_id += 1;
-                    let request = json!({
-                        "id": id,
-                        "method": "turn/steer",
-                        "params": {
-                            "threadId": provider_thread_id,
-                            "expectedTurnId": expected_turn_id,
-                            "input": crate::codex_attachments::build_user_input_items_from_paths(&steer.text, &[]),
-                        },
-                    });
+                    let (request, reply) = match control {
+                        ConsoleControl::Steer { text, reply } => (
+                            json!({
+                                "id": id,
+                                "method": "turn/steer",
+                                "params": {
+                                    "threadId": provider_thread_id,
+                                    "expectedTurnId": expected_turn_id,
+                                    "input": crate::codex_attachments::build_user_input_items_from_paths(&text, &[]),
+                                },
+                            }),
+                            reply,
+                        ),
+                        ConsoleControl::Interrupt { reply } => {
+                            interrupt_requested = true;
+                            (
+                                json!({
+                                    "id": id,
+                                    "method": "turn/interrupt",
+                                    "params": {"threadId": provider_thread_id, "turnId": expected_turn_id},
+                                }),
+                                reply,
+                            )
+                        }
+                    };
                     match rpc.write(&request).await {
                         Ok(()) => {
-                            pending_steers.insert(id, steer.reply);
+                            pending_steers.insert(id, reply);
                         }
                         Err(error) => {
-                            let _ = steer.reply.send(Err(format!("steer write failed: {error}")));
+                            let _ = reply.send(Err(format!("control write failed: {error}")));
                         }
                     }
                     continue;
@@ -1216,6 +1265,13 @@ async fn run_app_server_turn(
                 }
                 let status = json_string(&value, &["params", "turn", "status"])
                     .unwrap_or_else(|| "completed".to_string());
+                if status == "interrupted" && interrupt_requested {
+                    if let Some(path) = thread_path.as_deref() {
+                        sink.wake_transcript_shipper(path, &completed_turn_id, "turn_interrupted")
+                            .await;
+                    }
+                    return Err(anyhow::Error::new(CodexTurnInterrupted));
+                }
                 if status != "completed" {
                     anyhow::bail!("Codex turn ended with status {status}");
                 }
@@ -1238,8 +1294,9 @@ async fn run_app_server_turn(
     for (_, reply) in pending_steers.drain() {
         let _ = reply.send(Err("turn_ended".to_string()));
     }
-    while let Ok(steer) = steer_rx.try_recv() {
-        let _ = steer.reply.send(Err("turn_ended".to_string()));
+    while let Ok(control) = steer_rx.try_recv() {
+        let (ConsoleControl::Steer { reply, .. } | ConsoleControl::Interrupt { reply }) = control;
+        let _ = reply.send(Err("turn_ended".to_string()));
     }
     turn_outcome.context("Codex app-server turn timed out")??;
 

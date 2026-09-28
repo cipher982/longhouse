@@ -45,8 +45,8 @@ from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
-INTERRUPT_SUPPORTED = frozenset({"claude", "opencode", "cursor", "pi", "omp"})
-INTERRUPT_UNSUPPORTED = frozenset({"codex"})
+INTERRUPT_SUPPORTED = frozenset({"codex", "claude", "opencode", "cursor", "pi", "omp"})
+INTERRUPT_UNSUPPORTED: frozenset[str] = frozenset()
 # Only OMP's retained JSONL stream carries the terminal agent_end contract used
 # by the post-interrupt evidence check. The other supported adapters settle via
 # their own Runtime Host/claim contracts.
@@ -94,10 +94,11 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=13,
+    producer_revision=14,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
-    scenario_revision=4,
+    # 5: Codex Console interrupt is supported (turn/interrupt).
+    scenario_revision=5,
     assertion_cells=(
         (ASSERTION_ID, SUPPORTED_VARIANT),
         (ASSERTION_ID, UNSUPPORTED_VARIANT),

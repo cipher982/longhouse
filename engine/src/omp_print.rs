@@ -6,6 +6,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -163,13 +164,17 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     let stderr_file = private_output_file(&stderr_path)?;
     let runtime_events_outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
     let args = build_omp_args(
-        &config.prompt,
-        &config.image_paths,
         config.model.as_deref(),
         config.profile.as_deref(),
         &session_dir,
         &session_file,
     );
+    // RPC stdin: see `console_rpc`. The prompt and a later steer are written
+    // there; stdout still goes to the file the monitors tail.
+    let rpc_stdin = run_dir.join(crate::console_rpc::RPC_STDIN);
+    crate::console_rpc::create_fifo(&rpc_stdin)?;
+    let prompt_command = crate::console_rpc::prompt_command(&config.prompt, &config.image_paths)?;
+    let rpc_stdin_c = std::ffi::CString::new(rpc_stdin.as_os_str().as_bytes())?;
     let argv = std::iter::once(config.omp_bin.clone())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
@@ -186,17 +191,17 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .apply(&mut command, &[]);
     #[cfg(unix)]
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            Ok(())
+            crate::console_rpc::adopt_fifo_as_stdin(&rpc_stdin_c)
         });
     }
     let mut child = command
         .spawn()
-        .with_context(|| format!("spawning `{}` -p", config.omp_bin))?;
-    let pid = child.id().context("omp -p returned no pid")?;
+        .with_context(|| format!("spawning `{}` --mode rpc", config.omp_bin))?;
+    let pid = child.id().context("omp --mode rpc returned no pid")?;
     let process_group_id = i32::try_from(pid).context("OMP pid exceeds process-group range")?;
     let result = json!({
         "session_id": config.session_id,
@@ -253,6 +258,17 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         local_db_path,
         runtime_events_outbox_dir,
     };
+    for command in [
+        json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "get_state"}),
+        prompt_command,
+    ] {
+        if let Err(error) = crate::console_rpc::write_command(&rpc_stdin, &command).await {
+            let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+            let _ = crate::turn_claims::default_registry()?
+                .mark_failed(&config.run_id, &error.to_string());
+            return Err(error).context("sending the OMP Console prompt");
+        }
+    }
     let monitor_stderr_path = stderr_path.clone();
     tokio::spawn(async move {
         monitor_omp_print(&mut child, &monitor_stderr_path, sink).await;
@@ -302,6 +318,31 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         session_file: session_file.to_string_lossy().to_string(),
         argv,
     })
+}
+
+/// Enter the running OMP Console turn with an RPC `steer`. OMP delivers it at
+/// the next message boundary; a long-running command is moved to the
+/// background rather than cancelled, and its result is collected later.
+pub async fn steer_omp_print_turn(
+    run_id: &str,
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<(), String> {
+    let not_steerable = || "turn_not_steerable".to_string();
+    let registry = crate::turn_claims::default_registry().map_err(|err| err.to_string())?;
+    let claim = registry.read(run_id).map_err(|_| not_steerable())?;
+    if claim.session_id != session_id
+        || claim.provider != "omp"
+        || claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER)
+        || claim.state != "spawned"
+        || crate::console_adapter::claim_process_liveness(&claim)
+            != crate::console_adapter::ClaimLiveness::Live
+    {
+        return Err(not_steerable());
+    }
+    let stdout_path = PathBuf::from(claim.stdout_path.clone().ok_or_else(not_steerable)?);
+    let fifo = stdout_path.with_file_name(crate::console_rpc::RPC_STDIN);
+    crate::console_rpc::steer(&fifo, &stdout_path, text).await
 }
 
 pub async fn recover_omp_print_turns(
@@ -455,6 +496,9 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
     let mut pending = Vec::new();
     let mut seq = 0_u64;
     let mut terminal_drain_deadline = None;
+    // An RPC process stays up after the run settles; Longhouse ends it, and
+    // that exit is the run's successful end rather than a failure.
+    let mut settled_shutdown = false;
     sink.post_phase("thinking", None, 0).await;
     loop {
         if let Err(error) = publish_stdout_growth(
@@ -479,6 +523,10 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
             terminal_drain_deadline.get_or_insert_with(|| Instant::now() + TERMINAL_DRAIN_GRACE);
         } else {
             terminal_drain_deadline = None;
+        }
+        if !settled_shutdown && (projection.turn_settled || projection.rpc_rejected) {
+            settled_shutdown = projection.turn_settled;
+            crate::console_adapter::cleanup_process_group("omp-print", sink.process_group_id).await;
         }
         refresh_owned_processes(&sink.run_id);
         match child.try_wait() {
@@ -508,7 +556,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
                 let (terminal_state, reason) = if cleanup_verified {
                     terminal_state_for_projection(
                         &projection,
-                        Some(status.success()),
+                        Some(status.success() || settled_shutdown),
                         cancel_requested,
                         drain_error.as_deref(),
                         pending.is_empty(),
@@ -595,6 +643,13 @@ async fn monitor_recovered_omp_claim(
             };
             sink.post_terminal("run_failed", None, Some(reason)).await;
             return;
+        }
+        if (projection.turn_settled || projection.rpc_rejected)
+            && claim.process_group_is_from_this_boot()
+            && crate::console_adapter::claim_process_liveness(&claim)
+                == crate::console_adapter::ClaimLiveness::Live
+        {
+            crate::console_adapter::cleanup_process_group("omp-print", sink.process_group_id).await;
         }
         if projection.turn_settled {
             terminal_drain_deadline.get_or_insert_with(|| Instant::now() + TERMINAL_DRAIN_GRACE);
@@ -728,8 +783,6 @@ async fn settle_recovered_dead_claim(
 }
 
 pub fn build_omp_args(
-    prompt: &str,
-    image_paths: &[PathBuf],
     model: Option<&str>,
     profile: Option<&str>,
     session_dir: &Path,
@@ -740,7 +793,9 @@ pub fn build_omp_args(
         .unwrap_or(false);
     let mut args = vec![
         "--mode".into(),
-        "json".into(),
+        "rpc".into(),
+        // Extensions run headless: no extension_ui_request dialogs for a host.
+        "--no-ui".into(),
         "--session-dir".into(),
         session_dir.to_string_lossy().into_owned(),
         "--resume".into(),
@@ -755,19 +810,8 @@ pub fn build_omp_args(
     if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--model".into(), model.into()]);
     }
-    args.push("-p".into());
-    // `@<path>` arguments before `--` are file arguments: OMP folds them into
-    // the first user message as image content. After `--` an `@<path>` is a
-    // message of its own, so an image and its text used to reach the model
-    // as two separate user turns, the path answered first.
-    for image in image_paths {
-        args.push(format!("@{}", image.to_string_lossy()));
-    }
-    if !prompt.trim().is_empty() {
-        // `--` keeps a prompt that starts with `-` from reading as a flag.
-        args.push("--".into());
-        args.push(prompt.into());
-    }
+    // The prompt and its images (one user message) go over stdin as an RPC
+    // `prompt` command; see `console_rpc`.
     args
 }
 
@@ -781,6 +825,8 @@ struct OmpStreamProjection {
     final_stop_reason: Option<String>,
     turn_settled: bool,
     native_error: Option<String>,
+    /// OMP refused the prompt before accepting it: no run will follow.
+    rpc_rejected: bool,
 }
 
 impl OmpStreamProjection {
@@ -846,6 +892,35 @@ impl OmpStreamProjection {
                         .map(str::to_string);
                 }
             }
+            Some("response") => {
+                let ok = event.get("success").and_then(Value::as_bool) == Some(true);
+                if event.get("id").and_then(Value::as_str)
+                    == Some(crate::console_rpc::RPC_IDENTITY_ID)
+                    && ok
+                {
+                    let observed = event
+                        .pointer("/data/sessionId")
+                        .and_then(Value::as_str)
+                        .context("OMP get_state reported no sessionId")?;
+                    anyhow::ensure!(
+                        expected_provider_thread_id.is_none_or(|expected| expected == observed),
+                        "OMP RPC session id {observed} does not match the exact resume identity"
+                    );
+                    self.provider_thread_id = Some(observed.to_string());
+                    self.identity_confirmed = true;
+                } else if event.get("command").and_then(Value::as_str) == Some("prompt") && !ok {
+                    self.rpc_rejected = true;
+                    self.native_error = Some(
+                        event
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("OMP refused the prompt")
+                            .to_string(),
+                    );
+                }
+            }
+            // RPC mode's end of a whole prompt, after any steer it absorbed.
+            Some("session_settled") => self.turn_settled = true,
             Some("agent_settled" | "session_stop" | "turn_end") => {}
             Some("agent_end") => {
                 let is_terminal = is_terminal_agent_end(event);
@@ -1520,44 +1595,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_attachments_are_file_arguments_before_the_separator() {
+    fn stock_omp_console_runs_in_rpc_mode_and_binds_exact_resume() {
         let args = build_omp_args(
-            "what color",
-            &[PathBuf::from("/w/.longhouse/attachments/r/a.png")],
-            None,
-            None,
-            Path::new("/sessions"),
-            Path::new("/sessions/exact.jsonl"),
-        );
-        let tail = &args[args.len() - 4..];
-        assert_eq!(
-            tail,
-            [
-                "-p",
-                "@/w/.longhouse/attachments/r/a.png",
-                "--",
-                "what color"
-            ]
-        );
-        let image_only = build_omp_args(
-            "",
-            &[PathBuf::from("/w/.longhouse/attachments/r/a.png")],
-            None,
-            None,
-            Path::new("/sessions"),
-            Path::new("/sessions/exact.jsonl"),
-        );
-        assert_eq!(
-            &image_only[image_only.len() - 2..],
-            ["-p", "@/w/.longhouse/attachments/r/a.png"]
-        );
-    }
-
-    #[test]
-    fn stock_omp_args_keep_native_defaults_and_bind_exact_resume() {
-        let args = build_omp_args(
-            "reply",
-            &[],
             Some("gpt-5.2"),
             Some("work"),
             Path::new("/sessions"),
@@ -1567,7 +1606,8 @@ mod tests {
             args,
             vec![
                 "--mode",
-                "json",
+                "rpc",
+                "--no-ui",
                 "--session-dir",
                 "/sessions",
                 "--resume",
@@ -1576,11 +1616,12 @@ mod tests {
                 "work",
                 "--model",
                 "gpt-5.2",
-                "-p",
-                "--",
-                "reply"
             ]
         );
+        // The prompt (and any image) is a stdin command, never argv.
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "-p" || arg == "--" || arg.starts_with('@')));
         assert!(!args.iter().any(|arg| matches!(
             arg.as_str(),
             "--no-tools" | "--no-extensions" | "--no-skills"
@@ -1592,25 +1633,40 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let session_file = temp.path().join("session.jsonl");
         std::fs::write(&session_file, b"{\"type\":\"session\"}\n").unwrap();
-        let args = build_omp_args("reply", &[], None, None, temp.path(), &session_file);
+        let args = build_omp_args(None, None, temp.path(), &session_file);
         assert!(args.iter().any(|arg| arg == "--continue"));
     }
 
     #[test]
-    fn leading_dash_console_prompt_is_after_literal_separator() {
-        let args = build_omp_args(
-            "--looks-like-an-option",
-            &[],
-            None,
-            None,
-            Path::new("/sessions"),
-            Path::new("/sessions/exact.jsonl"),
-        );
-        assert_eq!(args[args.len() - 2], "--");
-        assert_eq!(
-            args.last().map(String::as_str),
-            Some("--looks-like-an-option")
-        );
+    fn rpc_identity_is_get_state_and_session_settled_ends_the_run() {
+        let mut projection = OmpStreamProjection::default();
+        projection
+            .apply(
+                Some("01a0e975-6956-7480-b292-42c7635c1b83"),
+                &json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "01a0e975-6956-7480-b292-42c7635c1b83"}}),
+            )
+            .unwrap();
+        assert!(projection.identity_confirmed);
+        assert!(OmpStreamProjection::default()
+            .apply(
+                Some("other"),
+                &json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "01a0e975-6956-7480-b292-42c7635c1b83"}}),
+            )
+            .is_err());
+        projection
+            .apply(None, &json!({"type": "agent_start"}))
+            .unwrap();
+        assert!(!projection.turn_settled);
+        projection
+            .apply(None, &json!({"type": "session_settled"}))
+            .unwrap();
+        assert!(projection.turn_settled);
+        let mut refused = OmpStreamProjection::default();
+        refused
+            .apply(None, &json!({"id": "longhouse-prompt", "type": "response", "command": "prompt", "success": false, "error": "no model"}))
+            .unwrap();
+        assert!(refused.rpc_rejected);
+        assert_eq!(refused.native_error.as_deref(), Some("no model"));
     }
 
     #[test]
@@ -1686,7 +1742,6 @@ import uuid
 
 args = sys.argv[1:]
 source = args[args.index("--resume") + 1]
-prompt = args[-1]
 native_id = "01a08857-826d-72f6-b816-672b54116504"
 header = {
     "type": "session",
@@ -1695,22 +1750,37 @@ header = {
     "timestamp": "2026-09-09T22:43:51.533Z",
     "cwd": os.getcwd(),
 }
-if os.path.getsize(source) == 0:
-    with open(source, "w", encoding="utf-8") as stream:
-        stream.write(json.dumps(header, separators=(",", ":")) + "\n")
-with open(source, "a", encoding="utf-8") as stream:
-    stream.write(json.dumps({"type":"message","id":str(uuid.uuid4()),"message":{"role":"user","content":[{"type":"text","text":prompt}]}}) + "\n")
-    stream.write(json.dumps({"type":"message","id":str(uuid.uuid4()),"message":{"role":"assistant","content":[{"type":"text","text":prompt}],"stopReason":"stop"}}) + "\n")
-events = [
-    header,
-    {"type":"agent_start"},
-    {"type":"message_start","message":{"role":"assistant","content":[]}},
-    {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":prompt}},
-    {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":prompt}],"stopReason":"stop"}},
-    {"type":"agent_end","isTerminal":True,"willContinue":False},
-]
-for event in events:
+def out(event):
     print(json.dumps(event, separators=(",", ":")), flush=True)
+out({"type":"ready"})
+# RPC mode never exits on its own: Longhouse ends it after session_settled.
+for line in sys.stdin:
+    command = json.loads(line)
+    kind = command["type"]
+    if kind == "get_state":
+        out({"id":command.get("id"),"type":"response","command":"get_state","success":True,"data":{"sessionId":native_id}})
+    elif kind == "steer":
+        with open(source + ".steer.log", "a", encoding="utf-8") as stream:
+            stream.write(command["message"])
+        out({"id":command.get("id"),"type":"response","command":"steer","success":True})
+    elif kind == "prompt":
+        prompt = command["message"]
+        out({"id":command.get("id"),"type":"response","command":"prompt","success":True})
+        if os.path.getsize(source) == 0:
+            with open(source, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(header, separators=(",", ":")) + "\n")
+        with open(source, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"type":"message","id":str(uuid.uuid4()),"message":{"role":"user","content":[{"type":"text","text":prompt}]}}) + "\n")
+            stream.write(json.dumps({"type":"message","id":str(uuid.uuid4()),"message":{"role":"assistant","content":[{"type":"text","text":prompt}],"stopReason":"stop"}}) + "\n")
+        for event in [
+            {"type":"agent_start"},
+            {"type":"message_start","message":{"role":"assistant","content":[]}},
+            {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":prompt}},
+            {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":prompt}],"stopReason":"stop"}},
+            {"type":"agent_end","isTerminal":True,"willContinue":False},
+            {"type":"session_settled"},
+        ]:
+            out(event)
 "##,
         )
         .unwrap();
@@ -2000,10 +2070,10 @@ for event in events:
             .expect("a console turn must claim its source");
         assert_eq!(claim.state, crate::managed_source_claim::ClaimState::Bound);
         assert_eq!(claim.native_session_id.as_deref(), Some(native_id.as_str()));
-        assert!(first
-            .argv
-            .windows(2)
-            .any(|pair| pair == ["--", "--OMP_FIRST"]));
+        // RPC mode: the prompt (even one that looks like a flag) is a stdin
+        // command, never argv.
+        assert!(first.argv.windows(2).any(|pair| pair == ["--mode", "rpc"]));
+        assert!(!first.argv.iter().any(|arg| arg == "--OMP_FIRST"));
         assert_ne!(unsafe { libc::killpg(first.process_group_id, 0) }, 0);
 
         registry

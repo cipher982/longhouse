@@ -109,7 +109,7 @@ def _late_provider_boundary(monkeypatch, lifecycle, tmp_path, provider: str):
 
 
 def _provider_args(root, provider_bin, engine, cli, provider):
-    variant = provider_console_lifecycle.UNSUPPORTED_VARIANT if provider == "codex" else provider_console_lifecycle.SUPPORTED_VARIANT
+    variant = provider_console_lifecycle.SUPPORTED_VARIANT
     return [
         "--provider",
         provider,
