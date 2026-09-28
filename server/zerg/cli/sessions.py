@@ -661,24 +661,27 @@ def _report_continue_outcome(body: dict[str, object], *, session_id: str, steer:
     receipt_id = body.get("live_input_id")
     outcome = str(body.get("outcome") or "unknown")
 
-    if steer:
+    if outcome == "unknown":
+        # A replay of an in-flight delivery reports the state that is actually
+        # known. It is not evidence the model received anything, and a steer
+        # that has not been acknowledged must not read as one that was.
+        typer.secho(f"Delivery outcome unknown for {session_id}.", fg=typer.colors.YELLOW, bold=True)
+        typer.echo(f"Receipt: {receipt_id}")
+        typer.echo("Read the target transcript before sending again: this message may already have landed.")
+    elif steer:
         typer.secho(f"Steered into {session_id}'s running turn.", fg=typer.colors.CYAN, bold=True)
         typer.echo(f"Receipt: {receipt_id}")
         typer.echo("Best effort: the provider applies this at its next boundary, not instantly.")
     elif outcome == "sent":
         typer.secho(f"Delivered to {session_id}.", fg=typer.colors.GREEN, bold=True)
         typer.echo(f"Receipt: {receipt_id}")
-    elif outcome == "queued":
+    else:
         typer.secho(f"Queued for {session_id}.", fg=typer.colors.CYAN, bold=True)
         typer.echo(f"Receipt: {receipt_id}")
         typer.echo(
             "Not delivered yet: the target takes it at its next turn boundary. "
             "A queued input expires after 30 minutes and is then reported failed."
         )
-    else:
-        typer.secho(f"Delivery outcome unknown for {session_id}.", fg=typer.colors.YELLOW, bold=True)
-        typer.echo(f"Receipt: {receipt_id}")
-        typer.echo("Read the target transcript before sending again: this message may already have landed.")
 
     typer.echo(f"Confirm: longhouse-server tail {session_id}")
 

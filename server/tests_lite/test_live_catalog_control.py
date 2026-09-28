@@ -396,6 +396,10 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
     factory = make_sessionmaker(engine)
     with factory() as db:
         session_id = _seed_live_control(db)
+        # A dispatch needs an observed turn boundary; without one the router
+        # parks a durable receipt instead of handing the text to a provider
+        # whose turn state is unknown.
+        _seed_canonical_idle_facts(db, session_id)
 
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "get_live_write_session_factory", lambda: factory)
@@ -414,6 +418,8 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
                 return catalog_store.finish_queued_input(**params)
             if method == "session.input.recent.list.v2":
                 return catalog_store.list_recent_input_receipts(**params)
+            if method == "session.input.activity.read.v2":
+                return catalog_store.read_session_activity(**params)
             raise AssertionError(method)
 
     import zerg.services.managed_control_dispatcher as dispatcher
@@ -467,6 +473,10 @@ async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches
     factory = make_sessionmaker(engine)
     with factory() as db:
         session_id = _seed_live_control(db)
+        # A dispatch needs an observed turn boundary; without one the router
+        # parks a durable receipt instead of handing the text to a provider
+        # whose turn state is unknown.
+        _seed_canonical_idle_facts(db, session_id)
 
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "get_live_write_session_factory", lambda: factory)
@@ -485,6 +495,8 @@ async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches
                 return catalog_store.finish_queued_input(**params)
             if method == "session.input.recent.list.v2":
                 return catalog_store.list_recent_input_receipts(**params)
+            if method == "session.input.activity.read.v2":
+                return catalog_store.read_session_activity(**params)
             raise AssertionError(method)
 
     class _Runtime:
@@ -683,6 +695,8 @@ async def test_pi_auto_and_queue_inputs_use_one_immediate_native_send_path(tmp_p
                 return catalog_store.finish_queued_input(**params)
             if method == "session.input.recent.list.v2":
                 return catalog_store.list_recent_input_receipts(**params)
+            if method == "session.input.activity.read.v2":
+                return catalog_store.read_session_activity(**params)
             raise AssertionError(method)
 
     import zerg.services.managed_control_dispatcher as dispatcher

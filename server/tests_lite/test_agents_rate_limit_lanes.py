@@ -219,6 +219,42 @@ def test_continue_session_retries_on_429(monkeypatch, capsys):
     assert "Accepted" not in printed
 
 
+def test_continue_session_does_not_call_an_unresolved_steer_delivered(monkeypatch, capsys):
+    """A replay of an in-flight steer reports unknown, not steered."""
+
+    session_id = str(uuid4())
+    monkeypatch.setattr("zerg.cli.sessions._load_api_credentials", lambda **kwargs: ("http://test", "zdt_tok"))
+
+    def mock_post(url, headers=None, json=None):
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            content=b'{"outcome":"unknown","live_input_id":"live-9","intent":"steer","client_request_id":"req-9"}',
+            request=httpx.Request("POST", url),
+        )
+
+    client_mock = MagicMock()
+    client_mock.__enter__.return_value = client_mock
+    client_mock.post = mock_post
+
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client_mock)
+
+    continue_session(
+        session_id=session_id,
+        message="redirect hot",
+        steer=True,
+        output_json=False,
+        current_session_id=None,
+        url=None,
+        token=None,
+        claude_dir=None,
+    )
+
+    printed = capsys.readouterr().out
+    assert "outcome unknown" in printed
+    assert "Steered into" not in printed
+
+
 def test_continue_session_explains_a_refused_steer(monkeypatch, capsys):
     session_id = str(uuid4())
     monkeypatch.setattr("zerg.cli.sessions._load_api_credentials", lambda **kwargs: ("http://test", "zdt_tok"))

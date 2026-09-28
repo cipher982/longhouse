@@ -2276,16 +2276,34 @@ async def _create_catalog_session_input_response(
     # A SEND is dispatched only at an observed turn boundary, because a
     # provider answers a mid-turn send from a queue it holds in memory. `auto`
     # and `queue` differ only in whether that boundary is used straight away.
-    park_for_turn_boundary = body.intent == INPUT_INTENT_AUTO and not at_turn_boundary
+    #
+    # SEND is also ordered: a direct dispatch is only allowed when nothing
+    # older is still waiting, or the newer message would overtake a receipt the
+    # drain has not delivered yet.
+    queued_state = await _catalog_recent_input_summaries(source_session.id)
+    if queued_state is None:
+        raise HTTPException(
+            status_code=503,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm the input catalog; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        )
+    older_queued = queued_state[1] > 0
+    send_can_dispatch = at_turn_boundary and not older_queued
+    park_for_turn_boundary = body.intent == INPUT_INTENT_AUTO and not send_can_dispatch
 
     if (
         str(getattr(source_session, "provider", "") or "").strip().lower() == "pi"
         and body.intent in {INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE}
-        and at_turn_boundary
+        and send_can_dispatch
     ):
         # Pi's native send owns the turn it starts, so it is reached only at an
-        # observed turn boundary. A mid-turn send would come back from Pi's
-        # volatile busy-turn queue, not from a durable one.
+        # observed turn boundary with nothing older waiting. A mid-turn send
+        # would come back from Pi's volatile busy-turn queue, and a direct send
+        # ahead of a parked receipt would deliver this message out of order.
         from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
         from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 
@@ -2366,11 +2384,12 @@ async def _create_catalog_session_input_response(
     if (
         str(getattr(source_session, "provider", "") or "").strip().lower() == "omp"
         and body.intent in {INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE}
-        and at_turn_boundary
+        and send_can_dispatch
     ):
-        # Reached only at an observed turn boundary. The OMP extension answers a
-        # mid-turn send from its volatile follow-up queue, which is not a
-        # delivery, so everything else takes the durable receipt path below.
+        # Reached only at an observed turn boundary with nothing older waiting.
+        # The OMP extension answers a mid-turn send from its volatile follow-up
+        # queue, which is not a delivery, so everything else takes the durable
+        # receipt path below.
         from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
         from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 
@@ -2472,18 +2491,7 @@ async def _create_catalog_session_input_response(
             queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
         )
 
-    state = await _catalog_recent_input_summaries(source_session.id)
-    if state is None:
-        raise HTTPException(
-            status_code=503,
-            detail=_input_error_detail(
-                "input_receipt_unknown",
-                "The server could not confirm the input catalog; retry with the same client_request_id.",
-                disposition="unknown",
-                client_request_id=client_request_id,
-            ),
-        )
-    current = state[1]
+    current = queued_state[1]
     if current >= MAX_QUEUED_PER_SESSION:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

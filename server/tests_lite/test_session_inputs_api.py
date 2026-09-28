@@ -149,6 +149,7 @@ def _machine_evidence(
     run_id: str,
     now: datetime,
     activity_kind: str = "idle",
+    activity_seq: int = 1,
 ) -> dict:
     """The typed facts the provider adapter reports through the heartbeat.
 
@@ -202,9 +203,9 @@ def _machine_evidence(
                 "subject_key": f"run:{run_id}",
                 "source": "provider_runtime",
                 "source_epoch": run_id,
-                "source_seq": 1,
+                "source_seq": activity_seq,
                 "sequenced": True,
-                "dedupe_key": hashlib.sha256(f"{run_id}:activity:1".encode()).hexdigest(),
+                "dedupe_key": hashlib.sha256(f"{run_id}:activity:{activity_seq}".encode()).hexdigest(),
                 "evidence_hash": canonical_evidence_hash(activity),
             },
             {
@@ -2542,6 +2543,47 @@ def test_intent_steer_turn_ended_returns_structured_409(live_catalog, live_catal
         asyncio.run(_clear_machine_control_registry())
 
 
+def _report_idle_activity(live: LiveCatalog, *, owner_id: int, session_id: str, device_id: str) -> None:
+    """Re-apply one heartbeat whose activity fact reports the target at rest."""
+
+    later = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=30)
+    live.rpc(
+        "machine.heartbeat.apply.v2",
+        {
+            "heartbeat": _machine_heartbeat(device_id=device_id, now=later, raw_json=None),
+            "machine_evidence": _machine_evidence(
+                provider="omp",
+                session_id=session_id,
+                run_id=_live_run_id(live, session_id),
+                now=later,
+                activity_seq=2,
+            ),
+            "managed_leases": [
+                {
+                    "session_id": session_id,
+                    "provider": "omp",
+                    "machine_id": device_id,
+                    "sequence": 2,
+                    "state": "attached",
+                    "bridge_status": "ready",
+                    "thread_subscription_status": "subscribed",
+                    "observed_at": later.isoformat(),
+                    "lease_ttl_ms": 300_000,
+                }
+            ],
+            "managed_leases_present": True,
+            "owner_id": owner_id,
+        },
+    )
+
+
+def _live_run_id(live: LiveCatalog, session_id: str) -> str:
+    from zerg.catalogd.schema import initialize_catalog_schema  # noqa: F401
+
+    snapshot = live.rpc("session.read.v2", {"session_id": session_id})
+    return str(snapshot["facts"]["latest_run"]["id"])
+
+
 def test_mid_turn_send_parks_durably_instead_of_provider_queue(live_catalog, live_catalog_client):  # noqa: F811
     """A SEND to a session that is already running a turn is not dispatched.
 
@@ -2609,6 +2651,57 @@ def test_mid_turn_auto_send_parks_instead_of_dispatching(live_catalog, live_cata
         assert resp.status_code == 200, resp.text
         assert resp.json()["outcome"] == "queued"
         assert websocket.sent == []
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_send_does_not_overtake_an_older_parked_receipt(live_catalog, live_catalog_client):  # noqa: F811
+    """A direct dispatch is refused while an older SEND is still queued.
+
+    SEND is ordered. Parking a message behind a running turn and then letting
+    the next message use the provider's direct path once the target looks free
+    would deliver them in the wrong order, which is what makes a peer reason
+    about state it no longer has.
+    """
+
+    email = "live-order@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="omp",
+        device_id="omp-order-control",
+        activity_kind="running",
+    )
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["omp.send"], device_id="omp-order-control"))
+
+    try:
+        first = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "first", "intent": "queue", "client_request_id": "order-1"},
+            cookies=cookies,
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["outcome"] == "queued"
+
+        # The turn ends; the target now looks free, but the first message has
+        # not been drained yet.
+        _report_idle_activity(live_catalog, owner_id=owner_id, session_id=session_id, device_id="omp-order-control")
+        observed = live_catalog.rpc(
+            "session.input.activity.read.v2",
+            {"owner_id": owner_id, "session_id": session_id},
+        )
+        assert observed["activity_state"] == "quiescent", observed
+
+        second = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "second", "intent": "queue", "client_request_id": "order-2"},
+            cookies=cookies,
+        )
+        assert second.status_code == 200, second.text
+        assert second.json()["outcome"] == "queued"
+        assert websocket.sent == [], "a newer SEND must not overtake an older queued receipt"
     finally:
         asyncio.run(_clear_machine_control_registry())
 
