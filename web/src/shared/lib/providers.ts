@@ -2,7 +2,7 @@
  * Provider display utilities — single source of truth for provider colors,
  * icons, labels, and launch-facing capability claims.
  *
- * Colors reference CSS custom properties from styles/tokens.css.
+ * Colors reference CSS custom properties from app/styles/tokens.css.
  * Add new providers here when onboarding them.
  */
 

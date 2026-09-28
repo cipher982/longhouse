@@ -205,18 +205,18 @@ Hard Codex contract:
 
 Read the relevant path before editing:
 
-- Codex CLI wrapper: `server/zerg/cli/codex.py`
+- Codex launcher (`longhouse codex`): `engine/src/longhouse.rs` (`launch_managed_codex`)
 - Codex bridge: `engine/src/codex_bridge.rs`
 - Codex WS relay: `engine/src/codex_ws_relay.rs`
 - Runtime installer/cleanup: `server/zerg/services/local_runtime_installer.py`
-- Local health/liveness: `server/zerg/services/local_health.py`
-- Managed session state: `engine/src/state/managed_session_state.rs`
+- Local health/liveness: `server/zerg/services/local_health/` (`classifier.py`, per-provider `codex.py`, `claude.py`)
+- Served session state: `server/zerg/services/session_state_contract.py` (wording) and `server/zerg/services/session_state_facts_projector.py`
 - Phase ledger: `engine/src/state/session_phase.rs`
 
 After changes:
 
 - Run focused tests for the touched layer.
-- For Codex launcher or cleanup changes, run `cd server && uv run pytest tests_lite/test_codex_cli.py tests_lite/test_local_runtime_installer.py`.
+- For Codex launcher changes, run `make test-engine`; for runtime install or cleanup changes, run `cd server && uv run pytest tests_lite/test_local_runtime_installer.py`.
 - For bridge/relay changes, run `make test-engine`.
 - For local runtime install changes that affect the dogfood machine, run `make dogfood-refresh`.
 

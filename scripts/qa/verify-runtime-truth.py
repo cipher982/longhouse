@@ -288,7 +288,7 @@ def _canonicalize_phase(raw: str | None) -> str | None:
     phase down to the canonical phase vocabulary.
 
     Local-health labels come from `_phase_display_label` in
-    server/zerg/services/local_health.py. Examples:
+    server/zerg/services/local_health/. Examples:
       - "running Bash" / "running"            -> running
       - "blocked on shell" / "needs permission" -> blocked
       - "needs you"                            -> needs_user

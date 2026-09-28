@@ -37,24 +37,10 @@ Host with authentication disabled.
 
 ## Project layout
 
-```
-Core runtime:
-  server/    Python: FastAPI Runtime Host, CLI, SQLite-backed state
-  web/       TypeScript/React frontend bundled into the Runtime Host
-  engine/    Rust Machine Agent (longhouse-engine) — ships session events
-
-Clients and support:
-  runner/    Rust optional WebSocket command executor
-  ios/       SwiftUI read/steer client
-  desktop/   macOS local setup and health surface
-  scripts/   generation, release, and QA entrypoints
-
-Contracts and docs:
-  schemas/   Source-of-truth contracts for generated code
-  config/    checked-in runtime/provider configuration
-  docs/      public specs and runbooks — see docs/README.md
-  e2e/       end-to-end fixtures and launch-surface coverage
-```
+The [Code map in `ARCHITECTURE.md`](ARCHITECTURE.md#code-map) lists every
+top-level directory, the web and iOS feature folders, the server service
+families, where each generated file comes from, and where to look for common
+topics. Each of `web/`, `ios/`, `engine/` and `scripts/` has a short README.
 
 ## Tests
 

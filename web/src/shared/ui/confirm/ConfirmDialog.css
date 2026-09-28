@@ -1,6 +1,6 @@
 /* ConfirmDialog Styles
    Matches existing modal.css glass/frosted style
-   Uses design tokens from styles/tokens.css
+   Uses design tokens from app/styles/tokens.css
    ==================================================================== */
 
 @layer components {

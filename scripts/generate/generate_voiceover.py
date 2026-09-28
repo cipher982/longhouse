@@ -4,8 +4,8 @@ Generate voiceover audio and output duration manifest.
 RUN THIS BEFORE video recording to drive timing.
 
 Usage:
-    uv run scripts/generate_voiceover.py product-demo
-    uv run scripts/generate_voiceover.py product-demo --scene dashboard-intro
+    uv run scripts/generate/generate_voiceover.py product-demo
+    uv run scripts/generate/generate_voiceover.py product-demo --scene dashboard-intro
 """
 
 import argparse

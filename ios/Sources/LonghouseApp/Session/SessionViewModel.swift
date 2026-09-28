@@ -1878,7 +1878,7 @@ final class SessionViewModel: ObservableObject {
     }
 
     /// Is this viewer still rendering provider work from a window that has
-    /// passed? Mirrors `activityClaimIsStale` in `web/src/lib/activityEvidence.ts`.
+    /// passed? Mirrors `activityClaimIsStale` in `web/src/shared/session/activityEvidence.ts`.
     ///
     /// It asks about states that make a *claim* -- work in flight, or an
     /// explicit stall -- so the server's re-mint (which serves `unknown` with

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The Ember palette, shared with the web (`web/src/styles/tokens.css`).
+/// The Ember palette, shared with the web (`web/src/app/styles/tokens.css`).
 ///
 /// An ash ladder carries lightness (soot page, char cards, umber raised
 /// surfaces, parchment text) and a fire ramp carries meaning: gold is the

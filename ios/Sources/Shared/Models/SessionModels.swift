@@ -33,7 +33,7 @@ struct SessionResumeIntent: Codable, Identifiable, Sendable {
 extension SessionStateFacts {
     /// Is the served activity evidence still inside its window?
     ///
-    /// Mirrors `web/src/lib/activityEvidence.ts`. Expired evidence becomes
+    /// Mirrors `web/src/shared/session/activityEvidence.ts`. Expired evidence becomes
     /// unknown, never idle or finished: absence of evidence is not evidence of
     /// an ending. A missing or unparseable window is not an expired one --
     /// inventing an expiry would hide live activity.

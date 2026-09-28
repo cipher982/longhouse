@@ -1,7 +1,7 @@
 import XCTest
 @testable import Longhouse
 
-/// Mirrors web/src/lib/sessionWorkspace/__tests__/finalAnswer.test.ts. The two
+/// Mirrors web/src/shared/session/model/__tests__/finalAnswer.test.ts. The two
 /// renderings must stay byte-identical: the same session is read on both.
 final class FinalAnswerTests: XCTestCase {
     func testRecognizesSchemaConstrainedReturnTool() {

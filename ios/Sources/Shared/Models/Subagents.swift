@@ -27,7 +27,7 @@ struct SessionSubagentsResponse: Codable, Sendable {
 }
 
 /// Binding worker transcripts to the tool call that spawned them. Mirrors
-/// `web/src/lib/sessionWorkspace/subagents.ts`; the two must agree, because the
+/// `web/src/shared/session/model/subagents.ts`; the two must agree, because the
 /// same session is read on both surfaces.
 ///
 /// Two shapes, two kinds of provider-supplied evidence. A Task/Agent subagent

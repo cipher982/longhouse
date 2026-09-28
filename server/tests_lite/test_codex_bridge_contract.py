@@ -3,7 +3,7 @@ codex-bridge run` must carry exactly the fields `_collect_managed_codex_sessions
 inspects, with the right JSON types.
 
 This catches drift between engine/src/codex_bridge.rs::BridgeStateFile and
-server/zerg/services/local_health.py. Skipped when the engine binary isn't
+server/zerg/services/local_health/. Skipped when the engine binary isn't
 available (bare CI sandboxes).
 """
 

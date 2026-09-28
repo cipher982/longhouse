@@ -5292,7 +5292,7 @@ mod tests {
     }
 
     /// The bytes a browser puts on the wire when DevicesPage navigates to the
-    /// loopback callback (web/src/pages/DevicesPage.tsx): a top-level,
+    /// loopback callback (web/src/features/machines/DevicesPage.tsx): a top-level,
     /// cross-site GET with a full navigation header block. Shape taken from
     /// Playwright WebKit 26 and Chromium 143 against this listener.
     fn browser_navigation(port: u16, query: &str) -> Vec<u8> {

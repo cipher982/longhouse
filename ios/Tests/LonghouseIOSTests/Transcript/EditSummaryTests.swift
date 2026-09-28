@@ -3,7 +3,7 @@ import XCTest
 
 /// Edit-shape detection, diff stats, and the failure preview
 /// (`docs/specs/transcript-action-visibility.md`). Must stay behaviorally
-/// identical to `web/src/lib/__tests__/editSummary.test.ts`.
+/// identical to `web/src/shared/session/model/__tests__/editSummary.test.ts`.
 final class EditSummaryTests: XCTestCase {
     private func editEvent(_ input: [String: JSONValue]) -> SessionEvent {
         SessionEvent(

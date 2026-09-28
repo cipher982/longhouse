@@ -1,7 +1,7 @@
 import XCTest
 @testable import Longhouse
 
-/// Mirrors web/src/lib/sessionWorkspace/__tests__/subagents.test.ts. The two
+/// Mirrors web/src/shared/session/model/__tests__/subagents.test.ts. The two
 /// surfaces read the same session, so the binding must agree case for case.
 final class SubagentsTests: XCTestCase {
     private static let workflowResult = """

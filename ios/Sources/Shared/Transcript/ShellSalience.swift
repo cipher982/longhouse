@@ -1,7 +1,7 @@
 // Content-aware salience for shell tool calls (spec: Change B in
 // docs/specs/timeline-reading-experience.md).
 //
-// Handwritten twin of web/src/lib/sessionWorkspace/shellSalience.ts.
+// Handwritten twin of web/src/shared/session/model/shellSalience.ts.
 // Behavioral parity is enforced by config/shell-salience-fixtures.json,
 // which both test suites run in full. Change the fixtures first, then both
 // implementations. Fail closed at every rule: the classifier detects

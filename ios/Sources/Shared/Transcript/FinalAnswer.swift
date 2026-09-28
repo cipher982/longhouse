@@ -1,7 +1,7 @@
 import Foundation
 
 /// Rendering for final-answer tool calls. Mirrors
-/// `web/src/lib/sessionWorkspace/finalAnswer.ts` — parity is enforced by
+/// `web/src/shared/session/model/finalAnswer.ts` — parity is enforced by
 /// `tests/fixtures/session-projection/structured-output-final-answer.json`.
 ///
 /// A schema-constrained agent (a Claude subagent or workflow step) does not end

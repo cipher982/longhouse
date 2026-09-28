@@ -1,7 +1,7 @@
 import Foundation
 
 /// Edit-shape detection and diff stats, mirroring
-/// `web/src/lib/sessionWorkspace/editSummary.ts`. Both clients must produce
+/// `web/src/shared/session/model/editSummary.ts`. Both clients must produce
 /// byte-identical collapsed summaries against the shared fixture corpus.
 ///
 /// See `docs/specs/transcript-action-visibility.md`.
