@@ -101,7 +101,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
-_STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 300
 
 
@@ -2013,6 +2012,61 @@ async def _finish_catalog_input_receipt(
         raise HTTPException(status_code=503, detail="Live input catalog could not finish the receipt") from exc
 
 
+async def _park_catalog_session_input(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    client_request_id: str,
+) -> SessionInputResponse:
+    """Record a durable `queued` receipt and let delivery happen at the boundary.
+
+    This is the only way a SEND reaches a target that is already running a
+    turn. Handing the text to the provider instead parks it in whatever
+    volatile queue that provider keeps for mid-turn input, where it can be
+    discarded without ever reaching the model while the receipt reports a
+    delivery that happened.
+
+    The recovery loop owns delivery from here (it polls queued receipts every
+    few seconds and wakes on the turn-terminal observation), so parking does
+    not depend on this request staying alive.
+    """
+
+    receipt_id = await _record_live_input_receipt_for_body(
+        source_session=source_session,
+        owner_id=owner_id,
+        body=body,
+        client_request_id=client_request_id,
+        intent=body.intent,
+        status_value=INPUT_STATUS_QUEUED,
+    )
+    if receipt_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not persist this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        )
+    return SessionInputResponse(
+        outcome="queued",
+        input_id=None,
+        live_input_id=receipt_id,
+        client_request_id=client_request_id,
+        intent=body.intent,
+        queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+    )
+
+
+def _provider_supports_steer(session) -> bool:
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider(getattr(session, "provider", None))
+    return bool(contract is not None and contract.steer_active_turn)
+
+
 async def _create_catalog_session_input_response(
     *,
     source_session,
@@ -2193,12 +2247,45 @@ async def _create_catalog_session_input_response(
                 ),
             )
 
-    if str(getattr(source_session, "provider", "") or "").strip().lower() == "pi" and body.intent in {
-        INPUT_INTENT_AUTO,
-        INPUT_INTENT_QUEUE,
-    }:
-        # Pi's native send operation owns the busy-turn queue. Do not take the
-        # Longhouse turn lock or park an auto/queue intent in a second queue.
+    from zerg.services.live_control_catalog import SEND_DISPATCHABLE_ACTIVITY_STATES
+    from zerg.services.live_control_catalog import STEERABLE_ACTIVITY_STATES
+    from zerg.services.live_control_catalog import live_control_session_activity_state
+
+    activity_state = await live_control_session_activity_state(source_session.id, owner_id=owner_id)
+    at_turn_boundary = activity_state in SEND_DISPATCHABLE_ACTIVITY_STATES
+    running_turn = activity_state in STEERABLE_ACTIVITY_STATES
+
+    if body.intent == INPUT_INTENT_STEER and _provider_supports_steer(source_session) and not running_turn:
+        # STEER means "enter the turn that is running". Longhouse must not
+        # quietly turn it into a new turn: that is what SEND is for, and the
+        # difference decides which turn the answer belongs to. Anything other
+        # than an observed running turn is refused, including no observation at
+        # all. A provider that cannot steer is refused later by its own
+        # contract, which gives the more useful answer.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_input_error_detail(
+                "steer_requires_active_turn",
+                "This session has no active turn to steer; nothing was sent.",
+                disposition="rejected",
+                client_request_id=client_request_id,
+            )
+            | {"retry_with_intent": INPUT_INTENT_QUEUE},
+        )
+
+    # A SEND is dispatched only at an observed turn boundary, because a
+    # provider answers a mid-turn send from a queue it holds in memory. `auto`
+    # and `queue` differ only in whether that boundary is used straight away.
+    park_for_turn_boundary = body.intent == INPUT_INTENT_AUTO and not at_turn_boundary
+
+    if (
+        str(getattr(source_session, "provider", "") or "").strip().lower() == "pi"
+        and body.intent in {INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE}
+        and at_turn_boundary
+    ):
+        # Pi's native send owns the turn it starts, so it is reached only at an
+        # observed turn boundary. A mid-turn send would come back from Pi's
+        # volatile busy-turn queue, not from a durable one.
         from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
         from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 
@@ -2276,13 +2363,14 @@ async def _create_catalog_session_input_response(
             queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
         )
 
-    if str(getattr(source_session, "provider", "") or "").strip().lower() == "omp" and body.intent in {
-        INPUT_INTENT_AUTO,
-        INPUT_INTENT_QUEUE,
-    }:
-        # OMP owns follow-up delivery while its native turn is active. The Helm
-        # extension selects normal versus deliverAs=followUp from ctx.isIdle(),
-        # so do not serialize this provider through Longhouse's turn lock.
+    if (
+        str(getattr(source_session, "provider", "") or "").strip().lower() == "omp"
+        and body.intent in {INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE}
+        and at_turn_boundary
+    ):
+        # Reached only at an observed turn boundary. The OMP extension answers a
+        # mid-turn send from its volatile follow-up queue, which is not a
+        # delivery, so everything else takes the durable receipt path below.
         from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
         from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 
@@ -2408,32 +2496,12 @@ async def _create_catalog_session_input_response(
         )
 
     delivery_request_id = uuid.uuid4().hex
-    if body.intent == INPUT_INTENT_QUEUE:
-        receipt_id = await _record_live_input_receipt_for_body(
+    if body.intent == INPUT_INTENT_QUEUE or park_for_turn_boundary:
+        return await _park_catalog_session_input(
             source_session=source_session,
             owner_id=owner_id,
             body=body,
             client_request_id=client_request_id,
-            intent=INPUT_INTENT_QUEUE,
-            status_value=INPUT_STATUS_QUEUED,
-        )
-        if receipt_id is None:
-            raise HTTPException(
-                status_code=503,
-                detail=_input_error_detail(
-                    "input_receipt_unknown",
-                    "The server could not persist this operation; retry with the same client_request_id.",
-                    disposition="unknown",
-                    client_request_id=client_request_id,
-                ),
-            )
-        return SessionInputResponse(
-            outcome="queued",
-            input_id=None,
-            live_input_id=receipt_id,
-            client_request_id=client_request_id,
-            intent=INPUT_INTENT_QUEUE,
-            queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
         )
 
     if body.intent == INPUT_INTENT_AUTO:
@@ -2444,31 +2512,11 @@ async def _create_catalog_session_input_response(
             ttl_seconds=300,
         )
         if not lock:
-            receipt_id = await _record_live_input_receipt_for_body(
+            return await _park_catalog_session_input(
                 source_session=source_session,
                 owner_id=owner_id,
                 body=body,
                 client_request_id=client_request_id,
-                intent=INPUT_INTENT_AUTO,
-                status_value=INPUT_STATUS_QUEUED,
-            )
-            if receipt_id is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=_input_error_detail(
-                        "input_receipt_unknown",
-                        "The server could not persist this operation; retry with the same client_request_id.",
-                        disposition="unknown",
-                        client_request_id=client_request_id,
-                    ),
-                )
-            return SessionInputResponse(
-                outcome="queued",
-                input_id=None,
-                live_input_id=receipt_id,
-                client_request_id=client_request_id,
-                intent=INPUT_INTENT_AUTO,
-                queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
             )
     else:
         lock_scope_id = session_lock_scope_id(source_session.id)

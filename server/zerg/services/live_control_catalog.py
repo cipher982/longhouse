@@ -30,6 +30,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cyc
     from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
 
 logger = logging.getLogger(__name__)
+# The drain's predicate: exactly the states in which `claim_queued_input` will
+# dispatch an input. Anything else — including a session the catalog cannot
+# project at all — is not a turn boundary, and SEND parks rather than
+# dispatching into a turn whose state is unknown. Whether a *present* activity
+# observation is still fresh is the head reducer's decision, and this gate
+# inherits it rather than second-guessing it.
+SEND_DISPATCHABLE_ACTIVITY_STATES = frozenset({"quiescent", "blocked"})
+# A turn that STEER can enter, the same two states `send_affordance` treats as
+# "this target is executing", so the composer's steer choice and the router's
+# delivery gate cannot disagree.
+STEERABLE_ACTIVITY_STATES = frozenset({"thinking", "executing"})
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
 _CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor", "antigravity", "pi", "omp"})
 # The live-control capabilities this module can authorize, and the reducer
@@ -456,6 +467,44 @@ def live_session_input_block_reason(db: Session, session: LiveControlSession) ->
 def live_session_closed_for_input(db: Session, session: LiveControlSession) -> bool:
     """Compatibility predicate for whether the current run rejects new input."""
     return live_session_input_block_reason(db, session) is not None
+
+
+async def live_control_session_activity_state(session_id: UUID | str, *, owner_id: int) -> str | None:
+    """The served activity state for one session, or None when unreadable.
+
+    Read from catalogd's projection, which is the same answer the queue drain
+    uses to decide whether an input may be dispatched, so the router and the
+    drain cannot disagree about whether a turn is running.
+
+    Both input semantics need it. SEND is dispatched only at an observed turn
+    boundary: the providers answer a mid-turn send by parking the text in
+    whatever volatile queue they keep for mid-turn input, which is not durable
+    and looks exactly like a completed delivery. STEER is defined as entering a
+    running turn, so anything else is refused rather than silently upgraded to
+    a new turn.
+
+    `None` means the catalog could not answer. Callers must treat that as
+    unknown, never as idle.
+    """
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        return None
+    try:
+        result = await catalogd.call(
+            "session.input.activity.read.v2",
+            {"session_id": str(session_id), "owner_id": int(owner_id)},
+            timeout_seconds=1.0,
+        )
+    except Exception:
+        logger.warning("Could not read served activity for session %s", session_id, exc_info=True)
+        return None
+    if not isinstance(result, dict) or result.get("found") is not True:
+        return None
+    state = result.get("activity_state")
+    return str(state) if isinstance(state, str) and state else None
 
 
 def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bool:

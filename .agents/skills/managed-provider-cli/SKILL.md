@@ -17,6 +17,30 @@ sessions.
 - **Machine Agent**: `longhouse-engine`; ships local events, owns runtime hooks/state, and may run provider-specific bridge processes.
 - **Runtime Host**: FastAPI/web/database product runtime. It stores session state and exposes `/api/agents/*`.
 
+## Input semantics: SEND and STEER
+
+Two semantics exist and they are not interchangeable. The sender chooses; the
+target's phase never decides whether a message survives, only when it lands.
+`specs/peer-input-delivery-contract.md` (control-plane) owns the full story.
+
+| semantic | intents | delivery | report |
+|---|---|---|---|
+| SEND | `queue`, `auto` | durable and ordered; dispatched only at a turn boundary | receipt `queued` → `delivered` when the provider accepted it |
+| STEER | `steer` | enters the turn running now; provider-bounded | receipt `delivered` on ack, or `409 steer_requires_active_turn` when nothing is running |
+
+- A SEND to a mid-turn target parks a durable receipt and the turn-boundary drain
+  delivers it. The provider's own mid-turn queue (OMP/Pi `deliverAs: "followUp"`)
+  is in-process memory: a message parked there dies with the turn and can never
+  be reported as delivered, so Longhouse does not route to it.
+- `delivered` on a receipt means the provider accepted the input. It is not
+  evidence the model has seen it; read the target transcript
+  (`longhouse-server tail <id>`) to confirm.
+- Peer verbs: `longhouse-server continue <session_id> <text>` is a durable SEND,
+  `continue --steer` enters a running turn, and `longhouse-server send` leaves a
+  durable attributed message. Steer is best effort and can change what the
+  target's turn does — use it when the turn must change course, not to be
+  polite.
+
 ## Provider Paths
 
 ### Claude
@@ -24,8 +48,10 @@ sessions.
 - `longhouse claude` relies on Claude's native channel/MCP/stdin control path.
 - Claude channel send, interrupt, and active-turn steer are first-class local
   control operations. Steer uses `claude-channel send --meta intent=steer` and
-  Runtime Host must gate explicit `intent=steer` on a fresh active runtime
-  phase; idle channel injection is not steer.
+  the Runtime Host gates explicit `intent=steer` on a fresh active runtime
+  phase (`session.input.activity.read.v2`, the same projection the queue drain
+  uses); idle channel injection is not steer, and the request is refused with
+  `409 steer_requires_active_turn` and `retry_with_intent: queue`.
 - Never SIGINT a Claude Helm process: Claude Code treats SIGINT as shutdown and
   the session ends. Interrupt records `<session>.interrupt.json` beside the
   channel state, terminates the foreground Bash tool's process group, and the

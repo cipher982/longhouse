@@ -628,6 +628,8 @@ class CatalogDaemon:
             return await self._list_queued_input_sessions(request)
         if request.method == "session.input.claim.v2":
             return await self._claim_queued_input(request)
+        if request.method == "session.input.activity.read.v2":
+            return await self._read_session_input_activity(request)
         if request.method == "session.input.finish.v2":
             return await self._finish_queued_input(request)
         if request.method == "session.input.attachment.create.v2":
@@ -2243,6 +2245,23 @@ class CatalogDaemon:
             self._store.claim_queued_input,
             session_id=session_id,
             delivery_request_id=delivery_request_id,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_session_input_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "owner_id"}:
+            return self._error(request, "invalid_request", "session.input.activity.read.v2 requires session_id and owner_id")
+        owner_id = request.params["owner_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        session_id = request.params["session_id"]
+        if not _is_canonical_uuid(session_id):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.read_session_activity,
+            session_id=session_id,
+            owner_id=owner_id,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

@@ -427,7 +427,16 @@ fn coordination_tools() -> Vec<Value> {
         ),
         tool(
             "send",
-            "Send durable attributed input to another managed session.",
+            "Send durable attributed input to another managed session. Delivery is \
+             durable and ordered, not immediate: the target takes the message at its \
+             next turn boundary, so a target that is mid-turn receives it only when its \
+             current turn ends. The tool never interrupts a running turn. Confirm the \
+             model actually received it by reading the target with \
+             tail(session_id, roles=\"user,assistant\"); a delivered receipt means the \
+             provider accepted the input, not that the model has seen it. To change \
+             what a running turn does right now, use the Runtime Host surface \
+             (`longhouse-server continue --steer <session_id> \"<text>\"`), which is \
+             best effort and refuses a target that is not mid-turn.",
             json!({"session_id":{"type":"string"},"text":{"type":"string"},"client_request_id":{"type":"string"}}),
         ),
         tool(

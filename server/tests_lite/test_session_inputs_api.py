@@ -142,14 +142,23 @@ def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None = 
     }
 
 
-def _machine_evidence(*, provider: str, session_id: str, run_id: str, now: datetime) -> dict:
+def _machine_evidence(
+    *,
+    provider: str,
+    session_id: str,
+    run_id: str,
+    now: datetime,
+    activity_kind: str = "idle",
+) -> dict:
     """The typed facts the provider adapter reports through the heartbeat.
 
     The control fact binds an adapter connection identity to the catalog
     connection; without it ``control.command.prepare.v2`` refuses every command
     with ``identity_unbound``, so a session can be attached and still
     uncontrollable. The activity fact is what makes the session quiescent, and
-    a queue drain will not claim a receipt for a session that is mid-turn.
+    a queue drain will not claim a receipt for a session that is mid-turn; pass
+    ``activity_kind="running"`` to seed a session that is mid-turn, which is the
+    only state STEER accepts.
     """
 
     from zerg.machine_evidence import canonical_evidence_hash
@@ -161,9 +170,9 @@ def _machine_evidence(*, provider: str, session_id: str, run_id: str, now: datet
         "provider": provider,
         "session_id": session_id,
         "run_id": run_id,
-        "kind": "idle",
-        "raw_kind": "idle",
-        "tool_name": None,
+        "kind": activity_kind,
+        "raw_kind": activity_kind,
+        "tool_name": "Bash" if activity_kind == "running" else None,
         "source": "provider_runtime",
         "observed_at": now.isoformat(),
         "valid_until": (now + timedelta(minutes=5)).isoformat(),
@@ -220,6 +229,7 @@ def _seed_live_catalog_session(
     provider: str = LIVE_CATALOG_PROVIDER,
     device_id: str = LIVE_CATALOG_DEVICE_ID,
     launch_surface: str = "cli",
+    activity_kind: str = "idle",
 ) -> str:
     """Launch one Helm session in the live catalog and bring its control online.
 
@@ -293,6 +303,7 @@ def _seed_live_catalog_session(
                 session_id=session_id,
                 run_id=run_id,
                 now=now,
+                activity_kind=activity_kind,
             ),
             "managed_leases": [
                 {
@@ -2373,7 +2384,9 @@ def test_intent_steer_acks_from_live_receipt_without_archive_row(live_catalog, l
     email = "live-steer@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
-    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    # A steer only exists inside a running turn: an idle session must be
+    # refused rather than silently upgraded to a new turn.
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, activity_kind="running")
     # Steer routes on the steer capability alone; the send capability is not
     # advertised here so a steer that silently fell back to send would fail.
     websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.steer"], device_id=LIVE_CATALOG_DEVICE_ID))
@@ -2423,6 +2436,7 @@ def test_codex_steer_intent_routes_through_machine_control(live_catalog, live_ca
         owner_id=owner_id,
         provider="codex",
         device_id="codex-machine-control",
+        activity_kind="running",
     )
     websocket = asyncio.run(
         _register_fake_machine_control(
@@ -2470,14 +2484,15 @@ def test_intent_steer_turn_ended_returns_structured_409(live_catalog, live_catal
     email = "live-turn-ended@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    # The session still looks mid-turn to the projection; the engine answers
+    # the steer command the way it answers one whose turn ended in the race.
     session_id = _seed_live_catalog_session(
         live_catalog,
         owner_id=owner_id,
         provider="codex",
         device_id="codex-machine-control",
+        activity_kind="running",
     )
-    # The engine answers the steer command the way it answers one that arrived
-    # after the turn already ended.
     websocket = _TurnEndedMachineWebSocket()
     asyncio.run(
         get_machine_control_channel_registry().register(
@@ -2525,6 +2540,149 @@ def test_intent_steer_turn_ended_returns_structured_409(live_catalog, live_catal
         assert replay_detail["live_input_id"] == receipt["id"]
     finally:
         asyncio.run(_clear_machine_control_registry())
+
+
+def test_mid_turn_send_parks_durably_instead_of_provider_queue(live_catalog, live_catalog_client):  # noqa: F811
+    """A SEND to a session that is already running a turn is not dispatched.
+
+    The provider answers a mid-turn send from a queue it holds in memory, so a
+    receipt marked delivered for it describes an acknowledgement, not a
+    delivery: the text dies with the provider and the model never sees it. The
+    durable receipt is the only honest destination, and the turn-boundary drain
+    owns it from there.
+    """
+
+    email = "live-omp-midturn@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="omp",
+        device_id="omp-machine-control",
+        activity_kind="running",
+    )
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            supports=["omp.send"],
+            device_id="omp-machine-control",
+        )
+    )
+
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "land it", "intent": "queue", "client_request_id": "omp-midturn-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["outcome"] == "queued"
+        assert websocket.sent == [], "a mid-turn send must not reach the provider's volatile queue"
+
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="omp-midturn-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_QUEUED
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_mid_turn_auto_send_parks_instead_of_dispatching(live_catalog, live_catalog_client):  # noqa: F811
+    """`auto` chooses promptness, never durability: a running turn still parks."""
+
+    email = "live-auto-midturn@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, activity_kind="running")
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "run this", "intent": "auto", "client_request_id": "auto-midturn-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["outcome"] == "queued"
+        assert websocket.sent == []
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_idle_omp_send_still_reaches_the_provider_directly(live_catalog, live_catalog_client):  # noqa: F811
+    """A target at a turn boundary keeps the provider's prompt send path."""
+
+    email = "live-omp-idle@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="omp", device_id="omp-idle-control")
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["omp.send"], device_id="omp-idle-control"))
+
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "start work", "intent": "queue", "client_request_id": "omp-idle-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["outcome"] == "sent"
+        assert [frame["command_type"] for frame in websocket.sent] == ["session.send_text"]
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_steer_intent_requires_an_active_turn(live_catalog, live_catalog_client):  # noqa: F811
+    """Steering is entering a running turn; an idle target must not become one."""
+
+    email = "live-steer-idle@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.steer"], device_id=LIVE_CATALOG_DEVICE_ID))
+
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "redirect", "intent": "steer", "client_request_id": "steer-idle-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "steer_requires_active_turn"
+        # The caller is told how to get the message there instead of the
+        # server guessing on its behalf.
+        assert detail["retry_with_intent"] == "queue"
+        assert websocket.sent == []
+        rejected = live_catalog.rpc(
+            "session.input.receipt.read.v2",
+            {"owner_id": owner_id, "session_id": session_id, "client_request_id": "steer-idle-1"},
+        )
+        assert rejected["found"] is False
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_input_activity_read_reports_the_drain_predicate(live_catalog):  # noqa: F811
+    """catalogd is the one authority on whether a turn is running."""
+
+    owner_id = live_catalog.create_user("live-activity-read@test.local")
+    idle_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    busy_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, activity_kind="running", device_id="busy-control")
+    other_owner_id = live_catalog.create_user("live-activity-other@test.local")
+
+    def activity(session_id: str, requester_id: int) -> dict:
+        return live_catalog.rpc(
+            "session.input.activity.read.v2",
+            {"owner_id": requester_id, "session_id": session_id},
+        )
+
+    assert activity(idle_id, owner_id)["activity_state"] == "quiescent"
+    assert activity(busy_id, owner_id)["activity_state"] == "executing"
+    assert activity(idle_id, other_owner_id)["found"] is False
 
 
 def test_capability_includes_can_queue_next_input():

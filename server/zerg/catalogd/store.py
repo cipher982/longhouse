@@ -6157,6 +6157,80 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
+    def _served_session_projection(self, connection: Connection, session: Any, *, observed_at: datetime) -> Any | None:
+        """Project one session's served state from its fact heads.
+
+        `claim_queued_input` and the input router must agree on one answer to
+        "is a turn running right now"; both read it here rather than each
+        deriving it. Returns `None` when the session has no projectable facts.
+        """
+
+        from zerg.catalogd.fact_reducer import read_session_fact_heads
+        from zerg.services.managed_provider_contracts import contract_for_provider
+        from zerg.services.session_state_contract import SessionHostFacts
+        from zerg.services.session_state_contract import SessionTranscriptFacts
+        from zerg.services.session_state_facts_projector import project_served_session_state_facts
+
+        session_id = str(session.id)
+        session_facts = _assemble_session_facts(
+            connection,
+            session_ids=[session_id],
+            observed_at=observed_at,
+            compact=True,
+        )
+        if not session_facts:
+            return None
+        fact_commit_seq, heads = read_session_fact_heads(connection, session_id=session_id)
+        contract = contract_for_provider(session.provider)
+        supported_operations = {
+            operation
+            for operation in ("send_input", "interrupt", "terminate", "tail_output", "resume")
+            if contract is not None and bool(getattr(contract, "can_resume" if operation == "resume" else operation, False))
+        }
+        return project_served_session_state_facts(
+            session_id=session_id,
+            commit_seq=fact_commit_seq,
+            catalog_facts=session_facts[0],
+            heads=heads,
+            supported_operations=supported_operations,
+            pending_interaction=None,
+            transcript=SessionTranscriptFacts(convergence="unknown"),
+            host=SessionHostFacts(state="unknown"),
+            now=observed_at,
+        )
+
+    def read_session_activity(self, *, session_id: str, owner_id: int | None = None) -> dict[str, Any]:
+        """Report whether the served projection sees a turn running right now.
+
+        Delivering input uses this: a SEND is not dispatched into a running
+        turn, because the provider's mid-turn queue is not durable, and STEER
+        is only meaningful against one.
+        """
+
+        from zerg.services.live_control_catalog import load_live_control_session
+
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                if owner_id is not None and not self._session_explicitly_belongs_to_owner(
+                    connection,
+                    session_id=session_id,
+                    owner_id=owner_id,
+                ):
+                    return {"found": False, "observed_at": observed_at.isoformat(), "activity_state": None}
+                session = load_live_control_session(orm, session_id)
+                if session is None:
+                    return {"found": False, "observed_at": observed_at.isoformat(), "activity_state": None}
+                projection = self._served_session_projection(connection, session, observed_at=observed_at)
+            finally:
+                orm.close()
+            return {
+                "found": True,
+                "observed_at": observed_at.isoformat(),
+                "activity_state": None if projection is None else projection.activity.state,
+            }
+
     def claim_queued_input(
         self,
         *,
@@ -6165,16 +6239,11 @@ class CatalogStore:
     ) -> dict[str, Any]:
         """Check drainability and claim exactly one queued input receipt."""
 
-        from zerg.catalogd.fact_reducer import read_session_fact_heads
         from zerg.services.live_control_catalog import load_live_control_session
         from zerg.services.live_session_inputs import MAX_DELIVERY_AGE
         from zerg.services.live_session_inputs import _snapshot
         from zerg.services.live_session_inputs import claim_next_live_queued_receipt
         from zerg.services.live_session_inputs import expire_stale_live_receipts
-        from zerg.services.managed_provider_contracts import contract_for_provider
-        from zerg.services.session_state_contract import SessionHostFacts
-        from zerg.services.session_state_contract import SessionTranscriptFacts
-        from zerg.services.session_state_facts_projector import project_served_session_state_facts
 
         observed_at = datetime.now(UTC)
         with _write_transaction(self.engine) as connection:
@@ -6215,34 +6284,7 @@ class CatalogStore:
                         "reason": "session_not_found",
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                session_facts = _assemble_session_facts(
-                    connection,
-                    session_ids=[session_id],
-                    observed_at=observed_at,
-                    compact=True,
-                )
-                fact_commit_seq, heads = read_session_fact_heads(connection, session_id=session_id)
-                contract = contract_for_provider(session.provider)
-                supported_operations = {
-                    operation
-                    for operation in ("send_input", "interrupt", "terminate", "tail_output", "resume")
-                    if contract is not None and bool(getattr(contract, "can_resume" if operation == "resume" else operation, False))
-                }
-                projection = (
-                    project_served_session_state_facts(
-                        session_id=session_id,
-                        commit_seq=fact_commit_seq,
-                        catalog_facts=session_facts[0],
-                        heads=heads,
-                        supported_operations=supported_operations,
-                        pending_interaction=None,
-                        transcript=SessionTranscriptFacts(convergence="unknown"),
-                        host=SessionHostFacts(state="unknown"),
-                        now=observed_at,
-                    )
-                    if session_facts
-                    else None
-                )
+                projection = self._served_session_projection(connection, session, observed_at=observed_at)
                 if projection is None or projection.activity.state not in {"quiescent", "blocked"}:
                     orm.rollback()
                     return {
