@@ -122,8 +122,8 @@ REGISTRATION = ProducerRegistration(
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
     scenario_revision=6,
     assertion_cells=(
+        # No provider is interrupt_unsupported since Codex gained turn/interrupt.
         (ASSERTION_ID, SUPPORTED_VARIANT),
-        (ASSERTION_ID, UNSUPPORTED_VARIANT),
         (STEER_ASSERTION_ID, None),
     ),
     providers=PROVIDERS,
