@@ -220,6 +220,46 @@ def test_continue_session_retries_on_429(monkeypatch, capsys):
     assert "Accepted" not in printed
 
 
+def test_continue_session_reports_its_key_for_an_ambiguous_api_failure(monkeypatch, capsys):
+    """502/503 means the input may be committed; the key resolves it."""
+
+    session_id = str(uuid4())
+    monkeypatch.setattr("zerg.cli.sessions._load_api_credentials", lambda **kwargs: ("http://test", "zdt_tok"))
+
+    def mock_post(url, headers=None, json=None):
+        return httpx.Response(
+            502,
+            headers={"Content-Type": "application/json"},
+            content=b'{"detail":{"error_code":"delivery_unknown","message":"provider outcome is unknown"}}',
+            request=httpx.Request("POST", url),
+        )
+
+    client_mock = MagicMock()
+    client_mock.__enter__.return_value = client_mock
+    client_mock.post = mock_post
+
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client_mock)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        continue_session(
+            session_id=session_id,
+            message="maybe delivered",
+            steer=False,
+            output_json=False,
+            client_request_id="stable-key-2",
+            current_session_id=None,
+            url=None,
+            token=None,
+            claude_dir=None,
+        )
+
+    assert excinfo.value.exit_code == 1
+    printed = capsys.readouterr().out
+    assert "Delivery not confirmed" in printed
+    assert "stable-key-2" in printed
+    assert "--client-request-id" in printed
+
+
 def test_continue_session_reports_its_idempotency_key_on_timeout(monkeypatch, capsys):
     """A timed-out send may have been accepted; the key makes retrying a resolve."""
 

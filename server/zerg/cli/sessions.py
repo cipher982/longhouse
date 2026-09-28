@@ -621,7 +621,14 @@ def continue_session(
                 typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
                 raise typer.Exit(code=1)
             if response.status_code not in (200, 201):
-                raise typer.Exit(code=_report_continue_failure(response, session_id=resolved_session_id, steer=steer))
+                raise typer.Exit(
+                    code=_report_continue_failure(
+                        response,
+                        session_id=resolved_session_id,
+                        steer=steer,
+                        client_request_id=resolved_client_request_id,
+                    )
+                )
 
             body = response.json()
     except httpx.ConnectError:
@@ -642,7 +649,13 @@ def continue_session(
     _report_continue_outcome(body, session_id=resolved_session_id, steer=steer)
 
 
-def _report_continue_failure(response: httpx.Response, *, session_id: str, steer: bool) -> int:
+def _report_continue_failure(
+    response: httpx.Response,
+    *,
+    session_id: str,
+    steer: bool,
+    client_request_id: str,
+) -> int:
     """Explain what the server refused, in the sender's terms."""
 
     detail = response.json().get("detail") if _looks_like_json(response) else None
@@ -650,6 +663,14 @@ def _report_continue_failure(response: httpx.Response, *, session_id: str, steer
     message = detail.get("message") if isinstance(detail, dict) else None
     if not isinstance(message, str) or not message:
         message = detail if isinstance(detail, str) and detail else response.text[:200]
+
+    if response.status_code in {502, 503, 504} or code in {"delivery_unknown", "input_receipt_unknown"}:
+        # The request may have been committed before the answer was lost. The
+        # key is what lets the sender resolve that instead of sending twice.
+        typer.secho(f"Delivery not confirmed: {message}", fg=typer.colors.YELLOW, bold=True)
+        typer.echo(f"client_request_id: {client_request_id}")
+        typer.echo("It may already have been delivered. Re-run with --client-request-id set to that value.")
+        return 1
 
     if code in {"steer_requires_active_turn", "turn_ended"}:
         typer.secho(f"Not sent: {message}", fg=typer.colors.YELLOW, bold=True)
