@@ -59,9 +59,10 @@ extension SessionDetail {
         return nil
     }
 
-    /// The newest thing the agent is doing, in its own words: the running
-    /// tool's command, or the last line of provisional text. Only while
-    /// executing — an idle session has nothing live to say.
+    /// The newest thing the agent is doing: the running tool's command or its
+    /// latest output line. Only while executing — an idle session has nothing
+    /// live to say. The agent's own reply is not activity: it is already in
+    /// the transcript, and repeating it under "Thinking" read as a second copy.
     var runtimeTailLine: String? {
         guard isSessionExecuting, let preview = transcriptPreview, preview.isStale != true else { return nil }
         if let toolName = preview.toolName, !toolName.isEmpty {
@@ -74,8 +75,7 @@ extension SessionDetail {
             }
             return nil
         }
-        guard preview.isProvisional else { return nil }
-        return Self.lastMeaningfulLine(preview.text)
+        return nil
     }
 
     private static func firstMeaningfulLine(_ text: String) -> String {
