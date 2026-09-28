@@ -171,7 +171,7 @@ ios-project: ## Regenerate the local Xcode project and freshness stamp
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 	@mkdir -p $(dir $(IOS_PACKAGE_RESOLVED))
 	@cp ios/XcodeHarness/Package.resolved $(IOS_PACKAGE_RESOLVED)
-	@shasum -a 256 ios/XcodeHarness/project.yml | cut -d ' ' -f 1 > ios/XcodeHarness/.project-source-sha256
+	@python3 scripts/build/ios_project_stamp.py > ios/XcodeHarness/.project-source-sha256
 
 ios-package-update: ## Re-resolve iOS Swift packages after changing a pin in project.yml, then commit Package.resolved
 	@$(MAKE) ios-project

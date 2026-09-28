@@ -17,11 +17,7 @@ final class ShellSalienceTests: XCTestCase {
     }
 
     private func loadCases() throws -> [FixtureCase] {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let fixtureURL = RepoRoot.url()
             .appendingPathComponent("config/shell-salience-fixtures.json")
         let data = try Data(contentsOf: fixtureURL)
         return try JSONDecoder().decode(FixtureFile.self, from: data).cases

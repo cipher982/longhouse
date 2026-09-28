@@ -135,12 +135,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
     }
 
     private func loadFixture(_ name: String) throws -> Fixture {
-        let fileURL = URL(fileURLWithPath: #filePath)
-        let fixtureURL = fileURL
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let fixtureURL = RepoRoot.url()
             .appendingPathComponent("tests/fixtures/session-projection")
             .appendingPathComponent(name)
         let data = try Data(contentsOf: fixtureURL)
@@ -148,12 +143,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
     }
 
     private func loadTranscriptPreviewFixture() throws -> TranscriptPreviewFixture {
-        let fileURL = URL(fileURLWithPath: #filePath)
-        let fixtureURL = fileURL
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let fixtureURL = RepoRoot.url()
             .appendingPathComponent("tests/fixtures/session-transcript-preview/rendering.json")
         let data = try Data(contentsOf: fixtureURL)
         return try JSONDecoder.snakeCase.decode(TranscriptPreviewFixture.self, from: data)

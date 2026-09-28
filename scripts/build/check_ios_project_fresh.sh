@@ -14,8 +14,8 @@ fi
 python3 - "$ROOT_DIR" "$PROJECT_FILE" "$PROJECT_SPEC" "$PROJECT_STAMP" <<'PY'
 from __future__ import annotations
 
-import hashlib
 import re
+import runpy
 import sys
 from collections import Counter
 from pathlib import Path
@@ -52,12 +52,16 @@ missing_source_builds = sorted(
     for name in [path.name]
     if source_build_files[name] < (2 if "Sources/Shared" in str(path) else 1)
 )
-expected_hash = hashlib.sha256(project_spec.read_bytes()).hexdigest()
+# Path-aware: project.yml plus every Swift and bundled-resource path. A moved
+# file keeps its basename, so the reference counts above cannot see a move;
+# the stamp can.
+compute_stamp = runpy.run_path(str(root / "scripts" / "build" / "ios_project_stamp.py"))["project_stamp"]
+expected_hash = compute_stamp(root)
 actual_hash = project_stamp.read_text().strip()
 
 problems = []
 if expected_hash != actual_hash:
-    problems.append("project.yml changed since the last project generation")
+    problems.append("project.yml or the iOS source/resource layout changed since the last project generation")
 if missing_references:
     problems.append("missing project file references: " + ", ".join(missing_references))
 if extra_references:

@@ -84,11 +84,7 @@ final class TranscriptPayloadGoldenTests: XCTestCase {
     // MARK: - Fixture loading (mirrors SharedProjectionFixtureTests)
 
     private func fixturesRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // LonghouseIOSTests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // ios
-            .deletingLastPathComponent()   // repo root
+        RepoRoot.url()
             .appendingPathComponent("tests/fixtures")
     }
 

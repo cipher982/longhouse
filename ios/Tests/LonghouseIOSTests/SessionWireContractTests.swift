@@ -9,11 +9,7 @@ import Testing
 /// made every managed Helm session render as a read-only import.
 struct SessionWireContractTests {
     private func loadFixtureData(_ name: String) throws -> Data {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let fixtureURL = RepoRoot.url()
             .appendingPathComponent("tests/fixtures/session-detail")
             .appendingPathComponent(name)
         return try Data(contentsOf: fixtureURL)
