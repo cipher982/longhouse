@@ -963,3 +963,19 @@ def test_steer_cell_requires_every_steer_fact_and_stays_out_of_the_turn_start_ga
     assert "steer" not in " ".join(lifecycle.OBSERVED_ACTIVITY)
     assert lifecycle.STEER_ASSERTION_ID != lifecycle.ASSERTION_ID
     assert (lifecycle.STEER_ASSERTION_ID, None) in lifecycle.REGISTRATION.assertion_cells
+
+
+def test_steer_cell_is_its_own_factory_invocation():
+    # The factory runs one execution per cell and passes its execution key as
+    # --variant, so each steer cell needs a key the producer's parser accepts.
+    from zerg.qa import omp_console_producer
+    from zerg.qa import pi_console_tool_producer
+
+    base = ["--model", "m", "--provider", "codex"]
+    steer = lifecycle.STEER_VARIANTS["codex"]
+    assert steer not in (lifecycle.SUPPORTED_VARIANT, lifecycle.UNSUPPORTED_VARIANT)
+    assert lifecycle._parser().parse_args([*base, "--variant", steer]).variant == steer
+    assert set(lifecycle.STEER_VARIANTS) == {"codex", "claude"}
+    for producer in (pi_console_tool_producer, omp_console_producer):
+        assert producer._STEER_VARIANT != producer._VARIANT
+        assert producer._STEER_VARIANT.endswith(f":{lifecycle.STEER_ASSERTION_ID}:{producer.SCENARIO_ID}")

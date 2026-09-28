@@ -73,6 +73,8 @@ REGISTRATION = ProducerRegistration(
     executable_module="zerg.qa.pi_console_tool_producer",
 )
 _VARIANT = execution_variant_key(provider="pi", assertion_id=ASSERTION_ID, scenario_id=SCENARIO_ID, variant=None)
+# The steer cell is its own factory execution (one per cell).
+_STEER_VARIANT = lifecycle.steer_execution_variant("pi", SCENARIO_ID)
 
 
 def pi_console_tool_assertions(observation: dict[str, object]) -> dict[str, bool]:
@@ -84,7 +86,7 @@ def pi_console_tool_assertions(observation: dict[str, object]) -> dict[str, bool
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=(_VARIANT,))
+    add_factory_provider_arguments(parser, variants=(_VARIANT, _STEER_VARIANT))
     parser.add_argument("--model", required=True)
     return parser
 
@@ -94,9 +96,14 @@ def run_pi_console_tool(args: argparse.Namespace) -> dict[str, object]:
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     # Reuse the established Runtime Host + Machine Agent + stock-provider
     # transaction. Only the subject registration and Pi-specific oracle differ.
-    generic = lifecycle._run_live("pi", lifecycle.SUPPORTED_VARIANT, args, root)
+    steer = getattr(args, "variant", None) == _STEER_VARIANT
+    generic = lifecycle._run_live("pi", lifecycle.SUPPORTED_VARIANT, args, root, steer=steer)
     observation = dict(generic.get("observation") or {})
-    assertions = pi_console_tool_assertions(observation)
+    assertions = (
+        {lifecycle.STEER_ASSERTION_ID: (generic.get("assertions") or {}).get(lifecycle.STEER_ASSERTION_ID) is True}
+        if steer
+        else pi_console_tool_assertions(observation)
+    )
     result = {
         "schema_version": 1,
         "artifact_kind": "pi_console_tool_lifecycle_result",
@@ -107,11 +114,8 @@ def run_pi_console_tool(args: argparse.Namespace) -> dict[str, object]:
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
         "generated_at": now(),
-        # Status tracks the Console tool contract only; the steer cell is
-        # reported beside it and never gates it.
         "status": "pass" if generic.get("status") == "pass" and all(assertions.values()) else "fail",
-        "assertions": assertions
-        | {lifecycle.STEER_ASSERTION_ID: (generic.get("assertions") or {}).get(lifecycle.STEER_ASSERTION_ID) is True},
+        "assertions": assertions,
         "steer": generic.get("steer"),
         "provider_binary": generic.get("provider_binary"),
         "observation": observation,

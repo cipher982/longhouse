@@ -42,6 +42,7 @@ from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.qa.resume_assurance import execution_variant_key
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
@@ -60,6 +61,21 @@ STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp"})
 SUPPORTED_VARIANT = "interrupt_supported"
 UNSUPPORTED_VARIANT = "interrupt_unsupported"
 SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
+
+
+def steer_execution_variant(provider: str, scenario_id: str) -> str:
+    """The steer cell's own execution key: the factory runs one execution per
+    cell, so the steer step runs in its own invocation, never in the one that
+    proves ASSERTION_ID."""
+
+    return execution_variant_key(provider=provider, assertion_id=STEER_ASSERTION_ID, scenario_id=scenario_id, variant=None)
+
+
+STEER_VARIANTS = {
+    provider: steer_execution_variant(provider, f"{provider}_console_adapter_lifecycle")
+    for provider in PROVIDERS
+    if provider in STEER_PROVIDERS
+}
 OBSERVED_ACTIVITY = (
     "adapter_dispatch_started",
     "qualification_model_bound",
@@ -1880,7 +1896,7 @@ def _observation_from_receipts(
     }
 
 
-def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path) -> dict[str, Any]:
+def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path, *, steer: bool = False) -> dict[str, Any]:
     if variant != _expected_variant(provider):
         raise RuntimeError(f"{provider} requires variant={_expected_variant(provider)}")
     home = isolated_provider_home()
@@ -2290,7 +2306,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         # Before the interrupt step: OMP's interrupt evidence requires the
         # post-interrupt turn to be the last output in the retained source.
         steer_receipt: dict[str, Any] | None = None
-        if provider in STEER_PROVIDERS:
+        if steer:
             steer_receipt = _run_steer_step(
                 api_url=api_url,
                 token=token,
@@ -2669,6 +2685,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             )
         observation["provider_source_artifacts"] = retained_sources
         assertion = console_lifecycle_assertions(observation)[ASSERTION_ID]
+        steer_passed = console_steer_assertion(steer_receipt)
         if provider == "pi":
             assertion = assertion and observation.get("pi_tool_enabled") is True
         return {
@@ -2676,14 +2693,14 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "artifact_kind": "provider_console_lifecycle_result",
             "producer": REGISTRATION.to_dict(),
             "provider": provider,
-            "variant": variant,
+            # The steer cell's authored variant is null.
+            "variant": None if steer else variant,
             "scenario_id": _scenario_id(provider),
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
             "generated_at": now(),
-            "status": "pass" if assertion else "fail",
-            "assertions": {ASSERTION_ID: assertion}
-            | ({STEER_ASSERTION_ID: console_steer_assertion(steer_receipt)} if provider in STEER_PROVIDERS else {}),
+            "status": "pass" if (steer_passed if steer else assertion) else "fail",
+            "assertions": {STEER_ASSERTION_ID: steer_passed} if steer else {ASSERTION_ID: assertion},
             "steer": steer_receipt,
             "provider_binary": binary_receipt,
             "observation": observation,
@@ -2732,7 +2749,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", choices=PROVIDERS)
-    parser.add_argument("--variant", choices=(SUPPORTED_VARIANT, UNSUPPORTED_VARIANT))
+    parser.add_argument("--variant", choices=(SUPPORTED_VARIANT, UNSUPPORTED_VARIANT, *STEER_VARIANTS.values()))
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--engine", type=Path)
@@ -2770,15 +2787,19 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    steer = args.variant in STEER_VARIANTS.values()
+    if steer and args.variant != STEER_VARIANTS.get(args.provider):
+        print(json.dumps({"status": "fail", "failure_code": "steer_variant_provider_mismatch"}))
+        return 2
     try:
-        result = _run_live(args.provider, args.variant, args, root)
+        result = _run_live(args.provider, _expected_variant(args.provider) if steer else args.variant, args, root, steer=steer)
     except Exception as exc:  # noqa: BLE001 - producer must retain one typed failure artifact
         result = {
             "schema_version": 1,
             "artifact_kind": "provider_console_lifecycle_result",
             "producer": REGISTRATION.to_dict(),
             "provider": args.provider,
-            "variant": args.variant,
+            "variant": None if steer else args.variant,
             "scenario_id": _scenario_id(args.provider),
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",

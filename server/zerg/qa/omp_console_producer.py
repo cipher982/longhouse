@@ -83,6 +83,8 @@ REGISTRATION = ProducerRegistration(
     provider_artifact_required=True,
 )
 _VARIANT = execution_variant_key(provider="omp", assertion_id=ASSERTION_ID, scenario_id=SCENARIO_ID, variant=None)
+# The steer cell is its own factory execution (one per cell).
+_STEER_VARIANT = lifecycle.steer_execution_variant("omp", SCENARIO_ID)
 PROFILE = "omp_print_v1"
 _MAX_NATIVE_MODEL_SOURCE_BYTES = 16 * 1024 * 1024
 _PROFILE = identity.IdentityProfile(
@@ -657,7 +659,8 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
 def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
-    generic = lifecycle._run_live("omp", SUPPORTED_VARIANT, args, root)
+    steer = getattr(args, "variant", None) == _STEER_VARIANT
+    generic = lifecycle._run_live("omp", SUPPORTED_VARIANT, args, root, steer=steer)
     observation = dict(generic.get("observation") or {})
     observation["runtime_host_turn_dispatch"] = observation.get("adapter_dispatch_started") is True
     dispatch = _read_json(root / "adapter-dispatch-receipt.json") or {}
@@ -698,7 +701,11 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
         dispatch["native_provider"] = result_event.get("provider") if isinstance(result_event, Mapping) else None
         dispatch["native_model_evidence"] = dict(result_event) if isinstance(result_event, Mapping) else None
         lifecycle.write_json(root / "adapter-dispatch-receipt.json", dispatch)
-    assertions = omp_console_assertions(observation)
+    assertions = (
+        {lifecycle.STEER_ASSERTION_ID: (generic.get("assertions") or {}).get(lifecycle.STEER_ASSERTION_ID) is True}
+        if steer
+        else omp_console_assertions(observation)
+    )
     result = {
         "schema_version": 1,
         "artifact_kind": "omp_console_lifecycle_result",
@@ -709,11 +716,8 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
         "generated_at": now(),
-        # Status tracks the Console lifecycle contract only; the steer cell is
-        # reported beside it and never gates it.
         "status": "pass" if generic.get("status") == "pass" and all(assertions.values()) else "fail",
-        "assertions": assertions
-        | {lifecycle.STEER_ASSERTION_ID: (generic.get("assertions") or {}).get(lifecycle.STEER_ASSERTION_ID) is True},
+        "assertions": assertions,
         "steer": generic.get("steer"),
         "provider_binary": generic.get("provider_binary"),
         "observation": observation,
@@ -781,7 +785,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_factory_provider_arguments(parser, variants=(_VARIANT,))
+    add_factory_provider_arguments(parser, variants=(_VARIANT, _STEER_VARIANT))
     parser.add_argument("--model", required=True)
     return parser
 
