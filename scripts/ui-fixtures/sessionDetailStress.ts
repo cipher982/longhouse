@@ -154,7 +154,9 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
     transcript: { convergence: "current", searchable: true, live_observation: false },
     host: { state: "online", observed_at: now },
     presentation: {
-      primary: { key: "executing", label: "Running Shell", tone: "running", observed_at: now },
+      // What session_state_contract._primary mints for an executing
+      // exec_command; clients show it verbatim.
+      primary: { key: "executing", label: "Using exec_command", tone: "running", observed_at: now },
       access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
       transcript: null,
     },

@@ -4,13 +4,18 @@ import type { SessionInteractionCapabilities } from "@/shared/session/model";
 import { getToolInputRecord } from "@/shared/session/model";
 import type { SessionActivityFeed } from "./sessionActivityFeed";
 import { useWallClock } from "@/shared/hooks/useWallClock";
-import { activityClaimIsStale, activityEvidenceIsLive } from "@/shared/session/activityEvidence";
+import { activityEvidenceIsLive } from "@/shared/session/activityEvidence";
 import { resolveSessionRuntimeState } from "@/shared/session/sessionRuntime";
 import {
   getRuntimeDisplayCopy,
   getRuntimeMetaLabel,
-  getRuntimeOutcomeLabel,
 } from "@/shared/session/sessionRuntimeDisplay";
+import {
+  ACTIVITY_UNCERTAIN_LABEL,
+  pendingInteractionLabel,
+  sessionIsWorking,
+  workClaimExpired,
+} from "@/shared/session/sessionStatus";
 import { SessionLedger, type SessionLedgerState } from "./SessionLedger";
 import "./SessionLedger.css";
 
@@ -210,7 +215,7 @@ export function buildSessionLedgerState(
   // updates can arrive, so `connecting` and `disconnected` belong on the
   // connection line, never on the activity claim. `valid_until` is what bounds
   // a work claim, and it is the reader's clock that retires it.
-  const activityDemoted = activityClaimIsStale(facts.activity, nowMs);
+  const activityDemoted = workClaimExpired(facts, nowMs);
   // A host we positively observed offline can retract a work claim the same
   // window has not expired yet, but it may never *add* an alarm: an idle
   // session stays idle rather than reading "Activity uncertain" because the
@@ -221,7 +226,7 @@ export function buildSessionLedgerState(
   const hostRetractsClaim = rawProviderWorking && (hostOffline || hostStale);
   const transcriptConcern =
     openSession && facts.transcript.convergence === "lagging";
-  const providerWorking = evidenceLive && rawProviderWorking;
+  const providerWorking = sessionIsWorking(facts, nowMs);
   const viewerNeedsDisclosure =
     openSession &&
     (hostRetractsClaim || transcriptConcern || activityDemoted);
@@ -238,20 +243,10 @@ export function buildSessionLedgerState(
             ? "working"
             : "quiet";
   const headline = pending
-    ? "Needs your response"
+    ? pendingInteractionLabel(facts)
     : tone === "unknown"
-      ? "Activity uncertain"
-      : interaction.isManagedLocalSession
-        ? withObservationAge(
-            display.headline,
-            facts.presentation.primary,
-            nowMs,
-          )
-        : withObservationAge(
-            getRuntimeOutcomeLabel(runtime),
-            facts.presentation.primary,
-            nowMs,
-          );
+      ? ACTIVITY_UNCERTAIN_LABEL
+      : withObservationAge(display.headline, facts.presentation.primary, nowMs);
   const preview = session.transcript_preview;
   const input = getToolInputRecord(preview?.tool_input_json);
   const inputDetail =

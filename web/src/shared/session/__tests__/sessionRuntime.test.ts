@@ -7,7 +7,7 @@ import {
   resolveTimelineSignal,
   timelineSignalLabel,
 } from "../sessionRuntime";
-import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionRuntimeDisplay";
+import { getRuntimeDisplayCopy } from "../sessionRuntimeDisplay";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
 
 function makeRuntimeDisplay(
@@ -130,7 +130,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.tone).toBe("running");
     expect(runtime.isExecuting).toBe(true);
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Using Shell");
     expect(getRuntimeDisplayCopy(runtime)).toEqual({
       headline: "Using Shell",
       detail: null,
@@ -166,7 +165,7 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.displayPhase).toBe("Closed");
     expect(runtime.tone).toBe("closed");
     expect(isSessionClosed({ session_state: makeSessionStateFacts({ closed: true }) })).toBe(true);
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
+    expect(getRuntimeDisplayCopy(runtime).headline).toBe("Closed");
   });
 
   it.each([

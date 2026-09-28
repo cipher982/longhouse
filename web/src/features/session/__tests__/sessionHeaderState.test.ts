@@ -65,7 +65,7 @@ describe("getSessionHeaderState", () => {
     expect(state).toEqual({ tone: "attention", text: "No progress for 31m" });
   });
 
-  it("reads an executing/thinking session as live, with a tool-named sentence", () => {
+  it("reads an executing session as live, with the server's label and a client duration", () => {
     const now = Date.parse("2026-04-15T16:30:00Z");
     const state = getSessionHeaderState(
       session({
@@ -73,11 +73,30 @@ describe("getSessionHeaderState", () => {
         tool: "hub",
         observedAt: "2026-04-15T15:55:00Z",
         primaryTone: "running",
+        primaryKey: "executing",
+        primaryLabel: "Using hub",
       }),
       now,
     );
     expect(state.tone).toBe("live");
     expect(state.text).toBe("Using hub for 35 minutes");
+  });
+
+  it("shows whatever label the server minted, never a client rewrite", () => {
+    // A Console run with no tool is served as "Working", an executing loop
+    // with no tool name as "Running", a run that has not landed as "Starting".
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    for (const [activityState, primaryKey, primaryTone, primaryLabel] of [
+      ["executing", "executing", "running", "Running"],
+      ["unknown", "executing", "running", "Working"],
+      ["unknown", "starting", "active", "Starting"],
+    ] as const) {
+      const state = getSessionHeaderState(
+        session({ activityState, primaryKey, primaryTone, primaryLabel, observedAt: "2026-04-15T16:28:00Z" }),
+        now,
+      );
+      expect(state).toEqual({ tone: "live", text: `${primaryLabel} for 2 minutes` });
+    }
   });
 
   it("uses the server's delegated label instead of a tool name", () => {
@@ -111,11 +130,13 @@ describe("getSessionHeaderState", () => {
         tool: "Bash",
         observedAt: "2026-04-15T16:29:00Z",
         primaryTone: "thinking",
+        primaryKey: "thinking",
+        primaryLabel: "Thinking",
       }),
       now,
     );
     expect(state.tone).toBe("live");
-    expect(state.text).toMatch(/^Working for /);
+    expect(state.text).toBe("Thinking for 1 minute");
     expect(state.text).not.toContain("Bash");
   });
 

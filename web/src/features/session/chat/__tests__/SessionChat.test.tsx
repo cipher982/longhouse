@@ -2028,3 +2028,67 @@ describe("SessionChat", () => {
 
   });
 });
+
+describe("SessionChat composer status", () => {
+  function composerHead() {
+    return screen.getByTestId("session-chat-composer-head");
+  }
+
+  function lockedClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: true,
+    });
+    return queryClient;
+  }
+
+  it("shows the server's label verbatim while the work claim is fresh", () => {
+    const now = Date.now();
+    renderSessionChat(
+      {
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            access: "live_control",
+            interruptAvailable: true,
+            activity: "thinking",
+            // A finished tool leaves its name behind; the served label wins.
+            tool: "Bash",
+            observedAt: new Date(now - 60_000).toISOString(),
+            activityValidUntil: new Date(now + 60_000).toISOString(),
+          }),
+        }),
+      },
+      { queryClient: lockedClient() },
+    );
+
+    expect(composerHead()).toHaveTextContent("Thinking");
+    expect(composerHead()).not.toHaveTextContent("Bash");
+    expect(composerHead()).not.toHaveTextContent("Working");
+  });
+
+  it("demotes an expired work claim instead of repeating the cached label", () => {
+    const now = Date.now();
+    renderSessionChat(
+      {
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            access: "live_control",
+            interruptAvailable: true,
+            activity: "executing",
+            observedAt: new Date(now - 600_000).toISOString(),
+            activityValidUntil: new Date(now - 60_000).toISOString(),
+          }),
+        }),
+      },
+      { queryClient: lockedClient() },
+    );
+
+    expect(composerHead()).toHaveTextContent("Activity uncertain");
+    expect(composerHead()).not.toHaveTextContent("Using Shell");
+  });
+});

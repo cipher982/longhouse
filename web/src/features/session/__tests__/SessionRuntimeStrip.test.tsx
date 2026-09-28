@@ -228,7 +228,10 @@ describe("SessionRuntimeStrip connection presentation", () => {
         .elapsedSeconds,
     ).toBeNull();
 
+    // The server re-mints the primary with the activity; a quiescent loop is
+    // served as Idle, never as a leftover "running" tone.
     current.session_state.activity.state = "quiescent";
+    current.session_state.presentation.primary = { key: "idle", label: "Idle", tone: "idle" };
     expect(
       buildSessionLedgerState(current, interaction, started + 12_000, true)
         .elapsedSeconds,
@@ -479,5 +482,35 @@ describe("withObservationAge", () => {
         nowMs,
       ),
     ).toBe("Last observed idle");
+  });
+});
+
+describe("SessionRuntimeStrip status words", () => {
+  it("heads a pending interaction with the server's own copy", () => {
+    const state = buildSessionLedgerState(
+      session("pending", { pendingInteraction: true, terminalAttached: true }),
+      interaction,
+      Date.parse("2026-09-09T19:00:00.000Z"),
+      true,
+    );
+    expect(state.tone).toBe("attention");
+    expect(state.headline).toBe("Needs answer");
+  });
+
+  it("shows the served working label while fresh and demotes it once expired", () => {
+    const started = Date.parse("2026-09-09T19:00:00.000Z");
+    const current = session("served-label", {
+      activity: "thinking",
+      tool: "Bash",
+      terminalAttached: true,
+      observedAt: new Date(started).toISOString(),
+      activityValidUntil: new Date(started + 10_000).toISOString(),
+    });
+    const fresh = buildSessionLedgerState(current, interaction, started + 5_000, true);
+    expect(fresh.tone).toBe("working");
+    expect(fresh.headline).toBe("Thinking");
+    const expired = buildSessionLedgerState(current, interaction, started + 11_000, true);
+    expect(expired.tone).toBe("unknown");
+    expect(expired.headline).toBe("Activity uncertain");
   });
 });

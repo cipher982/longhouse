@@ -18,6 +18,7 @@
  */
 
 import type { AgentSession } from "@/shared/api/agents";
+import { executingToolName } from "@/shared/session/sessionStatus";
 
 export type HearthMode = "working" | "waiting" | "idle" | "ended";
 export type ToolKind = "exec" | "edit" | "read" | "agent" | "other";
@@ -343,7 +344,7 @@ export function hearthSnapshotFromSession(
     assistantMessages: session.assistant_messages ?? 0,
     userMessages: session.user_messages ?? 0,
     subagents: session.session_state.delegation?.count ?? 0,
-    tool: activity.state === "executing" ? (activity.tool ?? null) : null,
+    tool: executingToolName(activity),
     lastActivityMs: parseMs(session.last_activity_at),
     startedMs: parseMs(session.started_at),
   };

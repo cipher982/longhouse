@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   AgentSessionProjectionItem,
 } from "@/shared/api/agents";
+import { ACTIVITY_UNCERTAIN_LABEL } from "@/shared/session/sessionStatus";
 import type {
   ReceiptMark,
   ReplayFrame,
@@ -181,7 +182,10 @@ export function buildReplayFrame(
   const description =
     SCENES.find((item) => item.id === scene)?.description ??
     SCENES[0].description;
-  const action = data.tool ? `Using ${data.tool}` : "Working";
+  // Replay frames are synthetic, so no server minted a label for them. Mirror
+  // the server's executing wording (session_state_contract._primary) and read
+  // everything else through the shared status vocabulary.
+  const action = data.tool ? `Using ${data.tool}` : "Running";
   const availableReceipts = RECEIPTS.slice(
     0,
     Math.max(0, data.items.length - data.baseEnd),
@@ -256,7 +260,7 @@ export function buildReplayFrame(
     providerFact = `Simulated provider evidence expires at replay 0:12${time >= 12000 ? " (expired)" : ""}`;
     if (time >= 12000) {
       tone = "unknown";
-      headline = "Work status unconfirmed";
+      headline = ACTIVITY_UNCERTAIN_LABEL;
       detail = `Last reported: ${action}.`;
       detailKind = "explanation";
       animateWork = false;
@@ -272,7 +276,7 @@ export function buildReplayFrame(
     if (time >= 5000 && time < 18000) {
       animateWork = false;
       tone = "unknown";
-      headline = "Work status unconfirmed";
+      headline = ACTIVITY_UNCERTAIN_LABEL;
       detailKind = "explanation";
       if (time < 12000) {
         connection = "reconnecting";
@@ -295,7 +299,7 @@ export function buildReplayFrame(
   if (scene === "machine" && time >= 8000) {
     arrivals = availableReceipts.filter((at) => at < 8000);
     tone = "unknown";
-    headline = "Work status unconfirmed";
+    headline = ACTIVITY_UNCERTAIN_LABEL;
     animateWork = false;
     observation = `Connected · can’t reach ${data.host}`;
     detail = "The agent may still be running.";
@@ -310,7 +314,7 @@ export function buildReplayFrame(
       tone = "unknown";
       animateWork = false;
       headline =
-        time < 5000 ? "Checking current status" : "Work status unconfirmed";
+        time < 5000 ? "Checking current status" : ACTIVITY_UNCERTAIN_LABEL;
       observation =
         time < 5000
           ? "Reconnecting · showing saved transcript"
@@ -326,7 +330,8 @@ export function buildReplayFrame(
   if (scene === "attention" && time >= 6000) {
     arrivals = availableReceipts.filter((at) => at < 6000);
     tone = "attention";
-    headline = "Needs your approval";
+    // The server's approval wording (session_state_contract._primary).
+    headline = "Needs approval";
     animateWork = false;
     detail = data.command;
     observation = "Connected · waiting for your response";

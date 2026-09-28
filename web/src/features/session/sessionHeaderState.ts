@@ -1,5 +1,13 @@
 import type { AgentSession } from "@/shared/api/agents";
-import { activityClaimIsStale } from "@/shared/session/activityEvidence";
+import {
+  ACTIVITY_UNCERTAIN_LABEL,
+  delegatedWorkLabel,
+  pendingInteractionLabel,
+  sessionIsWorking,
+  sessionNeedsInteraction,
+  workClaimExpired,
+  workingStatusLabel,
+} from "@/shared/session/sessionStatus";
 
 export type SessionHeaderStateTone = "live" | "attention" | "unknown" | "cool";
 
@@ -49,7 +57,7 @@ export function formatElapsedClock(totalSeconds: number): string {
  * glance; the full evidence disclosure still lives in the runtime strip below.
  *
  * `turnStartMs` is the one shared turn-elapsed anchor (see
- * `getRunningTurnStartMs` in `components/instruments/toolActivity.ts`) —
+ * `getRunningTurnStartMs` in `shared/instruments/toolActivity.ts`) —
  * pass it whenever the caller has the loaded thread, so this sentence's
  * "for N minutes" agrees with the composer clock and the readout rail's
  * Turn readout. Omitting it falls back to the activity heartbeat, which is
@@ -62,70 +70,35 @@ export function getSessionHeaderState(
   turnStartMs?: number | null,
 ): SessionHeaderStateInfo {
   const facts = session.session_state;
-  // The route's own tone (`session-workspace-route--tone-<tone>`) already
-  // reads `presentation.primary.tone` as the authoritative live/attention
-  // signal — a session can be "blocked" or "stalled" with activity.state
-  // still "quiescent" underneath, so activity.state alone under-detects.
   const primaryTone = facts.presentation.primary?.tone ?? null;
   const primaryKey = facts.presentation.primary?.key ?? null;
   const closed = facts.disposition.state === "closed";
   // A served tone is a verdict about the moment it was minted. The reader's
   // clock decides when that ended, so an expired window may not keep the
-  // composer saying "Using Bash for 50 minutes" -- the same claim the server
-  // would already have replaced with its last-seen label, if anything asked.
-  const staleClaim = activityClaimIsStale(facts.activity, nowMs);
-  const pending =
-    !closed &&
-    !staleClaim &&
-    (facts.pending_interaction != null ||
-      primaryTone === "blocked" ||
-      primaryTone === "stalled");
-  const working =
-    !closed &&
-    !staleClaim &&
-    (primaryTone === "running" ||
-      primaryTone === "thinking" ||
-      primaryTone === "active" ||
-      facts.activity.state === "thinking" ||
-      facts.activity.state === "executing");
+  // header saying "Using Bash for 50 minutes".
+  const staleClaim = workClaimExpired(facts, nowMs);
 
-  if (pending) {
-    // Always the server's own copy. It distinguishes a question ("Needs
-    // answer") from an approval ("Needs approval"); synthesizing "Waiting for
-    // approval" here made a Claude question read as something it is not, and a
-    // client that invents copy will disagree with the runtime strip below it.
-    return {
-      tone: "attention",
-      text: facts.presentation.primary?.label?.trim() || "Needs attention",
-    };
+  if (sessionNeedsInteraction(facts, nowMs)) {
+    return { tone: "attention", text: pendingInteractionLabel(facts) };
   }
 
-  if (working) {
-    // Delegated work is the one live state the client must not re-derive: the
-    // sentence names the work ("Waiting on 1 background agent"), and the tool
-    // field belongs to the main loop, which is idle. The server composes it.
-    const primary = facts.presentation.primary;
-    if (primary?.key === "delegated_work" && primary.label) {
-      return { tone: "live", text: primary.label };
-    }
-    // A finished tool leaves its name on the activity fact, so a non-empty
-    // `tool` is not evidence that one is running: only `executing` claims
-    // that. Without this gate a session that just ran Bash keeps reading
-    // "Using Bash for 4 minutes" while it is actually thinking.
-    const tool =
-      facts.activity.state === "executing" ? facts.activity.tool?.trim() : undefined;
+  if (sessionIsWorking(facts, nowMs)) {
+    // Delegated work names the work, not the elapsed turn.
+    const delegated = delegatedWorkLabel(facts);
+    if (delegated) return { tone: "live", text: delegated };
     const fallbackAnchorMs = Date.parse(facts.activity.observed_at ?? "");
     const anchorMs = turnStartMs ?? (Number.isFinite(fallbackAnchorMs) ? fallbackAnchorMs : null);
     const elapsedSeconds = anchorMs != null
       ? Math.max(0, Math.floor((nowMs - anchorMs) / 1_000))
       : null;
-    const using = tool ? `Using ${tool}` : "Working";
+    // The server's label, verbatim; the client adds only the duration.
+    const label = workingStatusLabel(facts);
     return {
       tone: "live",
       text:
         elapsedSeconds != null
-          ? `${using} for ${formatDurationWords(elapsedSeconds)}`
-          : using,
+          ? `${label} for ${formatDurationWords(elapsedSeconds)}`
+          : label,
     };
   }
 
@@ -138,7 +111,7 @@ export function getSessionHeaderState(
     facts.activity.state === "unknown" &&
     (primaryKey === "idle" || primaryKey === "ready" || (primaryKey === "ended" && primaryTone === "closed"));
   if (!closed && !servedAtRest && (staleClaim || facts.activity.state === "unknown")) {
-    return { tone: "unknown", text: "Activity uncertain" };
+    return { tone: "unknown", text: ACTIVITY_UNCERTAIN_LABEL };
   }
 
   const lastMs = Date.parse(facts.last_result_at ?? "");

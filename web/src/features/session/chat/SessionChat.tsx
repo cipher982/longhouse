@@ -53,6 +53,7 @@ import {
   isActivityExecuting,
   isActivityStalled,
 } from "@/shared/session/activityEvidence";
+import { workingStatusLabel } from "@/shared/session/sessionStatus";
 import "./session-chat.css";
 
 interface PendingManagedLocalInput {
@@ -1562,8 +1563,8 @@ export function SessionChat({
     ? "Send update reaches the active turn. Queue next waits for its boundary. Enter does not send while a turn is active."
     : "Queue next waits for the next turn boundary. Enter does not queue while a turn is active.";
 
-  // Composer header: ember + "Using <tool>" + a mono timer while a turn is
-  // active, ember + the server's attention copy when a provider question is
+  // Composer header: ember + the server's working label + a mono timer while
+  // a turn is active, ember + the server's attention copy when a provider question is
   // pending, or a cool dot + "Idle" + when the last turn ended. Shares its
   // tone read with the session header (sessionHeaderState.ts) so the two
   // never disagree about live/attention/cool, but keeps its own mono clock
@@ -1583,21 +1584,13 @@ export function SessionChat({
     activityNowMs,
     turnStartMs,
   );
-  // Same rule as getSessionHeaderState: only an executing activity may claim a
-  // tool. A thinking phase keeps the last tool name on the fact, and rendering
-  // it there is what made a finished Bash look like running work.
-  const activityTool =
-    activity.state === "executing" ? activity.tool?.trim() || null : null;
-  const composerDelegatedLabel =
-    session.session_state.presentation.primary?.key === "delegated_work"
-      ? session.session_state.presentation.primary.label || null
-      : null;
   const composerElapsedSeconds =
     composerState.tone === "live" && turnStartMs != null
       ? Math.max(0, Math.floor((activityNowMs - turnStartMs) / 1_000))
       : null;
-  const composerUsingLabel =
-    composerDelegatedLabel ?? (activityTool ? `Using ${activityTool}` : "Working");
+  // The server's label, verbatim, exactly as the session header shows it. It
+  // only renders while the header's freshness gate calls the session live.
+  const composerWorkingLabel = workingStatusLabel(session.session_state);
   const composerLastTurnMs = Date.parse(
     session.session_state.last_result_at ?? "",
   );
@@ -1862,7 +1855,7 @@ export function SessionChat({
                   <>
                     <StatusBulb state="working" />
                     <span className="session-chat-composer__head-label">
-                      {composerUsingLabel}
+                      {composerWorkingLabel}
                     </span>
                     {composerElapsedSeconds != null ? (
                       <Nixie
@@ -1882,7 +1875,7 @@ export function SessionChat({
                   <>
                     <StatusBulb state="unknown" />
                     <span className="session-chat-composer__head-label">
-                      Activity uncertain
+                      {composerState.text}
                     </span>
                     {composerObservedClock ? (
                       <span className="session-chat-composer__head-detail">

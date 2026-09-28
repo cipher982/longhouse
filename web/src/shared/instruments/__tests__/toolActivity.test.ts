@@ -133,7 +133,7 @@ describe("turn-elapsed agreement across header, composer, and rail", () => {
           observed_at: "2026-04-15T16:11:55Z",
         },
         presentation: {
-          primary: { tone: "running", label: "Running" },
+          primary: { key: "executing", tone: "running", label: "Using hub" },
         },
         last_result_at: null,
       } as never,

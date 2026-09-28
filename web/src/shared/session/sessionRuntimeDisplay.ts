@@ -15,12 +15,7 @@ export function getRuntimeMetaLabel(
   return null;
 }
 
-export function getRuntimeOutcomeLabel(
-  runtime: ReturnType<typeof resolveSessionRuntimeState>,
-): string {
-  return runtime.stateFacts.presentation.primary?.label ?? "Activity unknown";
-}
-
+/** The served headline and transcript detail for a session's runtime. */
 export interface RuntimeDisplayCopy {
   headline: string;
   detail: string | null;
