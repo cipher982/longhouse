@@ -7,6 +7,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
@@ -2805,6 +2806,69 @@ def test_capability_includes_can_queue_next_input():
     caps2 = build_session_capabilities(session_no_runner)
     assert caps2.live_control_available is False
     assert caps2.can_queue_next_input is False
+
+
+def test_parked_send_persists_under_the_ordering_lock(live_catalog, live_catalog_client):  # noqa: F811
+    """The receipt is durable before the lock is given up.
+
+    Releasing first would open a window where a newer SEND acquires the lock,
+    finds no older queued receipt, and dispatches ahead of this one.
+    """
+
+    import zerg.routers.session_chat as router_module
+
+    email = "live-park-order@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, activity_kind="running")
+
+    observed: dict[str, bool] = {}
+    original = router_module._record_live_input_receipt_for_body
+
+    async def spy(**kwargs):
+        observed["locked_while_persisting"] = await session_lock_manager.is_locked(str(session_id))
+        return await original(**kwargs)
+
+    with patch.object(router_module, "_record_live_input_receipt_for_body", spy):
+        queued = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "park behind the turn", "intent": "queue", "client_request_id": "park-order-1"},
+            cookies=cookies,
+        )
+
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["outcome"] == "queued"
+    assert observed["locked_while_persisting"] is True
+    assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
+
+
+def test_queue_cap_rejection_does_not_hold_the_ordering_lock(live_catalog, live_catalog_client):  # noqa: F811
+    """A rejected SEND must not leave the queue unable to drain."""
+
+    from zerg.services.session_inputs import MAX_QUEUED_PER_SESSION
+
+    email = "live-cap-lock@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+
+    for index in range(MAX_QUEUED_PER_SESSION):
+        queued = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": f"msg {index}", "intent": "queue", "client_request_id": f"cap-lock-{index}"},
+            cookies=cookies,
+        )
+        assert queued.status_code == 200, queued.text
+
+    over = live_catalog_client.post(
+        f"/sessions/{session_id}/input",
+        json={"text": "one too many", "intent": "queue", "client_request_id": "cap-lock-over"},
+        cookies=cookies,
+    )
+
+    assert over.status_code == 409, over.text
+    assert over.json()["detail"]["error_code"] == "input_queue_full"
+    assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
 
 
 def test_queue_cap_rejects_over_limit(live_catalog, live_catalog_client):  # noqa: F811

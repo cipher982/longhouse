@@ -536,6 +536,14 @@ def continue_session(
         "-j",
         help="Output the raw response.",
     ),
+    client_request_id: str | None = typer.Option(
+        None,
+        "--client-request-id",
+        help=(
+            "Idempotency key for this message. Defaults to a fresh id. Reuse the id a timed-out "
+            "run printed to resolve it without sending the text twice."
+        ),
+    ),
     current_session_id: str | None = typer.Option(
         None,
         "--current-session",
@@ -581,7 +589,7 @@ def continue_session(
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
     resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")
     intent = "steer" if steer else "queue"
-    client_request_id = uuid.uuid4().hex
+    resolved_client_request_id = (client_request_id or "").strip() or uuid.uuid4().hex
 
     headers = {"X-Agents-Token": resolved_token}
     resolved_current_session_id = (current_session_id or get_managed_session_id() or "").strip()
@@ -592,7 +600,7 @@ def continue_session(
         )
 
     input_url = f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/input"
-    payload = {"text": message, "intent": intent, "client_request_id": client_request_id}
+    payload = {"text": message, "intent": intent, "client_request_id": resolved_client_request_id}
     max_429_retries = 3
 
     try:
@@ -620,7 +628,11 @@ def continue_session(
         typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
     except httpx.TimeoutException:
-        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        # The server may have committed the input before the answer was lost.
+        # Printing the key is what makes a re-run a resolution, not a resend.
+        typer.secho(f"Request to {base_url} timed out.", fg=typer.colors.YELLOW, bold=True)
+        typer.echo(f"client_request_id: {resolved_client_request_id}")
+        typer.echo("It may already have been delivered. Re-run with --client-request-id set to that value.")
         raise typer.Exit(code=1)
 
     if output_json:

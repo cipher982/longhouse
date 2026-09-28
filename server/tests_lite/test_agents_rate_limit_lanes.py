@@ -202,6 +202,7 @@ def test_continue_session_retries_on_429(monkeypatch, capsys):
         message="hello peer",
         steer=False,
         output_json=False,
+        client_request_id=None,
         current_session_id=None,
         url=None,
         token=None,
@@ -217,6 +218,41 @@ def test_continue_session_retries_on_429(monkeypatch, capsys):
     assert "next turn boundary" in printed
     assert "expires after 30 minutes" in printed
     assert "Accepted" not in printed
+
+
+def test_continue_session_reports_its_idempotency_key_on_timeout(monkeypatch, capsys):
+    """A timed-out send may have been accepted; the key makes retrying a resolve."""
+
+    session_id = str(uuid4())
+    monkeypatch.setattr("zerg.cli.sessions._load_api_credentials", lambda **kwargs: ("http://test", "zdt_tok"))
+
+    def mock_post(url, headers=None, json=None):
+        raise httpx.TimeoutException("read timed out")
+
+    client_mock = MagicMock()
+    client_mock.__enter__.return_value = client_mock
+    client_mock.post = mock_post
+
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client_mock)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        continue_session(
+            session_id=session_id,
+            message="maybe delivered",
+            steer=False,
+            output_json=False,
+            client_request_id="stable-key-1",
+            current_session_id=None,
+            url=None,
+            token=None,
+            claude_dir=None,
+        )
+
+    assert excinfo.value.exit_code == 1
+    printed = capsys.readouterr().out
+    assert "timed out" in printed
+    assert "stable-key-1" in printed
+    assert "--client-request-id" in printed
 
 
 def test_continue_session_does_not_call_an_unresolved_steer_delivered(monkeypatch, capsys):
@@ -244,6 +280,7 @@ def test_continue_session_does_not_call_an_unresolved_steer_delivered(monkeypatc
         message="redirect hot",
         steer=True,
         output_json=False,
+        client_request_id=None,
         current_session_id=None,
         url=None,
         token=None,
@@ -280,6 +317,7 @@ def test_continue_session_explains_a_refused_steer(monkeypatch, capsys):
             message="redirect hot",
             steer=True,
             output_json=False,
+            client_request_id=None,
             current_session_id=None,
             url=None,
             token=None,

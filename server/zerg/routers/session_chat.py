@@ -2165,12 +2165,8 @@ async def _park_catalog_session_input(
 
     The recovery loop owns delivery from here (it polls queued receipts every
     few seconds and wakes on the turn-terminal observation), so parking does
-    not depend on this request staying alive. The SEND lock is released first,
-    because the drain needs it to deliver anything at all.
+    not depend on this request staying alive.
     """
-
-    if send_lock is not None:
-        await session_lock_manager.release(send_lock[0], send_lock[1])
 
     receipt_id = await _record_live_input_receipt_for_body(
         source_session=source_session,
@@ -2181,6 +2177,8 @@ async def _park_catalog_session_input(
         status_value=INPUT_STATUS_QUEUED,
     )
     if receipt_id is None:
+        if send_lock is not None:
+            await session_lock_manager.release(send_lock[0], send_lock[1])
         raise HTTPException(
             status_code=503,
             detail=_input_error_detail(
@@ -2190,6 +2188,10 @@ async def _park_catalog_session_input(
                 client_request_id=client_request_id,
             ),
         )
+    # The receipt is durable before the ordering lock is given up: a newer SEND
+    # that acquires it next must be able to see this message already waiting.
+    if send_lock is not None:
+        await session_lock_manager.release(send_lock[0], send_lock[1])
     return SessionInputResponse(
         outcome="queued",
         input_id=None,
@@ -2448,6 +2450,8 @@ async def _create_catalog_session_input_response(
 
     queued_state = await _catalog_recent_input_summaries(source_session.id)
     if queued_state is None:
+        if send_lock_held:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=503,
             detail=_input_error_detail(
@@ -2514,6 +2518,8 @@ async def _create_catalog_session_input_response(
 
     current = queued_state[1]
     if current >= MAX_QUEUED_PER_SESSION:
+        if send_lock_held:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_input_error_detail(
