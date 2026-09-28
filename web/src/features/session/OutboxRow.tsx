@@ -1,15 +1,22 @@
 /**
- * A message the user sent from Longhouse that the transcript has not echoed
- * yet. It renders in the ask's own place and shape (the tail of the
- * transcript, under a "You" label) so the durable row that
- * replaces it lands without moving anything; only the label carries delivery
- * state.
+ * One managed input operation owned by the client until the server-authoritative
+ * receipt settles it. It renders at the tail of the transcript so text and
+ * attachment summaries have one visible owner while delivery is unresolved.
  */
 
-/** `sent`: the Runtime Host confirmed delivery and only the transcript echo
- *  is outstanding. The provider may already be answering it, so it must not
- *  read as still in flight. */
-export type OutboxEntryState = "sending" | "sent" | "queued" | "unconfirmed" | "failed";
+/** `sent` is a brief Runtime Host delivery confirmation, independent of transcript echo. */
+export type OutboxEntryState =
+  | "sending"
+  | "queued"
+  | "unconfirmed"
+  | "failed"
+  | "sent";
+
+export interface OutboxAttachmentSummary {
+  filename: string;
+  mimeType?: string | null;
+  byteSize?: number | null;
+}
 
 export interface OutboxEntryAction {
   label: string;
@@ -20,9 +27,12 @@ export interface OutboxEntryAction {
 export interface OutboxEntry {
   key: string;
   text: string;
+  attachments?: OutboxAttachmentSummary[];
   state: OutboxEntryState;
   /** Short reason shown after the state word (failures, drain notices). */
   detail?: string | null;
+  /** Warning shown when a legacy row cannot reproduce its original model. */
+  warning?: string | null;
   actions?: OutboxEntryAction[];
 }
 
@@ -65,8 +75,22 @@ export function OutboxRow({ entry }: { entry: OutboxEntry }) {
           </button>
         ))}
       </div>
+      {entry.warning ? (
+        <div className="tl-msg__outbox-warning" role="note">
+          {entry.warning}
+        </div>
+      ) : null}
       {entry.text ? (
         <div className="tl-msg__body tl-msg__plain-ask">{entry.text}</div>
+      ) : null}
+      {entry.attachments && entry.attachments.length > 0 ? (
+        <div className="tl-msg__outbox-attachments" aria-label="Attachments">
+          {entry.attachments.map((attachment) => (
+            <span key={`${attachment.filename}:${attachment.byteSize ?? ""}`}>
+              {attachment.filename}
+            </span>
+          ))}
+        </div>
       ) : null}
     </div>
   );

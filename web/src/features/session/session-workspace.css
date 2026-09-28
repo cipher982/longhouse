@@ -1713,10 +1713,9 @@
   color: var(--color-text-primary);
 }
 
-/* --- Outbox: the ask before the transcript echoes it. ---
-     Same place, measure, and type as the durable ask it becomes, so the
-     swap moves nothing. Delivery state lives in the label; the words dim
-     while unsent. */
+/* --- Outbox: one visible owner for a managed input operation. ---
+     Same place, measure, and type as the durable ask it becomes, while the
+     delivery state and attachment summary remain explicit. */
 .tl-msg--outbox .tl-msg__body {
   white-space: pre-wrap;
   transition: opacity 240ms ease;
@@ -1727,6 +1726,20 @@
 }
 .tl-msg__outbox-detail {
   color: var(--color-text-secondary);
+}
+.tl-msg__outbox-warning,
+.tl-msg__outbox-attachments {
+  margin-top: var(--space-2);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.tl-msg__outbox-warning {
+  color: rgba(255, 222, 157, 0.95);
+}
+.tl-msg__outbox-attachments {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 .tl-msg__outbox-action {
   padding: 0;

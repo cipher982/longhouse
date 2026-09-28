@@ -21,6 +21,8 @@ export interface UseComposerAttachmentsApi {
   attachments: ComposerAttachment[];
   addFiles: (files: FileList | File[]) => Promise<void>;
   removeAttachment: (clientId: string) => void;
+  /** Restores persisted bytes when local outbox persistence itself fails. */
+  restore: (attachments: { blob: Blob; filename: string }[]) => void;
   clear: () => void;
   isCompressing: boolean;
   error: string | null;
@@ -117,6 +119,21 @@ export function useComposerAttachments(): UseComposerAttachmentsApi {
     },
     [sync],
   );
+  const restore = useCallback(
+    (nextAttachments: { blob: Blob; filename: string }[]) => {
+      ref.current.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
+      ref.current = nextAttachments.slice(0, MAX_ATTACHMENTS).map((attachment, index) => ({
+        clientId: `att-restored-${Date.now()}-${index}`,
+        filename: attachment.filename,
+        mimeType: attachment.blob.type || "application/octet-stream",
+        byteSize: attachment.blob.size,
+        previewUrl: URL.createObjectURL(attachment.blob),
+        blob: attachment.blob,
+      }));
+      sync();
+    },
+    [sync],
+  );
 
   const clear = useCallback(() => {
     ref.current.forEach((a) => URL.revokeObjectURL(a.previewUrl));
@@ -127,7 +144,7 @@ export function useComposerAttachments(): UseComposerAttachmentsApi {
 
   const clearError = useCallback(() => setError(null), []);
 
-  return { attachments, addFiles, removeAttachment, clear, isCompressing, error, clearError };
+  return { attachments, addFiles, removeAttachment, restore, clear, isCompressing, error, clearError };
 }
 
 export const COMPOSER_ATTACHMENT_LIMITS = {

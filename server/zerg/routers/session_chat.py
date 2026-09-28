@@ -83,6 +83,7 @@ from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import MAX_QUEUED_PER_SESSION
 from zerg.services.session_inputs import InputConflictReason
+from zerg.services.session_inputs import InputDisposition
 from zerg.services.session_inputs import InputIntent
 from zerg.services.session_inputs import InputOutcome
 from zerg.services.session_inputs import InputStatus
@@ -380,7 +381,7 @@ class SessionInputRequest(BaseModel):
         ...,
         min_length=1,
         max_length=64,
-        description="Caller-owned idempotency key for this submitted input",
+        description="Caller-owned idempotency key. If delivery is unknown, retry the exact payload with this same identity.",
     )
     report_id: UUID | None = Field(
         None,
@@ -389,27 +390,55 @@ class SessionInputRequest(BaseModel):
     model: str | None = None
 
 
+class SessionInputAttachmentSummary(BaseModel):
+    filename: str
+    mime_type: str
+    byte_size: int
+
+
 class QueuedInputSummary(BaseModel):
+    """A server-owned input receipt with separate delivery and Console turn state."""
+
     id: int | None = None
     live_input_id: str | None = None
     client_request_id: str | None = None
+    durable_event_id: str | None = None
     text: str
     intent: InputIntent
     status: InputStatus
+    disposition: InputDisposition = Field(
+        "accepted",
+        description="Operation ownership. A returned receipt row is accepted even if delivery later fails or is cancelled.",
+    )
+    delivery_status: InputStatus | None = Field(
+        None,
+        description="Delivery lifecycle; this does not change operation disposition.",
+    )
     last_error: str | None = None
     created_at: datetime | None = None
+    attachments: list[SessionInputAttachmentSummary] = Field(default_factory=list)
+    turn: "ConsoleTurnReceiptResponse | None" = None
 
 
 class ConsoleTurnReceiptResponse(BaseModel):
     turn_id: str
+    receipt_id: str | None = None
     run_id: str | None = None
     state: str
+    is_fresh: bool | None = Field(
+        None,
+        description="Terminal turns are authoritative; for nonterminal turns, true means the last update is within the Runtime Host's current-work freshness horizon.",
+    )
 
 
 class SessionInputResponse(BaseModel):
     """Shape returned from POST /api/sessions/{id}/input."""
 
     outcome: InputOutcome = Field(..., description="sent | queued | unknown")
+    disposition: InputDisposition = Field(
+        "accepted",
+        description="Operation ownership, separate from delivery outcome and Console turn state.",
+    )
     input_id: int | None = None
     live_input_id: str | None = None
     client_request_id: str | None = None
@@ -1386,11 +1415,33 @@ def _live_queued_summary(receipt: LiveInputReceiptSnapshot) -> QueuedInputSummar
         id=receipt.archive_session_input_id,
         live_input_id=receipt.id,
         client_request_id=receipt.client_request_id,
+        durable_event_id=receipt.durable_event_id,
         text=receipt.text,
         intent=receipt.intent if receipt.intent in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER) else INPUT_INTENT_AUTO,
         status=receipt.status,
+        disposition="accepted",
+        delivery_status=receipt.status,
         last_error=last_error,
         created_at=receipt.created_at,
+        attachments=[
+            SessionInputAttachmentSummary(
+                filename=attachment.filename,
+                mime_type=attachment.mime_type,
+                byte_size=attachment.byte_size,
+            )
+            for attachment in receipt.attachments
+        ],
+        turn=(
+            ConsoleTurnReceiptResponse(
+                turn_id=str(receipt.turn["turn_id"]),
+                receipt_id=receipt.id,
+                run_id=str(receipt.turn["run_id"]) if receipt.turn.get("run_id") is not None else None,
+                state=str(receipt.turn["state"]),
+                is_fresh=receipt.turn.get("is_fresh"),
+            )
+            if receipt.turn is not None and receipt.turn.get("turn_id")
+            else None
+        ),
     )
 
 
@@ -1434,6 +1485,84 @@ def _receipt_error_code(value: object) -> str | None:
 def _runtime_draining_error(value: object) -> bool:
     """Return whether a receipt records a known pre-dispatch drain refusal."""
     return _receipt_error_code(value) == "runtime_draining"
+
+
+def _input_error_detail(
+    error_code: str,
+    message: str,
+    *,
+    disposition: InputDisposition = "rejected",
+    delivery_status: str | None = None,
+    client_request_id: str | None = None,
+    input_id: int | None = None,
+    live_input_id: str | None = None,
+    turn: ConsoleTurnReceiptResponse | None = None,
+    code_key: str = "error_code",
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        code_key: error_code,
+        "message": message,
+        "disposition": disposition,
+    }
+    if delivery_status is not None:
+        detail["delivery_status"] = delivery_status
+    if client_request_id is not None:
+        detail["client_request_id"] = client_request_id
+    if input_id is not None:
+        detail["input_id"] = input_id
+    if live_input_id is not None:
+        detail["live_input_id"] = live_input_id
+    if turn is not None:
+        detail["turn"] = turn.model_dump(mode="json")
+    return detail
+
+
+def _console_turn_response(turn) -> ConsoleTurnReceiptResponse:
+    return ConsoleTurnReceiptResponse(
+        turn_id=str(turn.turn_id),
+        receipt_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
+        run_id=str(turn.run_id) if getattr(turn, "run_id", None) is not None else None,
+        state=str(turn.state),
+        is_fresh=True,
+    )
+
+
+def _console_turn_outcome(state: str) -> InputOutcome:
+    return "sent" if state in {"active", "completed"} else "queued"
+
+
+def _console_turn_failure(turn, *, client_request_id: str, code_key: str = "error_code") -> HTTPException:
+    turn_response = _console_turn_response(turn)
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=_input_error_detail(
+            getattr(turn, "error_code", None) or "provider_launch_failed",
+            getattr(turn, "error", None) or "Console turn failed",
+            disposition="accepted",
+            delivery_status=str(turn.state),
+            client_request_id=client_request_id,
+            live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
+            turn=turn_response,
+            code_key=code_key,
+        ),
+    )
+
+
+def _augment_receipt_error(
+    payload: object,
+    *,
+    client_request_id: str,
+    live_input_id: str,
+    disposition: InputDisposition = "accepted",
+    delivery_status: str | None = None,
+) -> dict[str, Any]:
+    detail = dict(payload) if isinstance(payload, dict) else {"message": str(payload)}
+    detail.setdefault("disposition", disposition)
+    detail.setdefault("client_request_id", client_request_id)
+    detail.setdefault("live_input_id", live_input_id)
+    if delivery_status is not None:
+        detail.setdefault("delivery_status", delivery_status)
+    return detail
 
 
 async def _set_catalog_live_receipt_error(
@@ -1524,11 +1653,14 @@ def _live_receipt_response(
 ) -> SessionInputResponse:
     if recent is None:
         recent = _recent_input_summaries(source_session, db)
+    summary = _live_queued_summary(receipt)
     return SessionInputResponse(
         outcome=_live_receipt_outcome(receipt),
+        disposition="accepted",
         input_id=receipt.archive_session_input_id,
         live_input_id=receipt.id,
         client_request_id=receipt.client_request_id,
+        turn=summary.turn,
         intent=receipt.intent if receipt.intent in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER) else INPUT_INTENT_AUTO,
         queued=recent,
     )
@@ -1547,10 +1679,12 @@ async def _retry_runtime_draining_catalog_input(
     if not delivery_request_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=body.client_request_id,
+            ),
         )
     lock_scope_id = session_lock_scope_id(source_session.id)
     lock = await session_lock_manager.acquire(
@@ -1561,11 +1695,15 @@ async def _retry_runtime_draining_catalog_input(
     if not lock:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "input_dispatch_in_flight",
-                "message": "This input is already being dispatched; retry with the same client_request_id.",
-                "client_request_id": body.client_request_id,
-            },
+            detail=_augment_receipt_error(
+                {
+                    "error_code": "input_dispatch_in_flight",
+                    "message": "This input is already being dispatched; retry with the same client_request_id.",
+                },
+                client_request_id=body.client_request_id,
+                live_input_id=existing.id,
+                delivery_status=existing.status,
+            ),
         )
     try:
         current = await load_live_input_receipt_by_client_request(
@@ -1573,29 +1711,39 @@ async def _retry_runtime_draining_catalog_input(
             session_id=source_session.id,
             client_request_id=body.client_request_id,
         )
-    except LiveInputReceiptUnavailable as exc:
+    except LiveInputReceiptUnavailable:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
-        ) from exc
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=body.client_request_id,
+            ),
+        )
     if current is None:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=body.client_request_id,
+            ),
         )
     if current.text != body.text or current.intent != body.intent:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"error_code": "input_conflict", "reason": "different_payload", "existing_live_input_id": current.id},
+            detail=_augment_receipt_error(
+                {"error_code": "input_conflict", "reason": "different_payload"},
+                client_request_id=body.client_request_id,
+                live_input_id=current.id,
+                disposition="accepted",
+                delivery_status=current.status,
+            ),
         )
     if current.status != INPUT_STATUS_DELIVERING or not _runtime_draining_error(current.error_json):
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
@@ -1607,16 +1755,31 @@ async def _retry_runtime_draining_catalog_input(
             return _live_receipt_response(source_session=source_session, db=db, receipt=current, recent=recent)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"error_code": "input_already_rejected", "existing_live_input_id": current.id, "status": current.status},
+            detail=_augment_receipt_error(
+                {
+                    "error_code": "input_already_rejected",
+                    "message": "This input already reached a terminal delivery state.",
+                },
+                client_request_id=body.client_request_id,
+                live_input_id=current.id,
+                disposition="accepted",
+                delivery_status=current.status,
+            ),
         )
     if str(current.delivery_request_id or "").strip() != delivery_request_id:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_augment_receipt_error(
+                {
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+                client_request_id=body.client_request_id,
+                live_input_id=current.id,
+                disposition="unknown",
+                delivery_status="unknown",
+            ),
         )
     existing = current
     claimed = await _set_catalog_live_receipt_error(
@@ -1636,10 +1799,16 @@ async def _retry_runtime_draining_catalog_input(
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_augment_receipt_error(
+                {
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+                client_request_id=body.client_request_id,
+                live_input_id=existing.id,
+                disposition="unknown",
+                delivery_status="unknown",
+            ),
         )
 
     async def mark_runtime_draining(payload: dict[str, object]) -> None:
@@ -1657,10 +1826,16 @@ async def _retry_runtime_draining_catalog_input(
             await session_lock_manager.release(lock_scope_id, delivery_request_id)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "error_code": "input_receipt_unknown",
-                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
-                },
+                detail=_augment_receipt_error(
+                    {
+                        "error_code": "input_receipt_unknown",
+                        "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                    },
+                    client_request_id=body.client_request_id,
+                    live_input_id=existing.id,
+                    disposition="unknown",
+                    delivery_status="unknown",
+                ),
             )
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
@@ -1699,7 +1874,13 @@ async def _retry_runtime_draining_catalog_input(
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"error_code": "delivery_unknown", "message": error},
+                detail=_augment_receipt_error(
+                    {"error_code": "delivery_unknown", "message": error},
+                    client_request_id=body.client_request_id,
+                    live_input_id=existing.id,
+                    disposition="accepted",
+                    delivery_status="unknown",
+                ),
             )
         if not result.ok:
             await _finish_catalog_input_receipt(
@@ -1707,7 +1888,16 @@ async def _retry_runtime_draining_catalog_input(
                 delivery_request_id=delivery_request_id,
                 error=str(result.error or "steer failed"),
             )
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error_code": str(result.error or "steer_failed")})
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_augment_receipt_error(
+                    {"error_code": str(result.error or "steer_failed")},
+                    client_request_id=body.client_request_id,
+                    live_input_id=existing.id,
+                    disposition="accepted",
+                    delivery_status="failed",
+                ),
+            )
     else:
         dispatch_response = await _build_managed_local_chat_response(
             source_session=source_session,
@@ -1735,13 +1925,31 @@ async def _retry_runtime_draining_catalog_input(
                     delivery_request_id=delivery_request_id,
                     error=f"delivery_unknown: {error}",
                 )
-                raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
+                raise HTTPException(
+                    status_code=dispatch_response.status_code,
+                    detail=_augment_receipt_error(
+                        payload,
+                        client_request_id=body.client_request_id,
+                        live_input_id=existing.id,
+                        disposition="accepted",
+                        delivery_status="unknown",
+                    ),
+                )
             await _finish_catalog_input_receipt(
                 receipt_id=existing.id,
                 delivery_request_id=delivery_request_id,
                 error=error,
             )
-            raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
+            raise HTTPException(
+                status_code=dispatch_response.status_code,
+                detail=_augment_receipt_error(
+                    payload,
+                    client_request_id=body.client_request_id,
+                    live_input_id=existing.id,
+                    disposition="accepted",
+                    delivery_status="failed",
+                ),
+            )
 
     await _finish_catalog_input_receipt(
         receipt_id=existing.id,
@@ -1814,7 +2022,15 @@ async def _create_catalog_session_input_response(
 ) -> SessionInputResponse:
     """Live-receipt authoritative input path used when the cold DB is absent."""
     if body.report_id is not None and getattr(source_session, "command_family", None) != "console_turn":
-        raise HTTPException(status_code=400, detail="report_id is only supported for Console sessions")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_input_error_detail(
+                "report_id_unsupported",
+                "report_id is only supported for Console sessions",
+                disposition="rejected",
+                client_request_id=body.client_request_id,
+            ),
+        )
 
     if getattr(source_session, "command_family", None) == "console_turn":
         client_request_id = body.client_request_id
@@ -1830,40 +2046,95 @@ async def _create_catalog_session_input_response(
                 enqueue_kwargs["model"] = body.model
             turn = await enqueue_catalog_console_turn(**enqueue_kwargs)
         except ConsoleTurnConflict as exc:
+            existing_conflict = None
+            try:
+                existing_conflict = await load_live_input_receipt_by_client_request(
+                    owner_id=owner_id,
+                    session_id=source_session.id,
+                    client_request_id=client_request_id,
+                )
+            except LiveInputReceiptUnavailable:
+                existing_conflict = None
+            if existing_conflict is not None:
+                summary = _live_queued_summary(existing_conflict)
+                detail = _input_error_detail(
+                    "idempotency_conflict",
+                    str(exc),
+                    disposition="accepted",
+                    delivery_status=existing_conflict.status,
+                    client_request_id=client_request_id,
+                    live_input_id=existing_conflict.id,
+                    turn=summary.turn,
+                )
+            else:
+                detail = _input_error_detail(
+                    "idempotency_conflict",
+                    str(exc),
+                    disposition="unknown",
+                    client_request_id=client_request_id,
+                )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        except ConsoleTurnUnavailable as exc:
+            disposition: InputDisposition = "unknown" if exc.code == "catalog_unavailable" else "rejected"
+            error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
+            raise HTTPException(
+                status_code=error_status,
+                detail=_input_error_detail(exc.code, str(exc), disposition=disposition, client_request_id=client_request_id),
+            ) from exc
+        if turn.state == "cancelled":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "idempotency_conflict", "message": str(exc)},
-            ) from exc
-        except ConsoleTurnUnavailable as exc:
-            error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
-            raise HTTPException(status_code=error_status, detail={"code": exc.code, "message": str(exc)}) from exc
+                detail=_input_error_detail(
+                    "input_cancelled",
+                    "This Console input was cancelled.",
+                    disposition="accepted",
+                    delivery_status="cancelled",
+                    client_request_id=client_request_id,
+                    live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
+                    turn=_console_turn_response(turn),
+                ),
+            )
         if turn.error and turn.error_code not in {
             "turn_start_ambiguous",
             "turn_start_outcome_unknown",
             "attachment_stage_outcome_unknown",
         }:
-            raise HTTPException(
-                status_code=502,
-                detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},
-            )
+            raise _console_turn_failure(turn, client_request_id=client_request_id, code_key="code")
         return SessionInputResponse(
-            outcome="sent" if turn.state == "active" else "queued",
+            outcome=_console_turn_outcome(turn.state),
+            disposition="accepted",
             input_id=None,
-            live_input_id=str(turn.turn_id),
+            live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
             client_request_id=client_request_id,
-            turn=ConsoleTurnReceiptResponse(
-                turn_id=str(turn.turn_id),
-                run_id=str(turn.run_id) if getattr(turn, "run_id", None) is not None else None,
-                state=turn.state,
-            ),
+            turn=_console_turn_response(turn),
             intent=INPUT_INTENT_AUTO,
             queued=[],
         )
 
     if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
-        raise HTTPException(status_code=400, detail=f"unknown intent: {body.intent}")
-    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_input_error_detail(
+                "invalid_intent",
+                f"unknown intent: {body.intent}",
+                disposition="rejected",
+                client_request_id=body.client_request_id,
+            ),
+        )
     client_request_id = body.client_request_id
+    try:
+        _assert_live_session_send_available(db, source_session, owner_id=owner_id)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=_input_error_detail(
+                "input_rejected",
+                detail,
+                disposition="rejected",
+                client_request_id=client_request_id,
+            ),
+        ) from exc
     try:
         existing = await load_live_input_receipt_by_client_request(
             owner_id=owner_id,
@@ -1873,31 +2144,24 @@ async def _create_catalog_session_input_response(
     except LiveInputReceiptUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
         ) from exc
     if existing is not None:
         if existing.payload_digest is not None or existing.text != body.text or existing.intent != body.intent:
             raise HTTPException(
                 status_code=409,
-                detail={
-                    "error_code": "input_conflict",
-                    "existing_live_input_id": existing.id,
-                    "reason": "different_payload",
-                },
-            )
-        if existing.status in (INPUT_STATUS_FAILED, INPUT_STATUS_CANCELLED) and not (
-            existing.status == INPUT_STATUS_FAILED and _delivery_unknown_error(existing.error_json)
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error_code": "input_already_rejected",
-                    "existing_live_input_id": existing.id,
-                    "status": existing.status,
-                },
+                detail=_augment_receipt_error(
+                    {"error_code": "input_conflict", "reason": "different_payload"},
+                    client_request_id=client_request_id,
+                    live_input_id=existing.id,
+                    disposition="accepted",
+                    delivery_status=existing.status,
+                ),
             )
         if existing.status == INPUT_STATUS_DELIVERING and _runtime_draining_error(existing.error_json):
             return await _retry_runtime_draining_catalog_input(
@@ -1910,9 +2174,24 @@ async def _create_catalog_session_input_response(
         if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING) or (
             existing.status == INPUT_STATUS_FAILED and _delivery_unknown_error(existing.error_json)
         ):
+            # A failed receipt with an ambiguous provider outcome is still the
+            # same accepted operation; resolve it instead of rejecting or dispatching it again.
             state = await _catalog_recent_input_summaries(source_session.id)
             recent = state[0] if state is not None else []
             return _live_receipt_response(source_session=source_session, db=db, receipt=existing, recent=recent)
+        if existing.status in (INPUT_STATUS_FAILED, INPUT_STATUS_CANCELLED):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_input_error_detail(
+                    "input_already_rejected",
+                    "This submitted input already reached a terminal delivery state.",
+                    disposition="accepted",
+                    delivery_status=existing.status,
+                    client_request_id=client_request_id,
+                    live_input_id=existing.id,
+                    turn=_live_queued_summary(existing).turn,
+                ),
+            )
 
     if str(getattr(source_session, "provider", "") or "").strip().lower() == "pi" and body.intent in {
         INPUT_INTENT_AUTO,
@@ -1934,7 +2213,15 @@ async def _create_catalog_session_input_response(
             delivery_request_id=delivery_request_id,
         )
         if receipt_id is None:
-            raise HTTPException(status_code=503, detail="Live input receipt writer is unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail=_input_error_detail(
+                    "input_receipt_unknown",
+                    "The server could not persist this operation; retry with the same client_request_id.",
+                    disposition="unknown",
+                    client_request_id=client_request_id,
+                ),
+            )
         result = await dispatch_managed_control_command(
             db=db,
             owner_id=owner_id,
@@ -1951,7 +2238,14 @@ async def _create_catalog_session_input_response(
             if result.failure_reason == "indeterminate":
                 raise HTTPException(
                     status_code=502,
-                    detail={"error_code": "delivery_unknown", "message": error},
+                    detail=_input_error_detail(
+                        "delivery_unknown",
+                        error,
+                        disposition="accepted",
+                        delivery_status="unknown",
+                        client_request_id=client_request_id,
+                        live_input_id=receipt_id,
+                    ),
                 )
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
@@ -1960,7 +2254,14 @@ async def _create_catalog_session_input_response(
             )
             raise HTTPException(
                 status_code=502,
-                detail={"error_code": "pi_native_send_failed", "message": error},
+                detail=_input_error_detail(
+                    "pi_native_send_failed",
+                    error,
+                    disposition="accepted",
+                    delivery_status="failed",
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                ),
             )
         await _finish_catalog_input_receipt(
             receipt_id=receipt_id,
@@ -1996,7 +2297,15 @@ async def _create_catalog_session_input_response(
             delivery_request_id=delivery_request_id,
         )
         if receipt_id is None:
-            raise HTTPException(status_code=503, detail="Live input receipt writer is unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail=_input_error_detail(
+                    "input_receipt_unknown",
+                    "The server could not persist this operation; retry with the same client_request_id.",
+                    disposition="unknown",
+                    client_request_id=client_request_id,
+                ),
+            )
         result = await dispatch_managed_control_command(
             db=db,
             owner_id=owner_id,
@@ -2013,7 +2322,14 @@ async def _create_catalog_session_input_response(
             if result.failure_reason == "indeterminate":
                 raise HTTPException(
                     status_code=502,
-                    detail={"error_code": "delivery_unknown", "message": error},
+                    detail=_input_error_detail(
+                        "delivery_unknown",
+                        error,
+                        disposition="accepted",
+                        delivery_status="unknown",
+                        client_request_id=client_request_id,
+                        live_input_id=receipt_id,
+                    ),
                 )
             # A precondition refusal means the provider channel was not reached;
             # the durable receipt remains owned by the recovery loop. Do not
@@ -2046,7 +2362,14 @@ async def _create_catalog_session_input_response(
             )
             raise HTTPException(
                 status_code=502,
-                detail={"error_code": "omp_native_send_failed", "message": error},
+                detail=_input_error_detail(
+                    "omp_native_send_failed",
+                    error,
+                    disposition="accepted",
+                    delivery_status="failed",
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                ),
             )
         await _finish_catalog_input_receipt(
             receipt_id=receipt_id,
@@ -2063,10 +2386,26 @@ async def _create_catalog_session_input_response(
 
     state = await _catalog_recent_input_summaries(source_session.id)
     if state is None:
-        raise HTTPException(status_code=503, detail="Live input catalog is unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm the input catalog; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        )
     current = state[1]
     if current >= MAX_QUEUED_PER_SESSION:
-        raise HTTPException(status_code=409, detail=f"Too many queued inputs for this session ({current})")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_input_error_detail(
+                "input_queue_full",
+                f"Too many queued inputs for this session ({current})",
+                disposition="rejected",
+                client_request_id=client_request_id,
+            ),
+        )
 
     delivery_request_id = uuid.uuid4().hex
     if body.intent == INPUT_INTENT_QUEUE:
@@ -2079,7 +2418,15 @@ async def _create_catalog_session_input_response(
             status_value=INPUT_STATUS_QUEUED,
         )
         if receipt_id is None:
-            raise HTTPException(status_code=503, detail="Live input queue is unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail=_input_error_detail(
+                    "input_receipt_unknown",
+                    "The server could not persist this operation; retry with the same client_request_id.",
+                    disposition="unknown",
+                    client_request_id=client_request_id,
+                ),
+            )
         return SessionInputResponse(
             outcome="queued",
             input_id=None,
@@ -2106,7 +2453,15 @@ async def _create_catalog_session_input_response(
                 status_value=INPUT_STATUS_QUEUED,
             )
             if receipt_id is None:
-                raise HTTPException(status_code=503, detail="Live input queue is unavailable")
+                raise HTTPException(
+                    status_code=503,
+                    detail=_input_error_detail(
+                        "input_receipt_unknown",
+                        "The server could not persist this operation; retry with the same client_request_id.",
+                        disposition="unknown",
+                        client_request_id=client_request_id,
+                    ),
+                )
             return SessionInputResponse(
                 outcome="queued",
                 input_id=None,
@@ -2130,7 +2485,15 @@ async def _create_catalog_session_input_response(
     if receipt_id is None:
         if body.intent == INPUT_INTENT_AUTO:
             await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        raise HTTPException(status_code=503, detail="Live input receipt writer is unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not persist this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        )
 
     if body.intent == INPUT_INTENT_STEER:
         from zerg.services.managed_local_control import steer_text_to_managed_local_session
@@ -2183,7 +2546,14 @@ async def _create_catalog_session_input_response(
             )
             raise HTTPException(
                 status_code=502,
-                detail={"error_code": "delivery_unknown", "message": str(result.error or "steer outcome is unknown")},
+                detail=_input_error_detail(
+                    "delivery_unknown",
+                    str(result.error or "steer outcome is unknown"),
+                    disposition="accepted",
+                    delivery_status="unknown",
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                ),
             )
         if not result.ok:
             await _finish_catalog_input_receipt(
@@ -2191,7 +2561,17 @@ async def _create_catalog_session_input_response(
                 delivery_request_id=delivery_request_id,
                 error=str(result.error or "steer failed"),
             )
-            raise HTTPException(status_code=409, detail={"error_code": str(result.error or "steer_failed")})
+            raise HTTPException(
+                status_code=409,
+                detail=_input_error_detail(
+                    str(result.error or "steer_failed"),
+                    str(result.error or "steer failed"),
+                    disposition="accepted",
+                    delivery_status="failed",
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                ),
+            )
     else:
         dispatch_response = await _build_managed_local_chat_response(
             source_session=source_session,
@@ -2219,10 +2599,20 @@ async def _create_catalog_session_input_response(
                     error=payload,
                 )
                 if not marked:
-                    payload = {
-                        "error_code": "input_receipt_unknown",
-                        "message": "The server could not confirm this operation; retry with the same client_request_id.",
-                    }
+                    payload = _input_error_detail(
+                        "input_receipt_unknown",
+                        "The server could not confirm this operation; retry with the same client_request_id.",
+                        disposition="unknown",
+                        client_request_id=client_request_id,
+                    )
+                else:
+                    payload = _augment_receipt_error(
+                        payload,
+                        client_request_id=client_request_id,
+                        live_input_id=receipt_id,
+                        disposition="accepted",
+                        delivery_status="delivering",
+                    )
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
             if _delivery_unknown_error(json.dumps(payload)):
                 # Keep the receipt in delivering: the provider may have
@@ -2237,13 +2627,31 @@ async def _create_catalog_session_input_response(
                     delivery_request_id=delivery_request_id,
                     error={"code": "delivery_unknown", "message": error},
                 )
-                raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
+                raise HTTPException(
+                    status_code=dispatch_response.status_code,
+                    detail=_augment_receipt_error(
+                        payload,
+                        client_request_id=client_request_id,
+                        live_input_id=receipt_id,
+                        disposition="accepted",
+                        delivery_status="unknown",
+                    ),
+                )
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
                 delivery_request_id=delivery_request_id,
                 error=error,
             )
-            raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
+            raise HTTPException(
+                status_code=dispatch_response.status_code,
+                detail=_augment_receipt_error(
+                    payload,
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                    disposition="accepted",
+                    delivery_status="failed",
+                ),
+            )
 
     await _finish_catalog_input_receipt(
         receipt_id=receipt_id,
@@ -2273,23 +2681,35 @@ def _input_conflict(existing: SessionInput, *, reason: InputConflictReason) -> H
 def _conflict_for_existing_input(existing: SessionInput) -> HTTPException:
     status_value = str(existing.status or "")
     if status_value == INPUT_STATUS_CANCELLED:
-        return _input_conflict(existing, reason="cancelled")
-    if status_value == INPUT_STATUS_FAILED:
-        last_error = str(existing.last_error or "").strip()
-        if last_error == "turn_ended":
-            return HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error_code": "turn_ended",
-                    "message": "The active turn already ended. Queue this as the next message instead?",
-                },
-            )
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "input_failed",
-                "message": last_error or "This submitted input already failed. Edit and send it again.",
-            },
+            detail=_input_error_detail(
+                "input_cancelled",
+                "This input was cancelled before delivery.",
+                disposition="accepted",
+                delivery_status=status_value,
+                client_request_id=existing.client_request_id,
+                input_id=int(existing.id),
+            ),
+        )
+    if status_value == INPUT_STATUS_FAILED:
+        last_error = str(existing.last_error or "").strip()
+        error_code = "turn_ended" if last_error == "turn_ended" else "input_failed"
+        message = (
+            "The active turn already ended. Queue this as the next message instead?"
+            if error_code == "turn_ended"
+            else last_error or "This submitted input already failed. Edit and send it again."
+        )
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_input_error_detail(
+                error_code,
+                message,
+                disposition="accepted",
+                delivery_status=status_value,
+                client_request_id=existing.client_request_id,
+                input_id=int(existing.id),
+            ),
         )
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -2486,13 +2906,12 @@ async def list_session_inputs_endpoint(
     db: Session = Depends(_catalog_control_db_dependency),
     current_user: Caller = Depends(get_current_browser_route_caller),
 ):
-    """List queued + recently settled inputs for the chip UI.
+    """List inputs or look up one exact server-owned operation.
 
-    The web composer polls this every 2s while any row is queued or
-    delivering. Most polls return the same shape, so we emit a weak
-    ETag derived from the row state tuple and honor If-None-Match →
-    304. A 304 is ~1ms vs ~9ms for the full response, which matters
-    at the aggregate QPS of many active session-detail pages.
+    With ``client_request_id``, returns [] when no receipt exists or one
+    accepted receipt with delivery status and optional Console turn identity.
+    Without it, returns queued + recently settled inputs for the chip UI and
+    emits a weak ETag for unchanged status/turn state.
     """
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     requested_client_request_id = (client_request_id or "").strip()
@@ -2513,11 +2932,24 @@ async def list_session_inputs_endpoint(
         raise HTTPException(status_code=503, detail="Live input catalog is unavailable")
     rows = state[0]
 
-    # Cheap stable hash of the state that matters to the client. If none of
-    # id/status/updated_at/last_error changed, neither did the chip.
+    # Receipt status alone does not describe Console progress: a delivered
+    # receipt may remain active while its turn runs. Include turn identity,
+    # state and freshness so If-None-Match cannot freeze that evidence.
     hasher = blake2b(digest_size=12)
     for r in rows:
-        hasher.update(f"{r.id}:{r.live_input_id}:{r.status}:{r.created_at}:{r.last_error or ''}|".encode())
+        turn = r.turn
+        attachment_state = json.dumps(
+            [(item.filename, item.mime_type, item.byte_size) for item in r.attachments],
+            separators=(",", ":"),
+        )
+        value = (
+            f"{r.id}:{r.live_input_id}:{r.client_request_id}:{r.durable_event_id}:"
+            f"{r.status}:{r.disposition}:{r.delivery_status}:"
+            f"{turn.turn_id if turn else ''}:{turn.receipt_id if turn else ''}:"
+            f"{turn.run_id if turn else ''}:{turn.state if turn else ''}:{turn.is_fresh if turn else ''}:"
+            f"{attachment_state}:{r.created_at}:{r.last_error or ''}|"
+        )
+        hasher.update(value.encode())
     etag = f'W/"inputs-{hasher.hexdigest()}"'
 
     if request.headers.get("If-None-Match") == etag:

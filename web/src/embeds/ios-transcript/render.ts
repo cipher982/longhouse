@@ -1,6 +1,6 @@
 import { escapeHtml } from "./escape";
 import { markdownToHtml } from "./markdown";
-import { renderItem } from "./rows";
+import { attachSubmittedInputHandlers, renderItem } from "./rows";
 import { isStickingToBottom, scrollToBottom, setStickToBottom } from "./scroll";
 import { attachSubagentHandlers, captureOpenSubagentKeys, restoreOpenSubagentKeys } from "./subagents";
 import type { FrameMetrics, RenderMetrics, TranscriptItem, TranscriptPayload } from "./types";
@@ -38,6 +38,7 @@ export function decodePayload(base64: string): TranscriptPayload {
 
 function attachExpandHandlers(scope: ParentNode = document): void {
   attachSubagentHandlers(scope);
+  attachSubmittedInputHandlers(scope);
   for (const button of scope.querySelectorAll("[data-expand-index]")) {
     button.addEventListener("click", () => {
       const index = Number(button.getAttribute("data-expand-index"));

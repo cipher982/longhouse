@@ -15,16 +15,19 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   cancelSessionInput,
+  fetchSessionInput,
   fetchSessionInputs,
   fetchSessionLockStatus,
   interruptLiveSession,
   interruptConsoleTurn,
   postSessionInput,
   postSessionInputMultipart,
+  type ConsoleTurnReceipt,
   type QueuedInputSummary,
+  type SessionInputResponse,
   type SessionLockInfo,
 } from "@/shared/api/index";
 import type { AgentSession } from "@/shared/api/agents";
@@ -60,23 +63,64 @@ interface PendingManagedLocalInput {
   text: string;
   clientRequestId: string;
   serverInputId: number | null;
+  serverLiveInputId?: string | null;
   intent: "auto" | "queue" | "steer";
+  model?: string | null;
+  legacyModelMissing?: boolean;
   attachments: { blob: Blob; filename: string }[];
-  /** `delivered`: the server confirmed handoff; the row stays until the
-   *  transcript echoes it so the message never blinks out in between. */
-  phase: "submitting" | "queued" | "unknown" | "delivered";
-  deliveredAt?: number;
-  /** Same-text user rows that cannot be this send's echo: those loaded when
-   *  it started, plus rows other sends have already claimed. */
-  echoExcludedRowIds?: string[];
+  attachmentSummaries?: { filename: string; mimeType: string | null; byteSize: number }[];
+  /** Server ownership phase; Console turns remain here until terminal. */
+  phase:
+    | "submitting"
+    | "queued"
+    | "starting"
+    | "active"
+    | "draining"
+    | "unknown"
+    | "failed"
+    | "delivered";
+  deliveryStatus?: string | null;
+  detail?: string | null;
 }
 
-/** A delivered message normally echoes within seconds. If the echo never
- *  lands in the loaded transcript, stop showing the provisional row. */
-const DELIVERED_ECHO_GRACE_MS = 60_000;
+type ManagedSendResult =
+  | { kind: "local-persistence-failed"; error: string }
+  | { kind: "accepted"; clientRequestId: string }
+  | { kind: "rejected"; clientRequestId: string; error: string }
+  | { kind: "unknown"; clientRequestId: string; error: string };
+
+interface ManagedSendOptions {
+  existingClientRequestId?: string;
+  replacementClientRequestId?: string;
+  model?: string | null;
+  legacyModelMissing?: boolean;
+  onPersisted?: () => void;
+}
+
+/** A delivered input keeps a lightweight row until its exact transcript echo. */
 const UNCONFIRMED_DELIVERY_ERROR =
   "Delivery is not confirmed; retry with the same request.";
+const STALE_CONSOLE_TURN_DETAIL =
+  "Console activity is stale; current delivery status is unconfirmed.";
+const LEGACY_MODEL_WARNING =
+  "Original model was not recorded; retry uses the server default and may not reproduce the original run.";
 
+type ActiveConsoleTurnPhase =
+  | "queued"
+  | "starting"
+  | "active"
+  | "draining";
+
+function activeConsoleTurnPhase(
+  state: string | null | undefined,
+): ActiveConsoleTurnPhase | null {
+  return state === "queued" ||
+    state === "starting" ||
+    state === "active" ||
+    state === "draining"
+    ? state
+    : null;
+}
 interface SessionChatProps {
   session: SessionChatTarget;
   onClose?: () => void;
@@ -150,8 +194,11 @@ interface StoredInputOutbox {
   text: string;
   intent: "auto" | "queue" | "steer";
   clientRequestId: string;
+  /** Null is an explicit no-override selection; absent means legacy metadata. */
+  model?: string | null;
   attachments: { filename: string; type: string; size: number }[];
   createdAt: number;
+  deliveryConfirmed?: boolean;
 }
 
 interface StoredInputOutboxPayload {
@@ -245,6 +292,7 @@ async function persistInputOutbox(
     text: string;
     intent: "auto" | "queue" | "steer";
     clientRequestId: string;
+    model?: string | null;
     attachments: { blob: Blob; filename: string }[];
   },
 ): Promise<void> {
@@ -256,12 +304,14 @@ async function persistInputOutbox(
     text: pending.text,
     intent: pending.intent,
     clientRequestId: pending.clientRequestId,
+    model: pending.model,
     attachments: pending.attachments.map(({ blob, filename }) => ({
       filename,
       type: blob.type || "application/octet-stream",
       size: blob.size,
     })),
     createdAt: Date.now(),
+    deliveryConfirmed: false,
   };
   if (pending.attachments.length > 0) {
     await writeInputOutboxPayload(sessionId, pending.clientRequestId, {
@@ -290,6 +340,72 @@ function clearInputOutbox(sessionId: string, clientRequestId: string): void {
   } finally {
     deleteInputOutboxPayload(sessionId, clientRequestId);
   }
+}
+
+function retainDeliveredInputOutbox(
+  sessionId: string,
+  clientRequestId: string,
+): void {
+  if (typeof window === "undefined") return;
+  const key = inputOutboxKey(sessionId, clientRequestId);
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return;
+    const stored = JSON.parse(raw) as StoredInputOutbox;
+    if (
+      stored.sessionId !== sessionId ||
+      stored.clientRequestId !== clientRequestId
+    ) {
+      return;
+    }
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({ ...stored, deliveryConfirmed: true }),
+    );
+    deleteInputOutboxPayload(sessionId, clientRequestId);
+  } catch {
+    // Keep the original durable payload when the summary cannot be stored.
+  }
+}
+
+function summarizeInputAttachments(
+  attachments: { blob: Blob; filename: string }[],
+): { filename: string; mimeType: string | null; byteSize: number }[] {
+  return attachments.map((attachment) => ({
+    filename: attachment.filename,
+    mimeType: attachment.blob.type || null,
+    byteSize: attachment.blob.size,
+  }));
+}
+
+const INPUT_DISMISSALS_PREFIX = "longhouse:session-input-dismissals:";
+
+function inputDismissalsKey(sessionId: string): string {
+  return `${INPUT_DISMISSALS_PREFIX}${sessionId}`;
+}
+
+function readDismissedInputIds(sessionId: string): Set<string> {
+  try {
+    const value = window.localStorage.getItem(inputDismissalsKey(sessionId));
+    const parsed: unknown = value ? JSON.parse(value) : [];
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function dismissInputReceipt(sessionId: string, clientRequestId: string): void {
+  const dismissed = readDismissedInputIds(sessionId);
+  if (dismissed.has(clientRequestId)) return;
+  dismissed.add(clientRequestId);
+  window.localStorage.setItem(
+    inputDismissalsKey(sessionId),
+    JSON.stringify(Array.from(dismissed)),
+  );
 }
 
 function readInputOutboxes(sessionId: string): StoredInputOutbox[] {
@@ -335,7 +451,7 @@ async function loadInputOutboxes(
     attachments: { blob: Blob; filename: string }[];
   }[] = [];
   for (const entry of metadata) {
-    if (entry.attachments.length === 0) {
+    if (entry.deliveryConfirmed || entry.attachments.length === 0) {
       loaded.push({ metadata: entry, attachments: [] });
       continue;
     }
@@ -371,50 +487,6 @@ function durableSubmittedInputRowId(
   });
   return match?.kind === "message" ? String(match.event.id) : null;
 }
-function normalizeInputText(value: string | null | undefined): string {
-  return (value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function userRowIdsWithText(
-  timelineItems: TimelineItem[] | undefined,
-  text: string,
-): string[] {
-  const target = normalizeInputText(text);
-  if (!target || !timelineItems) return [];
-  const ids: string[] = [];
-  for (const item of timelineItems) {
-    if (item.kind !== "message") continue;
-    const { event } = item;
-    if (event.role !== "user" || event.is_head_branch === false) continue;
-    if (normalizeInputText(event.content_text) === target) {
-      ids.push(String(event.id));
-    }
-  }
-  return ids;
-}
-
-/** Delivery is already confirmed, so only the visible row is at stake: the
- *  receipt-to-event link lands after ingest, and a new same-text user row
- *  nobody else has claimed is this message seen before its identity is
- *  stamped. Returns that row's id. */
-function deliveredTextEchoRowId(
-  timelineItems: TimelineItem[],
-  pendingInput: PendingManagedLocalInput,
-  claimedRowIds: Set<string>,
-): string | null {
-  if (
-    pendingInput.phase !== "delivered" ||
-    pendingInput.echoExcludedRowIds == null
-  ) {
-    return null;
-  }
-  const excluded = new Set(pendingInput.echoExcludedRowIds);
-  return (
-    userRowIdsWithText(timelineItems, pendingInput.text).find(
-      (id) => !excluded.has(id) && !claimedRowIds.has(id),
-    ) ?? null
-  );
-}
 
 function inputErrorCode(error?: string | null): string | null {
   const normalized = error?.trim().toLowerCase();
@@ -428,8 +500,20 @@ function hasRuntimeDrainingError(error?: string | null): boolean {
 
 function hasProviderDeliveryUnknownError(error?: string | null): boolean {
   const code = inputErrorCode(error);
-  return code === "delivery_unknown" || code === "input_receipt_unknown";
+  return (
+    code === "delivery_unknown" ||
+    code === "provider_unknown" ||
+    code === "provider_delivery_unknown" ||
+    code === "input_receipt_unknown"
+  );
 }
+
+const NONTERMINAL_CONSOLE_TURN_STATES = new Set([
+  "queued",
+  "starting",
+  "active",
+  "draining",
+]);
 
 function hasUnknownDeliveryError(error?: string | null): boolean {
   return (
@@ -437,14 +521,31 @@ function hasUnknownDeliveryError(error?: string | null): boolean {
   );
 }
 
-function structuredInputErrorCode(error: unknown): string | null {
+interface StructuredInputErrorDetail {
+  error_code?: string;
+  disposition?: "accepted" | "rejected" | "unknown";
+  delivery_status?: string | null;
+  client_request_id?: string | null;
+  input_id?: number | null;
+  live_input_id?: string | null;
+  turn?: ConsoleTurnReceipt | null;
+  message?: string;
+}
+
+interface TurnEndedDraft {
+  clientRequestId: string;
+  text: string;
+  model: string | null;
+}
+
+function structuredInputErrorDetail(error: unknown): StructuredInputErrorDetail | null {
   if (!error || typeof error !== "object" || !("body" in error)) return null;
   const body = error.body;
   if (!body || typeof body !== "object" || !("detail" in body)) return null;
   const detail = body.detail;
-  if (!detail || typeof detail !== "object") return null;
-  const code = "error_code" in detail ? detail.error_code : "code" in detail ? detail.code : null;
-  return typeof code === "string" ? code.trim().toLowerCase() : null;
+  return detail && typeof detail === "object"
+    ? (detail as StructuredInputErrorDetail)
+    : null;
 }
 
 export function SessionChat({
@@ -492,12 +593,28 @@ export function SessionChat({
   const [selectedModel, setSelectedModel] = useState(
     () => session.selected_model?.trim() ?? "",
   );
+  const selectedModelChoiceRef = useRef({
+    sessionId: session.id,
+    explicit: false,
+  });
+  const handleSelectedModelChange = useCallback(
+    (model: string) => {
+      selectedModelChoiceRef.current = { sessionId: session.id, explicit: true };
+      setSelectedModel(model);
+    },
+    [session.id],
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
   useEffect(() => {
-    setSelectedModel(session.selected_model?.trim() ?? "");
+    if (selectedModelChoiceRef.current.sessionId !== session.id) {
+      selectedModelChoiceRef.current = { sessionId: session.id, explicit: false };
+    }
+    if (!selectedModelChoiceRef.current.explicit) {
+      setSelectedModel(session.selected_model?.trim() ?? "");
+    }
   }, [session.id, session.selected_model]);
 
   const [sentConfirmation, setSentConfirmation] = useState(false);
@@ -525,9 +642,17 @@ export function SessionChat({
             text: metadata.text,
             clientRequestId: metadata.clientRequestId,
             serverInputId: null,
+            serverLiveInputId: null,
             intent: metadata.intent,
+            model: metadata.model,
+            legacyModelMissing: !Object.prototype.hasOwnProperty.call(metadata, "model"),
             attachments,
-            phase: "unknown",
+            attachmentSummaries: metadata.attachments.map((attachment) => ({
+              filename: attachment.filename,
+              mimeType: attachment.type || null,
+              byteSize: attachment.size,
+            })),
+            phase: metadata.deliveryConfirmed ? "delivered" : "unknown",
           })),
         );
       })
@@ -546,8 +671,6 @@ export function SessionChat({
   }, [session.id]);
 
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const timelineItemsRef = useRef(timelineItems);
-  timelineItemsRef.current = timelineItems;
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -590,58 +713,36 @@ export function SessionChat({
       queryClient.invalidateQueries({
         queryKey: ["agent-session-events-infinite", session.id],
       }),
+      queryClient.invalidateQueries({ queryKey: ["session-inputs", session.id] }),
+      queryClient.invalidateQueries({ queryKey: ["session-input", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
     ]);
   }, [queryClient, session.id]);
 
   useEffect(() => {
     if (pendingManagedLocalInputs.length === 0 || !timelineItems) return;
-    // Oldest first, and each echo row resolves exactly one send: a row
-    // claimed here is excluded for every later same-text send, now and in
-    // later passes, so one echo never clears two identical sends.
-    const claimedRowIds = new Set<string>();
-    const resolvedIds: string[] = [];
-    for (const pending of pendingManagedLocalInputs) {
-      const identityRow =
-        pending.attachments.length === 0 || pending.phase === "delivered"
-          ? durableSubmittedInputRowId(timelineItems, pending)
-          : null;
-      const echoRow =
-        identityRow ??
-        deliveredTextEchoRowId(timelineItems, pending, claimedRowIds);
-      if (echoRow == null) continue;
-      resolvedIds.push(pending.clientRequestId);
-      claimedRowIds.add(echoRow);
-    }
+    const resolvedIds = pendingManagedLocalInputs
+      .filter((pending) => pending.phase === "delivered")
+      .filter((pending) => durableSubmittedInputRowId(timelineItems, pending) != null)
+      .map((pending) => pending.clientRequestId);
     if (resolvedIds.length === 0) return;
     for (const clientRequestId of resolvedIds) {
       clearInputOutbox(session.id, clientRequestId);
     }
     setPendingManagedLocalInputs((current) =>
-      current
-        .filter((pending) => !resolvedIds.includes(pending.clientRequestId))
-        .map((pending) =>
-          pending.echoExcludedRowIds == null
-            ? pending
-            : {
-                ...pending,
-                echoExcludedRowIds: [
-                  ...new Set([
-                    ...pending.echoExcludedRowIds,
-                    ...claimedRowIds,
-                  ]),
-                ],
-              },
-        ),
+      current.filter((pending) => !resolvedIds.includes(pending.clientRequestId)),
     );
   }, [pendingManagedLocalInputs, session.id, timelineItems]);
 
-  // Delivery is settled once the server confirms it, so the durable retry
-  // slot is released immediately; only the visible row waits for the echo.
+  // Server confirmation releases attachment bytes; the identity-bound summary
+  // remains durable until the transcript exposes the same operation.
   const markInputDelivered = useCallback(
-    (clientRequestId: string, serverInputId: number | null | undefined) => {
-      clearInputOutbox(session.id, clientRequestId);
-      const deliveredAt = Date.now();
+    (
+      clientRequestId: string,
+      serverInputId: number | null | undefined,
+      serverLiveInputId?: string | null,
+    ) => {
+      retainDeliveredInputOutbox(session.id, clientRequestId);
       setPendingManagedLocalInputs((current) =>
         current.map((pending) =>
           pending.clientRequestId === clientRequestId &&
@@ -649,8 +750,13 @@ export function SessionChat({
             ? {
                 ...pending,
                 phase: "delivered",
-                deliveredAt,
+                attachments: [],
+                attachmentSummaries:
+                  pending.attachmentSummaries ??
+                  summarizeInputAttachments(pending.attachments),
                 serverInputId: serverInputId ?? pending.serverInputId,
+                serverLiveInputId:
+                  serverLiveInputId ?? pending.serverLiveInputId,
               }
             : pending,
         ),
@@ -659,29 +765,6 @@ export function SessionChat({
     [session.id],
   );
 
-  useEffect(() => {
-    const delivered = pendingManagedLocalInputs.filter(
-      (pending) => pending.phase === "delivered",
-    );
-    if (delivered.length === 0) return;
-    const oldest = Math.min(
-      ...delivered.map((pending) => pending.deliveredAt ?? Date.now()),
-    );
-    const timer = setTimeout(
-      () => {
-        const cutoff = Date.now() - DELIVERED_ECHO_GRACE_MS;
-        setPendingManagedLocalInputs((current) =>
-          current.filter(
-            (pending) =>
-              pending.phase !== "delivered" ||
-              (pending.deliveredAt ?? 0) > cutoff,
-          ),
-        );
-      },
-      Math.max(0, oldest + DELIVERED_ECHO_GRACE_MS - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [pendingManagedLocalInputs]);
 
   const lockStatusQuery = useQuery<SessionLockInfo | null>({
     queryKey: ["session-lock", session.id],
@@ -724,83 +807,241 @@ export function SessionChat({
     refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const rows = query.state.data ?? [];
-      return rows.some(
-        (row) => row.status === "queued" || row.status === "delivering",
-      )
+      return rows.some((row) => {
+        const turnState = row.turn?.state;
+        if (turnState && NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)) {
+          return row.turn?.is_fresh === true;
+        }
+        return row.status === "queued" || row.status === "delivering";
+      })
         ? 2_000
         : false;
     },
     staleTime: 10_000,
   });
+
+  const hasDeliveredLocalInput = pendingManagedLocalInputs.some(
+    (pending) => pending.phase === "delivered",
+  );
   useEffect(() => {
-    if (pendingManagedLocalInputs.length === 0 || !queuedInputsQuery.data)
-      return;
-    const resolvedIds: string[] = [];
+    if (!hasDeliveredLocalInput || !timelineItems?.length) return;
+    const refresh = setTimeout(() => {
+      void queryClient.invalidateQueries({
+        queryKey: ["session-inputs", session.id],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["session-input", session.id],
+      });
+    }, 250);
+    return () => clearTimeout(refresh);
+  }, [hasDeliveredLocalInput, queryClient, session.id, timelineItems]);
+  const exactInputQueries = useQueries({
+    queries: pendingManagedLocalInputs.map((pending) => ({
+      queryKey: ["session-input", session.id, pending.clientRequestId],
+      queryFn: () => fetchSessionInput(session.id, pending.clientRequestId),
+      enabled:
+        Boolean(session.id) &&
+        isManagedLocal &&
+        pending.phase !== "failed",
+      refetchOnWindowFocus: false,
+      staleTime: 1_000,
+      refetchInterval: (query: { state: { data: unknown } }) => {
+        if (pending.phase === "delivered") return false;
+        const row = query.state.data as QueuedInputSummary | null | undefined;
+        const turnState = row?.turn?.state;
+        if (turnState && NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)) {
+          return row?.turn?.is_fresh === true ? 2_000 : false;
+        }
+        return 2_000;
+      },
+    })),
+  });
+  // useQueries returns fresh result arrays on render. Cache this lookup by
+  // receipt facts so the parent outbox callback doesn't turn a state update
+  // into an effect loop.
+  const exactInputRowsKey = JSON.stringify(
+    exactInputQueries.map((query, index) => {
+      const row = query.data as QueuedInputSummary | null | undefined;
+      return [
+        pendingManagedLocalInputs[index]?.clientRequestId ?? null,
+        row?.client_request_id ?? null,
+        row?.id ?? null,
+        row?.live_input_id ?? null,
+        row?.durable_event_id ?? null,
+        row?.status ?? null,
+        row?.disposition ?? null,
+        row?.delivery_status ?? null,
+        row?.last_error ?? null,
+        row?.turn?.turn_id ?? null,
+        row?.turn?.run_id ?? null,
+        row?.turn?.state ?? null,
+        row?.turn?.is_fresh ?? null,
+      ];
+    }),
+  );
+  const exactInputRows = useMemo(() => {
+    const rows = new Map<string, QueuedInputSummary>();
+    exactInputQueries.forEach((query, index) => {
+      const row = query.data;
+      const clientRequestId = pendingManagedLocalInputs[index]?.clientRequestId;
+      if (row && clientRequestId) rows.set(clientRequestId, row);
+    });
+    return rows;
+  }, [exactInputRowsKey, pendingManagedLocalInputs]);
+
+  useEffect(() => {
+    const linkedIds = pendingManagedLocalInputs
+      .filter((pending) => pending.phase === "delivered")
+      .filter((pending) => {
+        const receipt =
+          exactInputRows.get(pending.clientRequestId) ??
+          queuedInputsQuery.data?.find(
+            (row) => row.client_request_id === pending.clientRequestId,
+          );
+        return Boolean(receipt?.durable_event_id);
+      })
+      .map((pending) => pending.clientRequestId);
+    if (linkedIds.length === 0) return;
+    for (const clientRequestId of linkedIds) {
+      clearInputOutbox(session.id, clientRequestId);
+    }
+    setPendingManagedLocalInputs((current) =>
+      current.filter((pending) => !linkedIds.includes(pending.clientRequestId)),
+    );
+  }, [
+    exactInputRows,
+    pendingManagedLocalInputs,
+    queuedInputsQuery.data,
+    session.id,
+  ]);
+  useEffect(() => {
+    if (pendingManagedLocalInputs.length === 0) return;
     const nextInputs = pendingManagedLocalInputs.map<PendingManagedLocalInput>(
       (pending) => {
-        const receipt = queuedInputsQuery.data.find(
-          (row) => row.client_request_id === pending.clientRequestId,
-        );
-        if (!receipt || pending.phase === "delivered") return pending;
-        if (receipt.status === "delivered") {
-          clearInputOutbox(session.id, pending.clientRequestId);
+        const receipt =
+          exactInputRows.get(pending.clientRequestId) ??
+          queuedInputsQuery.data?.find(
+            (row) => row.client_request_id === pending.clientRequestId,
+          );
+        if (!receipt) return pending;
+
+        const turnState = receipt.turn?.state;
+        const completed =
+          turnState === "completed" ||
+          (!turnState && receipt.status === "delivered");
+        if (completed) {
+          retainDeliveredInputOutbox(session.id, pending.clientRequestId);
           return {
             ...pending,
             phase: "delivered",
-            deliveredAt: Date.now(),
+            attachments: [],
+            attachmentSummaries:
+              pending.attachmentSummaries ??
+              summarizeInputAttachments(pending.attachments),
             serverInputId: receipt.id ?? pending.serverInputId,
+            serverLiveInputId:
+              receipt.live_input_id ?? pending.serverLiveInputId,
+            deliveryStatus: receipt.status,
           };
         }
-        if (
-          receipt.status === "cancelled" ||
-          (receipt.status === "failed" &&
-            !hasUnknownDeliveryError(receipt.last_error))
-        ) {
-          resolvedIds.push(pending.clientRequestId);
-          setError(
-            receipt.last_error ||
-              (receipt.status === "cancelled"
-                ? "Input was cancelled before delivery."
-                : "Input delivery failed."),
-          );
-          return pending;
+
+        const activePhase =
+          receipt.turn?.is_fresh === true
+            ? activeConsoleTurnPhase(turnState)
+            : null;
+        if (activePhase) {
+          return {
+            ...pending,
+            phase: activePhase,
+            serverInputId: receipt.id ?? pending.serverInputId,
+            serverLiveInputId:
+              receipt.live_input_id ?? pending.serverLiveInputId,
+          };
         }
         if (hasUnknownDeliveryError(receipt.last_error)) {
           return {
             ...pending,
-            serverInputId: receipt.id ?? null,
+            serverInputId: receipt.id ?? pending.serverInputId,
+            serverLiveInputId:
+              receipt.live_input_id ?? pending.serverLiveInputId,
             phase: "unknown",
+            deliveryStatus: receipt.status,
+            detail: receipt.last_error,
+          };
+        }
+        if (
+          turnState &&
+          NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
+          receipt.turn?.is_fresh !== true
+        ) {
+          return {
+            ...pending,
+            phase: "unknown",
+            serverInputId: receipt.id ?? pending.serverInputId,
+            serverLiveInputId:
+              receipt.live_input_id ?? pending.serverLiveInputId,
+            deliveryStatus: receipt.status,
+            detail: STALE_CONSOLE_TURN_DETAIL,
+          };
+        }
+        const failed =
+          receipt.status === "failed" ||
+          receipt.status === "cancelled" ||
+          turnState === "failed" ||
+          turnState === "cancelled";
+        if (failed) {
+          return {
+            ...pending,
+            phase: "failed",
+            serverInputId: receipt.id ?? pending.serverInputId,
+            serverLiveInputId:
+              receipt.live_input_id ?? pending.serverLiveInputId,
+            deliveryStatus: receipt.status ?? turnState,
+            detail:
+              receipt.last_error ||
+              (receipt.status === "cancelled" || turnState === "cancelled"
+                ? "Input was cancelled before completion."
+                : "Input delivery failed."),
           };
         }
         return {
           ...pending,
-          serverInputId: receipt.id ?? null,
-          phase: receipt.status === "queued" ? "queued" : "unknown",
+          serverInputId: receipt.id ?? pending.serverInputId,
+          serverLiveInputId:
+            receipt.live_input_id ?? pending.serverLiveInputId,
+          phase: receipt.status === "queued" ? "queued" : "submitting",
         };
       },
     );
-    if (resolvedIds.length > 0) {
-      for (const clientRequestId of resolvedIds) {
-        clearInputOutbox(session.id, clientRequestId);
-      }
-      setPendingManagedLocalInputs((current) =>
-        current.filter(
-          (pending) => !resolvedIds.includes(pending.clientRequestId),
-        ),
-      );
-    } else if (
+    if (
       nextInputs.some(
         (pending, index) =>
           pending.phase !== pendingManagedLocalInputs[index]?.phase ||
           pending.serverInputId !==
-            pendingManagedLocalInputs[index]?.serverInputId,
+            pendingManagedLocalInputs[index]?.serverInputId ||
+          pending.serverLiveInputId !==
+            pendingManagedLocalInputs[index]?.serverLiveInputId ||
+          pending.detail !== pendingManagedLocalInputs[index]?.detail ||
+          pending.deliveryStatus !==
+            pendingManagedLocalInputs[index]?.deliveryStatus,
       )
     ) {
       setPendingManagedLocalInputs(nextInputs);
     }
-  }, [pendingManagedLocalInputs, queuedInputsQuery.data, session.id]);
+  }, [
+    exactInputRows,
+    pendingManagedLocalInputs,
+    queuedInputsQuery.data,
+    session.id,
+  ]);
+  const pendingInputIds = new Set(
+    pendingManagedLocalInputs.map((pending) => pending.clientRequestId),
+  );
+  const dismissedInputIds = readDismissedInputIds(session.id);
   const activeQueuedInputs = (queuedInputsQuery.data ?? []).filter(
     (row) =>
+      !(row.client_request_id && pendingInputIds.has(row.client_request_id)) &&
+      !(row.client_request_id && dismissedInputIds.has(row.client_request_id)) &&
       !(row.intent === "steer" && row.last_error === "turn_ended") &&
       (row.status === "queued" ||
         row.status === "delivering" ||
@@ -810,46 +1051,77 @@ export function SessionChat({
     activeQueuedInputs.filter((row) => row.status === "queued").length >= 5;
   const failedInputs = (queuedInputsQuery.data ?? []).filter(
     (row) =>
+      !(row.client_request_id && pendingInputIds.has(row.client_request_id)) &&
+      !(row.client_request_id && dismissedInputIds.has(row.client_request_id)) &&
       (row.status === "failed" || row.status === "cancelled") &&
       !hasUnknownDeliveryError(row.last_error),
   );
   // Offer an explicit "Queue instead" fallback instead of silently remapping
   // the user's original steer intent.
-  const [turnEndedDraft, setTurnEndedDraft] = useState<string | null>(null);
+  const [turnEndedDraft, setTurnEndedDraft] =
+    useState<TurnEndedDraft | null>(null);
+  const [editingPendingId, setEditingPendingId] = useState<string | null>(null);
   const handleManagedLocalSend = useCallback(
     async (
       message: string,
       intent: "auto" | "queue" | "steer" = "auto",
       attachments: { blob: Blob; filename: string }[] = [],
-      existingClientRequestId?: string,
-    ) => {
-      const clientRequestId = existingClientRequestId ?? newClientRequestId();
+      options: ManagedSendOptions = {},
+    ): Promise<ManagedSendResult> => {
+      const clientRequestId =
+        options.existingClientRequestId ?? newClientRequestId();
+      const model =
+        Object.prototype.hasOwnProperty.call(options, "model")
+          ? options.model
+          : selectedModel.trim() || null;
       try {
         await persistInputOutbox(session.id, {
           text: message,
           intent,
           clientRequestId,
+          model,
           attachments,
         });
       } catch (storageError) {
-        setError(
+        const errorMessage =
           storageError instanceof Error
             ? storageError.message
-            : "Could not persist input intent before sending",
+            : "Could not persist input intent before sending";
+        setError(errorMessage);
+        return { kind: "local-persistence-failed", error: errorMessage };
+      }
+
+      options.onPersisted?.();
+      if (
+        options.replacementClientRequestId &&
+        options.replacementClientRequestId !== clientRequestId
+      ) {
+        try {
+          dismissInputReceipt(
+            session.id,
+            options.replacementClientRequestId,
+          );
+        } catch {
+          setError("The replaced failure may remain visible on this device.");
+        }
+        clearInputOutbox(session.id, options.replacementClientRequestId);
+        setPendingManagedLocalInputs((current) =>
+          current.filter(
+            (pending) =>
+              pending.clientRequestId !== options.replacementClientRequestId,
+          ),
         );
-        return false;
       }
       const nextPending: PendingManagedLocalInput = {
         text: message,
         clientRequestId,
         serverInputId: null,
+        serverLiveInputId: null,
         intent,
+        model,
+        legacyModelMissing: options.legacyModelMissing,
         attachments,
         phase: "submitting",
-        echoExcludedRowIds: userRowIdsWithText(
-          timelineItemsRef.current,
-          message,
-        ),
       };
       setPendingManagedLocalInputs((current) => {
         const existing = current.some(
@@ -857,117 +1129,283 @@ export function SessionChat({
         );
         return existing
           ? current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? nextPending
-                : pending,
+              pending.clientRequestId === clientRequestId ? nextPending : pending,
             )
           : [...current, nextPending];
       });
       setIsSubmitting(true);
+
+      const setPendingReceipt = (receipt: QueuedInputSummary): ManagedSendResult => {
+        const turnState = receipt.turn?.state;
+        const terminalSuccess =
+          turnState === "completed" ||
+          (!turnState && receipt.status === "delivered");
+        if (terminalSuccess) {
+          markInputDelivered(
+            clientRequestId,
+            receipt.id,
+            receipt.live_input_id,
+          );
+          if (!turnState) {
+            if (sentConfirmationTimerRef.current) {
+              clearTimeout(sentConfirmationTimerRef.current);
+              sentConfirmationTimerRef.current = null;
+            }
+            setSentConfirmation(true);
+            sentConfirmationTimerRef.current = setTimeout(
+              () => setSentConfirmation(false),
+              2_000,
+            );
+          }
+          return { kind: "accepted", clientRequestId };
+        }
+        const activePhase =
+          receipt.turn?.is_fresh === true
+            ? activeConsoleTurnPhase(turnState)
+            : null;
+        if (activePhase) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    phase: activePhase,
+                    serverInputId: receipt.id ?? pending.serverInputId,
+                    serverLiveInputId:
+                      receipt.live_input_id ?? pending.serverLiveInputId,
+                  }
+                : pending,
+            ),
+          );
+          return { kind: "accepted", clientRequestId };
+        }
+        if (hasUnknownDeliveryError(receipt.last_error)) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    phase: "unknown",
+                    serverInputId: receipt.id ?? pending.serverInputId,
+                    serverLiveInputId:
+                      receipt.live_input_id ?? pending.serverLiveInputId,
+                    deliveryStatus: receipt.status,
+                    detail: receipt.last_error,
+                  }
+                : pending,
+            ),
+          );
+          setError(UNCONFIRMED_DELIVERY_ERROR);
+          return {
+            kind: "unknown",
+            clientRequestId,
+            error: UNCONFIRMED_DELIVERY_ERROR,
+          };
+        }
+        const terminalFailure =
+          receipt.status === "failed" ||
+          receipt.status === "cancelled" ||
+          turnState === "failed" ||
+          turnState === "cancelled";
+        if (terminalFailure) {
+          const detail =
+            receipt.last_error ||
+            (receipt.status === "cancelled" || turnState === "cancelled"
+              ? "Input was cancelled before completion."
+              : "Input delivery failed.");
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    phase: "failed",
+                    serverInputId: receipt.id ?? pending.serverInputId,
+                    serverLiveInputId:
+                      receipt.live_input_id ?? pending.serverLiveInputId,
+                    deliveryStatus: receipt.status ?? turnState,
+                    detail,
+                  }
+                : pending,
+            ),
+          );
+          setError(detail);
+          return { kind: "accepted", clientRequestId };
+        }
+        if (
+          turnState &&
+          NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
+          receipt.turn?.is_fresh !== true
+        ) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    phase: "unknown",
+                    serverInputId: receipt.id ?? pending.serverInputId,
+                    serverLiveInputId:
+                      receipt.live_input_id ?? pending.serverLiveInputId,
+                    deliveryStatus: receipt.status,
+                    detail: STALE_CONSOLE_TURN_DETAIL,
+                  }
+                : pending,
+            ),
+          );
+          return { kind: "accepted", clientRequestId };
+        }
+        const phase: PendingManagedLocalInput["phase"] =
+          receipt.status === "queued" ? "queued" : "submitting";
+        setPendingManagedLocalInputs((current) =>
+          current.map((pending) =>
+            pending.clientRequestId === clientRequestId
+              ? {
+                  ...pending,
+                  phase,
+                  serverInputId: receipt.id ?? pending.serverInputId,
+                  serverLiveInputId:
+                    receipt.live_input_id ?? pending.serverLiveInputId,
+                  detail: receipt.last_error,
+                }
+              : pending,
+          ),
+        );
+        return { kind: "accepted", clientRequestId };
+      };
+
+      const setRejected = (
+        errorMessage: string,
+        deliveryStatus?: string | null,
+        serverInputId?: number | null,
+        serverLiveInputId?: string | null,
+      ): ManagedSendResult => {
+        setPendingManagedLocalInputs((current) =>
+          current.map((pending) =>
+            pending.clientRequestId === clientRequestId
+              ? {
+                  ...pending,
+                  phase: "failed",
+                  serverInputId: serverInputId ?? pending.serverInputId,
+                  serverLiveInputId:
+                    serverLiveInputId ?? pending.serverLiveInputId,
+                  deliveryStatus: deliveryStatus ?? null,
+                  detail: errorMessage,
+                }
+              : pending,
+          ),
+        );
+        setError(errorMessage);
+        return { kind: "rejected", clientRequestId, error: errorMessage };
+      };
+
       try {
-        const result = attachments.length
+        const result: SessionInputResponse = attachments.length
           ? await postSessionInputMultipart(session.id, {
               text: message,
               attachments,
               client_request_id: clientRequestId,
-              ...(selectedModel.trim() ? { model: selectedModel.trim() } : {}),
+              ...(model ? { model } : {}),
             })
           : await postSessionInput(session.id, {
               text: message,
               intent,
               client_request_id: clientRequestId,
-              ...(selectedModel.trim() ? { model: selectedModel.trim() } : {}),
+              ...(model ? { model } : {}),
             });
-
         queryClient.setQueryData<QueuedInputSummary[]>(
           ["session-inputs", session.id],
-          result.queued,
+          result.queued ?? [],
         );
-        const receipt = result.queued.find(
+        const receipt = (result.queued ?? []).find(
           (row) => row.client_request_id === clientRequestId,
         );
-        const terminalStatus = receipt?.status;
-        if (terminalStatus === "delivered") {
-          markInputDelivered(clientRequestId, result.input_id ?? receipt?.id);
-          return true;
-        }
-        if (
-          terminalStatus === "cancelled" ||
-          (terminalStatus === "failed" &&
-            !hasUnknownDeliveryError(receipt?.last_error))
-        ) {
-          clearInputOutbox(session.id, clientRequestId);
+        if (result.client_request_id && result.client_request_id !== clientRequestId) {
           setPendingManagedLocalInputs((current) =>
-            current.filter(
-              (pending) => pending.clientRequestId !== clientRequestId,
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
             ),
           );
-          setError(
-            receipt?.last_error ||
-              (terminalStatus === "cancelled"
-                ? "Input was cancelled before delivery."
-                : "Input delivery failed."),
-          );
-          return false;
+          setError(UNCONFIRMED_DELIVERY_ERROR);
+          return { kind: "unknown", clientRequestId, error: UNCONFIRMED_DELIVERY_ERROR };
         }
-        const consoleTurnAccepted =
-          result.turn &&
-          ["queued", "starting", "active", "draining"].includes(
-            result.turn.state,
-          ) &&
-          (result.outcome === "sent" || result.outcome === "queued");
-        if (consoleTurnAccepted) {
-          if (result.outcome === "queued") {
-            // The Console turn is durable, but it is not delivered until the
-            // provider claims it. Keep the outbox entry so an app restart can
-            // replay the same client_request_id instead of silently losing an
-            // image while the FIFO head is starting or ambiguous.
-            setPendingManagedLocalInputs((current) =>
-              current.map((pending) =>
-                pending.clientRequestId === clientRequestId
-                  ? {
-                      ...pending,
-                      phase: "queued",
-                    }
-                  : pending,
-              ),
-            );
-            void queryClient.invalidateQueries({
-              queryKey: ["session-inputs", session.id],
-            });
-          } else {
-            markInputDelivered(clientRequestId, result.input_id);
-          }
+        const disposition =
+          result.disposition ??
+          (result.outcome === "unknown" ? "unknown" : "accepted");
+        if (disposition === "rejected") {
+          return setRejected(
+            receipt?.last_error || "Input was rejected before delivery.",
+          );
+        }
+        if (disposition === "unknown") {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
+          );
+          setError(UNCONFIRMED_DELIVERY_ERROR);
+          return { kind: "unknown", clientRequestId, error: UNCONFIRMED_DELIVERY_ERROR };
+        }
+
+        if (receipt) {
+          const accepted = setPendingReceipt({
+            ...receipt,
+            turn: receipt.turn ?? result.turn,
+          });
+          if (accepted.kind === "accepted") void refreshCurrentSessionWorkspace();
+          return accepted;
+        }
+        const responseTurnPhase =
+          result.turn?.is_fresh === true
+            ? activeConsoleTurnPhase(result.turn.state)
+            : null;
+        if (responseTurnPhase) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    phase: responseTurnPhase,
+                    serverInputId: result.input_id ?? pending.serverInputId,
+                    serverLiveInputId:
+                      result.live_input_id ?? pending.serverLiveInputId,
+                  }
+                : pending,
+            ),
+          );
           void refreshCurrentSessionWorkspace();
-          return true;
-        }
-        if (result.outcome === "unknown") {
-          setPendingManagedLocalInputs((current) =>
-            current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? { ...pending, phase: "unknown" }
-                : pending,
-            ),
-          );
-          setError(UNCONFIRMED_DELIVERY_ERROR);
-          return false;
+          return { kind: "accepted", clientRequestId };
         }
         if (
-          (result.client_request_id &&
-            result.client_request_id !== clientRequestId) ||
-          (!result.client_request_id && !receipt)
+          result.turn?.state &&
+          NONTERMINAL_CONSOLE_TURN_STATES.has(result.turn.state) &&
+          result.turn.is_fresh !== true
         ) {
           setPendingManagedLocalInputs((current) =>
             current.map((pending) =>
               pending.clientRequestId === clientRequestId
-                ? { ...pending, phase: "unknown" }
+                ? {
+                    ...pending,
+                    phase: "unknown",
+                    serverInputId: result.input_id ?? pending.serverInputId,
+                    serverLiveInputId:
+                      result.live_input_id ?? pending.serverLiveInputId,
+                    detail: STALE_CONSOLE_TURN_DETAIL,
+                  }
                 : pending,
             ),
           );
-          setError(UNCONFIRMED_DELIVERY_ERROR);
-          return false;
+          void refreshCurrentSessionWorkspace();
+          return { kind: "accepted", clientRequestId };
         }
         if (result.outcome === "sent") {
+          markInputDelivered(
+            clientRequestId,
+            result.input_id,
+            result.live_input_id,
+          );
           queryClient.setQueryData<SessionLockInfo | null>(
             ["session-lock", session.id],
             {
@@ -982,164 +1420,149 @@ export function SessionChat({
           setSentConfirmation(true);
           sentConfirmationTimerRef.current = setTimeout(
             () => setSentConfirmation(false),
-            2000,
+            2_000,
           );
           void refreshCurrentSessionWorkspace();
-          markInputDelivered(clientRequestId, result.input_id ?? receipt?.id);
-        } else if (
-          receipt?.status !== "cancelled" &&
-          hasUnknownDeliveryError(receipt?.last_error)
-        ) {
-          setPendingManagedLocalInputs((current) =>
-            current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? { ...pending, phase: "unknown" }
-                : pending,
-            ),
-          );
-          setError(UNCONFIRMED_DELIVERY_ERROR);
-          return false;
-        } else if (receipt?.status === "queued") {
-          setPendingManagedLocalInputs((current) =>
-            current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? {
-                    ...pending,
-                    serverInputId: receipt.id ?? null,
-                    phase: "queued",
-                  }
-                : pending,
-            ),
-          );
-        } else if (
-          receipt?.status === "failed" ||
-          receipt?.status === "cancelled"
-        ) {
-          clearInputOutbox(session.id, clientRequestId);
-          setPendingManagedLocalInputs((current) =>
-            current.filter(
-              (pending) => pending.clientRequestId !== clientRequestId,
-            ),
-          );
-          setError(
-            receipt.last_error ||
-              (receipt.status === "cancelled"
-                ? "Input was cancelled before delivery."
-                : "Input delivery failed."),
-          );
-          return false;
-        } else {
-          setPendingManagedLocalInputs((current) =>
-            current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? { ...pending, phase: "unknown" }
-                : pending,
-            ),
-          );
-          setError(UNCONFIRMED_DELIVERY_ERROR);
-          return false;
+          return { kind: "accepted", clientRequestId };
         }
-        return true;
-      } catch (e) {
-        let persistedReceipt: QueuedInputSummary | undefined;
-        try {
-          const refreshedInputs = await fetchSessionInputs(session.id);
-          queryClient.setQueryData<QueuedInputSummary[]>(
-            ["session-inputs", session.id],
-            refreshedInputs,
+        if (disposition === "accepted" && result.outcome === "unknown") {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "submitting" }
+                : pending,
+            ),
           );
-          persistedReceipt = refreshedInputs.find(
-            (row) => row.client_request_id === clientRequestId,
+          void queryClient.invalidateQueries({
+            queryKey: ["session-input", session.id, clientRequestId],
+          });
+          return { kind: "accepted", clientRequestId };
+        }
+        setError(UNCONFIRMED_DELIVERY_ERROR);
+        setPendingManagedLocalInputs((current) =>
+          current.map((pending) =>
+            pending.clientRequestId === clientRequestId
+              ? { ...pending, phase: "unknown" }
+              : pending,
+          ),
+        );
+        return { kind: "unknown", clientRequestId, error: UNCONFIRMED_DELIVERY_ERROR };
+      } catch (error) {
+        const structured = structuredInputErrorDetail(error);
+        if (
+          structured?.client_request_id &&
+          structured.client_request_id !== clientRequestId
+        ) {
+          setError(UNCONFIRMED_DELIVERY_ERROR);
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
+          );
+          return {
+            kind: "unknown",
+            clientRequestId,
+            error: UNCONFIRMED_DELIVERY_ERROR,
+          };
+        }
+        let exactReceipt: QueuedInputSummary | null = null;
+        try {
+          exactReceipt = await fetchSessionInput(session.id, clientRequestId);
+          queryClient.setQueryData(
+            ["session-input", session.id, clientRequestId],
+            exactReceipt,
           );
         } catch {
-          // Preserve the request error when the receipt cannot be refreshed.
+          // The structured error or unknown outcome remains authoritative.
         }
-        if (persistedReceipt?.status === "delivered") {
-          markInputDelivered(clientRequestId, persistedReceipt.id);
-          return true;
-        }
-        if (
-          persistedReceipt?.status !== "cancelled" &&
-          hasUnknownDeliveryError(persistedReceipt?.last_error)
-        ) {
-          setPendingManagedLocalInputs((current) =>
-            current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? { ...pending, phase: "unknown" }
-                : pending,
-            ),
+        const messageFromServer =
+          structured?.message ||
+          (error instanceof Error ? error.message : "Input request failed.");
+        if (intent === "steer" && structured?.error_code === "turn_ended") {
+          setTurnEndedDraft({ clientRequestId, text: message, model: model ?? null });
+          return setRejected(
+            messageFromServer,
+            exactReceipt?.status ?? structured.delivery_status,
+            exactReceipt?.id ?? structured.input_id,
+            exactReceipt?.live_input_id ?? structured.live_input_id,
           );
-          setError(UNCONFIRMED_DELIVERY_ERROR);
-          return false;
         }
-        if (
-          persistedReceipt?.status === "failed" ||
-          persistedReceipt?.status === "cancelled"
-        ) {
-          clearInputOutbox(session.id, clientRequestId);
-          setPendingManagedLocalInputs((current) =>
-            current.filter(
-              (pending) => pending.clientRequestId !== clientRequestId,
-            ),
-          );
-          setError(
-            persistedReceipt.last_error ||
-              (persistedReceipt.status === "cancelled"
-                ? "Input was cancelled before delivery."
-                : "Input delivery failed."),
-          );
-          return false;
+        if (exactReceipt) return setPendingReceipt(exactReceipt);
+        if (structured?.disposition === "rejected") {
+          return setRejected(messageFromServer, structured.delivery_status);
         }
-        if (persistedReceipt?.status === "queued") {
-          setPendingManagedLocalInputs((current) =>
-            current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? {
-                    ...pending,
-                    serverInputId: persistedReceipt.id ?? null,
-                    phase: "queued",
-                  }
-                : pending,
-            ),
-          );
-          setError(null);
-          return true;
-        }
-        const errorBody = (
-          e as {
-            body?: {
-              detail?: { message?: string };
-            };
+        if (structured?.disposition === "accepted") {
+          const errorTurnPhase =
+            structured.turn?.is_fresh === true
+              ? activeConsoleTurnPhase(structured.turn.state)
+              : null;
+          if (errorTurnPhase) {
+            setPendingManagedLocalInputs((current) =>
+              current.map((pending) =>
+                pending.clientRequestId === clientRequestId
+                  ? {
+                      ...pending,
+                      phase: errorTurnPhase,
+                      serverInputId:
+                        structured.input_id ?? pending.serverInputId,
+                      serverLiveInputId:
+                        structured.live_input_id ?? pending.serverLiveInputId,
+                    }
+                  : pending,
+              ),
+            );
+            return { kind: "accepted", clientRequestId };
           }
-        )?.body;
-        const errorCode = structuredInputErrorCode(e);
-        if (intent === "steer" && errorCode === "turn_ended") {
-          setTurnEndedDraft(message);
-          setError(
-            errorBody?.detail?.message ??
-              "Active turn ended before your update arrived.",
-          );
-          clearInputOutbox(session.id, clientRequestId);
-          setPendingManagedLocalInputs((current) =>
-            current.filter(
-              (pending) => pending.clientRequestId !== clientRequestId,
-            ),
-          );
-        } else {
-          setError(
-            e instanceof Error
-              ? `${e.message}. ${UNCONFIRMED_DELIVERY_ERROR}`
-              : UNCONFIRMED_DELIVERY_ERROR,
-          );
-          setPendingManagedLocalInputs((current) =>
-            current.map((pending) =>
-              pending.clientRequestId === clientRequestId
-                ? { ...pending, phase: "unknown" }
-                : pending,
-            ),
-          );
+          const errorTurnState = structured.turn?.state.toLowerCase();
+          if (
+            structured.delivery_status === "cancelled" ||
+            errorTurnState === "cancelled"
+          ) {
+            setRejected(
+              "Input was cancelled before completion.",
+              structured.delivery_status ?? errorTurnState,
+              structured.input_id,
+              structured.live_input_id,
+            );
+            return { kind: "accepted", clientRequestId };
+          }
+          const terminalFailure =
+            !hasUnknownDeliveryError(structured.error_code) &&
+            (structured.delivery_status === "failed" ||
+              errorTurnState === "failed");
+          if (terminalFailure) {
+            setPendingManagedLocalInputs((current) =>
+              current.map((pending) =>
+                pending.clientRequestId === clientRequestId
+                  ? {
+                      ...pending,
+                      phase: "failed",
+                      serverInputId:
+                        structured.input_id ?? pending.serverInputId,
+                      serverLiveInputId:
+                        structured.live_input_id ?? pending.serverLiveInputId,
+                      deliveryStatus:
+                        structured.delivery_status ?? errorTurnState,
+                      detail: messageFromServer,
+                    }
+                  : pending,
+              ),
+            );
+            setError(messageFromServer);
+            return { kind: "accepted", clientRequestId };
+          }
         }
-        return false;
+        setPendingManagedLocalInputs((current) =>
+          current.map((pending) =>
+            pending.clientRequestId === clientRequestId
+              ? { ...pending, phase: "unknown", detail: messageFromServer }
+              : pending,
+          ),
+        );
+        setError(UNCONFIRMED_DELIVERY_ERROR);
+        return { kind: "unknown", clientRequestId, error: UNCONFIRMED_DELIVERY_ERROR };
       } finally {
         setIsSubmitting(false);
       }
@@ -1157,24 +1580,21 @@ export function SessionChat({
     async (input: QueuedInputSummary) => {
       try {
         await cancelSessionInput(session.id, input);
-        // Optimistically drop it from the cache; refetch to confirm.
-        queryClient.setQueryData<QueuedInputSummary[]>(
-          ["session-inputs", session.id],
-          (rows = []) =>
-            rows.filter((row) =>
-              input.live_input_id
-                ? row.live_input_id !== input.live_input_id
-                : row.id !== input.id,
-            ),
-        );
         const clientRequestId = input.client_request_id;
         if (clientRequestId) {
-          clearInputOutbox(session.id, clientRequestId);
           setPendingManagedLocalInputs((current) =>
-            current.filter(
-              (pending) => pending.clientRequestId !== clientRequestId,
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    detail: "Cancellation requested; awaiting confirmation.",
+                  }
+                : pending,
             ),
           );
+          void queryClient.invalidateQueries({
+            queryKey: ["session-input", session.id, clientRequestId],
+          });
         }
         void queuedInputsQuery.refetch();
       } catch (e) {
@@ -1260,8 +1680,6 @@ export function SessionChat({
       const message = draft.trim();
       const pendingAttachments = composerAttachments.attachments;
       const hasAttachments = pendingAttachments.length > 0;
-      // Attachments require message text only when the user wrote nothing —
-      // attachment-only sends are valid and the server accepts text="".
       if (!message && !hasAttachments) return;
       if (isSubmitting || isComposerDisabled || isSendBlocked) return;
       if (hasAttachments && primaryIntent !== "auto") {
@@ -1270,39 +1688,41 @@ export function SessionChat({
         );
         return;
       }
-      // Block send while compression is in flight; the snapshot would miss
-      // the pending file and the late add could repopulate the cleared tray.
       if (composerAttachments.isCompressing) return;
 
       setDraft("");
       setError(null);
       setBlockedKeyboardSubmit(false);
-
-      const attachmentArgs = hasAttachments
-        ? pendingAttachments.map((a) => ({
-            blob: a.blob,
-            filename: a.filename,
-          }))
-        : [];
-      const sent = await handleManagedLocalSend(
+      const attachmentArgs = pendingAttachments.map((attachment) => ({
+        blob: attachment.blob,
+        filename: attachment.filename,
+      }));
+      const replacementClientRequestId = editingPendingId;
+      const result = await handleManagedLocalSend(
         message,
         primaryIntent,
         attachmentArgs,
+        {
+          replacementClientRequestId: replacementClientRequestId ?? undefined,
+          onPersisted: () => {
+            composerAttachments.clear();
+            setEditingPendingId(null);
+          },
+        },
       );
-      if (sent) {
-        if (hasAttachments) composerAttachments.clear();
-      } else {
+      if (result.kind === "local-persistence-failed") {
         setDraft(message);
       }
     },
     [
+      composerAttachments,
       draft,
-      isSubmitting,
+      editingPendingId,
       handleManagedLocalSend,
       isComposerDisabled,
       isSendBlocked,
+      isSubmitting,
       primaryIntent,
-      composerAttachments,
     ],
   );
 
@@ -1349,14 +1769,28 @@ export function SessionChat({
   );
 
   const handleSecondaryQueue = useCallback(async () => {
+    if (isSubmitting || isComposerDisabled || !canQueueNow) return;
+    if (composerAttachments.isCompressing) return;
+    if (composerAttachments.attachments.length > 0) {
+      setError("Image attachments can only be sent when the session is ready for a new turn.");
+      return;
+    }
     const message = draft.trim();
-    if (!message || isSubmitting || isComposerDisabled || !canQueueNow) return;
+    if (!message) return;
     setDraft("");
     setError(null);
-    const sent = await handleManagedLocalSend(message, "queue");
-    if (!sent) setDraft(message);
+    const result = await handleManagedLocalSend(message, "queue", [], {
+      replacementClientRequestId: editingPendingId ?? undefined,
+      onPersisted: () => {
+        composerAttachments.clear();
+        setEditingPendingId(null);
+      },
+    });
+    if (result.kind === "local-persistence-failed") setDraft(message);
   }, [
+    composerAttachments,
     draft,
+    editingPendingId,
     isSubmitting,
     isComposerDisabled,
     canQueueNow,
@@ -1364,13 +1798,53 @@ export function SessionChat({
   ]);
 
   const handleQueueInsteadAfterTurnEnded = useCallback(async () => {
-    if (!turnEndedDraft) return;
+    const draft = turnEndedDraft;
+    if (!draft) return;
     setError(null);
-    const text = turnEndedDraft;
-    setTurnEndedDraft(null);
-    const sent = await handleManagedLocalSend(text, "queue");
-    if (!sent) setTurnEndedDraft(text);
+    await handleManagedLocalSend(draft.text, "queue", [], {
+      model: draft.model,
+      replacementClientRequestId: draft.clientRequestId,
+      onPersisted: () =>
+        setTurnEndedDraft((current) =>
+          current?.clientRequestId === draft.clientRequestId ? null : current,
+        ),
+    });
   }, [turnEndedDraft, handleManagedLocalSend]);
+
+  const handleDiscardPending = useCallback(
+    (clientRequestId: string) => {
+      try {
+        dismissInputReceipt(session.id, clientRequestId);
+      } catch {
+        setError("Could not save this dismissal; the input remains available.");
+        return;
+      }
+      clearInputOutbox(session.id, clientRequestId);
+      setPendingManagedLocalInputs((current) =>
+        current.filter((pending) => pending.clientRequestId !== clientRequestId),
+      );
+      setEditingPendingId((current) =>
+        current === clientRequestId ? null : current,
+      );
+      void queryClient.removeQueries({
+        queryKey: ["session-input", session.id, clientRequestId],
+      });
+    },
+    [queryClient, session.id],
+  );
+
+  const handleEditPending = useCallback(
+    (pending: PendingManagedLocalInput) => {
+      setEditingPendingId(pending.clientRequestId);
+      setDraft(pending.text);
+      if (!pending.legacyModelMissing) {
+        handleSelectedModelChange(pending.model ?? "");
+      }
+      composerAttachments.restore(pending.attachments);
+      setError(null);
+    },
+    [composerAttachments, handleSelectedModelChange],
+  );
 
   // Actions go through a ref so the reported entries only change when what
   // the user sees changes, not whenever a handler closure is rebuilt.
@@ -1378,16 +1852,21 @@ export function SessionChat({
     retry: handleManagedLocalSend,
     cancel: handleCancelQueuedInput,
     queueInstead: handleQueueInsteadAfterTurnEnded,
+    edit: handleEditPending,
+    discard: handleDiscardPending,
   });
   outboxActionsRef.current = {
     retry: handleManagedLocalSend,
     cancel: handleCancelQueuedInput,
     queueInstead: handleQueueInsteadAfterTurnEnded,
+    edit: handleEditPending,
+    discard: handleDiscardPending,
   };
   const outboxEntries = useMemo<OutboxEntry[]>(() => {
     if (!isManagedLocal) return [];
     const rows = queuedInputsQuery.data ?? [];
     const receiptFor = (clientRequestId: string) =>
+      exactInputRows.get(clientRequestId) ??
       rows.find((row) => row.client_request_id === clientRequestId);
     const pendingIds = new Set(
       pendingManagedLocalInputs.map((pending) => pending.clientRequestId),
@@ -1400,40 +1879,85 @@ export function SessionChat({
     const inFlight: OutboxEntry[] = [];
     const queued: OutboxEntry[] = [];
 
+    const dismissedReceipts = readDismissedInputIds(session.id);
     for (const row of rows) {
-      if (row.client_request_id && pendingIds.has(row.client_request_id))
+      const clientRequestId = row.client_request_id;
+      if (
+        clientRequestId &&
+        (pendingIds.has(clientRequestId) || dismissedReceipts.has(clientRequestId))
+      ) {
         continue;
-      const key = `receipt:${row.client_request_id ?? row.live_input_id ?? row.id ?? row.text}`;
-      if (row.intent === "steer" && row.last_error === "turn_ended") continue;
+      }
+      const key = `receipt:${clientRequestId ?? row.live_input_id ?? row.id ?? "unknown"}`;
+      const turnState = row.turn?.state;
+      const attachments = (row.attachments ?? []).map((attachment) => ({
+        filename: attachment.filename,
+        mimeType: attachment.mime_type,
+        byteSize: attachment.byte_size,
+      }));
       if (hasUnknownDeliveryError(row.last_error)) {
         inFlight.push({
           key,
           text: row.text,
+          attachments,
           state: "unconfirmed",
           detail: hasRuntimeDrainingError(row.last_error)
             ? "runtime restarting"
-            : null,
+            : row.last_error,
+        });
+      } else if (
+        turnState &&
+        NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
+        row.turn?.is_fresh !== true
+      ) {
+        inFlight.push({
+          key,
+          text: row.text,
+          attachments,
+          state: "unconfirmed",
+          detail: STALE_CONSOLE_TURN_DETAIL,
+        });
+      } else if (
+        turnState &&
+        NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)
+      ) {
+        (turnState === "queued" ? queued : inFlight).push({
+          key,
+          text: row.text,
+          attachments,
+          state: turnState === "queued" ? "queued" : "sending",
+          detail: `Console turn ${turnState}`,
+          actions: turnState === "queued" ? [cancelAction(row)] : undefined,
         });
       } else if (row.status === "delivering") {
-        inFlight.push({ key, text: row.text, state: "sending" });
+        inFlight.push({ key, text: row.text, attachments, state: "sending" });
       } else if (row.status === "queued") {
         queued.push({
           key,
           text: row.text,
+          attachments,
           state: "queued",
           actions: [cancelAction(row)],
         });
       } else if (
         row.status === "failed" ||
-        // A cancel the user asked for needs no tombstone; one with a reason
-        // was the system's call and stays visible.
         (row.status === "cancelled" && row.last_error)
       ) {
         failed.push({
           key,
           text: row.text,
+          attachments,
           state: "failed",
-          detail: row.last_error || null,
+          detail: row.last_error || "Input was cancelled before completion.",
+          actions: clientRequestId
+            ? [
+                {
+                  label: "Dismiss",
+                  onClick: () =>
+                    outboxActionsRef.current.discard(clientRequestId),
+                },
+              ]
+            : undefined,
         });
       }
     }
@@ -1441,20 +1965,21 @@ export function SessionChat({
     for (const pending of pendingManagedLocalInputs) {
       const key = `pending:${pending.clientRequestId}`;
       const receipt = receiptFor(pending.clientRequestId);
-      // A queued send the server is draining right now is mid-delivery, not
-      // ambiguous; the reconciler files it under `unknown` only for lack of
-      // a closer phase.
-      const serverDelivering =
-        receipt?.status === "delivering" &&
-        !hasUnknownDeliveryError(receipt.last_error);
-      if (pending.phase === "unknown" && !serverDelivering) {
+      const base = {
+        key,
+        text: pending.text,
+        attachments:
+          pending.attachmentSummaries ??
+          summarizeInputAttachments(pending.attachments),
+        warning: pending.legacyModelMissing ? LEGACY_MODEL_WARNING : null,
+      };
+      if (pending.phase === "delivered") {
+        inFlight.push({ ...base, state: "sent" });
+      } else if (pending.phase === "unknown") {
         inFlight.push({
-          key,
-          text: pending.text,
+          ...base,
           state: "unconfirmed",
-          detail: hasRuntimeDrainingError(receipt?.last_error)
-            ? "runtime restarting"
-            : null,
+          detail: pending.detail || UNCONFIRMED_DELIVERY_ERROR,
           actions: [
             {
               label: "Retry",
@@ -1464,32 +1989,61 @@ export function SessionChat({
                   pending.text,
                   pending.intent,
                   pending.attachments,
-                  pending.clientRequestId,
+                  {
+                    existingClientRequestId: pending.clientRequestId,
+                    model: pending.model,
+                    legacyModelMissing: pending.legacyModelMissing,
+                  },
                 ),
             },
           ],
         });
-      } else if (pending.phase === "queued") {
-        queued.push({
-          key,
-          text: pending.text,
-          state: "queued",
+      } else if (pending.phase === "failed") {
+        if (turnEndedDraft?.clientRequestId === pending.clientRequestId) {
+          continue;
+        }
+        failed.push({
+          ...base,
+          state: "failed",
+          detail: pending.detail || "Input delivery failed.",
+          actions: [
+            {
+              label: "Edit",
+              onClick: () => outboxActionsRef.current.edit(pending),
+            },
+            {
+              label: "Discard",
+              onClick: () =>
+                outboxActionsRef.current.discard(pending.clientRequestId),
+            },
+          ],
+        });
+      } else if (
+        pending.phase === "queued" ||
+        pending.phase === "starting" ||
+        pending.phase === "active" ||
+        pending.phase === "draining"
+      ) {
+        const isQueued = pending.phase === "queued";
+        (isQueued ? queued : inFlight).push({
+          ...base,
+          state: isQueued ? "queued" : "sending",
+          detail: `Console turn ${pending.phase}`,
           actions:
-            receipt?.status === "queued" ? [cancelAction(receipt)] : undefined,
+            isQueued && receipt ? [cancelAction(receipt)] : undefined,
         });
       } else {
         inFlight.push({
-          key,
-          text: pending.text,
-          state: pending.phase === "delivered" ? "sent" : "sending",
+          ...base,
+          state: "sending",
         });
       }
     }
 
     if (turnEndedDraft) {
       failed.push({
-        key: "turn-ended",
-        text: turnEndedDraft,
+        key: `turn-ended:${turnEndedDraft.clientRequestId}`,
+        text: turnEndedDraft.text,
         state: "failed",
         detail: "the turn ended before it arrived",
         actions: [
@@ -1503,6 +2057,7 @@ export function SessionChat({
     }
     return [...failed, ...inFlight, ...queued];
   }, [
+    exactInputRows,
     isManagedLocal,
     isSubmitting,
     pendingManagedLocalInputs,
@@ -1742,7 +2297,7 @@ export function SessionChat({
         >
           <div className="session-chat-queued__label">Active turn ended</div>
           <div className="session-chat-queued__item">
-            <span className="session-chat-queued__text">{turnEndedDraft}</span>
+            <span className="session-chat-queued__text">{turnEndedDraft.text}</span>
             <button
               type="button"
               className="session-chat-queued__cancel"
@@ -1770,22 +2325,35 @@ export function SessionChat({
         >
           <div className="session-chat-queued__label">Delivery failed</div>
           <ul className="session-chat-queued__list">
-            {failedInputs.map((row) => (
-              <li
-                key={
-                  row.client_request_id ??
-                  row.live_input_id ??
-                  row.id ??
-                  row.text
-                }
-                className="session-chat-queued__item"
-              >
-                <span className="session-chat-queued__text">{row.text}</span>
-                <span className="session-chat-queued__status session-chat-queued__status--failed">
-                  {row.last_error || "failed"}
-                </span>
-              </li>
-            ))}
+            {failedInputs.map((row) => {
+              const clientRequestId = row.client_request_id;
+              return (
+                <li
+                  key={
+                    clientRequestId ??
+                    row.live_input_id ??
+                    row.id ??
+                    row.text
+                  }
+                  className="session-chat-queued__item"
+                >
+                  <span className="session-chat-queued__text">{row.text}</span>
+                  <span className="session-chat-queued__status session-chat-queued__status--failed">
+                    {row.last_error || "failed"}
+                  </span>
+                  {clientRequestId ? (
+                    <button
+                      type="button"
+                      className="session-chat-queued__cancel"
+                      aria-label="Dismiss failed input"
+                      onClick={() => handleDiscardPending(clientRequestId)}
+                    >
+                      Dismiss
+                    </button>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
@@ -1901,7 +2469,7 @@ export function SessionChat({
                     deviceId={session.device_id}
                     provider={session.provider}
                     value={selectedModel}
-                    onChange={setSelectedModel}
+                    onChange={handleSelectedModelChange}
                     compact
                     testId="session-model-select"
                   />
@@ -1954,40 +2522,84 @@ export function SessionChat({
               ? pendingManagedLocalInputs
                   .filter((pendingInput) => pendingInput.phase !== "delivered")
                   .map((pendingInput) => (
-                  <div
-                    className="session-chat-pending-message"
-                    key={pendingInput.clientRequestId}
-                  >
-                    <span className="session-chat-pending-message__text">
-                      {pendingInput.text}
-                    </span>
-                    <span className="session-chat-pending-message__status">
-                      {pendingInput.phase === "unknown"
-                        ? "Not confirmed — retry with the same request"
-                        : pendingInput.phase === "queued"
-                          ? "Queued — server has this request"
-                          : "Delivering..."}
-                    </span>
-                    {pendingInput.phase === "unknown" ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        disabled={isSubmitting}
-                        onClick={() =>
-                          void handleManagedLocalSend(
-                            pendingInput.text,
-                            pendingInput.intent,
-                            pendingInput.attachments,
-                            pendingInput.clientRequestId,
-                          )
-                        }
-                      >
-                        Retry
-                      </Button>
-                    ) : null}
-                  </div>
-                ))
+                    <div
+                      className="session-chat-pending-message"
+                      key={pendingInput.clientRequestId}
+                    >
+                      <span className="session-chat-pending-message__text">
+                        {pendingInput.text}
+                      </span>
+                      <span className="session-chat-pending-message__status">
+                        {pendingInput.phase === "unknown"
+                          ? "Not confirmed — retry with the same request"
+                          : pendingInput.phase === "failed"
+                            ? pendingInput.detail || "Not delivered"
+                            : pendingInput.phase === "queued"
+                              ? "Queued — server has this request"
+                              : pendingInput.phase === "active"
+                                ? "Console turn active"
+                                : "Delivering..."}
+                      </span>
+                      {pendingInput.legacyModelMissing ? (
+                        <span className="session-chat-pending-message__warning">
+                          {LEGACY_MODEL_WARNING}
+                        </span>
+                      ) : null}
+                      {pendingInput.attachments.length > 0 ? (
+                        <span className="session-chat-pending-message__attachments">
+                          {pendingInput.attachments
+                            .map((attachment) => attachment.filename)
+                            .join(", ")}
+                        </span>
+                      ) : null}
+                      {pendingInput.phase === "unknown" ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={isSubmitting}
+                          onClick={() =>
+                            void handleManagedLocalSend(
+                              pendingInput.text,
+                              pendingInput.intent,
+                              pendingInput.attachments,
+                              {
+                                existingClientRequestId:
+                                  pendingInput.clientRequestId,
+                                model: pendingInput.model,
+                                legacyModelMissing:
+                                  pendingInput.legacyModelMissing,
+                              },
+                            )
+                          }
+                        >
+                          Retry
+                        </Button>
+                      ) : null}
+                      {pendingInput.phase === "failed" ? (
+                        <>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleEditPending(pendingInput)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() =>
+                              handleDiscardPending(pendingInput.clientRequestId)
+                            }
+                          >
+                            Discard
+                          </Button>
+                        </>
+                      ) : null}
+                    </div>
+                  ))
               : null}
             {attachImagesEnabled ? (
               <AttachmentTray

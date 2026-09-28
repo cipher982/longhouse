@@ -11,6 +11,11 @@ final class SessionViewModel: ObservableObject {
         let catalogCommitSeq: Int64?
         let pubsubSeq: Int?
     }
+    private static let workingConsoleTurnStates: Set<String> = [
+        "starting",
+        "active",
+        "draining",
+    ]
 
     @Published var detail: SessionDetail?
     /// Viewer transport only. A connected stream is not provider liveness.
@@ -92,10 +97,10 @@ final class SessionViewModel: ObservableObject {
     @Published var queuedInputCount: Int = 0
     @Published var failedInputCount: Int = 0
     @Published var submittedInputs: [SubmittedInput] = [] { didSet { transcriptRevision &+= 1 } }
-    /// Text preserved from a steer attempt that the server rejected with
-    /// error_code: "turn_ended". The UI offers an explicit "Queue instead"
-    /// action; we do not silently convert the intent for the user.
-    @Published var turnEndedDraft: String?
+    /// Identity-bound prompt for the one rejected steer awaiting an explicit
+    /// Queue instead decision. Its transcript row is hidden while this prompt
+    /// is visible, so one operation has one visible owner.
+    @Published var turnEndedDraft: TurnEndedInput?
     /// Monotonic counter; each send increments it. Used so a delayed "Sent."
     /// auto-dismiss task only clears the label it owns.
     private(set) var sendCounter: UInt64 = 0
@@ -204,8 +209,8 @@ final class SessionViewModel: ObservableObject {
     /// Warm reopen and cold relaunch both come from here; the store owns which
     /// tier answers.
     private let snapshotStore: TranscriptSnapshotStore?
-    /// Complete outgoing intents survive process death until receipt
-    /// reconciliation proves durable delivery or terminal dismissal.
+    /// Unresolved payloads and receipt-only summaries survive process death;
+    /// the summary is removed only when its exact transcript echo is linked.
     private let pendingInputStore: PendingInputStore
     private let realtimeRefreshRetryDelaysNanoseconds: [UInt64]
     private var lastPubsubSeq: Int?
@@ -900,14 +905,16 @@ final class SessionViewModel: ObservableObject {
         return (try? JSONSerialization.data(withJSONObject: stateFacts, options: [.sortedKeys])) ?? Data("{}".utf8)
     }
 
-    func send(
+
+    func sendResult(
         text: String,
         sessionId: String,
         appState: AppState,
         intent: String = "auto",
         model: String? = nil,
-        attachments: [ComposerAttachment] = []
-    ) async -> Bool {
+        attachments: [ComposerAttachment] = [],
+        replacingClientRequestId: String? = nil
+    ) async -> SessionInputSendResult {
         let clientRequestId = "ios-\(UUID().uuidString)"
         let serverURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
         let authGeneration = SharedAuthStore.authGeneration(for: serverURL)
@@ -938,19 +945,21 @@ final class SessionViewModel: ObservableObject {
         // construction. A process kill or transport failure can therefore
         // never lose the bytes needed to reconcile or explicitly retry.
         guard pendingInputStore.save(pending) else {
-            submittedInputs.append(
-                SubmittedInput(
-                    id: clientRequestId,
-                    clientRequestId: clientRequestId,
-                    text: text,
-                    intent: intent,
-                    phase: .failed,
-                    serverInputId: nil,
-                    lastError: "Could not save this message for safe delivery.",
-                    createdAt: pending.createdAt
-                )
+            return .persistenceFailed
+        }
+        if let replacingClientRequestId {
+            if turnEndedDraft?.clientRequestId == replacingClientRequestId {
+                turnEndedDraft = nil
+            }
+            // The replacement is durable before the old operation is removed.
+            // A crash between these writes leaves both records recoverable.
+            pendingInputStore.remove(
+                serverURL: serverURL,
+                sessionId: sessionId,
+                authGeneration: authGeneration,
+                clientRequestId: replacingClientRequestId
             )
-            return false
+            submittedInputs.removeAll { $0.clientRequestId == replacingClientRequestId }
         }
         submittedInputs.append(
             SubmittedInput(
@@ -958,6 +967,7 @@ final class SessionViewModel: ObservableObject {
                 clientRequestId: clientRequestId,
                 text: text,
                 intent: intent,
+                attachmentSummaries: attachments.map(SubmittedInputAttachmentSummary.init),
                 phase: .submitting,
                 serverInputId: nil,
                 lastError: nil,
@@ -974,38 +984,79 @@ final class SessionViewModel: ObservableObject {
         sessionId: String,
         appState: AppState
     ) async -> Bool {
+        guard !isSending else { return false }
         let serverURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
         let authGeneration = SharedAuthStore.authGeneration(for: serverURL)
         guard let pending = pendingInputStore.load(
             serverURL: serverURL,
             sessionId: sessionId,
             authGeneration: authGeneration
-        ).first(where: { $0.clientRequestId == clientRequestId })
+        ).first(where: { $0.clientRequestId == clientRequestId && !$0.isDeliveryConfirmed })
         else {
             return false
         }
 
+        let current = submittedInputs.first { $0.clientRequestId == clientRequestId }
         updateSubmittedInput(
             clientRequestId,
             phase: .submitting,
-            serverInputId: nil,
+            serverInputId: current?.serverInputId,
+            liveInputId: current?.liveInputId,
+            turnId: current?.turnId,
+            runId: current?.runId,
+            deliveryStatus: current?.deliveryStatus,
             lastError: nil
         )
-        return await dispatchPendingInput(pending, sessionId: sessionId, appState: appState)
+        lastSendOutcome = nil
+        errorMessage = nil
+        refreshErrorMessage = nil
+        let result = await dispatchPendingInput(pending, sessionId: sessionId, appState: appState)
+        return result.isSuccessfulHandoff
 
     }
+    func pendingInput(
+        clientRequestId: String,
+        sessionId: String,
+        appState: AppState
+    ) -> PendingInputIntent? {
+        let serverURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+        let authGeneration = SharedAuthStore.authGeneration(for: serverURL)
+        return pendingInputStore.load(
+            serverURL: serverURL,
+            sessionId: sessionId,
+            authGeneration: authGeneration
+        ).first { $0.clientRequestId == clientRequestId && !$0.isDeliveryConfirmed }
+    }
+
+    /// Discard is explicit: only this action releases retained bytes for a
+    /// rejected/failed/cancelled operation.
+    func discardPendingInput(
+        clientRequestId: String,
+        sessionId: String,
+        appState: AppState
+    ) {
+        guard let pending = pendingInput(
+            clientRequestId: clientRequestId,
+            sessionId: sessionId,
+            appState: appState
+        ) else { return }
+        pendingInputStore.remove(pending)
+        submittedInputs.removeAll { $0.clientRequestId == clientRequestId }
+    }
+
 
     private func restorePendingInputs(_ intents: [PendingInputIntent]) {
-        submittedInputs.append(contentsOf: intents.map {
+        submittedInputs.append(contentsOf: intents.map { intent in
             SubmittedInput(
-                id: $0.clientRequestId,
-                clientRequestId: $0.clientRequestId,
-                text: $0.text,
-                intent: $0.intent,
-                phase: .couldNotConfirm,
+                id: intent.clientRequestId,
+                clientRequestId: intent.clientRequestId,
+                text: intent.text,
+                intent: intent.intent,
+                attachmentSummaries: intent.displayAttachmentSummaries.map(SubmittedInputAttachmentSummary.init),
+                phase: intent.isDeliveryConfirmed ? .sent : .couldNotConfirm,
                 serverInputId: nil,
-                lastError: "Delivery status is not confirmed yet.",
-                createdAt: $0.createdAt
+                lastError: intent.isDeliveryConfirmed ? nil : "Delivery status is not confirmed yet.",
+                createdAt: intent.createdAt
             )
         })
     }
@@ -1028,77 +1079,158 @@ final class SessionViewModel: ObservableObject {
                     id: sessionId,
                     clientRequestId: intent.clientRequestId
                 ) else {
-                    updateSubmittedInput(
+                    markInputUnconfirmedIfUnresolved(
                         intent.clientRequestId,
-                        phase: .couldNotConfirm,
-                        serverInputId: nil,
                         lastError: "Delivery status is not confirmed yet."
                     )
                     continue
                 }
-                switch receipt.disposition {
-                case .accepted:
-                    if receipt.status?.lowercased() == "queued" {
-                        updateSubmittedInput(
-                            intent.clientRequestId,
-                            phase: .queued,
-                            serverInputId: receipt.inputId,
-                            lastError: nil
-                        )
+                if intent.isDeliveryConfirmed {
+                    if receipt.eventId != nil {
+                        pendingInputStore.remove(intent)
+                        submittedInputs.removeAll { $0.clientRequestId == intent.clientRequestId }
                     } else {
-                        pendingInputStore.remove(
-                            serverURL: intent.serverURL,
-                            sessionId: intent.sessionId,
-                            authGeneration: intent.authGeneration,
-                            clientRequestId: intent.clientRequestId
-                        )
                         updateSubmittedInput(
                             intent.clientRequestId,
                             phase: .sent,
                             serverInputId: receipt.inputId,
+                            liveInputId: receipt.liveInputId,
+                            turnId: receipt.turn?.turnId,
+                            runId: receipt.turn?.runId,
+                            deliveryStatus: receipt.deliveryStatus,
                             lastError: nil
                         )
                     }
-                case .rejected:
-                    pendingInputStore.remove(
-                        serverURL: intent.serverURL,
-                        sessionId: intent.sessionId,
-                        authGeneration: intent.authGeneration,
-                        clientRequestId: intent.clientRequestId
+                    continue
+                }
+                switch receipt.disposition {
+                case .accepted:
+                    let terminalStatus = receipt.deliveryStatus?.lowercased()
+                    let turnState = receipt.turn?.state.lowercased()
+                    let terminalSuccess: Bool = {
+                        if receipt.turn != nil {
+                            return turnState == "completed"
+                        }
+                        return terminalStatus == "delivered" || terminalStatus == "sent"
+                    }()
+                    if terminalSuccess, receipt.eventId != nil {
+                        pendingInputStore.remove(intent)
+                        submittedInputs.removeAll { $0.clientRequestId == intent.clientRequestId }
+                        continue
+                    }
+                    let ambiguousDelivery = isUncertainDeliveryError(receipt.error)
+                    let cancelled = terminalStatus == "cancelled" || turnState == "cancelled"
+                    let terminalFailure = cancelled || (
+                        !ambiguousDelivery
+                            && (terminalStatus == "failed" || turnState == "failed")
                     )
+                    let currentTurnIsFresh = receipt.turn?.isFresh == true
+                    let queued = (turnState == "queued" && currentTurnIsFresh)
+                        || (turnState == nil && terminalStatus == "queued")
+                    let workingConsole =
+                        currentTurnIsFresh && Self.workingConsoleTurnStates.contains(turnState ?? "")
+                    let phase: SubmittedInputPhase = {
+                        if terminalSuccess { return .sent }
+                        if workingConsole { return .working }
+                        if queued { return .queued }
+                        if ambiguousDelivery { return .couldNotConfirm }
+                        if terminalFailure { return .failed }
+                        return .couldNotConfirm
+                    }()
+                    if terminalSuccess {
+                        if receipt.eventId != nil {
+                            pendingInputStore.remove(intent)
+                        } else if !intent.isDeliveryConfirmed {
+                            _ = pendingInputStore.save(intent.confirmedReceiptSummary())
+                        }
+                    }
+                    let lastError: String?
+                    if cancelled {
+                        lastError = "This input was cancelled before completion."
+                    } else if ambiguousDelivery || phase == .couldNotConfirm {
+                        lastError = receipt.error ?? "Delivery status is not confirmed yet."
+                    } else if terminalFailure {
+                        lastError = receipt.error ?? "The turn did not complete."
+                    } else {
+                        lastError = nil
+                    }
+                    updateSubmittedInput(
+                        intent.clientRequestId,
+                        phase: phase,
+                        serverInputId: receipt.inputId,
+                        liveInputId: receipt.liveInputId,
+                        turnId: receipt.turn?.turnId,
+                        runId: receipt.turn?.runId,
+                        deliveryStatus: receipt.deliveryStatus,
+                        lastError: lastError
+                    )
+                case .rejected:
+                    // Failed/cancelled payloads remain editable until the user
+                    // replaces them with a newly persisted operation or discards.
                     updateSubmittedInput(
                         intent.clientRequestId,
                         phase: .failed,
                         serverInputId: receipt.inputId,
+                        liveInputId: receipt.liveInputId,
+                        turnId: receipt.turn?.turnId,
+                        runId: receipt.turn?.runId,
+                        deliveryStatus: receipt.deliveryStatus,
                         lastError: receipt.error ?? "The server rejected this input."
                     )
                 case .couldNotConfirm:
-                    updateSubmittedInput(
+                    markInputUnconfirmedIfUnresolved(
                         intent.clientRequestId,
-                        phase: .couldNotConfirm,
                         serverInputId: receipt.inputId,
+                        liveInputId: receipt.liveInputId,
+                        turnId: receipt.turn?.turnId,
+                        runId: receipt.turn?.runId,
+                        deliveryStatus: receipt.deliveryStatus,
                         lastError: receipt.error ?? "Delivery status is not confirmed yet."
                     )
                 }
             } catch {
-                // A failed reconciliation is itself unconfirmed. Keep the
-                // payload and attachment bytes; only an explicit user retry
-                // replays this identity through the idempotent endpoint.
-                updateSubmittedInput(
+                // A failed receipt fetch adds no evidence and cannot erase a
+                // newer accepted turn.
+                markInputUnconfirmedIfUnresolved(
                     intent.clientRequestId,
-                    phase: .couldNotConfirm,
-                    serverInputId: nil,
                     lastError: "Delivery status is not confirmed yet."
                 )
             }
         }
     }
 
+
+    private func markInputUnconfirmedIfUnresolved(
+        _ clientRequestId: String,
+        serverInputId: Int? = nil,
+        liveInputId: String? = nil,
+        turnId: String? = nil,
+        runId: String? = nil,
+        deliveryStatus: String? = nil,
+        lastError: String
+    ) {
+        // Missing or ambiguous receipt reads must not downgrade a newer result.
+        guard let current = submittedInputs.first(where: {
+            $0.clientRequestId == clientRequestId
+        }) else { return }
+        guard current.phase == .submitting || current.phase == .couldNotConfirm else { return }
+        updateSubmittedInput(
+            clientRequestId,
+            phase: .couldNotConfirm,
+            serverInputId: serverInputId ?? current.serverInputId,
+            liveInputId: liveInputId ?? current.liveInputId,
+            turnId: turnId ?? current.turnId,
+            runId: runId ?? current.runId,
+            deliveryStatus: deliveryStatus ?? current.deliveryStatus,
+            lastError: lastError
+        )
+    }
+
     private func dispatchPendingInput(
         _ pending: PendingInputIntent,
         sessionId: String,
         appState: AppState
-    ) async -> Bool {
+    ) async -> SessionInputSendResult {
         guard let api = apiFactory(appState.serverURL) else {
             updateSubmittedInput(
                 pending.clientRequestId,
@@ -1107,7 +1239,7 @@ final class SessionViewModel: ObservableObject {
                 lastError: "The Longhouse server URL is invalid."
             )
             errorMessage = "Could not confirm delivery. Check the server URL and retry with the same request."
-            return false
+            return .unknown
         }
         isSending = true
         defer { isSending = false }
@@ -1139,67 +1271,166 @@ final class SessionViewModel: ObservableObject {
                 )
             }
             sendCounter &+= 1
-            lastSendOutcome = response.outcome
+            let turnState = response.turn?.state.lowercased()
+            lastSendOutcome = {
+                guard response.disposition == .accepted else { return nil }
+                guard let turnState else { return response.outcome }
+                switch turnState {
+                case "queued":
+                    return response.turn?.isFresh == true ? .queued : nil
+                case "completed":
+                    return .sent
+                case "starting", "active", "draining", "failed", "cancelled", "canceled":
+                    return nil
+                default:
+                    return response.outcome
+                }
+            }()
             queuedInputCount = response.pendingInputCount
             failedInputCount = response.visibleFailedInputCount
-            turnEndedDraft = nil
-            switch response.outcome {
+            switch response.disposition {
             case .unknown:
                 updateSubmittedInput(
                     pending.clientRequestId,
                     phase: .couldNotConfirm,
                     serverInputId: response.inputId,
+                    liveInputId: response.liveInputId,
                     turnId: response.turn?.turnId,
                     runId: response.turn?.runId,
+                    deliveryStatus: response.deliveryStatus,
                     lastError: "Delivery status is not confirmed yet."
                 )
                 refreshErrorMessage = "Delivery status is not confirmed yet."
-                return false
-            case .queued:
+                return .unknown
+            case .rejected:
                 updateSubmittedInput(
                     pending.clientRequestId,
-                    phase: .queued,
+                    phase: .failed,
                     serverInputId: response.inputId,
+                    liveInputId: response.liveInputId,
                     turnId: response.turn?.turnId,
                     runId: response.turn?.runId,
-                    lastError: nil
+                    deliveryStatus: response.deliveryStatus,
+                    lastError: "The server rejected this input."
                 )
-            case .sent:
-                pendingInputStore.remove(pending)
+                return .rejected
+            case .accepted:
+                let acceptedTurnState = response.turn?.state.lowercased()
+                let terminalFailure = acceptedTurnState.map {
+                    ["failed", "cancelled", "canceled"].contains($0)
+                } == true || (response.turn == nil && response.deliveryStatus.map {
+                    ["failed", "cancelled", "canceled"].contains($0)
+                } == true)
+                let helmDelivered = response.turn == nil
+                    && (
+                        response.outcome == .sent
+                        || response.deliveryStatus?.lowercased() == "delivered"
+                        || response.deliveryStatus?.lowercased() == "sent"
+                    )
+                let terminalSuccess = helmDelivered || acceptedTurnState == "completed"
+                let currentTurnIsFresh = response.turn?.isFresh == true
+                let workingConsole =
+                    currentTurnIsFresh && Self.workingConsoleTurnStates.contains(acceptedTurnState ?? "")
+                let queued = (acceptedTurnState == "queued" && currentTurnIsFresh)
+                    || (
+                        acceptedTurnState == nil
+                            && (
+                                response.outcome == .queued
+                                || response.deliveryStatus?.lowercased() == "queued"
+                            )
+                    )
+                let phase: SubmittedInputPhase = {
+                    if terminalFailure { return .failed }
+                    if terminalSuccess { return .sent }
+                    if workingConsole { return .working }
+                    if queued { return .queued }
+                    return .couldNotConfirm
+                }()
+                if terminalSuccess {
+                    _ = pendingInputStore.save(pending.confirmedReceiptSummary())
+                }
                 updateSubmittedInput(
                     pending.clientRequestId,
-                    phase: response.turn.map { ["starting", "active", "draining"].contains($0.state) } == true
-                        ? .working
-                        : .sent,
+                    phase: phase,
                     serverInputId: response.inputId,
+                    liveInputId: response.liveInputId,
                     turnId: response.turn?.turnId,
                     runId: response.turn?.runId,
-                    lastError: nil
+                    deliveryStatus: response.deliveryStatus,
+                    lastError: terminalFailure
+                        ? "The turn did not complete."
+                        : (phase == .couldNotConfirm ? "Delivery status is not confirmed yet." : nil)
                 )
-                clearSupersededSubmittedInputs(text: pending.text, keepClientRequestId: pending.clientRequestId)
             }
             Task { [weak self] in
                 guard let self else { return }
                 try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
             }
-            return true
-        } catch let LonghouseAPIError.structured(_, code, message)
-            where pending.intent == "steer" && code == "turn_ended" {
-            // Preserve the original text; the UI offers an explicit
-            // "Queue instead" action. Intent is never silently mapped.
-            pendingInputStore.remove(pending)
-            let reason = message.isEmpty
-                ? "Active turn ended before your update arrived."
-                : message
+            switch response.disposition {
+            case .accepted:
+                if let turnState {
+                    return turnState == "queued" && response.turn?.isFresh == true ? .queued : .accepted
+                }
+                return response.outcome == .queued ? .queued : .accepted
+            case .rejected:
+                return .rejected
+            case .unknown:
+                return .unknown
+            }
+        } catch let inputError as SessionInputOperationError {
+            if pending.intent == "steer", inputError.errorCode == "turn_ended" {
+                let reason = inputError.message.isEmpty
+                    ? "Active turn ended before your update arrived."
+                    : inputError.message
+                updateSubmittedInput(
+                    pending.clientRequestId,
+                    phase: .needsUserDecision,
+                    serverInputId: inputError.inputId,
+                    liveInputId: inputError.liveInputId,
+                    turnId: inputError.turn?.turnId,
+                    runId: inputError.turn?.runId,
+                    deliveryStatus: inputError.deliveryStatus,
+                    lastError: reason
+                )
+                turnEndedDraft = TurnEndedInput(
+                    clientRequestId: pending.clientRequestId,
+                    text: pending.text
+                )
+                errorMessage = nil
+                return .rejected
+            }
+            let ambiguousDelivery = isUncertainDeliveryError(inputError.errorCode)
+            let cancelled = ["cancelled", "canceled"].contains(
+                inputError.deliveryStatus?.lowercased() ?? ""
+            )
+            let terminalFailure = cancelled || (
+                !ambiguousDelivery
+                    && inputError.deliveryStatus?.lowercased() == "failed"
+            )
+            let phase: SubmittedInputPhase = ambiguousDelivery && !cancelled
+                ? .couldNotConfirm
+                : (inputError.disposition == .rejected || terminalFailure
+                    ? .failed
+                    : .couldNotConfirm)
             updateSubmittedInput(
                 pending.clientRequestId,
-                phase: .needsUserDecision,
-                serverInputId: nil,
-                lastError: reason
+                phase: phase,
+                serverInputId: inputError.inputId,
+                liveInputId: inputError.liveInputId,
+                turnId: inputError.turn?.turnId,
+                runId: inputError.turn?.runId,
+                deliveryStatus: inputError.deliveryStatus,
+                lastError: inputError.message
             )
-            turnEndedDraft = pending.text
-            errorMessage = reason
-            return false
+            if inputError.disposition == .unknown || ambiguousDelivery {
+                refreshErrorMessage = inputError.message
+                return .unknown
+            }
+            if inputError.disposition == .accepted {
+                return .accepted
+            }
+            errorMessage = "Could not send: \(inputError.message)"
+            return .rejected
         } catch {
             let failureMessage = sendFailureMessage(for: error)
             if sendConfirmationMayHaveLanded(error) {
@@ -1223,11 +1454,10 @@ final class SessionViewModel: ObservableObject {
                     )
                     try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
                 }
-                return false
+                return .unknown
             }
-            // Rejections and validation failures have a known disposition, so
-            // their local attachment bytes are safe to delete.
-            pendingInputStore.remove(pending)
+            // A definitive rejection still retains its complete payload until
+            // the user edits it into a newly persisted operation or discards it.
             updateSubmittedInput(
                 pending.clientRequestId,
                 phase: .failed,
@@ -1239,33 +1469,40 @@ final class SessionViewModel: ObservableObject {
                 guard let self else { return }
                 try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
             }
-            return false
+            return .rejected
         }
     }
 
-    /// Explicit user acceptance of the "Queue instead" prompt after a
-    /// steer failed with turn_ended. Always maps to intent=queue.
+    /// Replaces the exact rejected steer only after the queued operation has
+    /// been durably persisted with a new request ID.
     func queueInsteadOfSteer(
+        clientRequestId: String,
         sessionId: String,
-        appState: AppState,
-        model: String? = nil
+        appState: AppState
     ) async -> Bool {
-        guard let text = turnEndedDraft else { return false }
-        let decisionIds = submittedInputs
-            .filter { $0.phase == .needsUserDecision && $0.text == text }
-            .map(\.id)
-        let queued = await send(
-            text: text,
+        guard let decision = turnEndedDraft,
+              decision.clientRequestId == clientRequestId,
+              submittedInputs.contains(where: {
+                  $0.clientRequestId == clientRequestId && $0.phase == .needsUserDecision
+              }),
+              let pending = pendingInput(
+                  clientRequestId: clientRequestId,
+                  sessionId: sessionId,
+                  appState: appState
+              ),
+              pending.intent == "steer"
+        else { return false }
+
+        let result = await sendResult(
+            text: pending.text,
             sessionId: sessionId,
             appState: appState,
             intent: "queue",
-            model: model
+            model: pending.model,
+            attachments: pending.composerAttachments(),
+            replacingClientRequestId: clientRequestId
         )
-        if queued {
-            turnEndedDraft = nil
-            submittedInputs.removeAll { decisionIds.contains($0.id) }
-        }
-        return queued
+        return result.isSuccessfulHandoff
     }
     /// Read-on-open acknowledgement for Console results
     /// (console-unread-acknowledgement spec): acknowledge exactly the result
@@ -1660,11 +1897,16 @@ final class SessionViewModel: ObservableObject {
     }
 
     static func pendingInputPollDelay(submittedInputs: [SubmittedInput], now: Date) -> UInt64? {
+        let activePhases: Set<SubmittedInputPhase> = [.submitting, .queued, .working]
+        if submittedInputs.contains(where: {
+            activePhases.contains($0.phase) && $0.turnId != nil
+        }) {
+            // Console turn state is authoritative by ID, including queued
+            // turns that have outlived the recent-list window.
+            return 2_000_000_000
+        }
         let activeAges = submittedInputs.compactMap { input -> TimeInterval? in
-            guard input.phase == .submitting
-                || input.phase == .queued
-                || input.phase == .working
-                || input.phase == .sent else { return nil }
+            guard activePhases.contains(input.phase) else { return nil }
             return max(0, now.timeIntervalSince(input.createdAt))
         }
         guard let youngest = activeAges.min() else { return nil }
@@ -1836,6 +2078,21 @@ final class SessionViewModel: ObservableObject {
                 }
             }
             guard let api = apiFactory(appState.serverURL) else { return }
+            let normalizedServerURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+            let authGeneration = SharedAuthStore.authGeneration(for: normalizedServerURL)
+            let pending = pendingInputStore.load(
+                serverURL: normalizedServerURL,
+                sessionId: sessionId,
+                authGeneration: authGeneration
+            )
+            if !pending.isEmpty {
+                await reconcilePendingInputs(
+                    pending,
+                    sessionId: sessionId,
+                    appState: appState,
+                    authGeneration: authGeneration
+                )
+            }
             switch change.change_kind {
             case "runtime", "title_update", "read_update":
                 // These wakes change native chrome, not transcript rows.
@@ -2936,27 +3193,23 @@ final class SessionViewModel: ObservableObject {
         _ id: String,
         phase: SubmittedInputPhase,
         serverInputId: Int?,
+        liveInputId: String? = nil,
         turnId: String? = nil,
         runId: String? = nil,
+        deliveryStatus: String? = nil,
         lastError: String?
     ) {
         guard let index = submittedInputs.firstIndex(where: { $0.id == id }) else { return }
         submittedInputs[index].phase = phase
         submittedInputs[index].serverInputId = serverInputId
+        if let liveInputId { submittedInputs[index].liveInputId = liveInputId }
         if let turnId { submittedInputs[index].turnId = turnId }
         if let runId { submittedInputs[index].runId = runId }
+        if let deliveryStatus { submittedInputs[index].deliveryStatus = deliveryStatus }
         submittedInputs[index].lastError = lastError
     }
 
-    private func clearSupersededSubmittedInputs(text: String, keepClientRequestId: String) {
-        submittedInputs.removeAll { input in
-            input.clientRequestId != keepClientRequestId
-                && input.text == text
-                // A could-not-confirm row may already have been accepted.
-                // Keep it visible until its own receipt/event identity resolves.
-                && input.phase == .failed
-        }
-    }
+
 
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
         guard !submittedInputs.isEmpty else { return }
@@ -3012,8 +3265,11 @@ final class SessionViewModel: ObservableObject {
                 || input.phase == .submitting
                 || input.phase == .working
                 || input.phase == .couldNotConfirm
-                || input.phase == .failed
             else { continue }
+            // A Console turn's receipt/event may link before provider
+            // execution finishes. Keep its bytes through queued/working
+            // states; only a completed turn is represented as .sent.
+            if input.turnId != nil && input.phase != .sent { continue }
             if linkedRequestIds.contains(input.clientRequestId) {
                 resolved.insert(input.id)
                 continue
@@ -3051,6 +3307,27 @@ final class SessionViewModel: ObservableObject {
             return "Longhouse couldn't confirm delivery. Refreshing to check whether it landed."
         default:
             return error.localizedDescription
+        }
+    }
+
+    private func isUncertainDeliveryError(_ value: String?) -> Bool {
+        guard let value else { return false }
+        let code = value
+            .split(separator: ":", maxSplits: 1)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        switch code {
+        case "delivery_unknown",
+             "provider_unknown",
+             "provider_delivery_unknown",
+             "input_receipt_unknown",
+             "input_dispatch_in_flight",
+             "runtime_draining":
+            return true
+        default:
+            return false
         }
     }
 

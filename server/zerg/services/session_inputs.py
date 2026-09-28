@@ -31,7 +31,8 @@ InputIntent = Literal["auto", "queue", "steer"]
 InputStatus = Literal["queued", "delivering", "delivered", "cancelled", "failed"]
 RetryInputStatus = Literal["queued", "delivering"]
 InputOutcome = Literal["sent", "queued", "unknown"]
-InputConflictReason = Literal["different_text", "cancelled"]
+InputDisposition = Literal["accepted", "rejected", "unknown"]
+InputConflictReason = Literal["cancelled", "different_text"]
 
 INPUT_INTENT_AUTO: InputIntent = "auto"
 INPUT_INTENT_QUEUE: InputIntent = "queue"

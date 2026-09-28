@@ -2,9 +2,8 @@ import CryptoKit
 import Foundation
 import SwiftUI
 
-/// The complete user intent held locally until the Runtime Host has given the
-/// client an authoritative disposition.  This is deliberately separate from
-/// the transcript cache: an input is an obligation, not derived display data.
+/// Full intent survives uncertain delivery. After terminal success only the
+/// identity, text and bounded attachment summaries remain until transcript echo.
 struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
     struct Attachment: Codable, Sendable, Equatable, Identifiable {
         let id: UUID
@@ -14,6 +13,22 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
 
         var byteSize: Int { data.count }
     }
+    struct AttachmentSummary: Codable, Sendable, Equatable {
+        let filename: String
+        let mimeType: String
+        let byteSize: Int
+
+        init(filename: String, mimeType: String, byteSize: Int) {
+            self.filename = String(filename.prefix(128))
+            self.mimeType = String(mimeType.prefix(80))
+            self.byteSize = max(0, byteSize)
+        }
+
+        init(_ attachment: Attachment) {
+            self.init(filename: attachment.filename, mimeType: attachment.mimeType, byteSize: attachment.data.count)
+        }
+    }
+
 
     let clientRequestId: String
     let serverURL: String
@@ -23,8 +38,31 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
     let intent: String
     let model: String?
     let attachments: [Attachment]
-    let createdAt: Date
+    let deliveryConfirmed: Bool?
+    let attachmentSummaries: [AttachmentSummary]?
 
+    let createdAt: Date
+    var isDeliveryConfirmed: Bool { deliveryConfirmed == true }
+
+    var displayAttachmentSummaries: [AttachmentSummary] {
+        attachmentSummaries ?? attachments.map(AttachmentSummary.init)
+    }
+
+    func confirmedReceiptSummary() -> PendingInputIntent {
+        PendingInputIntent(
+            clientRequestId: clientRequestId,
+            serverURL: serverURL,
+            authGeneration: authGeneration,
+            sessionId: sessionId,
+            text: text,
+            intent: intent,
+            model: model,
+            attachments: [],
+            createdAt: createdAt,
+            deliveryConfirmed: true,
+            attachmentSummaries: displayAttachmentSummaries
+        )
+    }
     var id: String { clientRequestId }
     init(
         clientRequestId: String,
@@ -35,7 +73,9 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
         intent: String,
         model: String? = nil,
         attachments: [Attachment],
-        createdAt: Date
+        createdAt: Date,
+        deliveryConfirmed: Bool? = nil,
+        attachmentSummaries: [AttachmentSummary]? = nil
     ) {
         self.clientRequestId = clientRequestId
         self.serverURL = TranscriptSnapshot.normalizedServerURL(serverURL)
@@ -45,6 +85,8 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
         self.intent = intent
         self.model = model
         self.attachments = attachments
+        self.deliveryConfirmed = deliveryConfirmed
+        self.attachmentSummaries = attachmentSummaries
         self.createdAt = createdAt
     }
 
@@ -62,10 +104,9 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
     }
 }
 
-/// Atomic, account-scoped storage for sends that may have crossed the network
-/// boundary without a response. Files are keyed by server, auth generation,
-/// session and client request ID, so changing tenant/login cannot replay an
-/// old intent into a new account.
+/// Account-scoped storage for unresolved sends and receipt-only summaries. Files
+/// are keyed by server, auth generation, session and client request ID, so
+/// changing tenant/login cannot replay an old intent into a new account.
 struct PendingInputStore: Sendable {
     static let shared = PendingInputStore()
     static let schemaVersion = 1

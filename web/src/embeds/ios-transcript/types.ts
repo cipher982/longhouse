@@ -38,6 +38,12 @@ export interface TurnEnd {
   doneAt: string;
 }
 
+export interface AttachmentSummary {
+  filename?: string | null;
+  mimeType?: string | null;
+  byteSize?: number | null;
+}
+
 export interface TranscriptItem {
   id: string;
   kind: string;
@@ -54,6 +60,8 @@ export interface TranscriptItem {
   calls?: ToolCall[];
   origin?: string | null;
   media?: MediaRef[] | null;
+  /** Bounded attachment metadata for optimistic submitted rows; bytes stay native. */
+  attachments?: AttachmentSummary[] | null;
   failurePreview?: string | null;
   diff?: DiffLine[] | null;
   subagents?: Subagent[] | null;

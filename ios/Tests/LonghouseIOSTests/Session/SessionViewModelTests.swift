@@ -767,9 +767,9 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
         await api.failFutureWorkspaceLoads()
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.lastSendOutcome == .sent)
         #expect(model.items.map(\.id) == ["user:10"])
         #expect(model.submittedInputs.count == 1)
@@ -783,16 +783,28 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-helm-success-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: store)
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.first?.text == "continue")
         #expect(model.submittedInputs.first?.phase == .sent)
-    }
+        let persisted = store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        )
+        #expect(persisted.count == 1)
+        #expect(persisted.first?.isDeliveryConfirmed == true)
+        #expect(persisted.first?.attachments.isEmpty == true)
 
+    }
     @Test
     func sendDoesNotBlankTranscriptWhenBestEffortRefreshFails() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
@@ -803,9 +815,9 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
         await api.failFutureWorkspaceLoads()
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.errorMessage == nil)
         #expect(model.refreshErrorMessage == nil)
         #expect(model.items.map(\.id) == ["user:10"])
@@ -823,9 +835,9 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "do not lose this", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "do not lose this", sessionId: "session-1", appState: appState)
 
-        #expect(!sent)
+        #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.text == "do not lose this")
         #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
@@ -860,23 +872,25 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(
+        let sent = await model.sendResult(
             text: "Inspect this screenshot",
             sessionId: "session-1",
             appState: appState,
             attachments: [attachment]
         )
 
-        #expect(!sent)
+        #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.first?.phase == .failed)
         #expect(model.submittedInputs.first?.lastError == serverReason)
         #expect(model.errorMessage == "Could not send: \(serverReason)")
         #expect(model.refreshErrorMessage == nil)
-        #expect(store.load(
+        let retained = store.load(
             serverURL: appState.serverURL,
             sessionId: "session-1",
             authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
-        ).isEmpty)
+        )
+        #expect(retained.count == 1)
+        #expect(retained.first?.attachments.first?.data == attachment.data)
     }
 
     @Test
@@ -903,9 +917,9 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "retain this", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "retain this", sessionId: "session-1", appState: appState)
 
-        #expect(!sent)
+        #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
         let requestId = try #require(model.submittedInputs.first?.clientRequestId)
         #expect(store.load(
@@ -913,6 +927,142 @@ struct SessionViewModelTests {
             sessionId: "session-1",
             authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
         ).map(\.clientRequestId) == [requestId])
+    }
+
+    @Test
+    func missingReceiptCannotDowngradeRetriedActiveConsoleTurn() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.failFutureSends(
+            LonghouseAPIError.structured(
+                status: 502,
+                errorCode: "delivery_unknown",
+                message: "Provider handoff status is unknown."
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-retry-reconcile-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let detailRequestsBeforeRetry = await api.detailRequestCount()
+        let detailResponsesBeforeRetry = await api.detailResponseCount()
+        await api.pauseNextDetailResponse()
+        defer { Task { await api.resumePausedDetailResponses() } }
+
+        let first = await model.sendResult(
+            text: "keep one Console operation",
+            sessionId: "session-1",
+            appState: appState
+        )
+        #expect(first == .unknown)
+        await api.waitForSessionInputReceiptQuery()
+        await waitForDetailRequestCount(api, atLeast: detailRequestsBeforeRetry + 1)
+        let clientRequestId = try #require(model.submittedInputs.first?.clientRequestId)
+
+        await api.setSendSteps([
+            .response(
+                SessionInputResponse(
+                    outcome: .sent,
+                    disposition: .accepted,
+                    inputId: nil,
+                    liveInputId: "live-turn-1",
+                    clientRequestId: clientRequestId,
+                    turn: ConsoleTurnReceipt(
+                        turnId: "turn-1",
+                        receiptId: "live-turn-1",
+                        runId: "run-1",
+                        state: "active",
+                        isFresh: true
+                    ),
+                    intent: .auto,
+                    queued: []
+                )
+            ),
+        ])
+        let retried = await model.retryPendingInput(
+            clientRequestId: clientRequestId,
+            sessionId: "session-1",
+            appState: appState
+        )
+        #expect(retried)
+        #expect(model.submittedInputs.first?.phase == .working)
+
+        await api.resumeFirstPausedDetailResponse()
+        await waitForDetailResponseCount(api, atLeast: detailResponsesBeforeRetry + 1)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        #expect(model.submittedInputs.first?.phase == .working)
+        #expect(model.submittedInputs.first?.lastError == nil)
+    }
+
+    @Test
+    func failedDeliveryUnknownReceiptRemainsRetryableAfterReopen() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-reopened-unknown-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let authGeneration = SharedAuthStore.authGeneration(for: appState.serverURL)
+        let clientRequestId = "reopened-delivery-unknown"
+        let pending = PendingInputIntent(
+            clientRequestId: clientRequestId,
+            serverURL: appState.serverURL,
+            authGeneration: authGeneration,
+            sessionId: "session-1",
+            text: "retain uncertain input",
+            intent: "auto",
+            attachments: [],
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        #expect(store.save(pending))
+
+        let error = "delivery_unknown: provider response not confirmed"
+        let receipt = SessionInputReceiptState(
+            clientRequestId: clientRequestId,
+            intent: "auto",
+            status: "failed",
+            disposition: .accepted,
+            deliveryStatus: "failed",
+            liveInputId: "receipt-1",
+            error: error
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.setSessionInputReceiptResponse(receipt)
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await api.waitForSessionInputReceiptQuery()
+        for _ in 0..<20 {
+            if model.submittedInputs.first?.lastError == error { break }
+            await Task.yield()
+        }
+
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
+        #expect(model.submittedInputs.first?.deliveryStatus == "failed")
+        #expect(model.submittedInputs.first?.lastError == error)
+        #expect(
+            store.load(
+                serverURL: appState.serverURL,
+                sessionId: "session-1",
+                authGeneration: authGeneration
+            ).map(\.clientRequestId) == [clientRequestId]
+        )
     }
     @Test
     func reopeningRestoresEachPendingOperationWithoutDispatching() async throws {
@@ -968,9 +1118,9 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "conflict", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "conflict", sessionId: "session-1", appState: appState)
 
-        #expect(!sent)
+        #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .failed)
         #expect(model.errorMessage == "Could not send: That client request id already belongs to a different message.")
@@ -1004,9 +1154,9 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "next", sessionId: "session-1", appState: appState, intent: "queue")
+        let sent = await model.sendResult(text: "next", sessionId: "session-1", appState: appState, intent: "queue")
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.lastSendOutcome == .queued)
         #expect(model.queuedInputCount == 1)
         #expect(model.submittedInputs.first?.phase == .queued)
@@ -1024,8 +1174,10 @@ struct SessionViewModelTests {
                 clientRequestId: nil,
                 turn: ConsoleTurnReceipt(
                     turnId: "turn-1",
+                    receiptId: nil,
                     runId: "run-1",
-                    state: "active"
+                    state: "active",
+                    isFresh: true
                 ),
                 intent: .auto,
                 queued: []
@@ -1033,13 +1185,291 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-active-console-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: store)
+        let attachment = ComposerAttachment(
+            id: UUID(),
+            filename: "active.jpg",
+            data: Data([0x01, 0x02, 0x03]),
+            mimeType: "image/jpeg",
+            thumbnail: nil
+        )
 
         await model.start(sessionId: "session-1", appState: appState)
-        #expect(await model.send(text: "work on this", sessionId: "session-1", appState: appState))
+        #expect((await model.sendResult(
+            text: "work on this",
+            sessionId: "session-1",
+            appState: appState,
+            attachments: [attachment]
+        )).isSuccessfulHandoff)
+        #expect(model.lastSendOutcome == nil)
         #expect(model.submittedInputs.first?.phase == .working)
         #expect(model.submittedInputs.first?.turnId == "turn-1")
         #expect(model.submittedInputs.first?.runId == "run-1")
+        #expect(
+            SessionViewModel.pendingInputPollDelay(
+                submittedInputs: model.submittedInputs,
+                now: Date()
+            ) == 2_000_000_000
+        )
+        let retained = store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        )
+        #expect(retained.first?.attachments.first?.data == attachment.data)
+    }
+
+    @Test
+    func startingConsoleTurnOutranksQueuedHandoffOutcome() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(
+                outcome: .queued,
+                disposition: .accepted,
+                deliveryStatus: "queued",
+                inputId: nil,
+                liveInputId: "live-turn-1",
+                clientRequestId: nil,
+                turn: ConsoleTurnReceipt(
+                    turnId: "turn-1",
+                    receiptId: "live-turn-1",
+                    runId: "run-1",
+                    state: "starting",
+                    isFresh: true
+                ),
+                intent: .auto,
+                queued: []
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: Self.isolatedPendingInputStore()
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(
+            text: "start the Console turn",
+            sessionId: "session-1",
+            appState: appState
+        )
+
+        #expect(sent == .accepted)
+        #expect(model.submittedInputs.first?.phase == .working)
+        #expect(model.submittedInputs.first?.deliveryStatus == "queued")
+        #expect(model.lastSendOutcome == nil)
+    }
+
+    @Test
+    func startingConsoleReceiptOutranksQueuedDeliveryStatus() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-starting-receipt-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let authGeneration = SharedAuthStore.authGeneration(for: appState.serverURL)
+        let clientRequestId = "console-starting-receipt"
+        let pending = PendingInputIntent(
+            clientRequestId: clientRequestId,
+            serverURL: appState.serverURL,
+            authGeneration: authGeneration,
+            sessionId: "session-1",
+            text: "start the Console turn",
+            intent: "auto",
+            attachments: [],
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(store.save(pending))
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.setSessionInputReceiptResponse(
+            SessionInputReceiptState(
+                clientRequestId: clientRequestId,
+                intent: "auto",
+                status: "queued",
+                disposition: .accepted,
+                deliveryStatus: "queued",
+                liveInputId: "live-turn-2",
+                turn: ConsoleTurnReceipt(
+                    turnId: "turn-2",
+                    receiptId: "live-turn-2",
+                    runId: "run-2",
+                    state: "starting",
+                    isFresh: true
+                )
+            )
+        )
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await api.waitForSessionInputReceiptQuery()
+        for _ in 0..<20 {
+            if model.submittedInputs.first?.phase == .working { break }
+            await Task.yield()
+        }
+
+        #expect(model.submittedInputs.first?.phase == .working)
+        #expect(model.submittedInputs.first?.deliveryStatus == "queued")
+    }
+
+    @Test
+    func staleConsoleReceiptIsUnconfirmedAndRetainsPayload() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-stale-console-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let authGeneration = SharedAuthStore.authGeneration(for: appState.serverURL)
+        let clientRequestId = "console-stale-receipt"
+        let attachment = PendingInputIntent.Attachment(
+            id: UUID(),
+            filename: "reference.png",
+            data: Data([0x01, 0x02, 0x03]),
+            mimeType: "image/png"
+        )
+        let pending = PendingInputIntent(
+            clientRequestId: clientRequestId,
+            serverURL: appState.serverURL,
+            authGeneration: authGeneration,
+            sessionId: "session-1",
+            text: "keep this input",
+            intent: "auto",
+            attachments: [attachment],
+            createdAt: Date()
+        )
+        #expect(store.save(pending))
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.setSessionInputReceiptResponse(
+            SessionInputReceiptState(
+                clientRequestId: clientRequestId,
+                intent: "auto",
+                status: "delivered",
+                disposition: .accepted,
+                deliveryStatus: "delivered",
+                liveInputId: "stale-live-input",
+                turn: ConsoleTurnReceipt(
+                    turnId: "stale-turn",
+                    receiptId: "stale-live-input",
+                    runId: "stale-run",
+                    state: "active",
+                    isFresh: false
+                )
+            )
+        )
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await api.waitForSessionInputReceiptQuery()
+        for _ in 0..<20 {
+            if model.submittedInputs.first?.turnId == "stale-turn" { break }
+            await Task.yield()
+        }
+
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
+        #expect(model.submittedInputs.first?.lastError == "Delivery status is not confirmed yet.")
+        #expect(
+            SessionViewModel.pendingInputPollDelay(
+                submittedInputs: model.submittedInputs,
+                now: Date()
+            ) == nil
+        )
+        let retained = store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: authGeneration
+        )
+        #expect(retained.first?.attachments.first?.data == attachment.data)
+        #expect(retained.first?.isDeliveryConfirmed == false)
+        #expect(await api.sendRequests() == [])
+    }
+
+    @Test
+    func acceptedUnknownSendRetainsPendingOperation() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(
+                outcome: .unknown,
+                disposition: .accepted,
+                inputId: nil,
+                clientRequestId: nil,
+                intent: .auto,
+                queued: []
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-accepted-unknown-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: store)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let result = await model.sendResult(text: "retain this", sessionId: "session-1", appState: appState)
+
+        #expect(result == .accepted)
+        #expect(model.lastSendOutcome == .unknown)
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
+        #expect(store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        ).count == 1)
+    }
+
+    @Test
+    func helmDeliveringSendRetainsPendingOperation() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(
+                outcome: .unknown,
+                disposition: .accepted,
+                deliveryStatus: "delivering",
+                inputId: nil,
+                clientRequestId: nil,
+                intent: .auto,
+                queued: []
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-helm-delivering-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: store)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let result = await model.sendResult(text: "still delivering", sessionId: "session-1", appState: appState)
+
+        #expect(result == .accepted)
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
+        #expect(model.submittedInputs.first?.deliveryStatus == "delivering")
+        #expect(store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        ).count == 1)
     }
 
     @Test
@@ -1061,6 +1491,7 @@ struct SessionViewModelTests {
                 )
             ]
         )
+        let store = Self.isolatedPendingInputStore()
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         await api.setSendSteps([
             .turnEnded("Active turn ended."),
@@ -1068,20 +1499,35 @@ struct SessionViewModelTests {
         ])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: store)
 
         await model.start(sessionId: "session-1", appState: appState)
-        let steered = await model.send(text: "keep going", sessionId: "session-1", appState: appState, intent: "steer")
-        #expect(!steered)
+        let steered = await model.sendResult(text: "keep going", sessionId: "session-1", appState: appState, intent: "steer")
+        #expect(!steered.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .needsUserDecision)
+        let originalRequestId = try #require(model.submittedInputs.first?.clientRequestId)
+        #expect(model.turnEndedDraft?.clientRequestId == originalRequestId)
 
-        let queued = await model.queueInsteadOfSteer(sessionId: "session-1", appState: appState)
+        let queued = await model.queueInsteadOfSteer(
+            clientRequestId: originalRequestId,
+            sessionId: "session-1",
+            appState: appState
+        )
 
         #expect(queued)
+        #expect(model.turnEndedDraft == nil)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .queued)
         #expect(model.submittedInputs.first?.serverInputId == 9)
+        let queuedRequestId = try #require(model.submittedInputs.first?.clientRequestId)
+        #expect(queuedRequestId != originalRequestId)
+        let storedInputs = store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        )
+        #expect(storedInputs.map(\.clientRequestId) == [queuedRequestId])
     }
 
     @Test
@@ -1234,8 +1680,8 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        let failed = await model.send(text: "retry me", sessionId: "session-1", appState: appState)
-        #expect(!failed)
+        let failed = await model.sendResult(text: "retry me", sessionId: "session-1", appState: appState)
+        #expect(!failed.isSuccessfulHandoff)
         #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
 
         let requestId = try #require(model.submittedInputs.first?.clientRequestId)
@@ -1274,10 +1720,10 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForSubmittedInputsToClear(model)
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.isEmpty)
         #expect(model.items.map(\.id) == ["user:11"])
     }
@@ -1308,10 +1754,10 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForSubmittedInputsToClear(model)
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.isEmpty)
         #expect(model.items.map(\.id) == ["user:11"])
     }
@@ -1327,7 +1773,13 @@ struct SessionViewModelTests {
                 outcome: .sent,
                 inputId: nil,
                 clientRequestId: nil,
-                turn: ConsoleTurnReceipt(turnId: "turn-1", runId: "run-1", state: "active"),
+                turn: ConsoleTurnReceipt(
+                    turnId: "turn-1",
+                    receiptId: nil,
+                    runId: "run-1",
+                    state: "active",
+                    isFresh: true
+                ),
                 intent: .auto,
                 queued: []
             ),
@@ -1345,15 +1797,110 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies the transcript") {
             model.items.map(\.id) == ["user:11"]
         }
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.items.map(\.id) == ["user:11"])
+    }
+
+    @Test
+    func completedConsoleSendRemainsVisibleUntilEcho() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(
+                outcome: .sent,
+                inputId: nil,
+                clientRequestId: nil,
+                turn: ConsoleTurnReceipt(
+                    turnId: "turn-1",
+                    receiptId: nil,
+                    runId: "run-1",
+                    state: "completed",
+                    isFresh: true
+                ),
+                intent: .auto,
+                queued: []
+            ),
+            afterSendWorkspace: { _ in
+                try makeWorkspace(
+                    eventId: 11,
+                    content: "continue",
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    inputOriginJSON: nil
+                )
+            }
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-sent-summary-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let attachment = ComposerAttachment(
+            id: UUID(),
+            filename: "reference.png",
+            data: Data([0x01, 0x02, 0x03]),
+            mimeType: "image/png",
+            thumbnail: nil
+        )
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(
+            text: "continue",
+            sessionId: "session-1",
+            appState: appState,
+            attachments: [attachment]
+        )
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
+        try await Task.sleep(nanoseconds: 2_100_000_000)
+
+        #expect(sent.isSuccessfulHandoff)
+        #expect(model.submittedInputs.first?.phase == .sent)
+        #expect(
+            SessionViewModel.pendingInputPollDelay(
+                submittedInputs: model.submittedInputs,
+                now: Date()
+            ) == nil
+        )
+        #expect(model.submittedInputs.first?.attachmentSummaries == [
+            SubmittedInputAttachmentSummary(filename: "reference.png", mimeType: "image/png", byteSize: 3),
+        ])
+        let persisted = store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        )
+        #expect(persisted.first?.isDeliveryConfirmed == true)
+        #expect(persisted.first?.attachments.isEmpty == true)
+        #expect(persisted.first?.displayAttachmentSummaries == [
+            PendingInputIntent.AttachmentSummary(filename: "reference.png", mimeType: "image/png", byteSize: 3),
+        ])
+        #expect(await model.retryPendingInput(
+            clientRequestId: try #require(model.submittedInputs.first?.clientRequestId),
+            sessionId: "session-1",
+            appState: appState
+        ) == false)
+
+        let reopened = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+        await reopened.start(sessionId: "session-1", appState: appState)
+        #expect(reopened.submittedInputs.first?.phase == .sent)
+        #expect(reopened.submittedInputs.first?.attachmentSummaries == model.submittedInputs.first?.attachmentSummaries)
+        #expect(await api.sendRequests() == ["continue:auto"])
     }
 
     @Test
@@ -1477,10 +2024,10 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForSubmittedInputsToClear(model)
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.isEmpty)
     }
 
@@ -1534,10 +2081,10 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
     }
 
@@ -1653,14 +2200,14 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         // Reload joins an in-flight refresh; wait for the send's refresh to finish.
         await waitForCondition("post-send tail refresh completion") {
             !model.hasTailRefreshInFlightForTesting
         }
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
 
         await model.reload(sessionId: "session-1", appState: appState)
@@ -1694,10 +2241,10 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForSubmittedInputsToClear(model)
 
-        #expect(!sent)
+        #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.isEmpty)
         #expect(model.items.map(\.id) == ["user:11"])
         #expect(model.errorMessage == nil)
@@ -1717,13 +2264,13 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies the transcript") {
             model.items.map(\.id) == ["user:11"]
         }
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.items.map(\.id) == ["user:11"])
     }
@@ -1754,13 +2301,13 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies transcript") {
             model.items.map(\.id) == ["user:11"]
         }
 
-        #expect(!sent)
+        #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
         #expect(model.items.map(\.id) == ["user:11"])
@@ -1791,13 +2338,13 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
-        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies the transcript") {
             model.items.map(\.id) == ["user:11"]
         }
 
-        #expect(sent)
+        #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.items.map(\.id) == ["user:11"])
     }
@@ -2289,6 +2836,9 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var pauseResponseRequests: [PauseResponseRecord] = []
     private var postedRenderBeacons: [RenderBeaconReporter.Payload] = []
     private var lastClientRequestId: String?
+    private var sessionInputReceiptResponses: [String: SessionInputReceiptState] = [:]
+    private var sessionInputReceiptQueryStarted = false
+    private var sessionInputReceiptQueryWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         workspaces: [SessionWorkspaceResponse],
@@ -2304,6 +2854,41 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         self.pauseResponse = pauseResponse
         self.primaryDetail = primaryDetail
         self.primaryDetails = primaryDetails
+    }
+    func setSessionInputReceiptResponse(_ receipt: SessionInputReceiptState) {
+        sessionInputReceiptResponses[receipt.clientRequestId] = receipt
+    }
+
+    func waitForSessionInputReceiptQuery() async {
+        if sessionInputReceiptQueryStarted { return }
+        await withCheckedContinuation { continuation in
+            sessionInputReceiptQueryWaiters.append(continuation)
+        }
+    }
+
+    func sessionInputReceipt(
+        id: String,
+        clientRequestId: String
+    ) async throws -> SessionInputReceiptState? {
+        sessionInputReceiptQueryStarted = true
+        let waiters = sessionInputReceiptQueryWaiters
+        sessionInputReceiptQueryWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if let receipt = sessionInputReceiptResponses[clientRequestId] {
+            return receipt
+        }
+        let detail = try await sessionDetail(id: id)
+        guard let receipt = detail.inputReceipts?.first(where: {
+            $0.clientRequestId == clientRequestId
+        }) else { return nil }
+        return SessionInputReceiptState(
+            clientRequestId: clientRequestId,
+            intent: receipt.intent,
+            status: receipt.status,
+            disposition: .accepted,
+            deliveryStatus: receipt.status,
+            eventId: receipt.eventId
+        )
     }
 
     func sessionDetail(id: String) async throws -> SessionDetail {
@@ -2395,7 +2980,17 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
             case .httpRejected(let status, let message):
                 throw LonghouseAPIError.httpRejected(status: status, message: message)
             case .turnEnded(let message):
-                throw LonghouseAPIError.structured(status: 409, errorCode: "turn_ended", message: message)
+                throw SessionInputOperationError(
+                    statusCode: 409,
+                    message: message,
+                    errorCode: "turn_ended",
+                    disposition: .accepted,
+                    deliveryStatus: "failed",
+                    clientRequestId: lastClientRequestId,
+                    inputId: 8,
+                    liveInputId: nil,
+                    turn: nil
+                )
             }
         }
         if let sendError {

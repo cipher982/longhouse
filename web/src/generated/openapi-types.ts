@@ -1537,13 +1537,12 @@ export interface paths {
         };
         /**
          * List Session Inputs Endpoint
-         * @description List queued + recently settled inputs for the chip UI.
+         * @description List inputs or look up one exact server-owned operation.
          *
-         *     The web composer polls this every 2s while any row is queued or
-         *     delivering. Most polls return the same shape, so we emit a weak
-         *     ETag derived from the row state tuple and honor If-None-Match →
-         *     304. A 304 is ~1ms vs ~9ms for the full response, which matters
-         *     at the aggregate QPS of many active session-detail pages.
+         *     With ``client_request_id``, returns [] when no receipt exists or one
+         *     accepted receipt with delivery status and optional Console turn identity.
+         *     Without it, returns queued + recently settled inputs for the chip UI and
+         *     emits a weak ETag for unchanged status/turn state.
          */
         get: operations["list_session_inputs_endpoint_sessions__session_id__inputs_get"];
         put?: never;
@@ -4258,10 +4257,17 @@ export interface components {
         ConsoleTurnReceiptResponse: {
             /** Turn Id */
             turn_id: string;
+            /** Receipt Id */
+            receipt_id?: string | null;
             /** Run Id */
             run_id?: string | null;
             /** State */
             state: string;
+            /**
+             * Is Fresh
+             * @description Terminal turns are authoritative; for nonterminal turns, true means the last update is within the Runtime Host's current-work freshness horizon.
+             */
+            is_fresh?: boolean | null;
         };
         /**
          * ControlPath
@@ -6443,7 +6449,10 @@ export interface components {
             /** Newest Modified At Ms */
             newest_modified_at_ms?: number | null;
         };
-        /** QueuedInputSummary */
+        /**
+         * QueuedInputSummary
+         * @description A server-owned input receipt with separate delivery and Console turn state.
+         */
         QueuedInputSummary: {
             /** Id */
             id?: number | null;
@@ -6451,6 +6460,8 @@ export interface components {
             live_input_id?: string | null;
             /** Client Request Id */
             client_request_id?: string | null;
+            /** Durable Event Id */
+            durable_event_id?: string | null;
             /** Text */
             text: string;
             /**
@@ -6463,10 +6474,25 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "delivering" | "delivered" | "cancelled" | "failed";
+            /**
+             * Disposition
+             * @description Operation ownership. A returned receipt row is accepted even if delivery later fails or is cancelled.
+             * @default accepted
+             * @enum {string}
+             */
+            disposition: "accepted" | "rejected" | "unknown";
+            /**
+             * Delivery Status
+             * @description Delivery lifecycle; this does not change operation disposition.
+             */
+            delivery_status?: ("queued" | "delivering" | "delivered" | "cancelled" | "failed") | null;
             /** Last Error */
             last_error?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Attachments */
+            attachments?: components["schemas"]["SessionInputAttachmentSummary"][];
+            turn?: components["schemas"]["ConsoleTurnReceiptResponse"] | null;
         };
         /** ReadConsistencyResponse */
         ReadConsistencyResponse: {
@@ -8206,6 +8232,15 @@ export interface components {
             /** Observed At */
             observed_at?: string | null;
         };
+        /** SessionInputAttachmentSummary */
+        SessionInputAttachmentSummary: {
+            /** Filename */
+            filename: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Byte Size */
+            byte_size: number;
+        };
         /**
          * SessionInputReceiptResponse
          * @description A send Longhouse accepted for this session, and the durable event it became.
@@ -8258,7 +8293,7 @@ export interface components {
             intent: "auto" | "queue" | "steer";
             /**
              * Client Request Id
-             * @description Caller-owned idempotency key for this submitted input
+             * @description Caller-owned idempotency key. If delivery is unknown, retry the exact payload with this same identity.
              */
             client_request_id: string;
             /**
@@ -8280,6 +8315,13 @@ export interface components {
              * @enum {string}
              */
             outcome: "sent" | "queued" | "unknown";
+            /**
+             * Disposition
+             * @description Operation ownership, separate from delivery outcome and Console turn state.
+             * @default accepted
+             * @enum {string}
+             */
+            disposition: "accepted" | "rejected" | "unknown";
             /** Input Id */
             input_id?: number | null;
             /** Live Input Id */

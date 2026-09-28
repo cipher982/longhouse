@@ -87,8 +87,7 @@ body {
 }
 
 .submitted.submitting .bubble,
-.submitted.working .bubble,
-.submitted.sent .bubble {
+.submitted.working .bubble {
   animation: submitted-breathe 1.8s ease-in-out infinite;
 }
 
@@ -113,6 +112,31 @@ body {
   text-align: right;
 }
 
+.submitted-attachments {
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  text-align: right;
+  white-space: pre-wrap;
+}
+
+.submitted-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.submitted-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
 .submitted.couldNotConfirm .submitted-status,
 .submitted.failed .submitted-status {
   color: var(--attention);
@@ -125,8 +149,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .submitted.submitting .bubble,
-  .submitted.working .bubble,
-  .submitted.sent .bubble {
+  .submitted.working .bubble {
     animation: none;
     opacity: 0.65;
   }

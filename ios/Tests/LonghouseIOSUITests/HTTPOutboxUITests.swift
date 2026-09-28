@@ -3,13 +3,13 @@ import XCTest
 
 /// Real-client proof against the disposable loopback Runtime Host-shaped fixture.
 ///
-/// This test deliberately does not launch ChatUITestFixtureView, inject bytes into
-/// production state, or call a mock API. The app receives only the normal
-/// headless credentials/open-session environment and the seeded photo is chosen
-/// through PhotosPicker. The fixture's first multipart request records the bytes
-/// then drops the acknowledgement; after a process restart the driver enables a
-/// served receipt and proves that the original operation identity and attachment
-/// digest are still the only durable request evidence.
+/// This test runs production SessionView against a disposable loopback HTTP
+/// fixture, not a mocked API client or ChatUITestFixtureView. It injects no app
+/// state; the real composer selects a synthetic seeded photo through PhotosPicker.
+/// The first multipart request records the bytes and drops the acknowledgement;
+/// Retry send replays the same ID, model, and bytes while the Console turn is
+/// active. After process restart, a completed server receipt settles it without
+/// a third POST.
 @MainActor
 final class HTTPOutboxUITests: XCTestCase {
     private static let timeout: TimeInterval = 30
@@ -22,6 +22,7 @@ final class HTTPOutboxUITests: XCTestCase {
         let clientRequestId: String
         let text: String
         let intent: String
+        let model: String
         let filename: String
         let mimeType: String
         let attachmentSha256: String
@@ -33,17 +34,26 @@ final class HTTPOutboxUITests: XCTestCase {
         let epoch: String
     }
 
+    private struct FixtureTurn: Decodable {
+        let turnId: String
+        let state: String
+    }
+
     private struct FixtureReceipt: Decodable {
         let clientRequestId: String
         let intent: String
         let status: String
-        let eventId: String
+        let disposition: String
+        let deliveryStatus: String
+        let liveInputId: String
+        let turn: FixtureTurn
     }
 
     private struct FixtureState: Decodable {
         let sessionId: String
         let posts: [FixturePost]
         let receiptEnabled: Bool
+        let turnState: String
         let receiptRequests: Int
         let servedReceipts: Int
         let lastServedReceipt: FixtureReceipt?
@@ -63,7 +73,7 @@ final class HTTPOutboxUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testRealHTTPOutboxPhotosPickerSurvivesTerminateAndReopen() async throws {
+    func testRealHTTPOutboxRetriesSamePhotoOperationAndSurvivesRelaunch() async throws {
         let configuration = try configuration()
         let app = XCUIApplication()
         app.launchEnvironment = [
@@ -86,6 +96,14 @@ final class HTTPOutboxUITests: XCTestCase {
         let actions = app.buttons["session-chat-compose-actions"]
         XCTAssertTrue(composer.waitForExistence(timeout: Self.timeout), "real composer did not load")
         XCTAssertTrue(actions.waitForExistence(timeout: Self.timeout), "real composer action menu did not load")
+
+        let selectedModel = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ AND label == %@", "session-chat-model-picker", "Model gpt-5.6-luna")
+        ).firstMatch
+        XCTAssertTrue(
+            selectedModel.waitForExistence(timeout: Self.timeout),
+            "the session's selected model did not hydrate in the composer before sending"
+        )
 
         actions.tap()
         let attach = app.buttons["session-chat-attach"]
@@ -115,6 +133,7 @@ final class HTTPOutboxUITests: XCTestCase {
         let firstPost = try XCTUnwrap(firstState.posts.first)
         XCTAssertEqual(firstPost.text, message)
         XCTAssertEqual(firstPost.intent, "auto")
+        XCTAssertEqual(firstPost.model, "gpt-5.6-luna")
         XCTAssertGreaterThan(firstPost.attachmentBytes, 0)
         XCTAssertEqual(firstPost.mimeType, "image/jpeg")
         XCTAssertFalse(firstPost.clientRequestId.isEmpty)
@@ -122,6 +141,47 @@ final class HTTPOutboxUITests: XCTestCase {
         pendingFrame.name = "http-outbox-unknown-before-termination"
         pendingFrame.lifetime = .keepAlways
         add(pendingFrame)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["session-chat-attachment-tray"].exists,
+            "ambiguous send must not restore an image thumbnail into the composer"
+        )
+        let liveWebView = app.webViews.firstMatch
+        XCTAssertTrue(
+            waitForWebViewText(liveWebView, containing: "Attachments", timeout: Self.timeout),
+            "the single retained outbox row should show its bounded attachment summary"
+        )
+
+        let retrySend = liveWebView.buttons["Retry send"]
+        XCTAssertTrue(
+            retrySend.waitForExistence(timeout: Self.timeout),
+            "an unconfirmed Console send needs an explicit same-operation retry"
+        )
+        retrySend.tap()
+        let retryState = try await waitForState(configuration, timeout: Self.timeout) {
+            $0.posts.count == 2 && $0.turnState == "active" && !$0.receiptEnabled
+        }
+        let retryPost = try XCTUnwrap(retryState.posts.last)
+        XCTAssertEqual(retryPost.clientRequestId, firstPost.clientRequestId)
+        XCTAssertEqual(retryPost.text, firstPost.text)
+        XCTAssertEqual(retryPost.model, firstPost.model)
+        XCTAssertEqual(retryPost.filename, firstPost.filename)
+        XCTAssertEqual(retryPost.mimeType, firstPost.mimeType)
+        XCTAssertEqual(retryPost.attachmentSha256, firstPost.attachmentSha256)
+        XCTAssertEqual(retryPost.attachmentBytes, firstPost.attachmentBytes)
+        XCTAssertTrue(
+            waitForWebViewText(liveWebView, containing: "Sending…", timeout: Self.timeout),
+            "an active Console turn is not a completed Sent state"
+        )
+        XCTAssertFalse(retrySend.exists, "active Console work must not offer another send retry")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["session-chat-attachment-tray"].exists,
+            "accepted Console work must keep image bytes in the outbox, not restore them to the composer"
+        )
+        let activeFrame = XCTAttachment(screenshot: app.screenshot())
+        activeFrame.name = "http-outbox-console-active-after-retry"
+        activeFrame.lifetime = .keepAlways
+        add(activeFrame)
+
 
         app.terminate()
         // Do not fabricate a response in the app. This is the fixture's
@@ -139,23 +199,44 @@ final class HTTPOutboxUITests: XCTestCase {
         )
         let finalState = try await waitForState(configuration, timeout: Self.timeout) {
             $0.receiptEnabled
+                && $0.turnState == "completed"
                 && $0.receiptRequests >= 2
                 && $0.servedReceipts >= 1
-                && $0.posts.count == 1
+                && $0.posts.count == 2
                 && $0.streams.contains(where: { $0.epoch == "proof-epoch-2" })
                 && $0.workspaceReads.contains("proof-epoch-2")
         }
+        XCTAssertTrue(
+            waitForWebViewText(reopenedWebView, containing: "Sent", timeout: Self.timeout),
+            "completed Console receipt should show Sent briefly even without a transcript echo"
+        )
+        XCTAssertFalse(reopenedWebView.buttons["Retry send"].exists)
+        let completedFrame = XCTAttachment(screenshot: app.screenshot())
+        completedFrame.name = "http-outbox-console-completed-without-echo"
+        completedFrame.lifetime = .keepAlways
+        add(completedFrame)
         let finalPost = try XCTUnwrap(finalState.posts.first)
-        // The absence of a second post proves relaunch reconciled authority
-        // instead of allocating a fresh operation or replaying bytes blindly.
+        let retriedPost = try XCTUnwrap(finalState.posts.last)
+        // Two HTTP attempts are one idempotent Console operation, with one
+        // request identity and one exact attachment payload; relaunch adds no
+        // third POST after the completed turn is recovered by ID.
+        XCTAssertEqual(finalState.posts.count, 2)
         XCTAssertEqual(finalPost.clientRequestId, firstPost.clientRequestId)
+        XCTAssertEqual(retriedPost.clientRequestId, firstPost.clientRequestId)
+        XCTAssertEqual(finalPost.model, "gpt-5.6-luna")
+        XCTAssertEqual(retriedPost.model, finalPost.model)
         XCTAssertEqual(finalPost.attachmentSha256, firstPost.attachmentSha256)
+        XCTAssertEqual(retriedPost.attachmentSha256, firstPost.attachmentSha256)
         XCTAssertEqual(finalPost.attachmentBytes, firstPost.attachmentBytes)
+        XCTAssertEqual(retriedPost.attachmentBytes, firstPost.attachmentBytes)
         let servedReceipt = try XCTUnwrap(finalState.lastServedReceipt)
         XCTAssertEqual(servedReceipt.clientRequestId, firstPost.clientRequestId)
         XCTAssertEqual(servedReceipt.intent, "auto")
-        XCTAssertEqual(servedReceipt.status, "accepted")
-
+        XCTAssertEqual(servedReceipt.disposition, "accepted")
+        XCTAssertEqual(servedReceipt.deliveryStatus, "delivered")
+        XCTAssertEqual(servedReceipt.status, "delivered")
+        XCTAssertEqual(servedReceipt.turn.turnId, "proof-turn-1")
+        XCTAssertEqual(servedReceipt.turn.state, "completed")
         let evidence: [String: Any] = [
             "proof": "real-app-http-fixture",
             "session_id": configuration.sessionID,
@@ -169,6 +250,10 @@ final class HTTPOutboxUITests: XCTestCase {
             "posts_recorded": finalState.posts.count,
             "receipt_enabled_after_relaunch": finalState.receiptEnabled,
             "receipt_status": servedReceipt.status,
+            "retried_request_id": retriedPost.clientRequestId,
+            "selected_model": finalPost.model,
+            "turn_state": servedReceipt.turn.state,
+            "receipt_disposition": servedReceipt.disposition,
         ]
         let evidenceData = try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(data: evidenceData, uniformTypeIdentifier: "public.json")

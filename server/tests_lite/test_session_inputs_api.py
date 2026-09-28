@@ -219,6 +219,7 @@ def _seed_live_catalog_session(
     owner_id: int,
     provider: str = LIVE_CATALOG_PROVIDER,
     device_id: str = LIVE_CATALOG_DEVICE_ID,
+    launch_surface: str = "cli",
 ) -> str:
     """Launch one Helm session in the live catalog and bring its control online.
 
@@ -257,8 +258,7 @@ def _seed_live_catalog_session(
                     "managed_session_name": f"{provider}-session-input-api",
                     "permission_mode": "bypass",
                     "launch_actor": "user",
-                    "launch_surface": "cli",
-                    "environment": "test",
+                    "launch_surface": launch_surface,
                     "origin_kind": None,
                     "hidden_from_default_timeline": 0,
                     "managed_transport": contract.managed_transport.value,
@@ -359,8 +359,25 @@ def test_live_failed_input_summary_preserves_typed_error():
             error_json=('{"code":"claude_lifecycle_hook_missing","message":"run `longhouse claude configure`"}'),
         )
     )
-
     assert summary.last_error == ("claude_lifecycle_hook_missing: run `longhouse claude configure`")
+
+
+def test_delivered_input_summary_exposes_exact_transcript_echo():
+    summary = _live_queued_summary(
+        LiveInputReceiptSnapshot(
+            id="live-delivered-1",
+            owner_id=7,
+            session_id="session-1",
+            provider="codex",
+            text="finished input",
+            intent="auto",
+            status="delivered",
+            client_request_id="request-delivered-1",
+            durable_event_id="event-44",
+        )
+    )
+
+    assert summary.durable_event_id == "event-44"
 
 
 def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:
@@ -566,9 +583,16 @@ def test_session_input_api_schema_exposes_typed_lifecycle_contract():
     queued_schema = QueuedInputSummary.model_json_schema()
 
     assert response_schema["properties"]["outcome"]["enum"] == ["sent", "queued", "unknown"]
+    assert response_schema["properties"]["disposition"]["enum"] == ["accepted", "rejected", "unknown"]
     assert response_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
     turn_schema = response_schema["properties"]["turn"]
     assert "ConsoleTurnReceiptResponse" in str(turn_schema)
+    assert queued_schema["properties"]["disposition"]["enum"] == ["accepted", "rejected", "unknown"]
+    assert queued_schema["properties"]["attachments"]["type"] == "array"
+    attachment_schema = queued_schema["$defs"]["SessionInputAttachmentSummary"]
+    assert set(attachment_schema["properties"]) == {"filename", "mime_type", "byte_size"}
+    assert "cancelled" in str(queued_schema["properties"]["delivery_status"])
+    assert "failed" in str(queued_schema["properties"]["delivery_status"])
     assert queued_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
     assert queued_schema["properties"]["status"]["enum"] == [
         "queued",
@@ -588,6 +612,82 @@ def test_live_receipt_replay_exposes_provider_handoff_ambiguity():
     assert _live_receipt_outcome(receipt("delivering")) == "unknown"
     assert _live_receipt_outcome(receipt("failed", '{"code":"delivery_unknown","message":"handoff was ambiguous"}')) == "unknown"
     assert _live_receipt_outcome(receipt("failed", '{"code":"provider_rejected"}')) == "queued"
+
+
+def test_targeted_live_receipt_summary_marks_terminal_row_owned():
+    receipt = LiveInputReceiptSnapshot(
+        id="receipt-cancelled",
+        owner_id=7,
+        session_id="session-1",
+        provider="codex",
+        text="cancelled Console input",
+        intent="auto",
+        status=INPUT_STATUS_CANCELLED,
+        client_request_id="console-cancelled-1",
+        turn={"turn_id": "turn-1", "run_id": None, "state": "cancelled"},
+    )
+
+    summary = _live_queued_summary(receipt)
+
+    assert summary.disposition == "accepted"
+    assert summary.delivery_status == INPUT_STATUS_CANCELLED
+    assert summary.turn.turn_id == "turn-1"
+    assert summary.turn.state == "cancelled"
+
+
+def test_live_receipt_rpc_snapshot_preserves_client_request_id():
+    from zerg.services.live_session_inputs import _snapshot_from_rpc
+
+    snapshot = _snapshot_from_rpc(
+        {
+            "id": "receipt-1",
+            "owner_id": 7,
+            "session_id": "session-1",
+            "provider": "codex",
+            "text": "hello",
+            "intent": "auto",
+            "status": "delivered",
+            "client_request_id": "request-1",
+            "durable_event_id": "event-44",
+        }
+    )
+
+    assert snapshot.client_request_id == "request-1"
+    assert snapshot.durable_event_id == "event-44"
+
+
+@pytest.mark.parametrize(
+    ("status_value", "last_error", "error_code"),
+    [
+        (INPUT_STATUS_FAILED, "turn_ended", "turn_ended"),
+        (INPUT_STATUS_CANCELLED, "cancelled", "input_cancelled"),
+    ],
+)
+def test_terminal_input_replay_error_preserves_owned_identity(
+    status_value: str,
+    last_error: str,
+    error_code: str,
+):
+    from fastapi import HTTPException
+
+    from zerg.routers.session_chat import _conflict_for_existing_input
+
+    existing = SimpleNamespace(
+        id=7,
+        client_request_id="request-1",
+        status=status_value,
+        last_error=last_error,
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        raise _conflict_for_existing_input(existing)
+
+    detail = raised.value.detail
+    assert detail["error_code"] == error_code
+    assert detail["disposition"] == "accepted"
+    assert detail["delivery_status"] == status_value
+    assert detail["client_request_id"] == "request-1"
+    assert detail["input_id"] == 7
 
 
 def test_json_input_rejects_empty_text_by_contract(tmp_path):
@@ -636,10 +736,10 @@ def test_console_input_idempotency_conflict_is_structured_409(monkeypatch):
         )
 
     assert raised.value.status_code == 409
-    assert raised.value.detail == {
-        "code": "idempotency_conflict",
-        "message": "client_request_id was reused with different text",
-    }
+    assert raised.value.detail["error_code"] == "idempotency_conflict"
+    assert raised.value.detail["message"] == "client_request_id was reused with different text"
+    assert raised.value.detail["disposition"] == "unknown"
+    assert raised.value.detail["client_request_id"] == "console-conflict-1"
 
 
 def test_console_input_preserves_ambiguous_start_as_queued(monkeypatch):
@@ -697,7 +797,11 @@ def test_report_id_is_rejected_for_non_console_input():
         )
 
     assert raised.value.status_code == 400
-    assert raised.value.detail == "report_id is only supported for Console sessions"
+    detail = raised.value.detail
+    assert detail["error_code"] == "report_id_unsupported"
+    assert detail["message"] == "report_id is only supported for Console sessions"
+    assert detail["disposition"] == "rejected"
+    assert detail["client_request_id"] == "non-console-report-1"
 
 
 def test_intent_auto_sends_now_and_acks_from_the_live_receipt(live_catalog, live_catalog_client):  # noqa: F811
@@ -764,6 +868,86 @@ def test_auto_input_dedupes_on_the_live_receipt(live_catalog, live_catalog_clien
         assert second.json()["input_id"] is None
         # The second post is answered from the receipt; the machine sees one send.
         assert len(websocket.sent) == 1
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_failed_delivery_unknown_replay_returns_existing_receipt_without_redispatch(live_catalog, live_catalog_client):
+    import json
+
+    email = "live-unknown-replay@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    device_id = "codex-unknown-replay"
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="codex",
+        device_id=device_id,
+        launch_surface="test",
+    )
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            supports=["codex.send"],
+            device_id=device_id,
+        )
+    )
+    client_request_id = "live-unknown-replay-1"
+    text = "retry the original operation"
+    try:
+        created = live_catalog.rpc(
+            "session.input.receipt.upsert.v2",
+            {
+                "receipt": {
+                    "owner_id": owner_id,
+                    "session_id": session_id,
+                    "provider": "codex",
+                    "text": text,
+                    "intent": "auto",
+                    "status": INPUT_STATUS_FAILED,
+                    "client_request_id": client_request_id,
+                    "device_id": device_id,
+                    "thread_id": None,
+                    "archive_session_input_id": None,
+                    "control_command_id": None,
+                    "delivery_request_id": "delivery-unknown-1",
+                    "enqueue_archive_projection": False,
+                    "error": {
+                        "code": "delivery_unknown",
+                        "message": "provider acknowledgement was lost",
+                    },
+                    "expires_at": None,
+                }
+            },
+        )
+        receipt_id = created["receipt"]["id"]
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={
+                "text": text,
+                "intent": "auto",
+                "client_request_id": client_request_id,
+            },
+            cookies=cookies,
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["outcome"] == "unknown"
+        assert body["disposition"] == "accepted"
+        assert body["client_request_id"] == client_request_id
+        assert body["live_input_id"] == receipt_id
+        assert websocket.sent == []
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id=client_request_id,
+        )
+        assert receipt["status"] == INPUT_STATUS_FAILED
+        assert json.loads(receipt["error_json"])["code"] == "delivery_unknown"
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         asyncio.run(_clear_machine_control_registry())
@@ -2057,7 +2241,10 @@ def test_client_request_id_different_text_conflicts(live_catalog, live_catalog_c
     assert first.status_code == 200, first.text
     assert second.status_code == 409, second.text
     assert second.json()["detail"]["error_code"] == "input_conflict"
-    assert second.json()["detail"]["existing_live_input_id"] == first.json()["live_input_id"]
+    detail = second.json()["detail"]
+    assert detail["disposition"] == "accepted"
+    assert detail["client_request_id"] == "live-conflict-1"
+    assert detail["live_input_id"] == first.json()["live_input_id"]
     receipt = _live_catalog_receipt(
         live_catalog,
         owner_id=owner_id,
@@ -2312,6 +2499,9 @@ def test_intent_steer_turn_ended_returns_structured_409(live_catalog, live_catal
         assert resp.status_code == 409, resp.text
         detail = resp.json()["detail"]
         assert detail["error_code"] == "turn_ended"
+        assert detail["disposition"] == "accepted"
+        assert detail["delivery_status"] == INPUT_STATUS_FAILED
+        assert detail["client_request_id"] == "codex-turn-ended-1"
         # The receipt persists as failed for audit — no silent recovery.
         receipt = _live_catalog_receipt(
             live_catalog,
@@ -2321,6 +2511,18 @@ def test_intent_steer_turn_ended_returns_structured_409(live_catalog, live_catal
         )
         assert receipt["status"] == INPUT_STATUS_FAILED
         assert "turn_ended" in str(receipt["error_json"])
+        assert detail["live_input_id"] == receipt["id"]
+        replay = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "too late", "intent": "steer", "client_request_id": "codex-turn-ended-1"},
+            cookies=cookies,
+        )
+        assert replay.status_code == 409, replay.text
+        replay_detail = replay.json()["detail"]
+        assert replay_detail["disposition"] == "accepted"
+        assert replay_detail["delivery_status"] == INPUT_STATUS_FAILED
+        assert replay_detail["client_request_id"] == "codex-turn-ended-1"
+        assert replay_detail["live_input_id"] == receipt["id"]
     finally:
         asyncio.run(_clear_machine_control_registry())
 
@@ -2419,6 +2621,124 @@ def test_inputs_etag_returns_304_when_unchanged(live_catalog, live_catalog_clien
     )
     assert third.status_code == 200, "cancel should bust the ETag"
     assert third.headers.get("etag") != etag
+
+
+@pytest.mark.asyncio
+async def test_console_turn_state_change_invalidates_input_list_etag(monkeypatch):
+    from starlette.responses import Response
+
+    import zerg.routers.session_chat as route
+
+    turn_state = "active"
+    turn_fresh = True
+    durable_event_id = None
+    attachments = []
+    source_session = SimpleNamespace(id="session-etag-console")
+
+    monkeypatch.setattr(
+        route,
+        "_load_session_for_continuation",
+        lambda *_args, **_kwargs: source_session,
+    )
+
+    async def summaries(session_id):
+        assert session_id == source_session.id
+        return [
+            route.QueuedInputSummary(
+                id=None,
+                live_input_id="receipt-etag-console",
+                client_request_id="console-etag-1",
+                durable_event_id=durable_event_id,
+                text="active image turn",
+                intent="auto",
+                status="delivered",
+                disposition="accepted",
+                delivery_status="delivered",
+                attachments=attachments,
+                turn=route.ConsoleTurnReceiptResponse(
+                    turn_id="turn-etag-1",
+                    receipt_id="receipt-etag-console",
+                    run_id="run-etag-1",
+                    state=turn_state,
+                    is_fresh=turn_fresh,
+                ),
+            )
+        ], 0
+
+    monkeypatch.setattr(route, "_catalog_recent_input_summaries", summaries)
+
+    first_response = Response()
+    first_rows = await route.list_session_inputs_endpoint(
+        session_id=source_session.id,
+        request=SimpleNamespace(headers={}),
+        response=first_response,
+        client_request_id=None,
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+    assert len(first_rows) == 1
+    first_etag = first_response.headers["ETag"]
+    turn_fresh = False
+    stale_response = Response()
+    stale_rows = await route.list_session_inputs_endpoint(
+        session_id=source_session.id,
+        request=SimpleNamespace(headers={"If-None-Match": first_etag}),
+        response=stale_response,
+        client_request_id=None,
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+    assert stale_rows[0].turn.state == "active"
+    assert stale_rows[0].turn.is_fresh is False
+    assert stale_response.headers["ETag"] != first_etag
+    stale_etag = stale_response.headers["ETag"]
+
+    turn_state = "completed"
+    turn_fresh = True
+    completed_response = Response()
+    completed_rows = await route.list_session_inputs_endpoint(
+        session_id=source_session.id,
+        request=SimpleNamespace(headers={"If-None-Match": stale_etag}),
+        response=completed_response,
+        client_request_id=None,
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+    assert len(completed_rows) == 1
+    assert completed_rows[0].turn.state == "completed"
+    assert completed_response.headers["ETag"] != first_etag
+    completed_etag = completed_response.headers["ETag"]
+    durable_event_id = "event-44"
+    linked_response = Response()
+    linked_rows = await route.list_session_inputs_endpoint(
+        session_id=source_session.id,
+        request=SimpleNamespace(headers={"If-None-Match": completed_etag}),
+        response=linked_response,
+        client_request_id=None,
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+    assert linked_rows[0].durable_event_id == "event-44"
+    assert linked_response.headers["ETag"] != completed_etag
+    linked_etag = linked_response.headers["ETag"]
+    attachments.append(
+        route.SessionInputAttachmentSummary(
+            filename="reference.png",
+            mime_type="image/png",
+            byte_size=123,
+        )
+    )
+    attachment_response = Response()
+    attachment_rows = await route.list_session_inputs_endpoint(
+        session_id=source_session.id,
+        request=SimpleNamespace(headers={"If-None-Match": linked_etag}),
+        response=attachment_response,
+        client_request_id=None,
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+    assert attachment_rows[0].attachments == attachments
+    assert attachment_response.headers["ETag"] != linked_etag
 
 
 def test_startup_reconciliation_fails_stuck_steer_rows_instead_of_requeuing(tmp_path):

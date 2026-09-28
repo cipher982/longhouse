@@ -387,7 +387,7 @@ struct LonghouseAPITests {
           "input_id": null,
           "live_input_id": "turn-1",
           "client_request_id": "request-1",
-          "turn": {"turn_id": "turn-1", "run_id": "run-1", "state": "active"},
+          "turn": {"turn_id": "turn-1", "run_id": "run-1", "state": "active", "is_fresh": true},
           "intent": "auto",
           "queued": []
         }
@@ -396,7 +396,7 @@ struct LonghouseAPITests {
         let response = try LonghouseAPI.decodeSessionInputResponse(data)
         #expect(response.turn?.turnId == "turn-1")
         #expect(response.turn?.runId == "run-1")
-        #expect(response.turn?.state == "active")
+        #expect(response.turn?.isFresh == true)
     }
 
     @Test
@@ -416,6 +416,153 @@ struct LonghouseAPITests {
         #expect(response.outcome == .unknown)
         #expect(response.clientRequestId == "request-1")
     }
+    @Test
+    func sendInputDecodesDispositionAndDeliveryStatusSeparatelyFromOutcome() throws {
+        let data = try #require("""
+        {
+          "outcome": "sent",
+          "disposition": "accepted",
+          "delivery_status": "delivering",
+          "input_id": null,
+          "live_input_id": "turn-1",
+          "client_request_id": "request-1",
+          "turn": {"turn_id": "turn-1", "run_id": "run-1", "state": "active"},
+          "intent": "auto",
+          "queued": []
+        }
+        """.data(using: .utf8))
+        let response = try LonghouseAPI.decodeSessionInputResponse(data)
+        #expect(response.outcome == .sent)
+        #expect(response.disposition == .accepted)
+        #expect(response.deliveryStatus == "delivering")
+        #expect(response.turn?.state == "active")
+    }
+
+    @Test
+    func sendInputPreservesStructuredTurnEndedOperationError() async throws {
+        APIRequestMockURLProtocol.handler = { request in
+            let body = """
+            {
+              "detail": {
+                "error_code": "turn_ended",
+                "message": "The active turn already ended.",
+                "disposition": "accepted",
+                "delivery_status": "failed",
+                "client_request_id": "turn-ended-1",
+                "input_id": 7
+              }
+            }
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 409,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+        defer { APIRequestMockURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [APIRequestMockURLProtocol.self]
+        let api = LonghouseAPI(
+            baseURL: try #require(URL(string: "https://demo.longhouse.ai")),
+            allowsAuthRefresh: false,
+            urlSession: URLSession(configuration: configuration)
+        )
+
+        do {
+            _ = try await api.sendInput(
+                id: "session-1",
+                text: "too late",
+                intent: "steer",
+                clientRequestId: "turn-ended-1"
+            )
+            Issue.record("expected a structured turn-ended operation error")
+        } catch let error as SessionInputOperationError {
+            #expect(error.errorCode == "turn_ended")
+            #expect(error.disposition == .accepted)
+            #expect(error.deliveryStatus == "failed")
+            #expect(error.clientRequestId == "turn-ended-1")
+            #expect(error.inputId == 7)
+        } catch {
+            Issue.record("expected an operation error, got \(error)")
+        }
+    }
+
+    @Test
+    func exactReceiptLookupTreatsLegacyCancelledRowAsAcceptedOwnership() async throws {
+        APIRequestMockURLProtocol.handler = { request in
+            let payload = """
+            [{
+              "client_request_id": "legacy-request-1",
+              "intent": "auto",
+              "status": "cancelled",
+              "last_error": "cancelled before delivery"
+            }]
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(payload.utf8))
+        }
+        defer { APIRequestMockURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [APIRequestMockURLProtocol.self]
+        let api = LonghouseAPI(
+            baseURL: try #require(URL(string: "https://demo.longhouse.ai")),
+            allowsAuthRefresh: false,
+            urlSession: URLSession(configuration: configuration)
+        )
+        let receipt = try #require(
+            try await api.sessionInputReceipt(id: "session-1", clientRequestId: "legacy-request-1")
+        )
+        #expect(receipt.disposition == .accepted)
+        #expect(receipt.deliveryStatus == "cancelled")
+    }
+
+    @Test
+    func exactReceiptLookupPreservesDeliveryUnknownError() async throws {
+        let error = "delivery_unknown: provider response not confirmed"
+        APIRequestMockURLProtocol.handler = { request in
+            let payload = """
+            [{
+              "client_request_id": "unknown-request-1",
+              "intent": "auto",
+              "status": "failed",
+              "last_error": "\(error)"
+            }]
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(payload.utf8))
+        }
+        defer { APIRequestMockURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [APIRequestMockURLProtocol.self]
+        let api = LonghouseAPI(
+            baseURL: try #require(URL(string: "https://demo.longhouse.ai")),
+            allowsAuthRefresh: false,
+            urlSession: URLSession(configuration: configuration)
+        )
+        let receipt = try #require(
+            try await api.sessionInputReceipt(id: "session-1", clientRequestId: "unknown-request-1")
+        )
+
+        #expect(receipt.disposition == .accepted)
+        #expect(receipt.deliveryStatus == "failed")
+        #expect(receipt.error == error)
+    }
+
     @Test
     func reportTurnCarriesReportAndIdempotencyIdentitiesAcrossRetry() async throws {
         let capture = APIRequestCapture()

@@ -743,23 +743,37 @@ struct APISessionMobileTailResponse: Codable, Hashable, Sendable {
 
 struct APIConsoleTurnReceiptResponse: Codable, Hashable, Sendable {
     let turnId: String
+    let receiptId: String?
     let runId: String?
     let state: String
+    let isFresh: Bool?
+}
+
+struct APISessionInputAttachmentSummary: Codable, Hashable, Sendable {
+    let filename: String
+    let mimeType: String
+    let byteSize: Int
 }
 
 struct APIQueuedInputSummary: Codable, Hashable, Sendable {
     let id: Int?
     let liveInputId: String?
     let clientRequestId: String?
+    let durableEventId: String?
     let text: String
     let intent: String
     let status: String
+    let disposition: String?
+    let deliveryStatus: String?
     let lastError: String?
     let createdAt: String?
+    let attachments: [APISessionInputAttachmentSummary]?
+    let turn: APIConsoleTurnReceiptResponse?
 }
 
 struct APISessionInputResponse: Codable, Hashable, Sendable {
     let outcome: String
+    let disposition: String?
     let inputId: Int?
     let liveInputId: String?
     let clientRequestId: String?

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Disposable Runtime Host-shaped HTTP fixture for the iOS outbox proof.
 
-This is intentionally an external fixture, not an app test seam. It accepts the
-same REST/SSE routes used by the normal authenticated client, drops the first
-multipart acknowledgement after recording the request, and only serves the
-receipt after the driver enables it on relaunch. The fixture records attachment
-hashes and request identities so the XCTest can prove that no new operation was
-allocated while the pending intent crossed a process restart.
+This is intentionally an external fixture, not an app test seam. It serves a
+Codex Console session, accepts the same REST/SSE routes used by the normal
+authenticated client, and drops the first multipart acknowledgement after
+recording the request. The UI's same-ID retry must replay the exact model and
+attachment bytes while the turn is active. The receipt becomes visible only
+after the driver marks that turn completed across a process restart.
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ class ProofState:
         self.lock = threading.RLock()
         self.posts: list[dict[str, Any]] = []
         self.receipt_enabled = False
+        self.turn_state = "active"
         self.receipt_requests = 0
         self.served_receipts = 0
         self.last_served_receipt: dict[str, Any] | None = None
@@ -50,6 +51,7 @@ class ProofState:
                 "session_id": self.session_id,
                 "posts": posts,
                 "receipt_enabled": self.receipt_enabled,
+                "turn_state": self.turn_state,
                 "receipt_requests": self.receipt_requests,
                 "served_receipts": self.served_receipts,
                 "last_served_receipt": self.last_served_receipt,
@@ -80,6 +82,7 @@ class ProofState:
         client_request_id: str,
         text: str,
         intent: str,
+        model: str,
         filename: str,
         mime_type: str,
         attachment: bytes,
@@ -89,6 +92,7 @@ class ProofState:
                 "client_request_id": client_request_id,
                 "text": text,
                 "intent": intent,
+                "model": model,
                 "filename": filename,
                 "mime_type": mime_type,
                 "attachment_sha256": hashlib.sha256(attachment).hexdigest(),
@@ -107,8 +111,17 @@ class ProofState:
             return {
                 "client_request_id": post["client_request_id"],
                 "intent": post["intent"],
-                "status": "accepted",
-                "event_id": "proof-event-1",
+                "status": "delivered",
+                "disposition": "accepted",
+                "delivery_status": "delivered",
+                "live_input_id": "proof-live-input-7",
+                "turn": {
+                    "turn_id": "proof-turn-1",
+                    "receipt_id": "proof-live-input-7",
+                    "run_id": "proof-run-1",
+                    "state": self.turn_state,
+                    "is_fresh": True,
+                },
             }
 
 
@@ -215,7 +228,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                     self.proof.served_receipts += 1
                     self.proof.last_served_receipt = dict(receipt)
                     self.proof.persist()
-            self.send_json(200, {"inputs": [] if receipt is None else [receipt]})
+            self.send_json(200, [] if receipt is None else [receipt])
             return
         self.send_json(404, {"detail": "fixture route not implemented"})
 
@@ -226,6 +239,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             if not self.require_auth():
                 return
             self.proof.receipt_enabled = True
+            self.proof.turn_state = "completed"
             self.proof.persist()
             self.send_json(200, {"receipt_enabled": True})
             return
@@ -257,9 +271,14 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"detail": "missing multipart boundary"})
             return
         boundary = boundary_header.split(prefix, 1)[1].strip().strip('"')
-        fields = parse_multipart(body, boundary.encode("utf-8"))
+        try:
+            fields = parse_multipart(body, boundary.encode("utf-8"))
+        except ValueError as exc:
+            self.send_json(400, {"detail": str(exc)})
+            return
         text = fields.get("text", ("", b""))[0]
         intent = fields.get("intent", ("", b""))[0]
+        model = fields.get("model", ("", b""))[0]
         client_request_id = fields.get("client_request_id", ("", b""))[0]
         filename, mime_type, attachment = fields.get("attachments", ("", b"application/octet-stream", b""))
         if not client_request_id or not attachment:
@@ -272,6 +291,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             filename=filename,
             mime_type=mime_type,
             attachment=attachment,
+            model=model,
         )
         if post_number == 1:
             # Deliberately no HTTP response: URLSession sees an ambiguous
@@ -286,10 +306,18 @@ class FixtureHandler(BaseHTTPRequestHandler):
             200,
             {
                 "outcome": "sent",
+                "disposition": "accepted",
                 "input_id": 7,
                 "live_input_id": "proof-live-input-7",
                 "client_request_id": client_request_id,
                 "intent": intent,
+                "turn": {
+                    "turn_id": "proof-turn-1",
+                    "receipt_id": "proof-live-input-7",
+                    "run_id": "proof-run-1",
+                    "state": "active",
+                    "is_fresh": True,
+                },
                 "queued": [],
             },
         )
@@ -347,12 +375,21 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
 def parse_multipart(body: bytes, boundary: bytes) -> dict[str, tuple[Any, ...]]:
     marker = b"--" + boundary
+    closing = marker + b"--\r\n"
+    if not body.startswith(marker + b"\r\n"):
+        raise ValueError("multipart body does not start at its boundary")
+    if not body.endswith(closing):
+        raise ValueError("multipart body is missing its closing boundary")
+
     fields: dict[str, tuple[Any, ...]] = {}
-    for part in body.split(marker)[1:]:
-        part = part.strip(b"\r\n-")
-        if not part or b"\r\n\r\n" not in part:
-            continue
-        header_bytes, value = part.split(b"\r\n\r\n", 1)
+    parts = body.split(marker)[1:-1]
+    for raw_part in parts:
+        if not raw_part.startswith(b"\r\n") or not raw_part.endswith(b"\r\n"):
+            raise ValueError("multipart part is missing its boundary delimiter")
+        part = raw_part[2:-2]
+        header_bytes, separator, value = part.partition(b"\r\n\r\n")
+        if not separator:
+            raise ValueError("multipart part is missing the header/body separator")
         headers = {}
         for raw in header_bytes.split(b"\r\n"):
             if b":" in raw:
@@ -374,9 +411,10 @@ def parse_multipart(body: bytes, boundary: bytes) -> dict[str, tuple[Any, ...]]:
 def base_session(session_id: str, receipt: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "id": session_id,
-        "origin_kind": "runtime_host",
-        "provider": "claude",
+        "origin_kind": "console",
+        "provider": "codex",
         "provider_session_id": "proof-provider-session",
+        "selected_model": "gpt-5.6-luna",
         "project": "ios-http-proof",
         "device_id": "proof-device",
         "environment": "test",
@@ -446,7 +484,7 @@ def base_session(session_id: str, receipt: dict[str, Any] | None) -> dict[str, A
             "composer_disabled_reason": None,
             "send_disabled_reason": None,
             "turn_state": "idle",
-            "can_start_turn": False,
+            "can_start_turn": True,
             "start_turn_blocked_by": None,
             "can_interrupt_active_turn": False,
             "attach_images": True,
@@ -492,7 +530,7 @@ def session_state_facts() -> dict[str, Any]:
     return {
         "state_contract_version": 1,
         "presentation_policy_version": 1,
-        "mode": "managed",
+        "mode": "console",
         "disposition": {"state": "open", "closed_at": None, "close_reason": None},
         "launch": {"state": "ready", "error_code": None, "error_message": None},
         "run": {"id": "proof-run", "lifecycle": "active", "started_at": NOW, "ended_at": None, "end_reason": None},
@@ -507,7 +545,7 @@ def session_state_facts() -> dict[str, Any]:
             "observed_at": NOW,
             "valid_until": NOW,
             "actions": {
-                "start_turn": unavailable,
+                "start_turn": available,
                 "send_input": available,
                 "interrupt": unavailable,
                 "terminate": unavailable,

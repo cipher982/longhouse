@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TimelinePane } from "../TimelinePane";
@@ -417,6 +418,46 @@ function makeFailedToolItem(output: string, wrapped = true): TimelineItem {
 }
 
 describe("TimelinePane", () => {
+  it("does not re-register the scroll node on parent state updates", () => {
+    function Parent() {
+      const [refCount, setRefCount] = useState(0);
+      const [parentVersion, setParentVersion] = useState(0);
+      const listRef = useCallback((node: HTMLDivElement | null) => {
+        if (node) setRefCount((count) => count + 1);
+      }, []);
+      return (
+        <>
+          <output data-testid="timeline-ref-count">{refCount}</output>
+          <output data-testid="timeline-parent-version">{parentVersion}</output>
+          <button onClick={() => setParentVersion((version) => version + 1)}>
+            Rerender parent
+          </button>
+          <TimelinePane
+            items={[]}
+            totalEntries={0}
+            loadedEntries={0}
+            abandonedEvents={0}
+            showAbandonedBranches={false}
+            onShowAbandonedBranchesChange={vi.fn()}
+            hasPreviousPage={false}
+            isFetchingPreviousPage={false}
+            onFetchPreviousPage={vi.fn()}
+            listRef={listRef}
+            loading={false}
+            error={null}
+            selectedKey={null}
+            onSelectKey={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<Parent />);
+    const refCount = screen.getByTestId("timeline-ref-count").textContent;
+    fireEvent.click(screen.getByRole("button", { name: "Rerender parent" }));
+    expect(screen.getByTestId("timeline-parent-version")).toHaveTextContent("1");
+    expect(screen.getByTestId("timeline-ref-count").textContent).toBe(refCount);
+  });
   it("renders provider notifications as compact status rows", () => {
     render(
       <TimelinePane

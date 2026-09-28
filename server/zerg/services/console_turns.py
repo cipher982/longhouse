@@ -69,6 +69,7 @@ class CatalogConsoleTurn:
     run_id: UUID | None
     state: str
     created: bool
+    receipt_id: UUID | None = None
     error_code: str | None = None
     error: str | None = None
 
@@ -260,6 +261,7 @@ async def enqueue_catalog_console_turn(
     turn = dict(result.get("turn") or {})
     turn_id = UUID(str(turn["turn_id"]))
     run_id = UUID(str(turn["run_id"])) if turn.get("run_id") else None
+    receipt_id = UUID(str(turn["receipt_id"])) if turn.get("receipt_id") else None
     state = str(turn.get("state") or "queued")
     if state == SESSION_TURN_STATE_QUEUED:
         # A follow-up is the first reliable opportunity to recover a current
@@ -299,6 +301,7 @@ async def enqueue_catalog_console_turn(
             run_id=run_id,
             state=state,
             created=bool(result.get("created")),
+            receipt_id=receipt_id,
             error_code=error_code,
             error=(str(turn.get("error") or "") or None) if error_code else None,
         )
@@ -394,6 +397,7 @@ async def enqueue_catalog_console_turn(
                     run_id=run_id,
                     state=persisted_state,
                     created=bool(result.get("created")),
+                    receipt_id=receipt_id,
                     error=str(persisted_turn.get("error") or "") or None,
                 )
             return CatalogConsoleTurn(
@@ -401,6 +405,7 @@ async def enqueue_catalog_console_turn(
                 run_id=run_id,
                 state=persisted_state,
                 created=bool(result.get("created")),
+                receipt_id=receipt_id,
                 error_code="turn_start_outcome_unknown",
                 error=error,
             )
@@ -432,6 +437,7 @@ async def enqueue_catalog_console_turn(
                     run_id=run_id,
                     state=persisted_state,
                     created=bool(result.get("created")),
+                    receipt_id=receipt_id,
                     error_code=error_code,
                     error=error,
                 )
@@ -466,6 +472,7 @@ async def enqueue_catalog_console_turn(
             run_id=run_id,
             state=state,
             created=bool(result.get("created")),
+            receipt_id=receipt_id,
             error=str(persisted_turn.get("error") or "") or None,
         )
     next_turn = update_result.get("next_turn")
@@ -481,6 +488,7 @@ async def enqueue_catalog_console_turn(
         run_id=run_id,
         state=state,
         created=bool(result.get("created")),
+        receipt_id=receipt_id,
         error_code=error_code,
         error=error,
     )
@@ -592,9 +600,10 @@ async def dispatch_catalog_claimed_turn(
 
     turn_id = UUID(str(turn["turn_id"]))
     run_id = UUID(str(turn["run_id"]))
+    session_id = UUID(str(turn["session_id"]))
+    receipt_id = UUID(str(turn["receipt_id"])) if turn.get("receipt_id") else None
     provider = str(turn["provider"])
     device_id = str(turn["device_id"])
-    session_id = UUID(str(turn["session_id"]))
     control = registry or get_machine_control_channel_registry()
     catalog = client or get_catalogd_client()
     if catalog is None:
@@ -661,6 +670,7 @@ async def dispatch_catalog_claimed_turn(
                     run_id=run_id,
                     state=persisted_state,
                     created=True,
+                    receipt_id=receipt_id,
                     error=str(persisted_turn.get("error") or "") or None,
                 )
             return CatalogConsoleTurn(
@@ -668,6 +678,7 @@ async def dispatch_catalog_claimed_turn(
                 run_id=run_id,
                 state=persisted_state,
                 created=True,
+                receipt_id=receipt_id,
                 error_code="turn_start_outcome_unknown",
                 error=error,
             )
@@ -700,6 +711,7 @@ async def dispatch_catalog_claimed_turn(
                     run_id=run_id,
                     state=persisted_state,
                     created=True,
+                    receipt_id=receipt_id,
                     error_code=error_code,
                     error=error,
                 )
@@ -744,6 +756,7 @@ async def dispatch_catalog_claimed_turn(
             run_id=run_id,
             state=state,
             created=True,
+            receipt_id=receipt_id,
             error=str(persisted_turn.get("error") or "") or None,
         )
     next_turn = update_result.get("next_turn")
@@ -759,6 +772,7 @@ async def dispatch_catalog_claimed_turn(
         run_id=run_id,
         state=state,
         created=True,
+        receipt_id=receipt_id,
         error_code=error_code,
         error=error,
     )

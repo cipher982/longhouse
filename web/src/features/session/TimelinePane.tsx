@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link } from "react-router";
 import remarkGfm from "remark-gfm";
@@ -1182,6 +1182,13 @@ export function TimelinePane({
 
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const attachScrollContainer = useCallback(
+    (node: HTMLDivElement | null) => {
+      scrollContainerRef.current = node;
+      listRef?.(node);
+    },
+    [listRef],
+  );
   useScrollToLoad({
     sentinelRef: topSentinelRef,
     rootRef: scrollContainerRef,
@@ -1581,10 +1588,7 @@ export function TimelinePane({
 
       <div className="timeline-pane__body">
         <div
-          ref={(node) => {
-            scrollContainerRef.current = node;
-            if (typeof listRef === "function") listRef(node);
-          }}
+          ref={attachScrollContainer}
           className="timeline-pane__list timeline-events"
           data-testid="session-timeline-list"
         >

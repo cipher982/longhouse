@@ -16,13 +16,43 @@ same backend-owned truth instead of reconstructing it differently.
 | Activity and presentation | What is the provider doing, and what scoped label should the user see? | `session_state.activity` plus versioned `session_state.presentation`; `runtime_display` is a deprecated facts-only alias | server property/contract tests plus web/iOS state-facts tests | Delete the alias after the compatibility window. |
 | Timeline card status | Can I trust this session at a glance? | `session_state.presentation.primary` and independent access/transcript labels | state contract truth table plus client presentation tests | Add only orthogonal fact combinations, never combined statuses. |
 | Action availability | Can this exact operation run now, and why not? | `session_state.control.actions`; legacy capability booleans are deprecated facts-only aliases | state contract and command-time exact-grant tests | Carry catalog lease generation through every command audit. |
-| Session input lifecycle | What state is a submitted user input in after send, retry, crash, or cancel? | `SessionInput.status` plus typed intent/status/outcome fields on the input API | server input API/idempotency/boot-recovery tests plus web/iOS optimistic-row identity reconciliation tests | Add end-to-end queue replay proof if recovered queued rows ever gain a separate dispatcher. |
+| Session input lifecycle | What state is a submitted user input in after send, retry, crash, or cancel? | `SessionInput.status` plus typed intent/disposition/outcome and request identity | server input API/idempotency/boot-recovery tests plus `HTTPOutboxUITests/testRealHTTPOutboxRetriesSamePhotoOperationAndSurvivesRelaunch` and web/iOS row reconciliation tests | Add end-to-end queue replay proof if recovered queued rows ever gain a separate dispatcher. |
 | Host and transport health | Is the host reachable, is the control transport alive, and are those different? | independent `session_state.host` and `session_state.control` facts | `server/tests_lite/test_session_liveness_facts.py` and state-contract tests | Add reason codes only from new raw evidence. |
 | Console turn lifecycle | Did a turn start, stream, finish, fail, or get interrupted? | durable Console turn/run facts projected through `session_state` and the turn APIs | Console session/turn route tests plus web/iOS composer fixtures | Extend the shared fixtures when a new turn outcome becomes user-visible. |
 | Provisional vs durable transcript | Is this text live preview, durable archive, stale preview, or superseded? | `SessionTranscriptPreview` and durable events | preview freshness tests plus shared web/iOS rendering fixtures | Keep stale/superseded render decisions backend-owned as bridge behavior changes. |
 | Clock and freshness | When does a signal expire, and which clock owns that decision? | backend freshness windows near runtime/provisional projections | `server/tests_lite/test_session_freshness_contract.py` pins backend-clock boundaries for runtime sync and provisional previews | Add cases here when a launch-critical projection introduces a new freshness window. |
 | Background work | What work continues beside the parent turn? | `session_state.delegation`: provider registry, category counts, named items and its own observation/expiry clock | `server/tests_lite/test_delegation_lifecycle.py` exercises hook ingress, replacement/empty snapshots, run fencing and exact child lineage | Provider-specific lifecycle captures establish which native updates carry the registry. |
 | Error taxonomy | Which failures are product states versus logs/debug details? | typed response fields on input/turn/runtime projections | input/send/turn/preview reason codes are typed at projection boundaries | Expand only when web, iOS, or agents branch on a new code. |
+
+## Session input lifecycle
+
+Each send is a durable operation keyed by `client_request_id`. The client saves
+the exact text, intent, model override, and attachment bytes before network
+dispatch.
+
+A lost or ambiguous acknowledgement is unknown, not a rejection: retain and
+retry the same ID and payload so the server can reconcile without creating a
+second turn. A definitive rejection retains the payload for editing into a new
+operation or explicit discard. Longhouse acceptance does not mean the Console
+turn has completed; show it as in progress until a terminal receipt or durable
+transcript evidence arrives.
+
+For a remote client without a local outbox entry, the server keeps a delivered
+Console receipt discoverable while its turn is nonterminal, beyond the recent
+delivered-receipt window. `starting`, `active`, and `draining` turn states are
+shown as in progress even when the handoff still reports `queued`.
+
+Terminal Console cancellations remain in the existing failed-receipt window,
+so remote list-only clients can observe the `cancelled` outcome.
+
+When no exact provider-authored origin is available, receipt-to-event linking
+uses a conservative text/time fallback. Link only when a receipt has exactly
+one eligible event and that event has exactly one eligible receipt. Any tie on
+either side stays unlinked; never choose by chronology. The client's lightweight
+sent row remains until exact identity evidence appears.
+
+Discard releases the client's retained payload; it is not a server cancellation
+of an operation that may already have been accepted.
 
 ## Background registry semantics
 

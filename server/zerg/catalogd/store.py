@@ -823,8 +823,10 @@ def _settle_console_turn(
     if receipt is not None:
         if next_state in {"active", "completed"}:
             receipt.status = "delivered"
-        elif next_state in {"failed", "cancelled"}:
+        elif next_state == "failed":
             receipt.status = "failed"
+        elif next_state == "cancelled":
+            receipt.status = "cancelled"
         receipt.error_json = json.dumps({"code": error_code, "message": error}, sort_keys=True, separators=(",", ":")) if error else None
         receipt.updated_at = now
     if next_state not in CONSOLE_TURN_TERMINAL_STATES:
@@ -1092,7 +1094,32 @@ class _RowReceipt:
             return None
 
 
-def _input_receipt_dto(receipt: Any) -> dict[str, Any]:
+def _console_turn_state_is_fresh(turn: Any, *, observed_at: datetime | None = None) -> bool:
+    """Keep terminal evidence authoritative; age out nonterminal observations."""
+    if getattr(turn, "terminal_at", None) is not None:
+        return True
+    updated_at = getattr(turn, "updated_at", None)
+    if not isinstance(updated_at, datetime):
+        return False
+    normalized_updated_at = updated_at.replace(tzinfo=UTC) if updated_at.tzinfo is None else updated_at.astimezone(UTC)
+    current_at = observed_at or datetime.now(UTC)
+    return normalized_updated_at > current_at - _CONSOLE_TURN_FRESHNESS
+
+
+def _input_receipt_dto(
+    receipt: Any,
+    *,
+    turn: Any | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    turn_identity = None
+    if turn is not None:
+        turn_identity = {
+            "turn_id": str(turn.id),
+            "run_id": str(turn.run_id) if turn.run_id is not None else None,
+            "state": str(turn.state),
+            "is_fresh": _console_turn_state_is_fresh(turn),
+        }
     return {
         "id": receipt.id,
         "owner_id": receipt.owner_id,
@@ -1107,6 +1134,8 @@ def _input_receipt_dto(receipt: Any) -> dict[str, Any]:
         "durable_event_id": getattr(receipt, "durable_event_id", None),
         "delivery_request_id": receipt.delivery_request_id,
         "error_json": receipt.error_json,
+        "turn": turn_identity,
+        "attachments": attachments or [],
         "created_at": _encode_datetime(receipt.created_at),
         "updated_at": _encode_datetime(receipt.updated_at),
     }
@@ -1127,6 +1156,47 @@ def _input_attachment_dto(row: Any) -> dict[str, Any]:
         "created_at": _encode_datetime(row.created_at),
         "expires_at": _encode_datetime(row.expires_at),
     }
+
+
+def _input_attachment_summary_dto(row: LiveSessionInputAttachment) -> dict[str, Any]:
+    """Return only bounded display metadata, never blob paths or digests."""
+    return {
+        "filename": str(row.original_filename or "image"),
+        "mime_type": str(row.mime_type),
+        "byte_size": int(row.byte_size),
+    }
+
+
+def _input_attachment_summaries_by_receipt(
+    orm: Session,
+    *,
+    session_id: str,
+    receipts: list[Any],
+) -> dict[str, list[dict[str, Any]]]:
+    owner_by_receipt_id = {str(receipt.id): int(receipt.owner_id) for receipt in receipts}
+    if not owner_by_receipt_id:
+        return {}
+
+    rows = (
+        orm.query(LiveSessionInputAttachment)
+        .filter(
+            LiveSessionInputAttachment.session_id == session_id,
+            LiveSessionInputAttachment.input_receipt_id.in_(tuple(owner_by_receipt_id)),
+            LiveSessionInputAttachment.owner_id.in_(tuple(sorted(set(owner_by_receipt_id.values())))),
+        )
+        .order_by(
+            LiveSessionInputAttachment.created_at.asc(),
+            LiveSessionInputAttachment.id.asc(),
+        )
+        .all()
+    )
+    summaries: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        receipt_id = str(row.input_receipt_id)
+        if owner_by_receipt_id.get(receipt_id) != int(row.owner_id):
+            continue
+        summaries.setdefault(receipt_id, []).append(_input_attachment_summary_dto(row))
+    return summaries
 
 
 def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
@@ -6511,11 +6581,29 @@ class CatalogStore:
                     session_id=session_id,
                     client_request_id=client_request_id,
                 )
+                turn = (
+                    orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == receipt.id).one_or_none()
+                    if receipt is not None
+                    else None
+                )
+                attachments_by_receipt = _input_attachment_summaries_by_receipt(
+                    orm,
+                    session_id=session_id,
+                    receipts=[receipt] if receipt is not None else [],
+                )
             finally:
                 orm.close()
             return {
                 "found": receipt is not None,
-                "receipt": _input_receipt_dto(receipt) if receipt is not None else None,
+                "receipt": (
+                    _input_receipt_dto(
+                        receipt,
+                        turn=turn,
+                        attachments=attachments_by_receipt.get(str(receipt.id), []),
+                    )
+                    if receipt is not None
+                    else None
+                ),
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
@@ -6560,11 +6648,10 @@ class CatalogStore:
     ) -> dict[str, Any]:
         """Link delivered sends to the durable user events they became.
 
-        A provider writes the injected text into its own transcript with no
-        Longhouse identity attached, so the only honest link is text plus
-        time, done once here and persisted. Each receipt links to at most one
-        event: the earliest unlinked user event with the same normalized text
-        written after the send was accepted (minus a small clock allowance).
+        Without a Longhouse identity on the provider event, text/time is a
+        lossy fallback. Link only when both the receipt and event each have
+        exactly one eligible counterpart. If duplicate text leaves either side
+        ambiguous, preserve the receipt unlinked; never break ties by ordering.
         """
         from zerg.services.session_input_links import normalize_input_text
 
@@ -6586,35 +6673,73 @@ class CatalogStore:
             )
             if not receipts:
                 return {"linked": linked, "commit_seq": str(_current_commit_seq(connection))}
-            taken_event_ids: set[str] = set()
+            # Matching only on text and time is inherently lossy. Link only
+            # when each receipt has one eligible event and each event has one
+            # eligible receipt; ties on either side remain unlinked rather
+            # than being guessed by chronology.
             ordered_candidates = sorted(candidates, key=lambda item: (item["timestamp"], item["event_id"]))
+            eligible_by_receipt: dict[str, list[dict[str, Any]]] = {}
             for receipt in receipts:
                 receipt_text = normalize_input_text(receipt["text"])
                 created_at = receipt["created_at"]
                 if created_at is not None and created_at.tzinfo is None:
                     created_at = created_at.replace(tzinfo=UTC)
-                for candidate in ordered_candidates:
-                    if candidate["event_id"] in taken_event_ids:
-                        continue
-                    if normalize_input_text(candidate["text"]) != receipt_text:
-                        continue
-                    if created_at is not None and candidate["timestamp"] < created_at - timedelta(seconds=5):
-                        continue
-                    taken_event_ids.add(candidate["event_id"])
-                    connection.execute(update(table).where(table.c.id == receipt["id"]).values(durable_event_id=candidate["event_id"]))
+                eligible_by_receipt[str(receipt["id"])] = [
+                    candidate
+                    for candidate in ordered_candidates
+                    if normalize_input_text(candidate["text"]) == receipt_text
+                    and (
+                        created_at is None
+                        or (candidate["timestamp"].replace(tzinfo=UTC) if candidate["timestamp"].tzinfo is None else candidate["timestamp"])
+                        >= created_at - timedelta(seconds=5)
+                    )
+                ]
+
+            remaining_receipts = set(eligible_by_receipt)
+            while remaining_receipts:
+                candidate_receipts: dict[str, list[str]] = {}
+                for receipt_id in remaining_receipts:
+                    for candidate in eligible_by_receipt[receipt_id]:
+                        event_id = str(candidate["event_id"])
+                        candidate_receipts.setdefault(event_id, []).append(receipt_id)
+                unambiguous: list[tuple[str, dict[str, Any]]] = []
+                for receipt_id in sorted(remaining_receipts):
+                    options = [
+                        candidate
+                        for candidate in eligible_by_receipt[receipt_id]
+                        if str(candidate["event_id"]) in candidate_receipts and len(candidate_receipts[str(candidate["event_id"])]) == 1
+                    ]
+                    if len(options) == 1:
+                        candidate = options[0]
+                        if (
+                            sum(
+                                1
+                                for other_id in remaining_receipts
+                                if any(str(item["event_id"]) == str(candidate["event_id"]) for item in eligible_by_receipt[other_id])
+                            )
+                            == 1
+                        ):
+                            unambiguous.append((receipt_id, candidate))
+                if not unambiguous:
+                    break
+                for receipt_id, candidate in unambiguous:
+                    connection.execute(update(table).where(table.c.id == receipt_id).values(durable_event_id=candidate["event_id"]))
+                    receipt = next(row for row in receipts if str(row["id"]) == receipt_id)
                     linked.append(
                         {
-                            "receipt_id": str(receipt["id"]),
+                            "receipt_id": receipt_id,
                             "client_request_id": receipt["client_request_id"],
                             "durable_event_id": candidate["event_id"],
                         }
                     )
-                    break
+                    remaining_receipts.remove(receipt_id)
+                # A candidate is removed implicitly by remaining_receipts; the
+                # next iteration recomputes competing pairs.
             commit_seq = _advance_commit_seq(connection, observed_at) if linked else _current_commit_seq(connection)
             return {"linked": linked, "commit_seq": str(commit_seq)}
 
     def list_recent_input_receipts(self, *, session_id: str) -> dict[str, Any]:
-        """Return bounded queued/delivering/recent-failed receipts for UI state."""
+        """Return queued/delivering and bounded recent terminal receipts."""
 
         from zerg.services.live_session_inputs import count_live_queued_receipts
         from zerg.services.live_session_inputs import list_recent_live_input_receipts
@@ -6623,31 +6748,76 @@ class CatalogStore:
             orm = Session(bind=connection, expire_on_commit=False)
             try:
                 receipts = list_recent_live_input_receipts(orm, session_id=session_id)
+                turns_by_receipt = {}
+                if receipts:
+                    turns = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id.in_([receipt.id for receipt in receipts])).all()
+                    turns_by_receipt = {str(turn.receipt_id): turn for turn in turns}
+                attachments_by_receipt = _input_attachment_summaries_by_receipt(
+                    orm,
+                    session_id=session_id,
+                    receipts=receipts,
+                )
                 queued_count = count_live_queued_receipts(orm, session_id=session_id)
             finally:
                 orm.close()
             return {
-                "receipts": [_input_receipt_dto(receipt) for receipt in receipts],
+                "receipts": [
+                    _input_receipt_dto(
+                        receipt,
+                        turn=turns_by_receipt.get(str(receipt.id)),
+                        attachments=attachments_by_receipt.get(str(receipt.id), []),
+                    )
+                    for receipt in receipts
+                ],
                 "queued_count": queued_count,
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
     def cancel_input_receipt(self, *, session_id: str, receipt_id: str) -> dict[str, Any]:
-        """Cancel one still-queued receipt through catalogd's writer."""
+        """Cancel one queued receipt, atomically with its Console turn."""
 
-        from zerg.services.live_session_inputs import cancel_live_queued_receipt
+        from zerg.services.live_session_inputs import _snapshot
 
         observed_at = datetime.now(UTC)
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
-                receipt = cancel_live_queued_receipt(orm, session_id=session_id, receipt_id=receipt_id)
-                if receipt is None:
+                receipt_row = (
+                    orm.query(LiveSessionInputReceipt)
+                    .filter(
+                        LiveSessionInputReceipt.session_id == session_id,
+                        LiveSessionInputReceipt.id == receipt_id,
+                        LiveSessionInputReceipt.status == "queued",
+                    )
+                    .one_or_none()
+                )
+                if receipt_row is None:
                     orm.rollback()
                     return {
                         "cancelled": False,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
+                turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == receipt_id).one_or_none()
+                if turn is not None and turn.state != "queued":
+                    orm.rollback()
+                    return {
+                        "cancelled": False,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                receipt_row.status = "cancelled"
+                receipt_row.updated_at = observed_at
+                if turn is not None:
+                    turn.state = "cancelled"
+                    turn.error = "cancelled by user"
+                    turn.updated_at = observed_at
+                    turn.terminal_at = observed_at
+                    receipt_row.error_json = json.dumps(
+                        {"code": "cancelled", "message": "cancelled by user"},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                orm.commit()
+                receipt = _snapshot(receipt_row)
             except BaseException:
                 orm.rollback()
                 raise
@@ -6656,7 +6826,7 @@ class CatalogStore:
             commit_seq = _advance_commit_seq(connection, observed_at)
             return {
                 "cancelled": True,
-                "receipt": _input_receipt_dto(receipt),
+                "receipt": _input_receipt_dto(receipt, turn=turn),
                 "commit_seq": str(commit_seq),
             }
 

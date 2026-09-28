@@ -14,7 +14,10 @@ from sqlalchemy.orm import Session
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionInputReceipt
+from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.session_input_links import input_origins_by_event
 from zerg.services.session_input_links import user_input_candidates
@@ -131,6 +134,166 @@ def test_store_links_delivered_receipts_to_matching_user_events(tmp_path):
         observed_at=sent_at + timedelta(minutes=2),
     )
     assert again["linked"] == []
+
+
+def test_unmatched_earlier_duplicate_cannot_claim_later_echo(tmp_path):
+    engine = create_catalog_engine(tmp_path / "duplicate-links.db")
+    initialize_catalog_schema(engine)
+    session_id = uuid4()
+    first = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    _seed_delivered_receipt(
+        engine,
+        session_id=session_id,
+        text="same words",
+        client_request_id="older",
+        created_at=first,
+    )
+    _seed_delivered_receipt(
+        engine,
+        session_id=session_id,
+        text="same words",
+        client_request_id="newer",
+        created_at=first + timedelta(seconds=30),
+    )
+
+    result = CatalogStore(engine).link_input_receipts_to_events(
+        session_id=str(session_id),
+        candidates=[_candidate("later-echo", "same words", first + timedelta(seconds=31))],
+        observed_at=first + timedelta(minutes=1),
+    )
+
+    assert result["linked"] == []
+
+
+def test_one_receipt_with_two_same_text_echoes_remains_unlinked(tmp_path):
+    engine = create_catalog_engine(tmp_path / "one-receipt-two-echoes.db")
+    initialize_catalog_schema(engine)
+    session_id = uuid4()
+    sent_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    _seed_delivered_receipt(
+        engine,
+        session_id=session_id,
+        text="same words",
+        client_request_id="request-1",
+        created_at=sent_at,
+    )
+    try:
+        result = CatalogStore(engine).link_input_receipts_to_events(
+            session_id=str(session_id),
+            candidates=[
+                _candidate("echo-a", "same words", sent_at + timedelta(seconds=10)),
+                _candidate("echo-b", "same words", sent_at + timedelta(seconds=11)),
+            ],
+            observed_at=sent_at + timedelta(minutes=1),
+        )
+        receipts = CatalogStore(engine).list_session_input_receipts(session_id=str(session_id))["receipts"]
+
+        assert result["linked"] == []
+        assert receipts[0]["durable_event_id"] is None
+    finally:
+        engine.dispose()
+
+
+def test_two_receipts_with_two_same_text_echoes_remain_unlinked(tmp_path):
+    engine = create_catalog_engine(tmp_path / "two-receipts-two-echoes.db")
+    initialize_catalog_schema(engine)
+    session_id = uuid4()
+    sent_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    for index in range(2):
+        _seed_delivered_receipt(
+            engine,
+            session_id=session_id,
+            text="same words",
+            client_request_id=f"request-{index}",
+            created_at=sent_at + timedelta(seconds=index),
+        )
+    try:
+        result = CatalogStore(engine).link_input_receipts_to_events(
+            session_id=str(session_id),
+            candidates=[
+                _candidate("echo-a", "same words", sent_at + timedelta(seconds=10)),
+                _candidate("echo-b", "same words", sent_at + timedelta(seconds=11)),
+            ],
+            observed_at=sent_at + timedelta(minutes=1),
+        )
+        receipts = CatalogStore(engine).list_session_input_receipts(session_id=str(session_id))["receipts"]
+
+        assert result["linked"] == []
+        assert all(receipt["durable_event_id"] is None for receipt in receipts)
+    finally:
+        engine.dispose()
+
+
+def test_console_cancel_updates_receipt_and_turn_atomically(tmp_path):
+    engine = create_catalog_engine(tmp_path / "console-cancel.db")
+    initialize_catalog_schema(engine)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    receipt_id = str(uuid4())
+    turn_id = str(uuid4())
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    with Session(engine) as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=session_id,
+                provider="claude",
+                environment="production",
+                origin_kind="console",
+                primary_thread_id=thread_id,
+                started_at=now,
+            )
+        )
+        db.add(
+            LiveSessionThread(
+                id=thread_id,
+                session_id=session_id,
+                provider="claude",
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveSessionInputReceipt(
+                id=receipt_id,
+                owner_id=7,
+                session_id=session_id,
+                thread_id=thread_id,
+                provider="claude",
+                client_request_id="console-cancel-1",
+                intent="auto",
+                status="queued",
+                text="cancel me",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveConsoleTurn(
+                id=turn_id,
+                session_id=session_id,
+                thread_id=thread_id,
+                receipt_id=receipt_id,
+                state="queued",
+                provider="claude",
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    result = CatalogStore(engine).cancel_input_receipt(session_id=session_id, receipt_id=receipt_id)
+
+    assert result["cancelled"] is True
+    assert result["receipt"]["status"] == "cancelled"
+    assert result["receipt"]["turn"]["turn_id"] == turn_id
+    assert result["receipt"]["turn"]["state"] == "cancelled"
+    with Session(engine) as db:
+        assert db.get(LiveSessionInputReceipt, receipt_id).status == "cancelled"
+        assert db.get(LiveConsoleTurn, turn_id).state == "cancelled"
 
 
 def test_linker_matches_claude_channel_echo_to_the_clean_submitted_text(tmp_path):

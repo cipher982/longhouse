@@ -290,6 +290,63 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(rows.first?.subtitle, "Not confirmed")
     }
 
+    func testPayloadLabelsSentSubmittedInput() {
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: [],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: "sent prompt",
+                    clientRequestId: "ios-request-sent",
+                    serverInputId: nil,
+                    phase: .sent
+                ),
+            ]
+        )
+
+        XCTAssertEqual(rows.first?.status, "sent")
+        XCTAssertEqual(rows.first?.subtitle, "Sent")
+    }
+
+    func testPayloadLabelsTurnEndedDecisionWithItsReason() {
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: [],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: "keep going",
+                    clientRequestId: "ios-turn-ended",
+                    serverInputId: 7,
+                    phase: .needsUserDecision,
+                    lastError: "The active turn already ended."
+                ),
+            ]
+        )
+
+        XCTAssertEqual(rows.first?.status, "needsUserDecision")
+        XCTAssertEqual(rows.first?.subtitle, "Needs choice — The active turn already ended.")
+    }
+
+    func testPayloadCarriesBoundedAttachmentSummaryOnOneSubmittedRow() {
+        let input = SubmittedInput(
+            id: "ios-request-attachments",
+            clientRequestId: "ios-request-attachments",
+            text: "describe this",
+            intent: "auto",
+            attachmentSummaries: [
+                SubmittedInputAttachmentSummary(filename: "shot.jpg", mimeType: "image/jpeg", byteSize: 4)
+            ],
+            phase: .failed,
+            serverInputId: nil,
+            lastError: "unsupported attachment",
+            createdAt: Date(timeIntervalSince1970: 0)
+        )
+        let rows = WebTranscriptView.payloadItems(timelineItems: [], submittedInputs: [input])
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.attachments?.count, 1)
+        XCTAssertEqual(rows.first?.attachments?.first?.filename, "shot.jpg")
+        XCTAssertEqual(rows.first?.attachments?.first?.byteSize, 4)
+    }
+
+
     func testPayloadCarriesPresentMediaRefsWithAbsoluteThumbnailURL() {
         let mediaRef = SessionEventMediaRef(
             sha256: "abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
@@ -336,6 +393,7 @@ final class WebTranscriptViewTests: XCTestCase {
         clientRequestId: String,
         serverInputId: Int?,
         phase: SubmittedInputPhase = .sent,
+        lastError: String? = nil,
         createdAt: Date = Date(timeIntervalSince1970: 0)
     ) -> SubmittedInput {
         SubmittedInput(
@@ -345,7 +403,7 @@ final class WebTranscriptViewTests: XCTestCase {
             intent: "auto",
             phase: phase,
             serverInputId: serverInputId,
-            lastError: nil,
+            lastError: lastError,
             createdAt: createdAt
         )
     }

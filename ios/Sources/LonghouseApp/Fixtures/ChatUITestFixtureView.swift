@@ -880,22 +880,24 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         let delay = fixtureName == "helm-channel-reconcile" ? 20_000_000_000 : 650_000_000
         try await Task.sleep(nanoseconds: UInt64(delay))
         let inputID = nextEventID
-        events.append(Self.makeEvent(
-            id: nextEventID,
-            role: "user",
-            content: text,
-            timestamp: ISO8601DateFormatter().string(from: Date()),
-            // The storage boundary strips Claude channel framing, then links
-            // this event to the accepted receipt by client_request_id.
-            inputOrigin: SessionInputOrigin(
-                authoredVia: .longhouse,
-                sessionInputId: ["console-reconcile", "helm-channel-reconcile"].contains(fixtureName)
-                    ? nil
-                    : inputID,
-                clientRequestId: clientRequestId
-            )
-        ))
-        nextEventID += 1
+        if fixtureName != "console-sent-unlinked" {
+            events.append(Self.makeEvent(
+                id: nextEventID,
+                role: "user",
+                content: text,
+                timestamp: ISO8601DateFormatter().string(from: Date()),
+                // The storage boundary strips Claude channel framing, then links
+                // this event to the accepted receipt by client_request_id.
+                inputOrigin: SessionInputOrigin(
+                    authoredVia: .longhouse,
+                    sessionInputId: ["console-reconcile", "helm-channel-reconcile"].contains(fixtureName)
+                        ? nil
+                        : inputID,
+                    clientRequestId: clientRequestId
+                )
+            ))
+            nextEventID += 1
+        }
         if fixtureName == "console-reconcile" {
             Task {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -907,7 +909,31 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 inputId: nil,
                 liveInputId: nil,
                 clientRequestId: clientRequestId,
-                turn: ConsoleTurnReceipt(turnId: "fixture-turn", runId: "fixture-run", state: "active"),
+                turn: ConsoleTurnReceipt(
+                    turnId: "fixture-turn",
+                    receiptId: nil,
+                    runId: "fixture-run",
+                    state: "active",
+                    isFresh: true
+                ),
+                intent: .auto,
+                queued: []
+            )
+        }
+        if fixtureName == "console-sent-unlinked" {
+            return SessionInputResponse(
+                outcome: .sent,
+                disposition: .accepted,
+                inputId: nil,
+                liveInputId: nil,
+                clientRequestId: clientRequestId,
+                turn: ConsoleTurnReceipt(
+                    turnId: "fixture-completed-turn",
+                    receiptId: nil,
+                    runId: "fixture-completed-run",
+                    state: "completed",
+                    isFresh: true
+                ),
                 intent: .auto,
                 queued: []
             )

@@ -19,6 +19,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
@@ -353,6 +354,169 @@ async def test_catalogd_claims_and_finishes_queued_input_exactly_once(daemon_pat
         assert db.get(LiveSessionInputReceipt, receipt_id).status == "delivered"
         assert db.query(LiveArchiveOutbox).count() == 0
     engine.dispose()
+
+
+@pytest.mark.parametrize(("turn_age_minutes", "expected_fresh"), [(10, True), (20, False)])
+def test_recent_input_list_keeps_nonterminal_console_receipt_past_delivered_window(
+    tmp_path,
+    turn_age_minutes,
+    expected_fresh,
+):
+    engine = create_catalog_engine(tmp_path / "recent-inputs.db")
+    initialize_catalog_schema(engine)
+    session_id, active_receipt_id = _seed_queue(engine, client_request_id="console-active")
+    stale_at = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=turn_age_minutes)
+    try:
+        with Session(engine) as db:
+            active_receipt = db.get(LiveSessionInputReceipt, active_receipt_id)
+            assert active_receipt is not None
+            active_receipt.status = "delivered"
+            active_receipt.updated_at = stale_at
+            catalog = db.get(LiveSessionCatalog, str(session_id))
+            assert catalog is not None
+            thread_id = catalog.primary_thread_id
+            run = db.query(LiveSessionRun).filter_by(thread_id=thread_id).one()
+            db.add(
+                LiveConsoleTurn(
+                    id=str(uuid4()),
+                    session_id=str(session_id),
+                    thread_id=thread_id,
+                    receipt_id=active_receipt_id,
+                    run_id=run.id,
+                    state="active",
+                    provider="codex",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    created_at=stale_at,
+                    updated_at=stale_at,
+                )
+            )
+
+            terminal_receipt = upsert_live_input_receipt(
+                db,
+                owner_id=7,
+                session_id=session_id,
+                provider="codex",
+                text="completed old Console turn",
+                intent="auto",
+                status="delivered",
+                client_request_id="console-completed-old",
+                now=stale_at,
+            )
+            db.add(
+                LiveConsoleTurn(
+                    id=str(uuid4()),
+                    session_id=str(session_id),
+                    thread_id=thread_id,
+                    receipt_id=str(terminal_receipt.id),
+                    run_id=None,
+                    state="completed",
+                    provider="codex",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    created_at=stale_at,
+                    updated_at=stale_at,
+                    terminal_at=stale_at,
+                )
+            )
+            db.commit()
+
+        recent = CatalogStore(engine).list_recent_input_receipts(session_id=str(session_id))
+
+        assert [receipt["id"] for receipt in recent["receipts"]] == [active_receipt_id]
+        assert recent["receipts"][0]["turn"]["state"] == "active"
+        assert recent["receipts"][0]["turn"]["is_fresh"] is expected_fresh
+        assert recent["queued_count"] == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(("receipt_age_minutes", "visible"), [(10, True), (20, False)])
+def test_recent_input_list_keeps_cancelled_console_receipt_for_remote_clients(
+    tmp_path,
+    receipt_age_minutes,
+    visible,
+):
+    engine = create_catalog_engine(tmp_path / "cancelled-inputs.db")
+    initialize_catalog_schema(engine)
+    session_id, receipt_id = _seed_queue(engine, client_request_id="console-cancelled")
+    cancelled_at = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=receipt_age_minutes)
+    try:
+        with Session(engine) as db:
+            receipt = db.get(LiveSessionInputReceipt, receipt_id)
+            assert receipt is not None
+            receipt.status = "cancelled"
+            receipt.updated_at = cancelled_at
+            catalog = db.get(LiveSessionCatalog, str(session_id))
+            assert catalog is not None
+            db.add(
+                LiveConsoleTurn(
+                    id=str(uuid4()),
+                    session_id=str(session_id),
+                    thread_id=catalog.primary_thread_id,
+                    receipt_id=receipt_id,
+                    run_id=None,
+                    state="cancelled",
+                    provider="codex",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    created_at=cancelled_at,
+                    updated_at=cancelled_at,
+                    terminal_at=cancelled_at,
+                )
+            )
+            db.commit()
+
+        recent = CatalogStore(engine).list_recent_input_receipts(session_id=str(session_id))
+        if visible:
+            assert [row["id"] for row in recent["receipts"]] == [receipt_id]
+            assert recent["receipts"][0]["status"] == "cancelled"
+            assert recent["receipts"][0]["turn"]["state"] == "cancelled"
+        else:
+            assert recent["receipts"] == []
+        assert recent["queued_count"] == 0
+    finally:
+        engine.dispose()
+
+
+def test_recent_input_list_exposes_only_attachment_display_metadata(tmp_path):
+    engine = create_catalog_engine(tmp_path / "recent-input-attachments.db")
+    initialize_catalog_schema(engine)
+    session_id, receipt_id = _seed_queue(engine)
+    now = datetime.now(UTC)
+    try:
+        with Session(engine) as db:
+            db.add(
+                LiveSessionInputAttachment(
+                    id=str(uuid4()),
+                    input_receipt_id=receipt_id,
+                    owner_id=7,
+                    session_id=str(session_id),
+                    mime_type="image/png",
+                    byte_size=123,
+                    sha256="a" * 64,
+                    blob_path=str(tmp_path / "private-photo.bin"),
+                    original_filename="photo.png",
+                    original_byte_size=456,
+                    created_at=now,
+                    expires_at=now + timedelta(hours=1),
+                )
+            )
+            db.commit()
+
+        store = CatalogStore(engine)
+        recent = store.list_recent_input_receipts(session_id=str(session_id))
+        attachments = recent["receipts"][0]["attachments"]
+        assert attachments == [{"filename": "photo.png", "mime_type": "image/png", "byte_size": 123}]
+
+        exact = store.read_input_receipt(
+            owner_id=7,
+            session_id=str(session_id),
+            client_request_id="queued-1",
+        )
+        assert exact["receipt"]["attachments"] == attachments
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

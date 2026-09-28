@@ -185,6 +185,29 @@ final class SessionChatUITests: XCTestCase {
         add(frame)
     }
 
+    func testCompletedConsoleSentInputRemainsUntilTranscriptEcho() {
+        let app = launchChatFixture(name: "console-sent-unlinked", eventCount: 0)
+        let composer = app.textFields["session-chat-composer"]
+        let sendButton = app.buttons["session-chat-send"]
+        let message = "completed Console input without an echo"
+
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
+        composer.tap()
+        composer.typeText(message)
+        sendButton.tap()
+
+        XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.staticTexts["Sent"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        Thread.sleep(forTimeInterval: 2.1)
+        XCTAssertTrue(app.staticTexts[message].exists)
+        XCTAssertTrue(app.staticTexts["Sent"].exists)
+
+        let frame = XCTAttachment(screenshot: app.screenshot())
+        frame.name = "console-sent-awaiting-transcript-echo"
+        frame.lifetime = .keepAlways
+        add(frame)
+    }
+
     func testHelmSteerReplacesOptimisticRowWithOneCleanDurableMessage() {
         let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
         let composer = app.textFields["session-chat-composer"]

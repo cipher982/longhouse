@@ -192,6 +192,34 @@ async def test_console_enqueue_persists_attachment_refs_and_compares_their_diges
     first = live_catalog.rpc("session.console.turn.enqueue.v2", {"turn": turn})
     assert first["found"] is True and first["created"] is True
     assert first["turn"]["attachments"] == [ref]
+    initial_turn = first["turn"]
+    update = live_catalog.rpc(
+        "session.console.turn.update.v2",
+        {
+            "turn": {
+                "turn_id": initial_turn["turn_id"],
+                "run_id": initial_turn["run_id"],
+                "owner_id": owner_id,
+                "session_id": str(created.session_id),
+                "thread_id": str(created.thread_id),
+                "provider": "claude",
+                "device_id": "cinder",
+                "state": "active",
+                "expected_state": initial_turn["state"],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+    assert update["applied"] is True
+    recent = live_catalog.rpc("session.input.recent.list.v2", {"session_id": str(created.session_id)})
+    receipt_row = next(row for row in recent["receipts"] if row["client_request_id"] == "console-attach-1")
+    assert receipt_row["status"] == "delivered"
+    assert receipt_row["turn"] == {
+        "turn_id": initial_turn["turn_id"],
+        "run_id": initial_turn["run_id"],
+        "state": "active",
+        "is_fresh": True,
+    }
 
     # Replay: same request id, no refs, same digest -> the stored turn.
     replay = live_catalog.rpc(
@@ -403,6 +431,7 @@ async def test_reconnect_replays_terminal_machine_claim_as_completed_turn():
         async def call(self, method, params):
             assert method == "session.console.turn.update.v2"
             assert params["turn"]["state"] == "completed"
+            assert params["turn"]["session_id"] == str(session_id)
             return {
                 "found": True,
                 "applied": True,
@@ -416,7 +445,8 @@ async def test_reconnect_replays_terminal_machine_claim_as_completed_turn():
         def supports(self, **_kwargs):
             return True
 
-        async def send_command(self, **_kwargs):
+        async def send_command(self, **kwargs):
+            assert kwargs["session_id"] == str(session_id)
             return SimpleNamespace(
                 transport_ok=True,
                 message={"ok": True, "result": {"terminal_state": "run_completed"}},

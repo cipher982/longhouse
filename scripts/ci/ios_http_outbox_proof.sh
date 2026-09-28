@@ -3,7 +3,7 @@
 # Called by ios_ui_shot.sh; it owns the fixture process, simulator, Photos seed,
 # result bundle, and all teardown. No host credentials or provider archives enter.
 # Invocation (through native isolation only):
-#   make ios-ui-shot TEST=HTTPOutboxUITests/testRealHTTPOutboxPhotosPickerSurvivesTerminateAndReopen
+# HTTP outbox proof: make ios-ui-shot TEST=HTTPOutboxUITests/testRealHTTPOutboxRetriesSamePhotoOperationAndSurvivesRelaunch
 set -euo pipefail
 
 TEST="${1:?test id required}"
@@ -86,10 +86,16 @@ PY
 # Always use a newly-created simulator: Photos contains only this proof's
 # disposable seed and is deleted by cleanup, never a user's existing device.
 read -r DEVICE_TYPE RUNTIME < <(python3 - <<'PY'
-import json, subprocess
+import json, os, subprocess
 runtimes = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "runtimes", "available", "-j"], text=True))["runtimes"]
 runtimes = [r for r in runtimes if "iOS" in r.get("identifier", "") and r.get("isAvailable")]
-runtime = sorted(runtimes, key=lambda r: r.get("version", ""))[-1]
+requested_version = os.environ.get("IOS_SIMULATOR_RUNTIME_VERSION")
+if requested_version:
+    runtime = next((r for r in runtimes if r.get("version") == requested_version), None)
+    if runtime is None:
+        raise SystemExit(f"requested iOS simulator runtime is not available: {requested_version}")
+else:
+    runtime = sorted(runtimes, key=lambda r: r.get("version", ""))[-1]
 phones = [d for d in runtime.get("supportedDeviceTypes", []) if d.get("productFamily") == "iPhone"]
 if not phones:
     raise SystemExit("no iPhone type supported by the selected iOS runtime")

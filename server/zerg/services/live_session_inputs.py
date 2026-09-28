@@ -15,6 +15,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 import zerg.database as database_module
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
@@ -22,11 +23,25 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import RECENT_FAILED_WINDOW_SECS
+from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
+from zerg.services.session_turns import SESSION_TURN_STATE_CANCELLED
+from zerg.services.session_turns import SESSION_TURN_STATE_DRAINING
+from zerg.services.session_turns import SESSION_TURN_STATE_QUEUED
+from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
 RECENT_DELIVERED_WINDOW_SECS = 5 * 60
+
+NONTERMINAL_CONSOLE_TURN_STATES = frozenset(
+    {
+        SESSION_TURN_STATE_QUEUED,
+        SESSION_TURN_STATE_STARTING,
+        SESSION_TURN_STATE_ACTIVE,
+        SESSION_TURN_STATE_DRAINING,
+    }
+)
 
 
 class LiveInputPayloadConflict(ValueError):
@@ -35,6 +50,13 @@ class LiveInputPayloadConflict(ValueError):
 
 class LiveInputReceiptUnavailable(RuntimeError):
     """The receipt authority could not answer a read request."""
+
+
+@dataclass(frozen=True)
+class LiveInputAttachmentSummary:
+    filename: str
+    mime_type: str
+    byte_size: int
 
 
 @dataclass(frozen=True)
@@ -49,10 +71,13 @@ class LiveInputReceiptSnapshot:
     client_request_id: str | None
     payload_digest: str | None = None
     archive_session_input_id: int | None = None
+    durable_event_id: str | None = None
     delivery_request_id: str | None = None
     error_json: str | None = None
+    turn: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    attachments: tuple[LiveInputAttachmentSummary, ...] = ()
 
 
 def _session_key(session_id: UUID | str) -> str:
@@ -82,6 +107,7 @@ def _snapshot(row: LiveSessionInputReceipt) -> LiveInputReceiptSnapshot:
         client_request_id=row.client_request_id,
         payload_digest=row.payload_digest,
         archive_session_input_id=(int(row.archive_session_input_id) if row.archive_session_input_id is not None else None),
+        durable_event_id=getattr(row, "durable_event_id", None),
         delivery_request_id=row.delivery_request_id,
         error_json=row.error_json,
         created_at=normalize_utc(row.created_at),
@@ -90,6 +116,9 @@ def _snapshot(row: LiveSessionInputReceipt) -> LiveInputReceiptSnapshot:
 
 
 def _snapshot_from_rpc(value: dict[str, Any]) -> LiveInputReceiptSnapshot:
+    raw_attachments = value.get("attachments")
+    if not isinstance(raw_attachments, list):
+        raw_attachments = []
     return LiveInputReceiptSnapshot(
         id=str(value["id"]),
         owner_id=int(value["owner_id"]),
@@ -101,8 +130,19 @@ def _snapshot_from_rpc(value: dict[str, Any]) -> LiveInputReceiptSnapshot:
         client_request_id=value.get("client_request_id"),
         payload_digest=value.get("payload_digest"),
         archive_session_input_id=value.get("archive_session_input_id"),
+        durable_event_id=str(value["durable_event_id"]) if value.get("durable_event_id") is not None else None,
         delivery_request_id=value.get("delivery_request_id"),
         error_json=value.get("error_json"),
+        attachments=tuple(
+            LiveInputAttachmentSummary(
+                filename=str(attachment.get("filename") or "image"),
+                mime_type=str(attachment.get("mime_type") or "application/octet-stream"),
+                byte_size=int(attachment.get("byte_size") or 0),
+            )
+            for attachment in raw_attachments
+            if isinstance(attachment, dict)
+        ),
+        turn=(dict(value["turn"]) if isinstance(value.get("turn"), dict) else None),
         created_at=(normalize_utc(datetime.fromisoformat(value["created_at"])) if value.get("created_at") else None),
         updated_at=(normalize_utc(datetime.fromisoformat(value["updated_at"])) if value.get("updated_at") else None),
     )
@@ -143,6 +183,18 @@ def list_recent_live_input_receipts(db: Session, *, session_id: UUID | str) -> l
     now = datetime.now(timezone.utc)
     failed_cutoff = now - timedelta(seconds=RECENT_FAILED_WINDOW_SECS)
     delivered_cutoff = now - timedelta(seconds=RECENT_DELIVERED_WINDOW_SECS)
+    # Console can mark delivery complete when its turn starts. Keep its receipt
+    # discoverable until that turn reaches a terminal state.
+    # A cancelled Console turn is terminal, but remains visible to remote
+    # clients for the same short window as other definitive failures.
+    nonterminal_console_receipt_ids = db.query(LiveConsoleTurn.receipt_id).filter(
+        LiveConsoleTurn.session_id == _session_key(session_id),
+        LiveConsoleTurn.state.in_(NONTERMINAL_CONSOLE_TURN_STATES),
+    )
+    cancelled_console_receipt_ids = db.query(LiveConsoleTurn.receipt_id).filter(
+        LiveConsoleTurn.session_id == _session_key(session_id),
+        LiveConsoleTurn.state == SESSION_TURN_STATE_CANCELLED,
+    )
     rows = (
         db.query(LiveSessionInputReceipt)
         .filter(
@@ -151,7 +203,13 @@ def list_recent_live_input_receipts(db: Session, *, session_id: UUID | str) -> l
                 (LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED)
                 | (LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERING)
                 | ((LiveSessionInputReceipt.status == INPUT_STATUS_FAILED) & (LiveSessionInputReceipt.updated_at >= failed_cutoff))
+                | (
+                    (LiveSessionInputReceipt.status == INPUT_STATUS_CANCELLED)
+                    & (LiveSessionInputReceipt.updated_at >= failed_cutoff)
+                    & LiveSessionInputReceipt.id.in_(cancelled_console_receipt_ids)
+                )
                 | ((LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERED) & (LiveSessionInputReceipt.updated_at >= delivered_cutoff))
+                | (LiveSessionInputReceipt.id.in_(nonterminal_console_receipt_ids))
             ),
         )
         .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())

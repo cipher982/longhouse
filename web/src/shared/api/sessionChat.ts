@@ -13,32 +13,47 @@ export type SessionInputStatus =
   | "cancelled"
   | "failed";
 export type SessionInputOutcome = "sent" | "queued" | "unknown";
+export type InputDisposition = "accepted" | "rejected" | "unknown";
+
+export interface ConsoleTurnReceipt {
+  turn_id: string;
+  receipt_id?: string | null;
+  run_id?: string | null;
+  state: string;
+  is_fresh?: boolean | null;
+}
+
+export interface SessionInputAttachmentSummary {
+  filename: string;
+  mime_type?: string | null;
+  byte_size?: number | null;
+}
 
 export interface QueuedInputSummary {
   id?: number | null;
   live_input_id?: string | null;
   client_request_id?: string | null;
+  durable_event_id?: string | null;
   text: string;
   intent: SessionInputIntent;
   status: SessionInputStatus;
+  disposition?: InputDisposition;
+  delivery_status?: SessionInputStatus | null;
   last_error?: string | null;
   created_at?: string | null;
+  attachments?: SessionInputAttachmentSummary[] | null;
+  turn?: ConsoleTurnReceipt | null;
 }
 
 export interface SessionInputResponse {
+  disposition: InputDisposition;
   outcome: SessionInputOutcome;
   input_id?: number | null;
   live_input_id?: string | null;
   client_request_id?: string | null;
   intent: SessionInputIntent;
-  turn?: ConsoleTurnReceipt;
+  turn?: ConsoleTurnReceipt | null;
   queued: QueuedInputSummary[];
-}
-
-export interface ConsoleTurnReceipt {
-  turn_id: string;
-  run_id?: string | null;
-  state: string;
 }
 
 export interface SessionInterruptResponse {
@@ -115,6 +130,17 @@ export async function fetchSessionInputs(
   sessionId: string,
 ): Promise<QueuedInputSummary[]> {
   return request<QueuedInputSummary[]>(`/sessions/${sessionId}/inputs`);
+}
+
+/** Durable exact-ID recovery; the server returns [] when no record exists. */
+export async function fetchSessionInput(
+  sessionId: string,
+  clientRequestId: string,
+): Promise<QueuedInputSummary | null> {
+  const result = await request<QueuedInputSummary | QueuedInputSummary[]>(
+    `/sessions/${sessionId}/inputs?client_request_id=${encodeURIComponent(clientRequestId)}`,
+  );
+  return Array.isArray(result) ? result[0] ?? null : result;
 }
 
 export async function cancelSessionInput(

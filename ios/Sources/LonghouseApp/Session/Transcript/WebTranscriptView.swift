@@ -70,6 +70,10 @@ struct WebTranscriptView: UIViewRepresentable {
     let onLifecycle: ((String) -> Void)?
     /// Tapping a worker row opens that child's transcript.
     let onOpenSubagent: ((String) -> Void)?
+    /// Input retry/edit/discard actions stay native; the WebView never receives retained bytes.
+    let onEditSubmittedInput: ((String) -> Void)?
+    let onDiscardSubmittedInput: ((String) -> Void)?
+    let onRetrySubmittedInput: ((String) -> Void)?
     /// Fires when WebKit rejects the payload's frame acknowledgement.
     let onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?
     /// Fires only after this payload's DOM frame was acknowledged by WebKit.
@@ -91,6 +95,9 @@ struct WebTranscriptView: UIViewRepresentable {
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onLifecycle: ((String) -> Void)? = nil,
         onOpenSubagent: ((String) -> Void)? = nil,
+        onEditSubmittedInput: ((String) -> Void)? = nil,
+        onDiscardSubmittedInput: ((String) -> Void)? = nil,
+        onRetrySubmittedInput: ((String) -> Void)? = nil,
         onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)? = nil,
         onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)? = nil
     ) {
@@ -98,6 +105,9 @@ struct WebTranscriptView: UIViewRepresentable {
         self.items = items
         self.subagents = subagents
         self.onOpenSubagent = onOpenSubagent
+        self.onEditSubmittedInput = onEditSubmittedInput
+        self.onDiscardSubmittedInput = onDiscardSubmittedInput
+        self.onRetrySubmittedInput = onRetrySubmittedInput
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
         self.contentRevision = contentRevision
@@ -125,6 +135,9 @@ struct WebTranscriptView: UIViewRepresentable {
         // it reaches navigation. Custom-scheme links stay inert on purpose (see
         // `decidePolicyFor`), so transcript text still has no route out of here.
         context.coordinator.onOpenSubagent = onOpenSubagent
+        context.coordinator.onEditSubmittedInput = onEditSubmittedInput
+        context.coordinator.onDiscardSubmittedInput = onDiscardSubmittedInput
+        context.coordinator.onRetrySubmittedInput = onRetrySubmittedInput
         context.coordinator.onFrameFailed = onFrameFailed
         context.coordinator.onFrameRendered = onFrameRendered
         let controller = webView.configuration.userContentController
@@ -180,6 +193,9 @@ struct WebTranscriptView: UIViewRepresentable {
 
     func updateUIView(_ webView: TranscriptWebView, context: Context) {
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
+        context.coordinator.onEditSubmittedInput = onEditSubmittedInput
+        context.coordinator.onDiscardSubmittedInput = onDiscardSubmittedInput
+        context.coordinator.onRetrySubmittedInput = onRetrySubmittedInput
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
         let preparationInput = WebTranscriptPayloadInput(
             serverURL: serverURL,
@@ -598,7 +614,8 @@ struct WebTranscriptView: UIViewRepresentable {
             output: nil,
             calls: [],
             origin: nil,
-            media: nil
+            media: nil,
+            attachments: input.attachmentSummaries
         )
     }
 
@@ -972,16 +989,21 @@ struct WebTranscriptView: UIViewRepresentable {
         // One vocabulary with web: the durable echo replacing this row is the
         // confirmation, and turn progress belongs to the composer, so every
         // in-flight phase reads the same.
-        case .submitting, .working, .sent: return "Sending…"
+        case .submitting, .working: return "Sending…"
+        case .sent: return "Sent"
         case .queued: return "Queued · sends after this turn"
         case .couldNotConfirm: return "Not confirmed"
         case .failed: return lastError.map { "Not delivered — \($0)" } ?? "Not delivered"
-        case .needsUserDecision: return "Needs choice"
+        case .needsUserDecision:
+            return lastError.map { "Needs choice — \($0)" } ?? "Needs choice"
         }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate, WKScriptMessageHandler {
         var onOpenSubagent: ((String) -> Void)?
+        var onEditSubmittedInput: ((String) -> Void)?
+        var onDiscardSubmittedInput: ((String) -> Void)?
+        var onRetrySubmittedInput: ((String) -> Void)?
         var onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?
         var onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)?
 
@@ -991,12 +1013,29 @@ struct WebTranscriptView: UIViewRepresentable {
         ) {
             guard message.name == WebTranscriptView.bridgeName,
                   let payload = message.body as? [String: Any],
-                  payload["type"] as? String == "openSubagent",
-                  let sessionId = payload["sessionId"] as? String,
-                  UUID(uuidString: sessionId) != nil,
-                  let handler = onOpenSubagent
+                  let type = payload["type"] as? String
             else { return }
-            Task { @MainActor in handler(sessionId) }
+            if type == "openSubagent",
+               let sessionId = payload["sessionId"] as? String,
+               UUID(uuidString: sessionId) != nil,
+               let handler = onOpenSubagent {
+                Task { @MainActor in handler(sessionId) }
+            } else if type == "editSubmitted",
+                      let clientRequestId = payload["clientRequestId"] as? String,
+                      !clientRequestId.isEmpty,
+                      let handler = onEditSubmittedInput {
+                Task { @MainActor in handler(clientRequestId) }
+            } else if type == "discardSubmitted",
+                      let clientRequestId = payload["clientRequestId"] as? String,
+                      !clientRequestId.isEmpty,
+                      let handler = onDiscardSubmittedInput {
+                Task { @MainActor in handler(clientRequestId) }
+            } else if type == "retrySubmitted",
+                      let clientRequestId = payload["clientRequestId"] as? String,
+                      !clientRequestId.isEmpty,
+                      let handler = onRetrySubmittedInput {
+                Task { @MainActor in handler(clientRequestId) }
+            }
         }
 
         weak var webView: WKWebView?
@@ -1415,6 +1454,9 @@ struct WebTranscriptView: UIViewRepresentable {
             contentSizeObservation?.invalidate()
             webView = nil
             onOpenSubagent = nil
+            onEditSubmittedInput = nil
+            onDiscardSubmittedInput = nil
+            onRetrySubmittedInput = nil
             onNearTop = nil
             onNeedsMoreHistory = nil
             onDiagnostics = nil
@@ -2134,6 +2176,9 @@ struct WebTranscriptPayloadItem: Encodable {
     let calls: [WebTranscriptToolCall]
     let origin: String?
     let media: [WebTranscriptMediaRef]?
+    /// Bounded attachment metadata for optimistic submitted rows. Full bytes
+    /// never cross the WebView boundary.
+    var attachments: [SubmittedInputAttachmentSummary]? = nil
     /// Bounded preview shown without a tap on a failed row (R4).
     var failurePreview: String? = nil
     /// Rendered diff for edit rows (R3).

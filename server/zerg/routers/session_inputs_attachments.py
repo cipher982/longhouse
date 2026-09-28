@@ -18,6 +18,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
+from typing import Any
 from typing import List
 
 from fastapi import APIRouter
@@ -44,7 +45,13 @@ from zerg.metrics import session_input_attachments_total
 from zerg.models.device_token import DeviceToken
 from zerg.routers.session_chat import QueuedInputSummary
 from zerg.routers.session_chat import SessionInputResponse
+from zerg.routers.session_chat import _augment_receipt_error
+from zerg.routers.session_chat import _console_turn_failure
+from zerg.routers.session_chat import _console_turn_outcome
+from zerg.routers.session_chat import _console_turn_response
 from zerg.routers.session_chat import _delivery_unknown_error
+from zerg.routers.session_chat import _input_error_detail
+from zerg.routers.session_chat import _live_queued_summary
 from zerg.routers.session_chat import _live_receipt_outcome
 from zerg.routers.session_chat import _runtime_draining_error
 from zerg.routers.session_chat import _set_catalog_live_receipt_error
@@ -100,13 +107,19 @@ def _validate_attachments(files: List[UploadFile]) -> None:
     if len(files) > MAX_ATTACHMENTS_PER_INPUT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"too many attachments (max {MAX_ATTACHMENTS_PER_INPUT})",
+            detail=_input_error_detail(
+                "too_many_attachments",
+                f"too many attachments (max {MAX_ATTACHMENTS_PER_INPUT})",
+            ),
         )
     for upload in files:
         if upload.content_type not in ALLOWED_MIME_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"unsupported attachment type: {upload.content_type}",
+                detail=_input_error_detail(
+                    "unsupported_attachment_type",
+                    f"unsupported attachment type: {upload.content_type}",
+                ),
             )
 
 
@@ -127,12 +140,15 @@ def _validate_attachment_bytes(mime_type: str | None, data: bytes) -> None:
     if not mime_type or not data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="attachments must not be empty",
+            detail=_input_error_detail("empty_attachment", "attachments must not be empty"),
         )
     if not _image_signature_matches(mime_type, data):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"attachment bytes do not match declared type: {mime_type}",
+            detail=_input_error_detail(
+                "attachment_signature_mismatch",
+                f"attachment bytes do not match declared type: {mime_type}",
+            ),
         )
 
 
@@ -142,6 +158,8 @@ def _queued_summary_from_row(row) -> QueuedInputSummary:
         text=row.body,
         intent=row.intent,
         status=row.status,
+        disposition="accepted",
+        delivery_status=row.status,
         last_error=row.last_error,
         created_at=row.created_at,
     )
@@ -187,7 +205,6 @@ async def _enqueue_console_input_with_attachments(
     stores nothing and passes only the digest; catalogd compares it against
     the stored turn and answers with the existing receipt or a conflict.
     """
-    from zerg.routers.session_chat import ConsoleTurnReceiptResponse
     from zerg.services.console_turns import ConsoleTurnConflict
     from zerg.services.console_turns import ConsoleTurnUnavailable
     from zerg.services.console_turns import enqueue_catalog_console_turn
@@ -196,7 +213,12 @@ async def _enqueue_console_input_with_attachments(
         record_outcome("rejected_capability")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This session's provider does not accept image attachments",
+            detail=_input_error_detail(
+                "attachments_unsupported",
+                "This session's provider does not accept image attachments",
+                disposition="rejected",
+                client_request_id=client_request_id,
+            ),
         )
     group_id: str | None = None
     existing_receipt = None
@@ -223,10 +245,12 @@ async def _enqueue_console_input_with_attachments(
     except LiveInputReceiptUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
         ) from exc
     stored_refs: list[dict] = []
     if existing_receipt is None:
@@ -265,17 +289,58 @@ async def _enqueue_console_input_with_attachments(
     except ConsoleTurnConflict as exc:
         await cleanup_stored_group()
         record_outcome("rejected_idempotency_conflict")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"error_code": "idempotency_conflict", "message": str(exc)},
-        ) from exc
+        conflict_receipt = existing_receipt
+        if conflict_receipt is None:
+            try:
+                conflict_receipt = await load_live_input_receipt_by_client_request(
+                    owner_id=owner_id,
+                    session_id=source_session.id,
+                    client_request_id=client_request_id,
+                )
+            except LiveInputReceiptUnavailable:
+                conflict_receipt = None
+        if conflict_receipt is not None:
+            summary = _live_queued_summary(conflict_receipt)
+            detail = _input_error_detail(
+                "idempotency_conflict",
+                str(exc),
+                disposition="accepted",
+                delivery_status=conflict_receipt.status,
+                client_request_id=client_request_id,
+                live_input_id=conflict_receipt.id,
+                turn=summary.turn,
+            )
+        else:
+            detail = _input_error_detail(
+                "idempotency_conflict",
+                str(exc),
+                disposition="unknown",
+                client_request_id=client_request_id,
+            )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
     except ConsoleTurnUnavailable as exc:
+        if exc.code == "catalog_unavailable":
+            record_outcome("dispatch_unknown")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_input_error_detail(
+                    exc.code,
+                    str(exc),
+                    disposition="unknown",
+                    client_request_id=client_request_id,
+                ),
+            ) from exc
         await cleanup_stored_group()
         record_outcome("rejected_unavailable")
         error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
         raise HTTPException(
             status_code=error_status,
-            detail={"error_code": exc.code, "message": str(exc)},
+            detail=_input_error_detail(
+                exc.code,
+                str(exc),
+                disposition="rejected",
+                client_request_id=client_request_id,
+            ),
         ) from exc
     except Exception as exc:
         # catalogd may have committed the turn before its response was lost;
@@ -285,16 +350,31 @@ async def _enqueue_console_input_with_attachments(
         record_outcome("dispatch_unknown")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
         ) from exc
     if group_id is not None and not turn.created:
         # Another request won the idempotency race. Its turn owns the durable
         # attachment group; discard this request's duplicate upload.
         await cleanup_stored_group()
         group_id = None
+    if turn.state == "cancelled":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_input_error_detail(
+                "input_cancelled",
+                "This Console input was cancelled.",
+                disposition="accepted",
+                delivery_status="cancelled",
+                client_request_id=client_request_id,
+                live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
+                turn=_console_turn_response(turn),
+            ),
+        )
     if turn.error and turn.error_code not in {
         "turn_start_ambiguous",
         "turn_start_outcome_unknown",
@@ -304,24 +384,18 @@ async def _enqueue_console_input_with_attachments(
             await cleanup_stored_group()
             group_id = None
         record_outcome("dispatch_failed")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error_code": turn.error_code or "provider_launch_failed", "message": turn.error},
-        )
+        raise _console_turn_failure(turn, client_request_id=client_request_id)
     if turn.error:
         record_outcome("dispatch_deferred")
     else:
         record_outcome("accepted_console")
     return SessionInputResponse(
-        outcome="sent" if turn.state == "active" else "queued",
+        outcome=_console_turn_outcome(turn.state),
+        disposition="accepted",
         input_id=None,
-        live_input_id=str(turn.turn_id),
+        live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
         client_request_id=client_request_id,
-        turn=ConsoleTurnReceiptResponse(
-            turn_id=str(turn.turn_id),
-            run_id=str(turn.run_id) if getattr(turn, "run_id", None) is not None else None,
-            state=turn.state,
-        ),
+        turn=_console_turn_response(turn),
         intent=INPUT_INTENT_AUTO,
         queued=[],
     )
@@ -378,33 +452,44 @@ async def create_session_input_with_attachments(
     drain path doesn't load attachments yet.
     """
     client_label = _client_label_from_user_agent(user_agent)
+    request_id = client_request_id.strip()
+
+    def _rejected_detail(detail: object, *, code: str = "input_rejected") -> dict[str, Any]:
+        payload = dict(detail) if isinstance(detail, dict) else {"message": str(detail)}
+        message = str(payload.get("message") or payload.get("error") or code)
+        return _input_error_detail(
+            str(payload.get("error_code") or payload.get("code") or code),
+            message,
+            disposition="rejected",
+            client_request_id=request_id,
+        )
 
     def _record_outcome(outcome: str) -> None:
         session_input_attachments_total.labels(client=client_label, outcome=outcome).inc()
 
     try:
         reject_cross_origin_form_post(request)
-    except HTTPException:
+    except HTTPException as exc:
         _record_outcome("rejected_cross_origin")
-        raise
+        raise HTTPException(status_code=exc.status_code, detail=_rejected_detail(exc.detail, code="cross_origin_rejected")) from exc
 
     if not attachments:
         _record_outcome("rejected_empty")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="multipart input requires at least one attachment",
+            detail=_rejected_detail("multipart input requires at least one attachment", code="empty_attachments"),
         )
     if intent != INPUT_INTENT_AUTO:
         _record_outcome("rejected_intent")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"intent {intent!r} not supported with attachments",
+            detail=_rejected_detail(f"intent {intent!r} not supported with attachments", code="invalid_intent"),
         )
     try:
         _validate_attachments(attachments)
-    except HTTPException:
+    except HTTPException as exc:
         _record_outcome("rejected_validation")
-        raise
+        raise HTTPException(status_code=exc.status_code, detail=_rejected_detail(exc.detail)) from exc
 
     # Read every upload + check size before we touch the DB. If a later
     # attachment is too large, we don't want a half-stored input in
@@ -416,13 +501,16 @@ async def create_session_input_with_attachments(
             _record_outcome("rejected_oversize")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(f"attachment {upload.filename!r} exceeds {MAX_ATTACHMENT_BYTES // 1024 // 1024}MB"),
+                detail=_rejected_detail(
+                    f"attachment {upload.filename!r} exceeds {MAX_ATTACHMENT_BYTES // 1024 // 1024}MB",
+                    code="attachment_oversize",
+                ),
             )
         try:
             _validate_attachment_bytes(upload.content_type, data)
-        except HTTPException:
+        except HTTPException as exc:
             _record_outcome("rejected_signature")
-            raise
+            raise HTTPException(status_code=exc.status_code, detail=_rejected_detail(exc.detail)) from exc
         upload_payloads.append((upload, data))
 
     payload_hasher = hashlib.sha256()
@@ -442,14 +530,14 @@ async def create_session_input_with_attachments(
     payload_digest = payload_hasher.hexdigest()
     try:
         source_session = _load_session_for_continuation(db, session_id, owner_id=int(current_user.id))
-    except HTTPException:
+    except HTTPException as exc:
         _record_outcome("rejected_session")
-        raise
+        raise HTTPException(status_code=exc.status_code, detail=_rejected_detail(exc.detail, code="session_unavailable")) from exc
     request_id = client_request_id.strip()
     if not request_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="client_request_id must not be blank",
+            detail=_rejected_detail("client_request_id must not be blank", code="invalid_client_request_id"),
         )
 
     if getattr(source_session, "command_family", None) == "console_turn":
@@ -465,15 +553,18 @@ async def create_session_input_with_attachments(
 
     try:
         _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
-    except HTTPException:
+    except HTTPException as exc:
         _record_outcome("rejected_live_control")
-        raise
+        raise HTTPException(status_code=exc.status_code, detail=_rejected_detail(exc.detail, code="session_unavailable")) from exc
 
     if not attachments_supported(getattr(source_session, "provider", None), "helm"):
         _record_outcome("rejected_capability")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This session's provider does not accept image attachments",
+            detail=_rejected_detail(
+                "This session's provider does not accept image attachments",
+                code="attachments_unsupported",
+            ),
         )
     try:
         existing_receipt = await load_live_input_receipt_by_client_request(
@@ -484,10 +575,12 @@ async def create_session_input_with_attachments(
     except LiveInputReceiptUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "input_receipt_unknown",
-                "message": "The server could not confirm this operation; retry with the same client_request_id.",
-            },
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=request_id,
+            ),
         ) from exc
     runtime_replay = False
     if existing_receipt is not None:
@@ -495,22 +588,27 @@ async def create_session_input_with_attachments(
             _record_outcome("rejected_idempotency_conflict")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error_code": "input_conflict",
-                    "reason": "different_payload",
-                    "existing_live_input_id": existing_receipt.id,
-                },
+                detail=_augment_receipt_error(
+                    {"error_code": "input_conflict", "reason": "different_payload"},
+                    client_request_id=request_id,
+                    live_input_id=existing_receipt.id,
+                    disposition="accepted",
+                    delivery_status=existing_receipt.status,
+                ),
             )
         is_delivery_unknown = existing_receipt.status == "failed" and _delivery_unknown_error(existing_receipt.error_json)
         runtime_replay = existing_receipt.status == INPUT_STATUS_DELIVERING and _runtime_draining_error(existing_receipt.error_json)
         if existing_receipt.status in {"failed", "cancelled"} and not is_delivery_unknown:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error_code": "input_already_rejected",
-                    "existing_live_input_id": existing_receipt.id,
-                    "status": existing_receipt.status,
-                },
+                detail=_input_error_detail(
+                    "input_already_rejected",
+                    "This submitted input already reached a terminal delivery state.",
+                    disposition="accepted",
+                    delivery_status=existing_receipt.status,
+                    client_request_id=request_id,
+                    live_input_id=existing_receipt.id,
+                ),
             )
         if not runtime_replay:
             return SessionInputResponse(
@@ -524,10 +622,16 @@ async def create_session_input_with_attachments(
         if not str(existing_receipt.delivery_request_id or "").strip():
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "error_code": "input_receipt_unknown",
-                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
-                },
+                detail=_augment_receipt_error(
+                    {
+                        "error_code": "input_receipt_unknown",
+                        "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                    },
+                    client_request_id=request_id,
+                    live_input_id=existing_receipt.id,
+                    disposition="unknown",
+                    delivery_status="unknown",
+                ),
             )
     delivery_request_id = str(existing_receipt.delivery_request_id) if runtime_replay and existing_receipt is not None else uuid.uuid4().hex
     lock_scope_id = session_lock_scope_id(source_session.id)
@@ -541,10 +645,23 @@ async def create_session_input_with_attachments(
     )
     if not lock:
         _record_outcome("rejected_lock")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="another dispatch is in flight for this session; try again",
+        detail = (
+            _augment_receipt_error(
+                {"error_code": "input_dispatch_in_flight", "message": "another dispatch is in flight for this session; try again"},
+                client_request_id=request_id,
+                live_input_id=existing_receipt.id,
+                disposition="accepted",
+                delivery_status=existing_receipt.status,
+            )
+            if existing_receipt is not None
+            else _input_error_detail(
+                "input_dispatch_in_flight",
+                "another dispatch is in flight for this session; try again",
+                disposition="rejected",
+                client_request_id=request_id,
+            )
         )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
     if runtime_replay:
         try:
             current_receipt = await load_live_input_receipt_by_client_request(
@@ -674,7 +791,7 @@ async def create_session_input_with_attachments(
                     stored=stored,
                 )
             )
-    except HTTPException:
+    except HTTPException as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         if catalog_receipt_id is not None:
             await _finish_catalog_receipt(
@@ -688,7 +805,17 @@ async def create_session_input_with_attachments(
                 receipt_id=catalog_receipt_id,
             )
         _record_outcome("store_rejected")
-        raise
+        if catalog_receipt_id is None:
+            raise
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=_augment_receipt_error(
+                exc.detail,
+                client_request_id=request_id,
+                live_input_id=catalog_receipt_id,
+                delivery_status="failed",
+            ),
+        ) from exc
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         if catalog_receipt_id is not None:
@@ -704,9 +831,24 @@ async def create_session_input_with_attachments(
             )
         logger.exception("attachment upload failed for session %s", source_session.id)
         _record_outcome("store_failed")
+        if catalog_receipt_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_input_error_detail(
+                    "input_receipt_unknown",
+                    "The server could not persist this operation; retry with the same client_request_id.",
+                    disposition="unknown",
+                    client_request_id=request_id,
+                ),
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="failed to store attachments",
+            detail=_augment_receipt_error(
+                "failed to store attachments",
+                client_request_id=request_id,
+                live_input_id=catalog_receipt_id,
+                delivery_status="failed",
+            ),
         ) from exc
 
     try:
@@ -720,7 +862,7 @@ async def create_session_input_with_attachments(
             session_input_id=None,
             attachments=stored_refs,
         )
-    except HTTPException:
+    except HTTPException as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         await _finish_catalog_receipt(
             receipt_id=catalog_receipt_id,
@@ -733,7 +875,15 @@ async def create_session_input_with_attachments(
             receipt_id=catalog_receipt_id,
         )
         _record_outcome("dispatch_rejected")
-        raise
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=_augment_receipt_error(
+                exc.detail,
+                client_request_id=request_id,
+                live_input_id=catalog_receipt_id,
+                delivery_status="failed",
+            ),
+        ) from exc
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         unknown_error = f"Provider dispatch outcome is unknown: {exc}"[:500]
@@ -754,7 +904,22 @@ async def create_session_input_with_attachments(
         _record_outcome("dispatch_unknown")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error_code": "delivery_unknown", "message": unknown_error},
+            detail=(
+                _augment_receipt_error(
+                    {"error_code": "delivery_unknown", "message": unknown_error},
+                    client_request_id=request_id,
+                    live_input_id=catalog_receipt_id,
+                    disposition="accepted" if marked else "unknown",
+                    delivery_status="unknown",
+                )
+                if marked
+                else _input_error_detail(
+                    "input_receipt_unknown",
+                    unknown_error,
+                    disposition="unknown",
+                    client_request_id=request_id,
+                )
+            ),
         ) from exc
 
     dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
@@ -776,10 +941,20 @@ async def create_session_input_with_attachments(
                 error=payload,
             )
             if not marked:
-                payload = {
-                    "error_code": "input_receipt_unknown",
-                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
-                }
+                payload = _input_error_detail(
+                    "input_receipt_unknown",
+                    "The server could not confirm this operation; retry with the same client_request_id.",
+                    disposition="unknown",
+                    client_request_id=request_id,
+                )
+            else:
+                payload = _augment_receipt_error(
+                    payload,
+                    client_request_id=request_id,
+                    live_input_id=catalog_receipt_id,
+                    disposition="accepted",
+                    delivery_status="delivering",
+                )
             _record_outcome("dispatch_deferred")
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
         if isinstance(payload, dict) and _delivery_unknown_error(json.dumps(payload)):
@@ -807,7 +982,16 @@ async def create_session_input_with_attachments(
                     error={"code": "delivery_unknown", "message": unknown_error},
                 )
             _record_outcome("dispatch_unknown")
-            raise HTTPException(status_code=dispatch_status, detail=payload)
+            raise HTTPException(
+                status_code=dispatch_status,
+                detail=_augment_receipt_error(
+                    payload,
+                    client_request_id=request_id,
+                    live_input_id=catalog_receipt_id,
+                    disposition="accepted",
+                    delivery_status="unknown",
+                ),
+            )
         await _cleanup_catalog_attachment_group(
             owner_id=int(current_user.id),
             session_id=str(source_session.id),
@@ -821,7 +1005,13 @@ async def create_session_input_with_attachments(
         _record_outcome("dispatch_error")
         raise HTTPException(
             status_code=dispatch_status,
-            detail=f"managed local dispatch returned {dispatch_status}",
+            detail=_augment_receipt_error(
+                f"managed local dispatch returned {dispatch_status}",
+                client_request_id=request_id,
+                live_input_id=catalog_receipt_id,
+                disposition="accepted",
+                delivery_status="failed",
+            ),
         )
 
     uploaded_count = len(stored_refs)

@@ -272,6 +272,34 @@ describe("subagents and the native bridge", () => {
     expect(() => root().querySelector<HTMLButtonElement>(".subagent-link")!.click()).not.toThrow();
   });
 
+  it("shows a submitted row's attachment summary and routes its actions to the app", () => {
+    const postMessage = vi.fn();
+    (window as unknown as { webkit: unknown }).webkit = { messageHandlers: { longhouse: { postMessage } } };
+    render({
+      items: [
+        {
+          id: "ios-failed",
+          kind: "submitted",
+          body: "describe this",
+          status: "failed",
+          subtitle: "Not delivered",
+          attachments: [{ filename: "shot.jpg", mimeType: "image/jpeg", byteSize: 4 }],
+        },
+        { id: "ios-unknown", kind: "submitted", body: "again", status: "couldNotConfirm", subtitle: "Not confirmed" },
+        { id: "ios-sent", kind: "submitted", body: "done", status: "sent", subtitle: "Sent" },
+      ],
+    });
+    expect(root().querySelector('[data-testid="session-submitted-attachments"]')?.textContent).toBe(
+      "Attachments · shot.jpg (image/jpeg, 4 bytes)",
+    );
+    const actions = Array.from(root().querySelectorAll<HTMLButtonElement>("[data-submitted-action]"));
+    expect(actions.map((b) => b.textContent)).toEqual(["Edit", "Discard", "Retry send"]);
+    actions[0].click();
+    actions[2].click();
+    expect(postMessage).toHaveBeenCalledWith({ type: "editSubmitted", clientRequestId: "ios-failed" });
+    expect(postMessage).toHaveBeenCalledWith({ type: "retrySubmitted", clientRequestId: "ios-unknown" });
+  });
+
   it("keeps an opened worker list open across renders", () => {
     render({ items: [spawner] });
     root().querySelector<HTMLDetailsElement>("details.subagents")!.open = true;

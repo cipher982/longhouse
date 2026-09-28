@@ -21,6 +21,7 @@ struct SessionView: View {
     @State private var composerText: String = ""
     @State private var composerModel: String?
     @State private var composerModelSessionId: String?
+    @State private var composerModelWasChosen = false
     @State private var recentComposerModels: [RecentModel] = []
     @State private var loadingComposerModels = false
     @State private var composerModelError: String?
@@ -36,6 +37,7 @@ struct SessionView: View {
     @State private var bugReportSessionToOpen: String?
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
+    @State private var editingClientRequestId: String?
     @State private var isLoadingPickerItems: Bool = false
     init(
         sessionId: String,
@@ -109,7 +111,7 @@ struct SessionView: View {
             // primary request immediately; constructing WebKit here would
             // consume the same main-actor slice before the first network byte.
             await viewModel.start(sessionId: sessionId, appState: appState)
-            initializeComposerModelIfNeeded()
+            synchronizeComposerModelFromSessionIfUnchosen()
             await viewModel.acknowledgeUnreadIfNeeded(
                 sessionId: sessionId,
                 appState: appState,
@@ -118,6 +120,15 @@ struct SessionView: View {
         }
         .onDisappear {
             viewModel.pauseRealtime()
+        }
+        .onChange(of: sessionId) { _, _ in
+            composerModel = nil
+            composerModelSessionId = nil
+            composerModelWasChosen = false
+        }
+
+        .onChange(of: viewModel.detail?.selectedModel) { _, _ in
+            synchronizeComposerModelFromSessionIfUnchosen()
         }
         .onChange(of: scenePhase) { _, newPhase in
             // SSE over URLSession is foreground-only per Apple's contract.
@@ -210,6 +221,8 @@ struct SessionView: View {
                     errorMessage: composerModelError
                 ) { model in
                     composerModel = model
+                    composerModelSessionId = sessionId
+                    composerModelWasChosen = true
                     isShowingModelPicker = false
                 }
             }
@@ -263,11 +276,19 @@ struct SessionView: View {
             isShowingBugReportSavedAlert = true
         }
     }
-    private func initializeComposerModelIfNeeded() {
-        guard composerModelSessionId != sessionId, let detail = viewModel.detail else { return }
-        composerModelSessionId = sessionId
+
+    private func synchronizeComposerModelFromSessionIfUnchosen() {
+        guard let detail = viewModel.detail, detail.id == sessionId else { return }
+        if composerModelSessionId != sessionId {
+            composerModelSessionId = sessionId
+            composerModelWasChosen = false
+        }
+        guard !composerModelWasChosen else { return }
         let value = detail.selectedModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        composerModel = value.isEmpty ? nil : value
+        let selectedModel = value.isEmpty ? nil : value
+        if composerModel != selectedModel {
+            composerModel = selectedModel
+        }
     }
 
     private func loadRecentComposerModels() async {
@@ -438,13 +459,21 @@ struct SessionView: View {
     private var transcriptState: TranscriptDisplayState {
         TranscriptDisplayState.derive(
             isInitialLoading: viewModel.isInitialLoading,
-            hasContent: !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty,
+            hasContent: !viewModel.items.isEmpty || !visibleSubmittedInputs.isEmpty,
             errorMessage: viewModel.errorMessage,
             refreshErrorMessage: viewModel.refreshErrorMessage,
             isSyncing: viewModel.detail?.isTranscriptSyncing == true,
             rendererReady: viewModel.isTranscriptFrameReady,
             rendererErrorMessage: viewModel.transcriptRendererErrorMessage
         )
+    }
+    private var visibleSubmittedInputs: [SubmittedInput] {
+        guard let decisionId = viewModel.turnEndedDraft?.clientRequestId else {
+            return viewModel.submittedInputs
+        }
+        return viewModel.submittedInputs.filter {
+            $0.clientRequestId != decisionId
+        }
     }
 
     private var transcript: some View {
@@ -457,7 +486,7 @@ struct SessionView: View {
                     serverURL: appState.serverURL,
                     items: viewModel.items,
                     subagents: viewModel.subagents,
-                    submittedInputs: viewModel.submittedInputs,
+                    submittedInputs: visibleSubmittedInputs,
                     errorMessage: viewModel.errorMessage,
                     contentRevision: viewModel.transcriptRevision,
                     transcriptReadThrough: viewModel.transcriptReadThrough,
@@ -484,6 +513,36 @@ struct SessionView: View {
                         viewModel.recordTranscriptLifecycle(stage)
                     },
                     onOpenSubagent: onOpenSubagent,
+                    onEditSubmittedInput: { clientRequestId in
+                        guard let pending = viewModel.pendingInput(
+                            clientRequestId: clientRequestId,
+                            sessionId: sessionId,
+                            appState: appState
+                        ) else { return }
+                        composerText = pending.text
+                        composerModel = pending.model
+                        composerModelSessionId = sessionId
+                        composerModelWasChosen = true
+                        attachmentStore.restore(pending.attachments)
+                        editingClientRequestId = clientRequestId
+                        composerFocused = true
+                    },
+                    onDiscardSubmittedInput: { clientRequestId in
+                        viewModel.discardPendingInput(
+                            clientRequestId: clientRequestId,
+                            sessionId: sessionId,
+                            appState: appState
+                        )
+                    },
+                    onRetrySubmittedInput: { clientRequestId in
+                        Task {
+                            _ = await viewModel.retryPendingInput(
+                                clientRequestId: clientRequestId,
+                                sessionId: sessionId,
+                                appState: appState
+                            )
+                        }
+                    },
                     onFrameFailed: { receipt in
                         viewModel.recordTranscriptFrameFailed(receipt)
                     },
@@ -546,12 +605,13 @@ struct SessionView: View {
             attachmentIsEmpty: attachmentStore.isEmpty,
             attachmentIsProcessing: attachmentStore.isProcessing,
             isLoadingPickerItems: isLoadingPickerItems,
-            turnEndedDraft: viewModel.turnEndedDraft,
+            turnEndedDraft: viewModel.turnEndedDraft?.text,
             onQueueInstead: {
+                guard let draft = viewModel.turnEndedDraft else { return }
                 _ = await viewModel.queueInsteadOfSteer(
+                    clientRequestId: draft.clientRequestId,
                     sessionId: sessionId,
-                    appState: appState,
-                    model: composerModel
+                    appState: appState
                 )
             },
             onDismissTurnEnded: {
@@ -775,15 +835,24 @@ struct SessionView: View {
         // Snapshot+clear before send so a slow request doesn't keep the
         // thumbnails next to a fresh empty draft.
         attachmentStore.clear()
-        let sent = await viewModel.send(
+        let replacedClientRequestId = editingClientRequestId
+        let result = await viewModel.sendResult(
             text: trimmed,
             sessionId: sessionId,
             appState: appState,
             intent: requestedIntent,
             model: composerModel,
             attachments: pendingAttachments,
+            replacingClientRequestId: replacedClientRequestId
         )
-        if sent {
+        if result == .persistenceFailed {
+            // Only failure to persist the outbox operation makes it safe to
+            // put the source payload back in the composer. Network/server
+            // rejection or ambiguity stays as one transcript outbox row.
+            composerText = trimmed
+            attachmentStore.restore(pendingAttachments)
+            composerFocused = true
+        } else if result.isSuccessfulHandoff {
             let token = viewModel.sendCounter
             Task { [weak viewModel] in
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -794,11 +863,9 @@ struct SessionView: View {
                     }
                 }
             }
-        } else if !pendingAttachments.isEmpty {
-            // Re-ingest compressed attachments after a terminal failure or
-            // ambiguous confirmation so the user can decide whether to retry.
-            let raw = pendingAttachments.map { (filename: $0.filename, data: $0.data) }
-            await attachmentStore.ingest(rawImages: raw)
+            editingClientRequestId = nil
+        } else {
+            editingClientRequestId = nil
         }
     }
 

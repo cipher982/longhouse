@@ -1,3 +1,4 @@
+import { postToNative } from "./bridge";
 import { escapeHtml } from "./escape";
 import { markdownToHtml } from "./markdown";
 import { mediaStrip } from "./media";
@@ -34,14 +35,53 @@ export function message(item: TranscriptItem, index: number): string {
 }
 
 export function submitted(item: TranscriptItem): string {
+  const attachments = item.attachments?.length
+    ? `<div class="submitted-attachments" data-testid="session-submitted-attachments">${escapeHtml(
+        "Attachments · " +
+          item.attachments
+            .map((attachment) => `${attachment.filename || "image"} (${attachment.mimeType || "file"}, ${attachment.byteSize || 0} bytes)`)
+            .join(" · "),
+      )}</div>`
+    : "";
+  const id = escapeHtml(item.id);
+  const actions =
+    item.status === "couldNotConfirm"
+      ? `<div class="submitted-actions">
+             <button type="button" data-submitted-action="retry" data-client-request-id="${id}">Retry send</button>
+           </div>`
+      : item.status === "failed" || item.status === "needsUserDecision"
+        ? `<div class="submitted-actions">
+               <button type="button" data-submitted-action="edit" data-client-request-id="${id}">Edit</button>
+               <button type="button" data-submitted-action="discard" data-client-request-id="${id}">Discard</button>
+             </div>`
+        : "";
   return `
         <div class="row message user submitted ${escapeHtml(item.status || "")}">
           <div>
             <div class="bubble">${escapeHtml(item.body || "")}</div>
+            ${attachments}
             <div class="submitted-status">${escapeHtml(item.subtitle || "")}</div>
+            ${actions}
           </div>
         </div>
       `;
+}
+
+const SUBMITTED_ACTIONS = {
+  edit: "editSubmitted",
+  discard: "discardSubmitted",
+  retry: "retrySubmitted",
+} as const;
+
+export function attachSubmittedInputHandlers(scope: ParentNode = document): void {
+  for (const button of scope.querySelectorAll("[data-submitted-action]")) {
+    button.addEventListener("click", () => {
+      const clientRequestId = button.getAttribute("data-client-request-id");
+      const type = SUBMITTED_ACTIONS[button.getAttribute("data-submitted-action") as keyof typeof SUBMITTED_ACTIONS];
+      if (!clientRequestId || !type) return;
+      postToNative({ type, clientRequestId });
+    });
+  }
 }
 
 export function action(item: TranscriptItem): string {

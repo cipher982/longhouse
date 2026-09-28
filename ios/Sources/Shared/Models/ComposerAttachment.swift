@@ -76,5 +76,26 @@ final class ComposerAttachmentStore: ObservableObject {
         errorMessage = nil
     }
 
+    /// Restores the already-compressed bytes from a pending operation without
+    /// decoding/re-encoding them. This is used only when local persistence
+    /// failed or the user explicitly edits a retained outbox row.
+    func restore(_ restored: [ComposerAttachment]) {
+        guard !isProcessing else { return }
+        attachments = Array(restored.prefix(ComposerAttachmentLimits.maxAttachments))
+        errorMessage = nil
+    }
+
+    func restore(_ restored: [PendingInputIntent.Attachment]) {
+        restore(restored.map {
+            ComposerAttachment(
+                id: $0.id,
+                filename: $0.filename,
+                data: $0.data,
+                mimeType: $0.mimeType,
+                thumbnail: UIImage(data: $0.data)
+            )
+        })
+    }
+
     func snapshot() -> [ComposerAttachment] { attachments }
 }

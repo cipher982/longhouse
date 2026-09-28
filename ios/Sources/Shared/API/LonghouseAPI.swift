@@ -301,7 +301,10 @@ extension SessionWorkspaceClient {
             clientRequestId: clientRequestId,
             intent: receipt.intent,
             status: receipt.status,
-            disposition: SessionInputReceiptDisposition.from(status: receipt.status),
+            // Finding a durable legacy row proves ownership. Its status is
+            // carried separately as deliveryStatus.
+            disposition: .accepted,
+            deliveryStatus: receipt.status,
             eventId: receipt.eventId
         )
     }
@@ -680,24 +683,49 @@ struct LonghouseAPI: Sendable {
             return candidate == clientRequestId
         }
         guard let record else { return nil }
-        let status = (record["status"] as? String)
-            ?? (record["disposition"] as? String)
+        let deliveryStatus = (record["delivery_status"] as? String)
+            ?? (record["status"] as? String)
             ?? (record["outcome"] as? String)
+        let rawDisposition = (record["disposition"] as? String)?.lowercased()
         let intent = (record["intent"] as? String)
         let error = (record["error"] as? String)
             ?? (record["last_error"] as? String)
             ?? (record["message"] as? String)
         let inputId = (record["input_id"] as? Int)
-            ?? (record["live_input_id"] as? Int)
             ?? (record["id"] as? Int)
+        let liveInputId = (record["live_input_id"] as? String)
+            ?? (record["liveInputId"] as? String)
+        let turn: ConsoleTurnReceipt? = {
+            guard let raw = record["turn"] as? [String: Any],
+                  let turnId = (raw["turn_id"] as? String) ?? (raw["turnId"] as? String),
+                  let state = raw["state"] as? String
+            else { return nil }
+            return ConsoleTurnReceipt(
+                turnId: turnId,
+                receiptId: (raw["receipt_id"] as? String) ?? (raw["receiptId"] as? String),
+                runId: (raw["run_id"] as? String) ?? (raw["runId"] as? String),
+                state: state,
+                isFresh: (raw["is_fresh"] as? Bool) ?? (raw["isFresh"] as? Bool)
+            )
+        }()
+        let disposition: SessionInputReceiptDisposition = {
+            if rawDisposition == "rejected" { return .rejected }
+            if rawDisposition == "unknown" { return .couldNotConfirm }
+            // A durable receipt proves server ownership. Its status describes
+            // delivery, not whether the operation was accepted.
+            return .accepted
+        }()
         let eventId = (record["event_id"] as? String)
             ?? (record["durable_event_id"] as? String)
         return SessionInputReceiptState(
             clientRequestId: clientRequestId,
             intent: intent,
-            status: status,
-            disposition: SessionInputReceiptDisposition.from(status: status, error: error),
+            status: deliveryStatus,
+            disposition: disposition,
+            deliveryStatus: deliveryStatus,
             inputId: inputId,
+            liveInputId: liveInputId,
+            turn: turn,
             eventId: eventId,
             error: error
         )
@@ -817,9 +845,12 @@ struct LonghouseAPI: Sendable {
             }
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
         let (data, httpResponse) = try await data(for: request)
+
         guard (200..<300).contains(httpResponse.statusCode) else {
+            if let inputError = Self.parseSessionInputOperationError(statusCode: httpResponse.statusCode, data: data) {
+                throw inputError
+            }
             if let inputError = Self.parseSessionInputError(statusCode: httpResponse.statusCode, data: data) {
                 throw inputError
             }
@@ -975,6 +1006,9 @@ struct LonghouseAPI: Sendable {
             "status=\(httpResponse.statusCode) elapsed_ms=\(elapsedMs)"
         )
         guard (200..<300).contains(httpResponse.statusCode) else {
+            if let inputError = Self.parseSessionInputOperationError(statusCode: httpResponse.statusCode, data: data) {
+                throw inputError
+            }
             if let inputError = Self.parseSessionInputError(statusCode: httpResponse.statusCode, data: data) {
                 throw inputError
             }
@@ -1028,35 +1062,26 @@ struct LonghouseAPI: Sendable {
         attachments: [ComposerAttachment]
     ) -> Data {
         var body = Data()
-        let crlf = "\r\n"
-        let dashes = "--"
-
-        func appendField(name: String, value: String) {
-            body.append("\(dashes)\(boundary)\(crlf)".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(name)\"\(crlf)\(crlf)".data(using: .utf8)!)
-            body.append(value.data(using: .utf8) ?? Data())
-            body.append(crlf.data(using: .utf8)!)
-        }
-
-        appendField(name: "text", value: text)
-        appendField(name: "intent", value: intent)
-        appendField(name: "client_request_id", value: clientRequestId)
+        appendMultipartField(&body, boundary: boundary, name: "text", value: text)
+        appendMultipartField(&body, boundary: boundary, name: "intent", value: intent)
+        appendMultipartField(&body, boundary: boundary, name: "client_request_id", value: clientRequestId)
         if let model {
             let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
             if !normalizedModel.isEmpty {
-                appendField(name: "model", value: normalizedModel)
+                appendMultipartField(&body, boundary: boundary, name: "model", value: normalizedModel)
             }
         }
-
         for attachment in attachments {
-            let safeFilename = sanitizeMultipartFilename(attachment.filename)
-            body.append("\(dashes)\(boundary)\(crlf)".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"attachments\"; filename=\"\(safeFilename)\"\(crlf)".data(using: .utf8)!)
-            body.append("Content-Type: \(attachment.mimeType)\(crlf)\(crlf)".data(using: .utf8)!)
-            body.append(attachment.data)
-            body.append(crlf.data(using: .utf8)!)
+            appendMultipartFile(
+                &body,
+                boundary: boundary,
+                name: "attachments",
+                filename: attachment.filename,
+                mimeType: attachment.mimeType,
+                data: attachment.data
+            )
         }
-        body.append("\(dashes)\(boundary)\(dashes)\(crlf)".data(using: .utf8)!)
+        body.append(Data("--\(boundary)--\r\n".utf8))
         return body
     }
     private static func appendMultipartField(_ body: inout Data, boundary: String, name: String, value: String) {
@@ -1116,6 +1141,98 @@ struct LonghouseAPI: Sendable {
         return .structured(status: statusCode, errorCode: code, message: message)
     }
 
+    private static func parseSessionInputOperationError(
+        statusCode: Int,
+        data: Data
+    ) -> SessionInputOperationError? {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            guard statusCode == 400 else { return nil }
+            return SessionInputOperationError(
+                statusCode: statusCode,
+                message: "Longhouse rejected this message (HTTP \(statusCode)).",
+                errorCode: nil,
+                disposition: .rejected,
+                deliveryStatus: nil,
+                clientRequestId: nil,
+                inputId: nil,
+                liveInputId: nil,
+                turn: nil
+            )
+        }
+        let detail = (object["detail"] as? [String: Any]) ?? object
+        let errorCode = (detail["error_code"] as? String)
+            ?? (detail["code"] as? String)
+            ?? (object["error_code"] as? String)
+            ?? (object["code"] as? String)
+        let rawDisposition = (detail["disposition"] as? String) ?? (object["disposition"] as? String)
+        let rawStatus = (detail["delivery_status"] as? String)
+            ?? (detail["deliveryStatus"] as? String)
+            ?? (detail["status"] as? String)
+            ?? (object["delivery_status"] as? String)
+            ?? (object["deliveryStatus"] as? String)
+        let disposition: SessionInputDisposition = {
+            if let rawDisposition = rawDisposition {
+                if let parsed = SessionInputDisposition(rawValue: rawDisposition.lowercased()) {
+                    return parsed
+                }
+                // An unrecognised explicit disposition is not evidence of
+                // rejection.
+                return .unknown
+            }
+            if rawStatus != nil {
+                // delivery_status describes handoff state, not ownership.
+                // Never infer rejection from it when disposition is absent.
+                return .unknown
+            }
+            return statusCode == 400 ? .rejected : .unknown
+        }()
+        let clientRequestId = (detail["client_request_id"] as? String)
+            ?? (object["client_request_id"] as? String)
+        let inputId = (detail["input_id"] as? Int)
+            ?? (detail["id"] as? Int)
+            ?? (object["input_id"] as? Int)
+        let liveInputId = (detail["live_input_id"] as? String)
+            ?? (object["live_input_id"] as? String)
+        let turn: ConsoleTurnReceipt? = {
+            guard let raw = (detail["turn"] as? [String: Any]) ?? (object["turn"] as? [String: Any]),
+                  let turnId = raw["turn_id"] as? String,
+                  let state = raw["state"] as? String
+            else { return nil }
+            return ConsoleTurnReceipt(
+                turnId: turnId,
+                receiptId: (raw["receipt_id"] as? String) ?? (raw["receiptId"] as? String),
+                runId: (raw["run_id"] as? String) ?? (raw["runId"] as? String),
+                state: state,
+                isFresh: (raw["is_fresh"] as? Bool) ?? (raw["isFresh"] as? Bool)
+            )
+        }()
+        let message = (detail["message"] as? String)
+            ?? (detail["error"] as? String)
+            ?? (detail["detail"] as? String)
+            ?? (object["detail"] as? String)
+            ?? (object["message"] as? String)
+            ?? "Longhouse rejected this message (HTTP \(statusCode))."
+        let hasOperationMetadata = rawDisposition != nil
+            || rawStatus != nil
+            || clientRequestId != nil
+            || inputId != nil
+            || liveInputId != nil
+            || turn != nil
+            || errorCode != nil
+        guard statusCode == 400 || hasOperationMetadata else { return nil }
+        return SessionInputOperationError(
+            statusCode: statusCode,
+            message: message,
+            errorCode: errorCode,
+            disposition: disposition,
+            deliveryStatus: rawStatus,
+            clientRequestId: clientRequestId,
+            inputId: inputId,
+            liveInputId: liveInputId,
+            turn: turn
+        )
+    }
+
     /// A plain session-input 400 is a known rejection, not an ambiguous delivery outcome.
     static func parseSessionInputError(statusCode: Int, data: Data) -> LonghouseAPIError? {
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -1138,7 +1255,25 @@ struct LonghouseAPI: Sendable {
 
     static func decodeSessionInputResponse(_ data: Data) throws -> SessionInputResponse {
         do {
-            return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
+            let decoded = try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data)
+            let base = decoded.sessionInputResponse
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let disposition = (object?["disposition"] as? String)
+                .flatMap { SessionInputDisposition(rawValue: $0.lowercased()) }
+                ?? (decoded.outcome == "unknown" ? .unknown : .accepted)
+            let deliveryStatus = (object?["delivery_status"] as? String)
+                ?? (object?["status"] as? String)
+            return SessionInputResponse(
+                outcome: base.outcome,
+                disposition: disposition,
+                deliveryStatus: deliveryStatus,
+                inputId: base.inputId,
+                liveInputId: base.liveInputId,
+                clientRequestId: base.clientRequestId,
+                turn: base.turn,
+                intent: base.intent,
+                queued: base.queued
+            )
         } catch {
             throw LonghouseAPIError.unexpectedResponse(
                 "Longhouse returned an unexpected send response. Refreshing to check whether it landed."
@@ -1897,6 +2032,20 @@ extension LonghouseAPI {
 }
 
 extension LonghouseAPI: SessionWorkspaceClient {}
+
+struct SessionInputOperationError: Error, LocalizedError, Sendable, Equatable {
+    let statusCode: Int
+    let message: String
+    let errorCode: String?
+    let disposition: SessionInputDisposition
+    let deliveryStatus: String?
+    let clientRequestId: String?
+    let inputId: Int?
+    let liveInputId: String?
+    let turn: ConsoleTurnReceipt?
+
+    var errorDescription: String? { message }
+}
 
 enum LonghouseAPIError: Error {
     case requestFailed

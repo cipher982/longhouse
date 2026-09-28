@@ -25,6 +25,8 @@
  *   bunx tsx scripts/ui-capture.ts --scene=empty
  *   bunx tsx scripts/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
  *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-detail-stress
+ *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
+ *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
  *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-resume
  *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
  *   bunx tsx scripts/ui-capture.ts machines
@@ -82,6 +84,8 @@ const SCENES = [
   "launch-model-picker",
   "launch-model-picked",
   "session-detail-stress",
+  "session-input-outbox",
+  "session-remote-image-outbox",
   "session-question",
   "session-attention",
   "session-resume",
@@ -106,6 +110,8 @@ const FIRST_RUN_SCENE: SceneName = "first-run";
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
   "session-detail-stress",
+  "session-input-outbox",
+  "session-remote-image-outbox",
   "session-question",
   "session-attention",
   "session-resume",
@@ -260,6 +266,8 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     LANDING_TIMELINE_SCENES.includes(scene) ||
     scene === "landing-session" ||
     scene === "session-detail-stress" ||
+    scene === "session-input-outbox" ||
+    scene === "session-remote-image-outbox" ||
     scene === "session-question" ||
     scene === "session-attention" ||
     scene === "session-resume" ||
@@ -419,6 +427,14 @@ async function installSceneMocks(
         return;
       }
 
+      if (pathname === `${sessionBasePath}/subagents`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ subagents: [] }),
+        });
+        return;
+      }
       if (pathname === `${sessionBasePath}/workspace`) {
         await route.fulfill({
           status: 200,
@@ -488,6 +504,57 @@ async function installSceneMocks(
         return;
       }
 
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && scene === "session-input-outbox") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+        return;
+      }
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && scene === "session-remote-image-outbox") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 9002,
+              live_input_id: "remote-image-input",
+              client_request_id: "remote-image-input",
+              text: "",
+              intent: "auto",
+              status: "delivered",
+              delivery_status: "delivered",
+              attachments: [
+                { filename: "reference.png", mime_type: "image/png", byte_size: 123 },
+              ],
+              turn: {
+                turn_id: "remote-image-turn",
+                receipt_id: "remote-image-input",
+                run_id: "remote-image-run",
+                state: "active",
+                is_fresh: true,
+              },
+              created_at: "2026-04-15T16:10:45Z",
+            },
+            {
+              id: 9003,
+              live_input_id: "stale-console-input",
+              client_request_id: "stale-console-input",
+              text: "An older Console turn",
+              intent: "auto",
+              status: "delivered",
+              delivery_status: "delivered",
+              attachments: [],
+              turn: {
+                turn_id: "stale-console-turn",
+                receipt_id: "stale-console-input",
+                run_id: "stale-console-run",
+                state: "active",
+                is_fresh: false,
+              },
+              created_at: "2026-04-15T14:00:00Z",
+            },
+          ]),
+        });
+        return;
+      }
       if (pathname === `/api/sessions/${fixture.session.id}/inputs`) {
         await route.fulfill({
           status: 200,
@@ -862,6 +929,40 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     const fixtureNow = Date.parse(nowIso);
     Date.now = () => fixtureNow;
   }, fixtureNowIso);
+
+  if (scene === "session-input-outbox") {
+    await page.addInitScript((sessionId) => {
+      const clientRequestId = "web-ui-retry-proof";
+      window.localStorage.setItem(
+        `longhouse:session-input:${sessionId}:${clientRequestId}`,
+        JSON.stringify({
+          sessionId,
+          text: "Retry this image input",
+          intent: "auto",
+          clientRequestId,
+          model: "gpt-5.6-luna",
+          attachments: [],
+          createdAt: Date.now(),
+        }),
+      );
+      const sentRequestId = "web-ui-sent-summary-proof";
+      window.localStorage.setItem(
+        `longhouse:session-input:${sessionId}:${sentRequestId}`,
+        JSON.stringify({
+          sessionId,
+          text: "Image delivered; waiting for its transcript echo.",
+          intent: "auto",
+          clientRequestId: sentRequestId,
+          model: "gpt-5.6-luna",
+          attachments: [
+            { filename: "reference.png", type: "image/png", size: 123 },
+          ],
+          createdAt: Date.now(),
+          deliveryConfirmed: true,
+        }),
+      );
+    }, SESSION_DETAIL_STRESS_SESSION_ID);
+  }
 
   if (
     scene === "timeline-card-stress" ||

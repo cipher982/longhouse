@@ -4,7 +4,8 @@
 # look at the rendered frame instead of trusting an assertion.
 #
 # Usage: scripts/ci/ios_ui_shot.sh SessionChatUITests/testTurnFooterRendersUnderTheProviderReply
-# HTTP outbox proof: make ios-ui-shot TEST=HTTPOutboxUITests/testRealHTTPOutboxPhotosPickerSurvivesTerminateAndReopen
+# HTTP outbox proof: make ios-ui-shot TEST=HTTPOutboxUITests/testRealHTTPOutboxRetriesSamePhotoOperationAndSurvivesRelaunch
+# Its simulator defaults to the latest runtime; set IOS_SIMULATOR_RUNTIME_VERSION to override it.
 # Live-session proof: export LONGHOUSE_FIDELITY_{SERVER_URL,AUTH_TOKEN,SESSION_ID,MARKERS_JSON}
 # first, then select LiveSessionFidelityUITests/testRealSessionColdOpenAndReopen.
 # Credentials travel only through process environment, never xctestrun/plist files.

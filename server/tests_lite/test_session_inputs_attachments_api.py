@@ -293,6 +293,79 @@ async def test_catalog_multipart_keeps_group_when_dispatch_outcome_is_unknown(mo
 
 
 @pytest.mark.asyncio
+async def test_catalog_multipart_replays_delivery_unknown_without_redispatch(monkeypatch):
+    import zerg.routers.session_inputs_attachments as route
+
+    session_id = uuid4()
+    receipt_id = str(uuid4())
+    client_request_id = "multipart-unknown-replay"
+    payload_hasher = hashlib.sha256()
+    payload_hasher.update(b"longhouse-input-payload-v1\0")
+    payload_hasher.update(b"look")
+    payload_hasher.update(b"\0")
+    payload_hasher.update(b"auto")
+    for component in ("a.png", "image/png", str(len(_PNG_BYTES))):
+        payload_hasher.update(component.encode("utf-8"))
+        payload_hasher.update(b"\0")
+    payload_hasher.update(_PNG_BYTES)
+    receipt = SimpleNamespace(
+        id=receipt_id,
+        payload_digest=payload_hasher.hexdigest(),
+        status=INPUT_STATUS_FAILED,
+        error_json=json.dumps({"code": "delivery_unknown", "message": "provider outcome unknown"}),
+        intent="auto",
+    )
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="codex",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="managed_local",
+        catalog_facts={},
+    )
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+
+    async def load_existing(**kwargs):
+        calls["lookup"] = kwargs
+        return receipt
+
+    async def forbidden(**_kwargs):
+        raise AssertionError("an unknown replay must not create or dispatch another input")
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_existing)
+    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", forbidden)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", forbidden)
+    monkeypatch.setattr(route, "_build_managed_local_chat_response", forbidden)
+    monkeypatch.setattr(route.session_lock_manager, "acquire", forbidden)
+
+    response = await route.create_session_input_with_attachments(
+        session_id=str(session_id),
+        request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+        text="look",
+        intent="auto",
+        client_request_id=client_request_id,
+        attachments=[
+            UploadFile(
+                file=io.BytesIO(_PNG_BYTES),
+                filename="a.png",
+                headers=Headers({"content-type": "image/png"}),
+            )
+        ],
+        user_agent="Longhouse-iOS",
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+
+    assert response.outcome == "unknown"
+    assert response.disposition == "accepted"
+    assert response.live_input_id == receipt_id
+    assert response.client_request_id == client_request_id
+    assert calls["lookup"]["client_request_id"] == client_request_id
+
+
+@pytest.mark.asyncio
 async def test_catalog_multipart_cleans_group_after_partial_store_failure(monkeypatch, tmp_path):
     import zerg.routers.session_inputs_attachments as route
 
@@ -380,8 +453,7 @@ async def test_catalog_multipart_cleans_group_after_partial_store_failure(monkey
 
 @pytest.mark.asyncio
 async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monkeypatch, tmp_path):
-    """A Console session takes the Console enqueue path: blobs first, then
-    the turn carries their refs and a digest; no Helm lock, no live receipt."""
+    """Console attachments use the Console receipt/turn path without a Helm lock."""
     import zerg.routers.session_inputs_attachments as route
     import zerg.services.console_turns as console_turns
 
@@ -392,7 +464,7 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
     run_id = uuid4()
     source_session = SimpleNamespace(
         id=session_id,
-        provider="claude",
+        provider="codex",
         device_id="cinder",
         primary_thread_id=uuid4(),
         command_family="console_turn",
@@ -421,7 +493,15 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
 
     async def enqueue(**kwargs):
         calls["enqueue"] = kwargs
-        return SimpleNamespace(turn_id=turn_id, run_id=run_id, state="active", created=True, error=None, error_code=None)
+        return SimpleNamespace(
+            turn_id=turn_id,
+            run_id=run_id,
+            state="active",
+            receipt_id=kwargs["receipt_id"],
+            created=True,
+            error=None,
+            error_code=None,
+        )
 
     async def never_lock(**kwargs):
         raise AssertionError("Console attachments must not take the Helm dispatch lock")
@@ -437,6 +517,7 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
         request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
         text="what color",
         intent="auto",
+        model="gpt-5.6-luna",
         client_request_id="console-attach-1",
         attachments=[upload],
         user_agent="Longhouse-iOS",
@@ -446,11 +527,12 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
 
     assert response.outcome == "sent"
     assert response.turn is not None and response.turn.turn_id == str(turn_id)
-    assert response.live_input_id == str(turn_id)
     group_id = calls["store"]["input_receipt_id"]
     UUID(group_id)
+    assert response.turn.receipt_id == group_id
     enqueue_call = calls["enqueue"]
     assert enqueue_call["message"] == "what color"
+    assert enqueue_call["model"] == "gpt-5.6-luna"
     assert enqueue_call["client_request_id"] == "console-attach-1"
     assert enqueue_call["attachments"][0]["blob_url"] == (
         f"/api/agents/sessions/{session_id}/inputs/{group_id}/attachments/{attachment_id}/blob"
@@ -471,6 +553,7 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
     replay = await route.create_session_input_with_attachments(
         session_id=str(session_id),
         request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+        model="gpt-5.6-luna",
         text="what color",
         intent="auto",
         client_request_id="console-attach-1",
@@ -480,6 +563,7 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
         current_user=SimpleNamespace(id=7),
     )
     assert replay.turn is not None and replay.turn.turn_id == str(turn_id)
+    assert calls["enqueue"]["model"] == "gpt-5.6-luna"
     assert calls["enqueue"]["attachments"] == []
     assert calls["enqueue"]["attachments_digest"] == enqueue_call["attachments_digest"]
 
@@ -715,7 +799,77 @@ async def test_console_multipart_rejects_unsupported_provider(monkeypatch, tmp_p
             db=None,
             current_user=SimpleNamespace(id=7),
         )
-    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail == {
+        "error_code": "attachments_unsupported",
+        "message": "This session's provider does not accept image attachments",
+        "disposition": "rejected",
+        "client_request_id": "console-attach-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_console_multipart_catalog_unavailable_keeps_unbound_group(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+    import zerg.services.console_turns as console_turns
+    from zerg.services.console_turns import ConsoleTurnUnavailable
+
+    session_id = uuid4()
+    source_session = SimpleNamespace(id=session_id, provider="codex")
+    stored = StoredAttachment(
+        id=uuid4(),
+        session_input_id=str(uuid4()),
+        session_id=session_id,
+        mime_type="image/png",
+        byte_size=len(_PNG_BYTES),
+        sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+        blob_path=tmp_path / "unbound.png",
+        original_filename="a.png",
+        original_byte_size=len(_PNG_BYTES),
+    )
+    calls: dict[str, object] = {}
+
+    async def no_receipt(**_kwargs):
+        return None
+
+    async def store_blob(**kwargs):
+        calls["group_id"] = kwargs["input_receipt_id"]
+        return stored
+
+    async def delete_forbidden(**_kwargs):
+        raise AssertionError("catalog unavailability must retain unbound attachment blobs")
+
+    async def unavailable(**_kwargs):
+        raise ConsoleTurnUnavailable("catalog_unavailable", "catalogd is unavailable")
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", no_receipt)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_forbidden)
+    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", unavailable)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await route._enqueue_console_input_with_attachments(
+            source_session=source_session,
+            owner_id=7,
+            text="retain this",
+            client_request_id="console-catalog-unavailable",
+            model=None,
+            upload_payloads=[
+                (
+                    UploadFile(
+                        file=io.BytesIO(_PNG_BYTES),
+                        filename="a.png",
+                        headers=Headers({"content-type": "image/png"}),
+                    ),
+                    _PNG_BYTES,
+                )
+            ],
+            record_outcome=lambda _outcome: None,
+        )
+
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail["disposition"] == "unknown"
+    assert excinfo.value.detail["client_request_id"] == "console-catalog-unavailable"
+    assert calls["group_id"]
 
 
 @pytest.mark.asyncio
@@ -1433,7 +1587,10 @@ def test_multipart_rejects_unsupported_helm_provider(live_catalog, live_catalog_
             cookies=cookies,
         )
         assert resp.status_code == 409, resp.text
-        assert "attachments" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "attachments_unsupported"
+        assert detail["disposition"] == "rejected"
+        assert "attachments" in detail["message"].lower()
         assert websocket.sent == []
         # The gate runs before anything is persisted: no receipt, no blob.
         assert (
@@ -1466,7 +1623,10 @@ def test_multipart_rejects_queue_intent(monkeypatch, tmp_path):
             files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
         )
         assert resp.status_code == 400, resp.text
-        assert "intent" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "invalid_intent"
+        assert detail["disposition"] == "rejected"
+        assert "intent" in detail["message"].lower()
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -1487,7 +1647,10 @@ def test_multipart_rejects_unsupported_mime(monkeypatch, tmp_path):
             files=[("attachments", ("a.txt", io.BytesIO(b"hi"), "text/plain"))],
         )
         assert resp.status_code == 400, resp.text
-        assert "unsupported" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "unsupported_attachment_type"
+        assert detail["disposition"] == "rejected"
+        assert "unsupported" in detail["message"].lower()
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -1510,7 +1673,10 @@ def test_multipart_rejects_oversize(monkeypatch, tmp_path):
             files=[("attachments", ("big.png", io.BytesIO(big), "image/png"))],
         )
         assert resp.status_code == 400, resp.text
-        assert "MB" in resp.json()["detail"] or "exceed" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "attachment_oversize"
+        assert detail["disposition"] == "rejected"
+        assert "MB" in detail["message"] or "exceed" in detail["message"].lower()
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}

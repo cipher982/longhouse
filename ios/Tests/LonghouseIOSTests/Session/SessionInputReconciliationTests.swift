@@ -5,7 +5,12 @@ import Testing
 
 @MainActor
 struct SessionInputReconciliationTests {
-    private func input(_ requestId: String, phase: SubmittedInputPhase = .sent, serverInputId: Int? = nil) -> SubmittedInput {
+    private func input(
+        _ requestId: String,
+        phase: SubmittedInputPhase = .sent,
+        serverInputId: Int? = nil,
+        turnId: String? = nil
+    ) -> SubmittedInput {
         SubmittedInput(
             id: requestId,
             clientRequestId: requestId,
@@ -13,6 +18,7 @@ struct SessionInputReconciliationTests {
             intent: "auto",
             phase: phase,
             serverInputId: serverInputId,
+            turnId: turnId,
             lastError: nil,
             createdAt: Date(timeIntervalSince1970: 1_000)
         )
@@ -51,6 +57,16 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
+    func activeConsoleReceiptDoesNotResolveBeforeCompletion() {
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("req-1", phase: .working, turnId: "turn-1")],
+            events: [],
+            receipts: [receipt("req-1", eventId: "echo-1")]
+        )
+        #expect(resolved.isEmpty)
+    }
+
+    @Test
     func stampedEventResolvesSendWithoutReceipt() {
         let origin = SessionInputOrigin(authoredVia: .longhouse, sessionInputId: nil, clientRequestId: "req-1")
         let resolved = SessionViewModel.resolvedSubmittedInputIds(
@@ -82,7 +98,7 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
-    func pendingIntentRoundTripsAttachmentBytesAndIsAccountScoped() {
+    func pendingIntentRoundTripsModelAndAttachmentBytesAndIsAccountScoped() {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("lh-pending-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -94,6 +110,7 @@ struct SessionInputReconciliationTests {
             sessionId: "session-1",
             text: "keep this",
             intent: "auto",
+            model: "model-at-send",
             attachments: [
                 PendingInputIntent.Attachment(
                     id: UUID(),
@@ -106,11 +123,13 @@ struct SessionInputReconciliationTests {
         )
 
         #expect(store.save(intent))
-        #expect(store.load(
+        let loaded = store.load(
             serverURL: "https://tenant.example/",
             sessionId: "session-1",
             authGeneration: "login-1"
-        ) == [intent])
+        )
+        #expect(loaded == [intent])
+        #expect(loaded.first?.model == "model-at-send")
         #expect(store.load(
             serverURL: "https://tenant.example",
             sessionId: "session-1",
@@ -164,42 +183,20 @@ struct SessionInputReconciliationTests {
             authGeneration: "login-1"
         ) == [second])
     }
+
     @Test
-    func deliveringReceiptRemainsUnconfirmed() {
-        #expect(SessionInputReceiptDisposition.from(status: "delivering") == .couldNotConfirm)
-        #expect(
-            SessionInputReceiptDisposition.from(
-                status: "delivering",
-                error: "runtime_draining: runtime is restarting"
-            ) == .couldNotConfirm
-        )
-        #expect(
-            SessionInputReceiptDisposition.from(status: "failed", error: "delivery_unknown")
-                == .couldNotConfirm
-        )
-        #expect(SessionInputReceiptDisposition.from(status: "queued") == .accepted)
-        #expect(SessionInputOutcome(rawValue: "unknown") == .unknown)
-    }
-    @Test
-    func refusalAndAmbiguityStayNonTerminalButDeliveredWins() {
-        #expect(
-            SessionInputReceiptDisposition.from(
-                status: "failed",
-                error: "runtime_draining: runtime is restarting"
-            ) == .couldNotConfirm
-        )
-        #expect(
-            SessionInputReceiptDisposition.from(
-                status: "failed",
-                error: "input_receipt_unknown: provider status unavailable"
-            ) == .couldNotConfirm
-        )
-        #expect(
-            SessionInputReceiptDisposition.from(
-                status: "delivered",
-                error: "runtime_draining"
-            ) == .accepted
-        )
+    func legacyReceiptRowDefaultsToAcceptedAndPreservesDeliveryStatus() throws {
+        let data = try #require("""
+        {
+          "client_request_id": "req-legacy",
+          "intent": "auto",
+          "status": "cancelled",
+          "event_id": null
+        }
+        """.data(using: .utf8))
+        let receipt = try JSONDecoder.snakeCase.decode(SessionInputReceiptState.self, from: data)
+        #expect(receipt.disposition == .accepted)
+        #expect(receipt.deliveryStatus == "cancelled")
     }
     @Test
     func runtimeDrainingAPIErrorIsKnownPreDispatchRefusal() {
