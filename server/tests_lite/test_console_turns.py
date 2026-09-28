@@ -82,6 +82,45 @@ async def test_create_empty_console_session_has_target_but_no_run(live_catalog):
 
 
 @pytest.mark.asyncio
+async def test_console_session_refuses_steer_before_enqueueing_a_turn(live_catalog):
+    """A Console session starts a turn; it has no running turn to steer.
+
+    Enqueuing here would create a new turn while answering a request to change
+    the current one, so the intent is refused before any turn row exists.
+    """
+    from fastapi import HTTPException
+
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _create_session_input_response
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    owner_id = live_catalog.create_user("console-steer@test.local")
+    created = await create_empty_console_session(
+        None,
+        owner_id=owner_id,
+        provider="claude",
+        device_id="cinder",
+        cwd="/tmp/longhouse",
+    )
+    session = load_live_control_session_snapshot(created.session_id, owner_id=owner_id)
+    assert session is not None
+
+    with pytest.raises(HTTPException) as refused:
+        await _create_session_input_response(
+            source_session=session,
+            owner_id=owner_id,
+            body=SessionInputRequest(text="redirect hot", intent="steer", client_request_id="console-steer-1"),
+            db=None,
+        )
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail["error_code"] == "steer_unsupported"
+    assert refused.value.detail["retry_with_intent"] == "queue"
+    facts = live_catalog.rpc("session.read.v2", {"session_id": str(created.session_id)})["facts"]
+    assert not facts.get("latest_console_turn")
+
+
+@pytest.mark.asyncio
 async def test_test_surface_console_session_is_automation_hidden(live_catalog):
     owner_id = live_catalog.create_user("console-automation@test.local")
 

@@ -420,6 +420,8 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
                 return catalog_store.list_recent_input_receipts(**params)
             if method == "session.input.activity.read.v2":
                 return catalog_store.read_session_activity(**params)
+            if method == "session.read.v2":
+                return catalog_store.read_session(**params)
             raise AssertionError(method)
 
     import zerg.services.managed_control_dispatcher as dispatcher
@@ -697,6 +699,8 @@ async def test_pi_auto_and_queue_inputs_use_one_immediate_native_send_path(tmp_p
                 return catalog_store.list_recent_input_receipts(**params)
             if method == "session.input.activity.read.v2":
                 return catalog_store.read_session_activity(**params)
+            if method == "session.read.v2":
+                return catalog_store.read_session(**params)
             raise AssertionError(method)
 
     import zerg.services.managed_control_dispatcher as dispatcher
@@ -732,6 +736,11 @@ async def test_pi_auto_and_queue_inputs_use_one_immediate_native_send_path(tmp_p
             body=SessionInputRequest(text="native idle send", client_request_id="pi-auto"),
             db=db,
         )
+        # The direct send holds the one per-session lock until the turn it
+        # started reaches a terminal phase, so a second SEND is ordered behind
+        # it. Releasing here is what the terminal watcher does after the turn
+        # ends, which is what lets the next one dispatch.
+        await session_lock_manager.release(session_lock_scope_id(session_id))
         queued = await _create_session_input_response(
             source_session=session,
             owner_id=7,

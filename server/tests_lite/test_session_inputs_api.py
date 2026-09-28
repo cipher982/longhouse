@@ -999,7 +999,6 @@ def _assert_provider_auto_input_routes_through_machine_control(
     *,
     provider: str,
     support: str,
-    expect_longhouse_lock: bool = True,
 ) -> None:
     email = f"live-{provider}-send@test.local"
     owner_id = live.create_user(email)
@@ -1029,7 +1028,10 @@ def _assert_provider_auto_input_routes_through_machine_control(
         # Authorization binds the adapter identity the Helm launch seeded, so
         # the engine is handed a control grant rather than a bare session id.
         assert frame["payload"]["longhouse_control_grant"]["run_id"]
-        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is expect_longhouse_lock
+        # Every provider's direct send is serialized with the drain through the
+        # one per-session lock, so a newer SEND cannot overtake a receipt the
+        # drain is already delivering.
+        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is True
 
         receipt = _live_catalog_receipt(
             live,
@@ -1063,13 +1065,12 @@ def test_opencode_auto_input_routes_through_machine_control(live_catalog, live_c
     )
 
 
-def test_omp_auto_input_uses_native_follow_up_path_without_longhouse_lock(live_catalog, live_catalog_client):  # noqa: F811
+def test_omp_auto_input_uses_the_native_send_path_under_the_send_lock(live_catalog, live_catalog_client):  # noqa: F811
     _assert_provider_auto_input_routes_through_machine_control(
         live_catalog,
         live_catalog_client,
         provider="omp",
         support="omp.send",
-        expect_longhouse_lock=False,
     )
 
 

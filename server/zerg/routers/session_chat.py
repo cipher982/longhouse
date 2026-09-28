@@ -2012,12 +2012,148 @@ async def _finish_catalog_input_receipt(
         raise HTTPException(status_code=503, detail="Live input catalog could not finish the receipt") from exc
 
 
+async def _dispatch_provider_native_send(
+    *,
+    db: Session,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    client_request_id: str,
+    delivery_request_id: str,
+    lock_scope_id: str,
+    failure_code: str,
+    requeue_preconditions: frozenset[str],
+) -> SessionInputResponse:
+    """Hand a SEND to a provider that owns the turn it starts.
+
+    Reached only at an observed turn boundary, with the SEND lock held and no
+    older receipt queued. The lock is what makes that true against a racing
+    drain or a second send: the drain holds the same lock from claim through
+    delivery, so a receipt it has already claimed cannot be overtaken here.
+    """
+
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+    from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
+    from zerg.services.session_chat_impl import _schedule_catalog_lock_release
+
+    dispatched_at = datetime.now(timezone.utc)
+    receipt_id = await _record_live_input_receipt_for_body(
+        source_session=source_session,
+        owner_id=owner_id,
+        body=body,
+        client_request_id=client_request_id,
+        intent=body.intent,
+        status_value=INPUT_STATUS_DELIVERING,
+        delivery_request_id=delivery_request_id,
+    )
+    if receipt_id is None:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(
+            status_code=503,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not persist this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        )
+
+    try:
+        result = await dispatch_managed_control_command(
+            db=db,
+            owner_id=owner_id,
+            session=source_session,
+            timeout_secs=15,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": body.text},
+            request_id=delivery_request_id,
+            run_id=None,
+        )
+    except BaseException:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise
+
+    data = dict(result.data or {})
+    if not result.ok or int(data.get("exit_code", 1)) != 0:
+        error = str(result.error or data.get("stderr") or data.get("stdout") or "Provider native send failed")
+        if result.failure_reason == "indeterminate":
+            # Hold the lock: the drain must not replay a command that may
+            # already be running.
+            raise HTTPException(
+                status_code=502,
+                detail=_input_error_detail(
+                    "delivery_unknown",
+                    error,
+                    disposition="accepted",
+                    delivery_status="unknown",
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                ),
+            )
+        if result.failure_reason in requeue_preconditions:
+            # A precondition refusal means the provider channel was not reached;
+            # the durable receipt stays owned by the recovery loop. Do not turn
+            # a disconnected provider into a terminal failed receipt.
+            await _finish_catalog_input_receipt(
+                receipt_id=receipt_id,
+                delivery_request_id=delivery_request_id,
+                error=error,
+                status_value=INPUT_STATUS_QUEUED,
+            )
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            return SessionInputResponse(
+                outcome="queued",
+                input_id=None,
+                live_input_id=receipt_id,
+                client_request_id=client_request_id,
+                intent=body.intent,
+                queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+            )
+        await _finish_catalog_input_receipt(
+            receipt_id=receipt_id,
+            delivery_request_id=delivery_request_id,
+            error=error,
+        )
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(
+            status_code=502,
+            detail=_input_error_detail(
+                failure_code,
+                error,
+                disposition="accepted",
+                delivery_status="failed",
+                client_request_id=client_request_id,
+                live_input_id=receipt_id,
+            ),
+        )
+
+    await _finish_catalog_input_receipt(
+        receipt_id=receipt_id,
+        delivery_request_id=delivery_request_id,
+    )
+    _schedule_catalog_lock_release(
+        session_id=source_session.id,
+        lock_scope_id=lock_scope_id,
+        request_id=delivery_request_id,
+        dispatched_at=dispatched_at,
+    )
+    return SessionInputResponse(
+        outcome="sent",
+        input_id=None,
+        live_input_id=receipt_id,
+        client_request_id=client_request_id,
+        intent=body.intent,
+        queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+    )
+
+
 async def _park_catalog_session_input(
     *,
     source_session,
     owner_id: int,
     body: SessionInputRequest,
     client_request_id: str,
+    send_lock: tuple[str, str] | None = None,
 ) -> SessionInputResponse:
     """Record a durable `queued` receipt and let delivery happen at the boundary.
 
@@ -2029,8 +2165,12 @@ async def _park_catalog_session_input(
 
     The recovery loop owns delivery from here (it polls queued receipts every
     few seconds and wakes on the turn-terminal observation), so parking does
-    not depend on this request staying alive.
+    not depend on this request staying alive. The SEND lock is released first,
+    because the drain needs it to deliver anything at all.
     """
+
+    if send_lock is not None:
+        await session_lock_manager.release(send_lock[0], send_lock[1])
 
     receipt_id = await _record_live_input_receipt_for_body(
         source_session=source_session,
@@ -2087,6 +2227,20 @@ async def _create_catalog_session_input_response(
         )
 
     if getattr(source_session, "command_family", None) == "console_turn":
+        if body.intent == INPUT_INTENT_STEER:
+            # A Console session runs one headless turn at a time and has no
+            # adapter to enter a running one, so enqueuing here would create a
+            # turn while reporting a steer.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_input_error_detail(
+                    "steer_unsupported",
+                    "A Console session starts a turn rather than steering one; nothing was sent.",
+                    disposition="rejected",
+                    client_request_id=body.client_request_id,
+                )
+                | {"retry_with_intent": INPUT_INTENT_QUEUE},
+            )
         client_request_id = body.client_request_id
         try:
             enqueue_kwargs = {
@@ -2277,9 +2431,21 @@ async def _create_catalog_session_input_response(
     # provider answers a mid-turn send from a queue it holds in memory. `auto`
     # and `queue` differ only in whether that boundary is used straight away.
     #
-    # SEND is also ordered: a direct dispatch is only allowed when nothing
-    # older is still waiting, or the newer message would overtake a receipt the
-    # drain has not delivered yet.
+    # SEND is also ordered, and the ordering decision is made under the same
+    # per-session lock the drain takes: a receipt the drain has already claimed
+    # is no longer "queued", so counting outside that lock would let a newer
+    # message overtake the one being delivered, and two direct sends could both
+    # see an empty queue.
+    delivery_request_id = uuid.uuid4().hex
+    lock_scope_id = session_lock_scope_id(source_session.id)
+    send_lock_held = False
+    if body.intent in {INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE}:
+        send_lock_held = await session_lock_manager.acquire(
+            session_id=lock_scope_id,
+            holder=delivery_request_id,
+            ttl_seconds=300,
+        )
+
     queued_state = await _catalog_recent_input_summaries(source_session.id)
     if queued_state is None:
         raise HTTPException(
@@ -2292,7 +2458,7 @@ async def _create_catalog_session_input_response(
             ),
         )
     older_queued = queued_state[1] > 0
-    send_can_dispatch = at_turn_boundary and not older_queued
+    send_can_dispatch = at_turn_boundary and not older_queued and send_lock_held
     park_for_turn_boundary = body.intent == INPUT_INTENT_AUTO and not send_can_dispatch
 
     if (
@@ -2301,84 +2467,20 @@ async def _create_catalog_session_input_response(
         and send_can_dispatch
     ):
         # Pi's native send owns the turn it starts, so it is reached only at an
-        # observed turn boundary with nothing older waiting. A mid-turn send
-        # would come back from Pi's volatile busy-turn queue, and a direct send
-        # ahead of a parked receipt would deliver this message out of order.
-        from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
-        from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
-
-        delivery_request_id = uuid.uuid4().hex
-        receipt_id = await _record_live_input_receipt_for_body(
+        # observed turn boundary, with the SEND lock held and nothing older
+        # waiting. A mid-turn send would come back from Pi's volatile busy-turn
+        # queue, and a direct send ahead of a parked receipt would deliver this
+        # message out of order.
+        return await _dispatch_provider_native_send(
+            db=db,
             source_session=source_session,
             owner_id=owner_id,
             body=body,
             client_request_id=client_request_id,
-            intent=body.intent,
-            status_value=INPUT_STATUS_DELIVERING,
             delivery_request_id=delivery_request_id,
-        )
-        if receipt_id is None:
-            raise HTTPException(
-                status_code=503,
-                detail=_input_error_detail(
-                    "input_receipt_unknown",
-                    "The server could not persist this operation; retry with the same client_request_id.",
-                    disposition="unknown",
-                    client_request_id=client_request_id,
-                ),
-            )
-        result = await dispatch_managed_control_command(
-            db=db,
-            owner_id=owner_id,
-            session=source_session,
-            timeout_secs=15,
-            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
-            payload={"text": body.text},
-            request_id=delivery_request_id,
-            run_id=None,
-        )
-        data = dict(result.data or {})
-        if not result.ok or int(data.get("exit_code", 1)) != 0:
-            error = str(result.error or data.get("stderr") or data.get("stdout") or "Pi native send failed")
-            if result.failure_reason == "indeterminate":
-                raise HTTPException(
-                    status_code=502,
-                    detail=_input_error_detail(
-                        "delivery_unknown",
-                        error,
-                        disposition="accepted",
-                        delivery_status="unknown",
-                        client_request_id=client_request_id,
-                        live_input_id=receipt_id,
-                    ),
-                )
-            await _finish_catalog_input_receipt(
-                receipt_id=receipt_id,
-                delivery_request_id=delivery_request_id,
-                error=error,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=_input_error_detail(
-                    "pi_native_send_failed",
-                    error,
-                    disposition="accepted",
-                    delivery_status="failed",
-                    client_request_id=client_request_id,
-                    live_input_id=receipt_id,
-                ),
-            )
-        await _finish_catalog_input_receipt(
-            receipt_id=receipt_id,
-            delivery_request_id=delivery_request_id,
-        )
-        return SessionInputResponse(
-            outcome="sent",
-            input_id=None,
-            live_input_id=receipt_id,
-            client_request_id=client_request_id,
-            intent=body.intent,
-            queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+            lock_scope_id=lock_scope_id,
+            failure_code="pi_native_send_failed",
+            requeue_preconditions=frozenset(),
         )
 
     if (
@@ -2386,109 +2488,28 @@ async def _create_catalog_session_input_response(
         and body.intent in {INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE}
         and send_can_dispatch
     ):
-        # Reached only at an observed turn boundary with nothing older waiting.
-        # The OMP extension answers a mid-turn send from its volatile follow-up
-        # queue, which is not a delivery, so everything else takes the durable
-        # receipt path below.
-        from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
-        from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
-
-        delivery_request_id = uuid.uuid4().hex
-        receipt_id = await _record_live_input_receipt_for_body(
+        # Reached only at an observed turn boundary, with the SEND lock held and
+        # nothing older waiting. The OMP extension answers a mid-turn send from
+        # its volatile follow-up queue, which is not a delivery, so everything
+        # else takes the durable receipt path below.
+        return await _dispatch_provider_native_send(
+            db=db,
             source_session=source_session,
             owner_id=owner_id,
             body=body,
             client_request_id=client_request_id,
-            intent=body.intent,
-            status_value=INPUT_STATUS_DELIVERING,
             delivery_request_id=delivery_request_id,
-        )
-        if receipt_id is None:
-            raise HTTPException(
-                status_code=503,
-                detail=_input_error_detail(
-                    "input_receipt_unknown",
-                    "The server could not persist this operation; retry with the same client_request_id.",
-                    disposition="unknown",
-                    client_request_id=client_request_id,
-                ),
-            )
-        result = await dispatch_managed_control_command(
-            db=db,
-            owner_id=owner_id,
-            session=source_session,
-            timeout_secs=15,
-            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
-            payload={"text": body.text},
-            request_id=delivery_request_id,
-            run_id=None,
-        )
-        data = dict(result.data or {})
-        if not result.ok or int(data.get("exit_code", 1)) != 0:
-            error = str(result.error or data.get("stderr") or data.get("stdout") or "OMP native send failed")
-            if result.failure_reason == "indeterminate":
-                raise HTTPException(
-                    status_code=502,
-                    detail=_input_error_detail(
-                        "delivery_unknown",
-                        error,
-                        disposition="accepted",
-                        delivery_status="unknown",
-                        client_request_id=client_request_id,
-                        live_input_id=receipt_id,
-                    ),
-                )
-            # A precondition refusal means the provider channel was not reached;
-            # the durable receipt remains owned by the recovery loop. Do not
-            # turn a disconnected OMP into a terminal failed receipt.
-            if result.failure_reason in {
-                "control_unavailable",
-                "connection_unavailable",
-                "control_head_missing",
-                "lease_expired",
-                "identity_unbound",
-            }:
-                await _finish_catalog_input_receipt(
-                    receipt_id=receipt_id,
-                    delivery_request_id=delivery_request_id,
-                    error=error,
-                    status_value="queued",
-                )
-                return SessionInputResponse(
-                    outcome="queued",
-                    input_id=None,
-                    live_input_id=receipt_id,
-                    client_request_id=client_request_id,
-                    intent=body.intent,
-                    queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
-                )
-            await _finish_catalog_input_receipt(
-                receipt_id=receipt_id,
-                delivery_request_id=delivery_request_id,
-                error=error,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=_input_error_detail(
-                    "omp_native_send_failed",
-                    error,
-                    disposition="accepted",
-                    delivery_status="failed",
-                    client_request_id=client_request_id,
-                    live_input_id=receipt_id,
-                ),
-            )
-        await _finish_catalog_input_receipt(
-            receipt_id=receipt_id,
-            delivery_request_id=delivery_request_id,
-        )
-        return SessionInputResponse(
-            outcome="sent",
-            input_id=None,
-            live_input_id=receipt_id,
-            client_request_id=client_request_id,
-            intent=body.intent,
-            queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+            lock_scope_id=lock_scope_id,
+            failure_code="omp_native_send_failed",
+            requeue_preconditions=frozenset(
+                {
+                    "control_unavailable",
+                    "connection_unavailable",
+                    "control_head_missing",
+                    "lease_expired",
+                    "identity_unbound",
+                }
+            ),
         )
 
     current = queued_state[1]
@@ -2503,31 +2524,14 @@ async def _create_catalog_session_input_response(
             ),
         )
 
-    delivery_request_id = uuid.uuid4().hex
     if body.intent == INPUT_INTENT_QUEUE or park_for_turn_boundary:
         return await _park_catalog_session_input(
             source_session=source_session,
             owner_id=owner_id,
             body=body,
             client_request_id=client_request_id,
+            send_lock=(lock_scope_id, delivery_request_id) if send_lock_held else None,
         )
-
-    if body.intent == INPUT_INTENT_AUTO:
-        lock_scope_id = session_lock_scope_id(source_session.id)
-        lock = await session_lock_manager.acquire(
-            session_id=lock_scope_id,
-            holder=delivery_request_id,
-            ttl_seconds=300,
-        )
-        if not lock:
-            return await _park_catalog_session_input(
-                source_session=source_session,
-                owner_id=owner_id,
-                body=body,
-                client_request_id=client_request_id,
-            )
-    else:
-        lock_scope_id = session_lock_scope_id(source_session.id)
 
     receipt_id = await _record_live_input_receipt_for_body(
         source_session=source_session,
@@ -2539,7 +2543,7 @@ async def _create_catalog_session_input_response(
         delivery_request_id=delivery_request_id,
     )
     if receipt_id is None:
-        if body.intent == INPUT_INTENT_AUTO:
+        if send_lock_held:
             await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=503,
