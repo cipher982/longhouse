@@ -2,7 +2,7 @@
 # Demo development environment (SQLite, seeded demo DB)
 set -e
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 echo "Starting demo development environment..."
 

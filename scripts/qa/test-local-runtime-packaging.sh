@@ -50,7 +50,7 @@ mkdir -p "$ARTIFACT_DIR"
 rm -rf "$STAGE_DIR" "$ARCHIVE_PATH" "$DISK_IMAGE_PATH" "$MANIFEST_PATH"
 
 log "🏗️  Building macOS menu bar binary..."
-MENUBAR_BINARY="$("$ROOT_DIR/scripts/resolve-swift-product-path.sh" \
+MENUBAR_BINARY="$("$ROOT_DIR/scripts/build/resolve-swift-product-path.sh" \
   --package-path "$PACKAGE_PATH" \
   --product LonghouseMenuBarHarnessMenuBar \
   --configuration release)"

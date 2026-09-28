@@ -9,16 +9,16 @@
 # blocked release.
 #
 # Checking is deliberately non-mutating: authors can regenerate explicitly with
-# scripts/generate_managed_provider_contracts.py --write after this hook fails.
+# scripts/generate/generate_managed_provider_contracts.py --write after this hook fails.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-if (cd server && uv run --extra dev python ../scripts/generate_managed_provider_contracts.py --check) >/dev/null; then
+if (cd server && uv run --extra dev python ../scripts/generate/generate_managed_provider_contracts.py --check) >/dev/null; then
   exit 0
 fi
 
 echo "managed_provider_contracts.json is stale and must be regenerated." >&2
 echo "An adapter source changed, which invalidates the contract digest." >&2
-echo "Run scripts/generate_managed_provider_contracts.py --write, then stage server/zerg/config/managed_provider_contracts.json and commit again." >&2
+echo "Run scripts/generate/generate_managed_provider_contracts.py --write, then stage server/zerg/config/managed_provider_contracts.json and commit again." >&2
 exit 1

@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT_PATH = ROOT / "docs" / "generated" / "provider_census.json"
 # *.swift was absent until 2026-07-31, so the two Swift clients -- the iOS app
@@ -118,7 +118,7 @@ def main() -> int:
     if args.check:
         if rendered != current:
             print(
-                f"{OUTPUT_PATH} is out of date; run scripts/generate_provider_census.py --write",
+                f"{OUTPUT_PATH} is out of date; run scripts/generate/generate_provider_census.py --write",
                 file=sys.stderr,
             )
             return 1

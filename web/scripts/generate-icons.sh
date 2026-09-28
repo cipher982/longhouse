@@ -78,7 +78,7 @@ fi
 
 # og-image.png is not generated here: it's a code-derived screenshot (real
 # timeline capture + wedge headline + master logo) built by
-# scripts/generate-og-image.mjs (repo root), not this ImageMagick gradient
+# scripts/generate/generate-og-image.mjs (repo root), not this ImageMagick gradient
 # plate. Run that script directly to regenerate it.
 
 echo "Done. Assets written to ${PUBLIC_DIR}"

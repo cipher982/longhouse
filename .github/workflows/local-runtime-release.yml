@@ -159,7 +159,7 @@ jobs:
 
       - name: Build macOS ambient app payload
         run: |
-          PRODUCT_PATH="$(scripts/resolve-swift-product-path.sh \
+          PRODUCT_PATH="$(scripts/build/resolve-swift-product-path.sh \
             --package-path desktop/LonghouseMenuBarHarness \
             --product LonghouseMenuBarHarnessMenuBar \
             --configuration release)"

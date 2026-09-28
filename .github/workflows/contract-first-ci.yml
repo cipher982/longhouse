@@ -4,12 +4,12 @@ on:
   push:
     paths-ignore:
       - "blog/**"
-      - "tools/check-static-blog.py"
+      - "scripts/ci/check-static-blog.py"
       - ".github/workflows/blog-publish.yml"
   pull_request:
     paths-ignore:
       - "blog/**"
-      - "tools/check-static-blog.py"
+      - "scripts/ci/check-static-blog.py"
       - ".github/workflows/blog-publish.yml"
   workflow_dispatch: {}
 

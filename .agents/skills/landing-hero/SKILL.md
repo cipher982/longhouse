@@ -77,7 +77,7 @@ providers.yml (pinned source + auth mode + sentinels)
   with curated data in `scripts/ui-fixtures/landingShowcase.ts`. Every API
   call is mocked or sealed, so no real account data can reach an image. Re-run
   after timeline/session-detail UI changes, bump the `?v=` stamps in
-  `ProductShowcase.tsx`, and `bun scripts/generate-og-image.mjs` for the
+  `ProductShowcase.tsx`, and `bun scripts/generate/generate-og-image.mjs` for the
   social card.
 - `video/src/compositions/ControlRoom.tsx` — Remotion export composition
 - `Makefile demo-render` — export lane (mp4 has its silent AAC stripped)

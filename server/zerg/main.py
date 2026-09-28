@@ -166,7 +166,7 @@ from zerg.services.public_downloads import download_macos_desktop_app_response
 # public no-auth deployment is supported (LONGHOUSE_ALLOW_PUBLIC_NO_AUTH, see
 # docker/runtime.dockerfile) and DEMO_MODE implies auth_disabled too, so
 # including it published the whole inventory in exactly the configuration that
-# has nothing else in front of it. scripts/dev-demo.sh exports DEV_ADMIN=1, so
+# has nothing else in front of it. scripts/dev/dev-demo.sh exports DEV_ADMIN=1, so
 # local dev keeps /docs; .env.example ships it commented out, because that file
 # gets copied to real deployments.
 _docs_enabled = _settings.testing or _settings.dev_admin

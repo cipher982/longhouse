@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / "schemas" / "session_state_contract.yml"
 PYTHON_PROJECTOR = ROOT / "server" / "zerg" / "services" / "session_state_contract.py"
 OPENAPI = ROOT / "openapi.json"

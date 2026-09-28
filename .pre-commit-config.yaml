@@ -164,7 +164,7 @@ repos:
       # -----------------------------------------------------------------------
       - id: check-db-commits
         name: Check db.commit() in routers
-        entry: scripts/check-db-commits.sh
+        entry: scripts/ci/check-db-commits.sh
         language: system
         files: ^server/zerg/routers/.*\.py$
         pass_filenames: false

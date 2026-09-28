@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT_PATH = ROOT / "server" / "zerg" / "config" / "managed_provider_contracts.json"
 
@@ -63,7 +63,7 @@ def main() -> int:
     if args.check:
         if rendered != current:
             print(
-                f"{OUTPUT_PATH} is out of date; run scripts/generate_managed_provider_contracts.py --write",
+                f"{OUTPUT_PATH} is out of date; run scripts/generate/generate_managed_provider_contracts.py --write",
                 file=sys.stderr,
             )
             return 1

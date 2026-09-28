@@ -9,7 +9,7 @@
 # a published image. Re-run after any timeline or session-detail UI change.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 OUT_DIR="web/public/images/landing"
 SCRATCH="$(mktemp -d)"
@@ -30,7 +30,7 @@ capture() {
     exit 1
   fi
   cp "$shot" "$OUT_DIR/$name.png"
-  # The PNG master feeds README.md and scripts/generate-og-image.mjs; quantized
+  # The PNG master feeds README.md and scripts/generate/generate-og-image.mjs; quantized
   # it is ~1MB instead of ~2.6MB with no visible change to UI text.
   pngquant --quality 80-95 --speed 1 --force --ext .png "$OUT_DIR/$name.png"
   magick "$OUT_DIR/$name.png" -quality 82 "$OUT_DIR/$name.webp"

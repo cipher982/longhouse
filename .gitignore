@@ -165,15 +165,12 @@ e2e/canvas-*.js
 e2e/debug-*.html
 e2e/test-config.js
 e2e/visual-reports/
-e2e/visual-baseline/*.png
 e2e/*-visual-test*.js
 e2e/enhanced-analysis.js
 *.pw_tmp*
 
 # Generated files
 openapi.json
-web/src/styles/generated/
-web/src/styles/tokens/
 
 # Logs (local dev only)
 logs/
@@ -185,6 +182,7 @@ docs-archive/
 
 # UV cache
 .uv_cache/
+.uv-cache/
 .uv_tmp*
 
 # Yarn
@@ -203,6 +201,7 @@ CLAUDE.md
 comet_latest.dmg
 .clinerules/
 .playwright-mcp/
+.gemini-clipboard/
 server/scripts/user_context.local.json
 server/scripts/personal_credentials.local.json
 server/scripts/runners.local.json
@@ -211,13 +210,8 @@ server/scripts/runners.local.json
 .env-backups-*/
 data/llm_requests/
 
-# Eval results
-server/evals/results/*.json
-server/evals/results/.tmp/
+# Local server data
 server/data/
-
-# Work-in-progress docs
-server/docs/work/
 
 # Agent handoff docs (ephemeral, session-specific)
 docs/handoffs/

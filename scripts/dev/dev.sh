@@ -2,7 +2,7 @@
 # Local frontend development against the Runtime Host already linked to this machine.
 set -e
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 TARGET_FILE="$HOME/.longhouse/machine/target-url"
 TOKEN_FILE="$HOME/.longhouse/machine/device-token"

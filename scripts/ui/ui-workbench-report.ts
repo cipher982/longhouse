@@ -3,7 +3,7 @@
  * Build a small local review page for a qa-ui-workbench run.
  *
  * Usage:
- *   bunx tsx scripts/ui-workbench-report.ts artifacts/ui-capture/workbench-...
+ *   bunx tsx scripts/ui/ui-workbench-report.ts artifacts/ui-capture/workbench-...
  */
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
@@ -40,7 +40,7 @@ interface CaptureCard {
 const ISSUE_RE = /\[(ERROR|WARN)\]|TypeError|ReferenceError|Unhandled|failed/i;
 
 function usage(): never {
-  console.error("Usage: bunx tsx scripts/ui-workbench-report.ts <workbench-run-dir>");
+  console.error("Usage: bunx tsx scripts/ui/ui-workbench-report.ts <workbench-run-dir>");
   process.exit(2);
 }
 

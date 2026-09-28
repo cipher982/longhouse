@@ -14,23 +14,23 @@
  * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
  *
  * Usage:
- *   bunx tsx scripts/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2]
+ *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2]
  *
  * --probe writes <page>-probe.json with the bounding box and key computed
  * styles of each selector (first match), so a layout can be measured, not
  * just eyeballed.
  *
  * Examples:
- *   bunx tsx scripts/ui-capture.ts timeline
- *   bunx tsx scripts/ui-capture.ts --scene=empty
- *   bunx tsx scripts/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
- *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-detail-stress
- *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
- *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
- *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-resume
- *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
- *   bunx tsx scripts/ui-capture.ts machines
- *   bunx tsx scripts/ui-capture.ts --all
+ *   bunx tsx scripts/ui/ui-capture.ts timeline
+ *   bunx tsx scripts/ui/ui-capture.ts --scene=empty
+ *   bunx tsx scripts/ui/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-detail-stress
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
+ *   bunx tsx scripts/ui/ui-capture.ts machines
+ *   bunx tsx scripts/ui/ui-capture.ts --all
  */
 
 import { chromium, type BrowserContext, type Page, type Route } from "playwright";
@@ -49,14 +49,14 @@ import {
   SESSION_DETAIL_STRESS_SESSION_ID,
   SESSION_TONES,
   type SessionTone,
-} from "./ui-fixtures/sessionDetailStress";
-import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
-import { buildTimelineHearthFixture, buildTimelineHearthStreamBatch } from "./ui-fixtures/timelineHearth";
+} from "../ui-fixtures/sessionDetailStress";
+import { buildTimelineCardStressFixture } from "../ui-fixtures/timelineCardStress";
+import { buildTimelineHearthFixture, buildTimelineHearthStreamBatch } from "../ui-fixtures/timelineHearth";
 import {
   LANDING_SEARCH_QUERY,
   buildLandingSessionFixture,
   buildLandingTimelineFixture,
-} from "./ui-fixtures/landingShowcase";
+} from "../ui-fixtures/landingShowcase";
 
 const PAGE_DEFINITIONS = {
   timeline: { path: "/timeline" },
@@ -1115,7 +1115,7 @@ async function captureBundle(
   return { screenshotPath, a11yPath, a11yFormat };
 }
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 async function isServing(url: string): Promise<boolean> {
   try {

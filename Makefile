@@ -71,10 +71,10 @@ help: ## Show this help message
 # Development
 # ---------------------------------------------------------------------------
 dev: ## Start local UI against this machine's linked Runtime Host
-	@env -u DATABASE_URL -u VITE_PROXY_TARGET ./scripts/dev.sh
+	@env -u DATABASE_URL -u VITE_PROXY_TARGET ./scripts/dev/dev.sh
 
 dev-demo: ## Start demo environment (seeded SQLite DB)
-	@env -u DATABASE_URL ./scripts/dev-demo.sh
+	@env -u DATABASE_URL ./scripts/dev/dev-demo.sh
 
 # Isolated, local-file-only design surface; never sends to provider sessions.
 LAB_PORT ?= 47213
@@ -807,7 +807,7 @@ validate-managed-session-contract: ## @internal Guard managed provider session c
 	@python3 scripts/tests/managed-session-contract.test.py
 
 validate-session-state-contract: ## @internal Guard canonical session-state vocabulary and generated client DTOs
-	@uv run --no-project --with pyyaml python scripts/generate_session_state_contract.py --check
+	@uv run --no-project --with pyyaml python scripts/generate/generate_session_state_contract.py --check
 
 generate-phase-contract: ## Regenerate the engine wire-phase vocabulary from the phase contract
 	@python3 scripts/generate/managed_phase_contract_rs.py
@@ -833,7 +833,7 @@ validate-managed-provider-contracts: ## @internal Guard the generated managed-pr
 	@# The engine include_str!s server/zerg/config/managed_provider_contracts.json,
 	@# so the entire Rust-side provider authority rests on this generated file.
 	@# The generator had a --check mode and no caller anywhere in the repo.
-	@cd server && uv run python ../scripts/generate_managed_provider_contracts.py --check
+	@cd server && uv run python ../scripts/generate/generate_managed_provider_contracts.py --check
 
 generate-provider-capabilities: ## @internal Regenerate the web provider capability claims from the contract
 	@python3 scripts/generate/provider_capabilities_ts.py
@@ -843,10 +843,10 @@ validate-provider-capabilities: ## @internal Guard the generated web provider ca
 	@python3 scripts/generate/provider_capabilities_ts.py --check
 
 validate-provider-census: ## @internal Guard the provider-name-literal census artifact
-	@uv run --no-project --with pyyaml python scripts/generate_provider_census.py --check
+	@uv run --no-project --with pyyaml python scripts/generate/generate_provider_census.py --check
 
 validate-provider-factory-plan: ## @internal Guard the provider factory plan matrix artifact
-	@cd server && uv run python ../scripts/generate_provider_factory_plan.py --check
+	@cd server && uv run python ../scripts/generate/generate_provider_factory_plan.py --check
 
 validate-session-state-fault-matrix: ## @internal Guard Phase 7 deterministic and live fault inventory
 	@uv run --no-project --with pyyaml python scripts/qa/session-state-fault-matrix.py --check
@@ -1098,10 +1098,10 @@ generate-provider-brands: ## Regenerate provider identity config (Python + TS + 
 	@python3 scripts/generate/provider_brands.py
 
 generate-provider-census: ## Regenerate the provider-name-literal census artifact
-	@uv run --no-project --with pyyaml python scripts/generate_provider_census.py --write
+	@uv run --no-project --with pyyaml python scripts/generate/generate_provider_census.py --write
 
 generate-provider-factory-plan: ## Regenerate the provider factory plan matrix artifact
-	@cd server && uv run python ../scripts/generate_provider_factory_plan.py --write
+	@cd server && uv run python ../scripts/generate/generate_provider_factory_plan.py --write
 
 import-smoke: ## @internal Fast import + CSS reference smoke (<5s)
 	@cd server && uv run python ../scripts/ci/import-smoke.py
@@ -1201,10 +1201,10 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 # Tools
 # ---------------------------------------------------------------------------
 ui-capture: ## Render a web page to PNG (PAGE=, SCENE=); fixture scenes need nothing running, Vite is started and stopped for you
-	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),)
+	@bunx tsx scripts/ui/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),)
 
 landing-screenshots: ## Regenerate the landing showcase images (Timeline/Search/Session Detail) from the current UI with curated fixtures
-	@./scripts/landing-screenshots.sh
+	@./scripts/ui/landing-screenshots.sh
 
 demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed real-PTY grid timelines
 	@# video/ is its own Bun project (Remotion stays out of the root install).
@@ -1212,12 +1212,12 @@ demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed r
 	@# Strip the silent AAC track Remotion muxes in (halves the asset size).
 	@ffmpeg -y -v error -i video/out/control-room.mp4 -c:v copy -an web/public/videos/control-room.mp4
 	@cp video/out/control-poster.png web/public/images/landing/control-poster.png
-	@node scripts/generate-og-image.mjs
+	@node scripts/generate/generate-og-image.mjs
 	@echo "Wedge demo, poster, and social card rendered into web/public"
 
 qa-remote-scene: ## Capture sampled remote-scene frames for independent visual review (FRONTEND_URL=... EVERY=6)
 	@$(MAKE) ensure-playwright-browser
-	@bun scripts/remote-scene-qa.ts $(if $(EVERY),--every=$(EVERY),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(SEED),--seed=$(SEED),)
+	@bun scripts/ui/remote-scene-qa.ts $(if $(EVERY),--every=$(EVERY),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(SEED),--seed=$(SEED),)
 
 qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshots
 	@set -e; \
@@ -1227,7 +1227,7 @@ qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshot
 	$(MAKE) ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile NO_TRACE=1 OUTPUT=$$RUN_DIR/timeline-mobile; \
 	$(MAKE) ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=desktop NO_TRACE=1 OUTPUT=$$RUN_DIR/session-detail-desktop; \
 	$(MAKE) ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=mobile NO_TRACE=1 OUTPUT=$$RUN_DIR/session-detail-mobile; \
-	bunx tsx scripts/ui-workbench-report.ts $$RUN_DIR; \
+	bunx tsx scripts/ui/ui-workbench-report.ts $$RUN_DIR; \
 	echo "Workbench bundle: $$RUN_DIR"
 
 qa-ui-baseline: ## Visual baseline check for current app and public pages

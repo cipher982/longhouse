@@ -799,14 +799,6 @@
       ]
     },
     {
-      "path": "scripts/ui-capture.ts",
-      "providers": [
-        "claude",
-        "codex",
-        "omp"
-      ]
-    },
-    {
       "path": "scripts/ui-fixtures/landingShowcase.ts",
       "providers": [
         "claude",
@@ -829,6 +821,14 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "scripts/ui/ui-capture.ts",
+      "providers": [
+        "claude",
+        "codex",
+        "omp"
       ]
     },
     {

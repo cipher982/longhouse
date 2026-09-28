@@ -231,7 +231,7 @@ build_desktop_app_bundle() {
   bundle_version="$(current_version)"
 
   printf '==> Building Longhouse.app from current source\n' >&2
-  menubar_binary="$("$ROOT_DIR/scripts/resolve-swift-product-path.sh" \
+  menubar_binary="$("$ROOT_DIR/scripts/build/resolve-swift-product-path.sh" \
     --package-path "$DESKTOP_PACKAGE_PATH" \
     --product LonghouseMenuBarHarnessMenuBar \
     --configuration release \
