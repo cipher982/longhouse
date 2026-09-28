@@ -111,7 +111,9 @@ const RECONNECTING_DETAIL = "reconnecting to Longhouse";
 
 function isTransientSendFailure(error: unknown, structured: { error_code?: string } | null): boolean {
   if (structured?.error_code === "runtime_draining") return true;
-  if (error instanceof TypeError) return true; // fetch network failure
+  // fetch rejects with a TypeError only for a network failure; its message
+  // differs by engine. Anything else is a bug and must surface, not retry.
+  if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return true;
   const status = error && typeof error === "object" && "status" in error ? (error as { status: unknown }).status : null;
   return status === 502 || status === 503 || status === 504;
 }

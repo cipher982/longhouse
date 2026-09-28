@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import replace
+import dataclasses
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -1345,6 +1346,21 @@ def test_helm_turn_phase_outlives_its_window_while_the_control_lease_is_live(pha
     assert facts.activity.valid_until == lease_until
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.label == label
+
+
+def test_helm_turn_phase_holds_on_a_degraded_but_unexpired_lease():
+    lease_until = NOW + timedelta(minutes=5)
+    liveness = _liveness(expires_at=lease_until)
+    capabilities = dataclasses.replace(_capabilities(), connection_state="degraded")
+    facts = _facts(
+        runtime=_runtime(phase="running", confidence="stale", tool="Bash"),
+        liveness=liveness,
+        capabilities=capabilities,
+    )
+
+    assert facts.control.connection == "degraded"
+    assert facts.activity.state == "executing"
+    assert facts.activity.valid_until == lease_until
 
 
 def test_helm_turn_phase_decays_once_the_control_lease_is_gone():

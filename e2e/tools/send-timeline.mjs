@@ -194,7 +194,17 @@ for (const [index, click] of clicks.entries()) {
   const stillSending = events.filter(
     (e) => accepted && e.t > accepted.t + 250 && e.t < until && e.what === "outbox" && /sending:/.test(e.value ?? ""),
   );
-  const failed = events.find((e) => e.t >= click.t && e.what === "outbox" && /failed:/.test(e.value ?? ""));
+  const failed = events.find((e) => e.t >= click.t && e.t < until && e.what === "outbox" && /failed:/.test(e.value ?? ""));
+  // The ordering rule: a send that started a turn reads "Sent" (or its echo
+  // already replaced it) no later than the agent first shows activity.
+  let sentBeforeBusy = true;
+  if (accepted?.status === 200 && /"outcome":"sent"/.test(accepted.body ?? "")) {
+    // Anchor on the click: the DOM can flip before Playwright reports the
+    // response, and "Sending…" can be shorter than one sample.
+    const settled = firstAfter(click.t, (e) => e.what === "outbox" && /(^|; )(sent|queued):/.test(e.value ?? ""));
+    const busy = firstAfter(click.t, (e) => e.what === "head" && e.value && !/^idle$/i.test(e.value));
+    sentBeforeBusy = Boolean(settled) && (!busy || settled.t <= busy.t);
+  }
   verdicts.push({
     text: click.text,
     post_ms: accepted ? accepted.t - click.t : null,
@@ -203,9 +213,10 @@ for (const [index, click] of clicks.entries()) {
     agent_busy_ms: busy ? busy.t - click.t : null,
     sending_after_accept: stillSending.length,
     failed: Boolean(failed),
+    sent_before_busy: sentBeforeBusy,
   });
 }
-const ok = verdicts.every((v) => v.status === 200 && v.sending_after_accept === 0 && !v.failed);
+const ok = verdicts.every((v) => v.status === 200 && v.sending_after_accept === 0 && !v.failed && v.sent_before_busy);
 record("driver", ok ? "PASS" : "FAIL", { verdicts });
 record("driver", "done", { out: OUT });
 process.exitCode = ok ? 0 : 1;

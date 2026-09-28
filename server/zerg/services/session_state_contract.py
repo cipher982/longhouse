@@ -404,7 +404,7 @@ def helm_activity_held_by_lease(
         or activity.state != "unknown"
         or activity.raw_kind not in _HELM_LEASE_HELD_KINDS
         or activity.source in {"fallback", "progress"}
-        or control.connection != "connected"
+        or control.connection not in {"connected", "degraded"}
         or control.valid_until is None
         or control.valid_until <= now
     ):

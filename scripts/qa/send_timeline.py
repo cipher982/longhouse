@@ -28,6 +28,7 @@ import os
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -37,9 +38,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRATCH = Path("/tmp/agents/send-timeline")
 STATE = SCRATCH / "state.json"
-SERVER_PORT, RELAY_PORT, WEB_PORT = 47311, 47312, 47201
 DEVICE = "send-timeline-mac"
 SCENARIOS = {"single", "midturn", "midtool", "restart"}
+
+
+def free_port() -> int:
+    # Fresh ports per `up`: a just-stopped stack leaves its ports in TIME_WAIT,
+    # which the server's own preflight reads as "already in use".
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 def http(method: str, url: str, body: dict | None = None, timeout: float = 5) -> dict:
@@ -71,7 +79,15 @@ def start(key: str, command: list[str], env: dict, log: str, cwd: Path, state: d
 def up() -> dict:
     if STATE.exists():
         down()
-    for tool in ("longhouse", "longhouse-engine", "codex", "bun"):
+    try:
+        return _up()
+    except BaseException:
+        down()
+        raise
+
+
+def _up() -> dict:
+    for tool in ("longhouse", "longhouse-engine", "codex", "bun", "node"):
         if shutil.which(tool) is None:
             sys.exit(f"{tool} is not on PATH")
     codex_auth = Path.home() / ".codex" / "auth.json"
@@ -86,7 +102,8 @@ def up() -> dict:
     (home / ".codex" / "config.toml").write_text('model = "gpt-5.6-luna"\nmodel_reasoning_effort = "low"\n')
     (project / "README.md").write_text("# scratch project for send-timeline\n")
     started = time.monotonic()
-    state: dict = {"scratch": str(SCRATCH)}
+    server_port, relay_port, web_port = free_port(), free_port(), free_port()
+    state: dict = {"scratch": str(SCRATCH), "ports": [server_port, relay_port, web_port]}
 
     server_env = {
         **os.environ,
@@ -100,11 +117,11 @@ def up() -> dict:
     }
     start(
         "server_pid",
-        ["uv", "run", "python", "-m", "zerg.cli.main", "serve", "--host", "127.0.0.1", "--port", str(SERVER_PORT)],
+        ["uv", "run", "python", "-m", "zerg.cli.main", "serve", "--host", "127.0.0.1", "--port", str(server_port)],
         server_env, "server.log", ROOT / "server", state,
     )
-    api = f"http://127.0.0.1:{SERVER_PORT}"
-    wait_for("runtime host", lambda: http("GET", f"{api}/api/health", timeout=2), 120)
+    api = f"http://127.0.0.1:{server_port}"
+    wait_for("runtime host (see server.log)", lambda: http("GET", f"{api}/api/health", timeout=2), 120)
     token = wait_for(
         "device token",
         lambda: http("POST", f"{api}/api/devices/tokens", {"name": "send-timeline", "device_id": DEVICE}).get("token"),
@@ -137,18 +154,18 @@ def up() -> dict:
     offline.unlink(missing_ok=True)
     start(
         "relay_pid",
-        [sys.executable, str(ROOT / "scripts/qa/simlab_proxy.py"), "--listen-port", str(RELAY_PORT),
-         "--upstream-port", str(SERVER_PORT), "--offline-file", str(offline)],
+        [sys.executable, str(ROOT / "scripts/qa/simlab_proxy.py"), "--listen-port", str(relay_port),
+         "--upstream-port", str(server_port), "--offline-file", str(offline)],
         dict(os.environ), "relay.log", ROOT, state,
     )
-    relay = f"127.0.0.1:{RELAY_PORT}"
+    relay = f"127.0.0.1:{relay_port}"
     start(
         "web_pid",
-        ["bunx", "vite", "--host", "127.0.0.1", "--port", str(WEB_PORT), "--strictPort"],
+        ["bunx", "vite", "--host", "127.0.0.1", "--port", str(web_port), "--strictPort"],
         {**os.environ, "VITE_PROXY_TARGET": f"http://{relay}", "VITE_WS_BASE_URL": f"ws://{relay}", "VITE_AUTH_ENABLED": "false"},
         "web.log", ROOT / "web", state,
     )
-    web = f"http://127.0.0.1:{WEB_PORT}"
+    web = f"http://127.0.0.1:{web_port}"
     wait_for("web ui", lambda: http("GET", f"{web}/api/health", timeout=2), 60)
 
     session = wait_for(
@@ -165,6 +182,7 @@ def up() -> dict:
 
 
 def down() -> None:
+    state: dict = {}
     if STATE.exists():
         state = json.loads(STATE.read_text())
         for key in ("web_pid", "relay_pid", "engine_pid", "server_pid"):
@@ -173,7 +191,7 @@ def down() -> None:
                 continue
             try:
                 os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError:
+            except OSError:  # gone, or a reaped group macOS reports as EPERM
                 continue
         time.sleep(2)
         for key in ("web_pid", "relay_pid", "engine_pid", "server_pid"):
@@ -181,8 +199,15 @@ def down() -> None:
             try:
                 if pid:
                     os.killpg(pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except OSError:
                 pass
+    # Children the process groups did not cover (catalogd/searchd reparent).
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and any(
+        subprocess.run(["lsof", "-t", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"], capture_output=True).stdout
+        for port in state.get("ports", [])
+    ):
+        time.sleep(0.3)
     shutil.rmtree(SCRATCH, ignore_errors=True)
     print("send-timeline stack down; scratch removed")
 
@@ -190,7 +215,9 @@ def down() -> None:
 def run(scenario: str, keep: bool) -> int:
     if scenario not in SCENARIOS:
         sys.exit(f"scenario must be one of {sorted(SCENARIOS)}")
-    state = json.loads(STATE.read_text()) if STATE.exists() else up()
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    if "session_id" not in state:  # absent, or a partial `up` that failed
+        state = up()
     offline = state["offline_file"]
     command = [
         "node", str(ROOT / "e2e/tools/send-timeline.mjs"),
