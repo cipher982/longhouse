@@ -227,7 +227,7 @@ const crypto = require("crypto");
 const [home, healthPath, port] = process.argv.slice(2);
 const machine = JSON.parse(fs.readFileSync(path.join(home, ".longhouse/machine/state.json"), "utf8"));
 const health = JSON.parse(fs.readFileSync(healthPath, "utf8"));
-if (machine.runtime_url !== `http://127.0.0.1:${port}` || machine.machine_name !== "native-installer-upgrade") {
+if (machine.runtime_url !== `http://127.0.0.1:${port}` || machine.machine_name !== "native-installer-smoke-device") {
   throw new Error("previously enrolled machine configuration is missing or changed");
 }
 if (health.realtime?.runtime_url !== machine.runtime_url || health.realtime?.machine_name !== machine.machine_name ||
@@ -365,8 +365,10 @@ COMMIT_EOF
   [[ "$previous_commit" != "$EXPECTED_COMMIT" ]] || { echo "Upgrade must advance build commit" >&2; exit 1; }
   install_pair "$PREVIOUS_TAG" previous
   check_identity previous "${PREVIOUS_TAG#v}" "$previous_commit"
+  # The fixture's token belongs to native-installer-smoke-device; since
+  # v0.1.55 auth refuses a --device that disagrees with the token.
   smoke_command 60 env LONGHOUSE_DEVICE_TOKEN=native-installer-smoke-upgrade-token \
-    "$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" --device native-installer-upgrade \
+    "$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" --device native-installer-smoke-device \
     > "$EVIDENCE_DIR/previous-auth.log"
   smoke_command 60 "$installed" cursor configure --cursor-dir "$HOME_DIR/.cursor" \
     > "$EVIDENCE_DIR/previous-cursor-configure.log"
