@@ -507,6 +507,11 @@ final class SessionChatUITests: XCTestCase {
         let directory = URL(fileURLWithPath: "/tmp/lh-shots", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try screenshot.pngRepresentation.write(to: directory.appendingPathComponent(outputName), options: .atomic)
+        // Also attached, so `make ios-ui-shot` exports the frame from a VM.
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = (outputName as NSString).deletingPathExtension
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func waitForScreenshotMatchingAppearance(

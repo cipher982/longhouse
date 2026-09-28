@@ -17,7 +17,8 @@
       "parallelizable" : false,
       "skippedTests" : [
         "SessionChatUITests\/testCaptureToolsTranscriptLightScreenshot",
-        "SessionChatUITests\/testCaptureToolsTranscriptDarkScreenshot"
+        "SessionChatUITests\/testCaptureToolsTranscriptDarkScreenshot",
+        "InboxCaptureUITests"
       ],
       "target" : {
         "containerPath" : "container:LonghouseIOS.xcodeproj",
