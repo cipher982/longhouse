@@ -463,18 +463,6 @@ struct LonghouseAPI: Sendable {
         return decoded
     }
 
-    func sendLive(id: String, text: String) async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/send-live"))
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["message": text])
-
-        let (_, httpResponse) = try await data(for: request)
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-    }
-
     /// Posts user input with server-decided outcome. When the session is idle
     /// the input dispatches immediately (`outcome == .sent`). When it's
     /// working, the row is durably queued and auto-drains at the next safe
