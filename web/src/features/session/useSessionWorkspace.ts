@@ -198,8 +198,12 @@ export function useSessionWorkspace(
         return false;
       }
       const currentSession = query.state.data?.session;
+      // Keep re-asking after a failed refresh so a brief outage heals itself.
+      if (query.state.error) {
+        return WORKSPACE_FALLBACK_REFRESH_MS;
+      }
       if (!currentSession) {
-        return query.state.error ? WORKSPACE_FALLBACK_REFRESH_MS : false;
+        return false;
       }
       if (!shouldRefreshWorkspaceSession(currentSession)) {
         return false;

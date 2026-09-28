@@ -94,10 +94,26 @@ type ManagedSendResult =
 
 interface ManagedSendOptions {
   existingClientRequestId?: string;
+  /** How many automatic same-ID re-sends preceded this attempt. */
+  autoRetryAttempt?: number;
   replacementClientRequestId?: string;
   model?: string | null;
   legacyModelMissing?: boolean;
   onPersisted?: () => void;
+}
+
+// A send that never reached the server (network drop, a deploy restart's
+// 502/503/504, a draining runtime) is re-sent under the same request ID, so
+// the server's idempotency makes it land at most once. The row keeps saying
+// "Sending…" while this runs; only an exhausted budget becomes "Not confirmed".
+const AUTO_RETRY_DELAYS_MS = [1_000, 2_000, 3_000, 5_000, 8_000, 10_000, 10_000, 15_000, 15_000, 20_000];
+const RECONNECTING_DETAIL = "reconnecting to Longhouse";
+
+function isTransientSendFailure(error: unknown, structured: { error_code?: string } | null): boolean {
+  if (structured?.error_code === "runtime_draining") return true;
+  if (error instanceof TypeError) return true; // fetch network failure
+  const status = error && typeof error === "object" && "status" in error ? (error as { status: unknown }).status : null;
+  return status === 502 || status === 503 || status === 504;
 }
 
 /** A delivered input keeps a lightweight row until its exact transcript echo. */
@@ -693,6 +709,16 @@ export function SessionChat({
   }, [session.id]);
 
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // Automatic re-sends belong to this mounted view; a remount rehydrates the
+  // stored operation instead.
+  const autoRetryTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const timers = autoRetryTimersRef.current;
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -1144,6 +1170,7 @@ export function SessionChat({
         legacyModelMissing: options.legacyModelMissing,
         attachments,
         phase: "submitting",
+        detail: options.autoRetryAttempt ? RECONNECTING_DETAIL : null,
       };
       setPendingManagedLocalInputs((current) => {
         const existing = current.some(
@@ -1583,6 +1610,30 @@ export function SessionChat({
             setError(messageFromServer);
             return { kind: "accepted", clientRequestId };
           }
+        }
+        const attempt = options.autoRetryAttempt ?? 0;
+        if (
+          isTransientSendFailure(error, structured) &&
+          attempt < AUTO_RETRY_DELAYS_MS.length
+        ) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "submitting", detail: RECONNECTING_DETAIL }
+                : pending,
+            ),
+          );
+          const timer = setTimeout(() => {
+            autoRetryTimersRef.current.delete(timer);
+            void outboxActionsRef.current.retry(message, intent, attachments, {
+              existingClientRequestId: clientRequestId,
+              model,
+              legacyModelMissing: options.legacyModelMissing,
+              autoRetryAttempt: attempt + 1,
+            });
+          }, AUTO_RETRY_DELAYS_MS[attempt]);
+          autoRetryTimersRef.current.add(timer);
+          return { kind: "accepted", clientRequestId };
         }
         setPendingManagedLocalInputs((current) =>
           current.map((pending) =>
@@ -2063,6 +2114,7 @@ export function SessionChat({
         inFlight.push({
           ...base,
           state: "sending",
+          detail: pending.detail ?? null,
         });
       }
     }

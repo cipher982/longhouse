@@ -302,7 +302,10 @@ function SessionDetailWorkspaceRoute({
     );
   }
 
-  if (sessionError || !session) {
+  // A failed background refresh (a deploy restart answers 502 for a few
+  // seconds) keeps the loaded session on screen; only a session that never
+  // loaded becomes an error page.
+  if (!session) {
     return (
       <div className="session-workspace-route session-workspace-route--empty">
         <EmptyState

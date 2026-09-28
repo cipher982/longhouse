@@ -780,7 +780,7 @@ describe("SessionChat", () => {
     expect(inputPostCount).toBe(1);
   });
 
-  it("replays the same ID after an initial runtime-draining refusal with no receipt", async () => {
+  it("replays the same ID automatically after a runtime-draining refusal with no receipt", async () => {
     const user = userEvent.setup();
     const { ApiError } = await import("@/shared/api/base");
     const requestIds: string[] = [];
@@ -825,20 +825,12 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() =>
-      expect(
-        screen.getByText("Not confirmed — retry with the same request"),
-      ).toBeInTheDocument(),
-    );
+    // A restart is not a failure: no "Not confirmed" and no Retry click;
+    // the same operation is re-sent on its own once the runtime is back.
     expect(
-      screen.getByText("Continue locally", {
-        selector: "span.session-chat-pending-message__text",
-      }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Sent")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(requestIds).toHaveLength(2));
+      screen.queryByText("Not confirmed — retry with the same request"),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(requestIds).toHaveLength(2), { timeout: 3_000 });
     expect(requestIds[1]).toBe(requestIds[0]);
     await waitFor(() =>
       expect(
@@ -1256,11 +1248,9 @@ describe("SessionChat", () => {
       new File([new Uint8Array(bytes)], "note.png", { type: "image/png" }),
     );
     await user.click(screen.getByRole("button", { name: /send/i }));
-    await waitFor(() =>
-      expect(
-        screen.getByText("Not confirmed — retry with the same request"),
-      ).toBeInTheDocument(),
-    );
+    // Leave before the automatic re-send fires; the remount must recover the
+    // stored bytes and offer the same-ID retry itself.
+    await waitFor(() => expect(requestIds).toHaveLength(1));
     first.unmount();
 
     const second = renderSessionChat({ chatMode: "managed_local", session });
