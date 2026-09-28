@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from pathlib import Path
 
 import httpx
@@ -98,78 +99,6 @@ def _print_event(event: dict) -> None:
         typer.echo(content_text)
     if tool_output_text:
         typer.echo(tool_output_text)
-
-
-def _print_branch_stream(response: httpx.Response) -> int:
-    saw_text = False
-    exit_code = 0
-
-    event_name: str | None = None
-    data_lines: list[str] = []
-
-    def _flush_event() -> int | None:
-        nonlocal saw_text, exit_code, event_name, data_lines
-        if event_name is None:
-            data_lines = []
-            return None
-
-        raw_data = "\n".join(data_lines)
-        payload: dict[str, object] = {}
-        if raw_data:
-            try:
-                payload = json.loads(raw_data)
-            except json.JSONDecodeError:
-                payload = {"raw": raw_data}
-
-        if event_name == "assistant_delta":
-            text = str(payload.get("text") or "")
-            if text:
-                typer.echo(text, nl=False)
-                saw_text = True
-        elif event_name == "tool_use":
-            if saw_text:
-                typer.echo("")
-                saw_text = False
-            tool_name = str(payload.get("name") or "tool")
-            typer.secho(f"[tool] {tool_name}", fg=typer.colors.YELLOW)
-        elif event_name == "error":
-            if saw_text:
-                typer.echo("")
-                saw_text = False
-            typer.secho(str(payload.get("error") or raw_data or "Request failed"), fg=typer.colors.RED)
-            exit_code = 1
-        elif event_name == "done":
-            if saw_text:
-                typer.echo("")
-                saw_text = False
-            if payload.get("persistence_error"):
-                typer.secho(str(payload["persistence_error"]), fg=typer.colors.YELLOW)
-            if int(payload.get("exit_code") or 0) != 0:
-                exit_code = 1
-
-        event_name = None
-        data_lines = []
-        return None
-
-    for raw_line in response.iter_lines():
-        line = raw_line.decode() if isinstance(raw_line, bytes) else str(raw_line)
-        if not line:
-            _flush_event()
-            continue
-        if line.startswith("event:"):
-            event_name = line.split(":", 1)[1].strip()
-        elif line.startswith("data:"):
-            data_lines.append(line.split(":", 1)[1].strip())
-
-    _flush_event()
-    if saw_text:
-        typer.echo("")
-    return exit_code
-
-
-def _should_use_live_send(session_payload: dict[str, object]) -> bool:
-    capabilities = session_payload.get("capabilities")
-    return bool(capabilities.get("live_control_available")) if isinstance(capabilities, dict) else False
 
 
 def _parse_retry_after(response: httpx.Response, default: float = 1.0, max_delay: float = 5.0) -> float:
@@ -593,6 +522,20 @@ def events(
 def continue_session(
     session_id: str = typer.Argument(..., help="Session UUID to continue."),
     message: str = typer.Argument(..., help="Follow-up message."),
+    steer: bool = typer.Option(
+        False,
+        "--steer",
+        help=(
+            "Enter the target's running turn instead of queueing for its next turn boundary. "
+            "Best effort: the provider applies it at its next boundary, and an idle target is refused."
+        ),
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output the raw response.",
+    ),
     current_session_id: str | None = typer.Option(
         None,
         "--current-session",
@@ -616,10 +559,29 @@ def continue_session(
         help="Claude config directory (default: ~/.claude).",
     ),
 ) -> None:
-    """Continue live work through the canonical machine-facing route."""
+    """Send a peer a message with an explicit delivery semantic.
+
+    Two semantics exist and they are not interchangeable:
+
+    * default (SEND): durable and ordered. The message is committed to the
+      target's input queue and the target takes it at its next turn boundary.
+      A target that is mid-turn waits for its current turn to end, and the
+      message survives the wait.
+    * ``--steer``: immediate and best effort. The text enters the turn the
+      target is running right now, which can change what that turn does. The
+      provider decides exactly when it lands (for example after the current
+      tool call), and a target that is not running a turn is refused rather
+      than silently upgraded to a new one.
+
+    Both report the receipt the delivery was recorded under; read the target
+    transcript to confirm the model received it.
+    """
+
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
     resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")
+    intent = "steer" if steer else "queue"
+    client_request_id = uuid.uuid4().hex
 
     headers = {"X-Agents-Token": resolved_token}
     resolved_current_session_id = (current_session_id or get_managed_session_id() or "").strip()
@@ -629,64 +591,96 @@ def continue_session(
             label="current_session_id",
         )
 
-    send_url = f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/send-live"
-    send_payload = {"message": message}
+    input_url = f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/input"
+    payload = {"text": message, "intent": intent, "client_request_id": client_request_id}
     max_429_retries = 3
 
     try:
-        with httpx.Client(timeout=None) as client:
+        with httpx.Client(timeout=30) as client:
+            response = None
             for attempt in range(max_429_retries + 1):
-                with client.stream(
-                    "POST",
-                    send_url,
-                    headers=headers,
-                    json=send_payload,
-                ) as response:
-                    if response.status_code == 429 and attempt < max_429_retries:
-                        response.read()
-                        delay = _parse_retry_after(response)
-                        time.sleep(delay)
-                        continue
+                response = client.post(input_url, headers=headers, json=payload)
+                if response.status_code == 429 and attempt < max_429_retries:
+                    time.sleep(_parse_retry_after(response))
+                    continue
+                break
+            assert response is not None
 
-                    if response.status_code == 401:
-                        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
-                        raise typer.Exit(code=1)
-                    if response.status_code == 404:
-                        typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
-                        raise typer.Exit(code=1)
-                    if response.status_code != 200:
-                        detail = response.read().decode(errors="replace")[:200]
-                        typer.secho(f"API error: {response.status_code} {detail}", fg=typer.colors.RED)
-                        raise typer.Exit(code=1)
+            if response.status_code == 401:
+                typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+            if response.status_code == 404:
+                typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+            if response.status_code not in (200, 201):
+                raise typer.Exit(code=_report_continue_failure(response, session_id=resolved_session_id, steer=steer))
 
-                    content_type = str(response.headers.get("content-type") or "")
-                    if content_type.startswith("application/json"):
-                        response.read()
-                        payload = response.json()
-                        if payload.get("accepted"):
-                            typer.secho(
-                                f"Accepted by session {payload.get('session_id')}",
-                                fg=typer.colors.CYAN,
-                                bold=True,
-                            )
-                            dispatch_ms = payload.get("dispatch_ms")
-                            if dispatch_ms is not None:
-                                typer.echo(f"dispatch_ms: {dispatch_ms}")
-                            return
-
-                        typer.secho(json.dumps(payload, indent=2), fg=typer.colors.RED)
-                        raise typer.Exit(code=1)
-
-                    exit_code = _print_branch_stream(response)
-                    if exit_code:
-                        raise typer.Exit(code=exit_code)
-                    return
+            body = response.json()
     except httpx.ConnectError:
         typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
     except httpx.TimeoutException:
         typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+    if output_json:
+        typer.echo(json.dumps(body, indent=2))
+        return
+
+    _report_continue_outcome(body, session_id=resolved_session_id, steer=steer)
+
+
+def _report_continue_failure(response: httpx.Response, *, session_id: str, steer: bool) -> int:
+    """Explain what the server refused, in the sender's terms."""
+
+    detail = response.json().get("detail") if _looks_like_json(response) else None
+    code = detail.get("error_code") if isinstance(detail, dict) else None
+    message = detail.get("message") if isinstance(detail, dict) else None
+    if not isinstance(message, str) or not message:
+        message = detail if isinstance(detail, str) and detail else response.text[:200]
+
+    if code in {"steer_requires_active_turn", "turn_ended"}:
+        typer.secho(f"Not sent: {message}", fg=typer.colors.YELLOW, bold=True)
+        if steer:
+            typer.echo("The target is not running a turn. Re-run without --steer to queue it durably.")
+        else:
+            typer.echo("The target is not running a turn this steer could join.")
+        return 1
+
+    typer.secho(f"API error: {response.status_code} {message}", fg=typer.colors.RED)
+    return 1
+
+
+def _looks_like_json(response: httpx.Response) -> bool:
+    return str(response.headers.get("content-type") or "").startswith("application/json")
+
+
+def _report_continue_outcome(body: dict[str, object], *, session_id: str, steer: bool) -> None:
+    """Say what happened to the message, never just that the transport answered."""
+
+    receipt_id = body.get("live_input_id")
+    outcome = str(body.get("outcome") or "unknown")
+
+    if steer:
+        typer.secho(f"Steered into {session_id}'s running turn.", fg=typer.colors.CYAN, bold=True)
+        typer.echo(f"Receipt: {receipt_id}")
+        typer.echo("Best effort: the provider applies this at its next boundary, not instantly.")
+    elif outcome == "sent":
+        typer.secho(f"Delivered to {session_id}.", fg=typer.colors.GREEN, bold=True)
+        typer.echo(f"Receipt: {receipt_id}")
+    elif outcome == "queued":
+        typer.secho(f"Queued for {session_id}.", fg=typer.colors.CYAN, bold=True)
+        typer.echo(f"Receipt: {receipt_id}")
+        typer.echo(
+            "Not delivered yet: the target takes it at its next turn boundary. "
+            "A queued input expires after 30 minutes and is then reported failed."
+        )
+    else:
+        typer.secho(f"Delivery outcome unknown for {session_id}.", fg=typer.colors.YELLOW, bold=True)
+        typer.echo(f"Receipt: {receipt_id}")
+        typer.echo("Read the target transcript before sending again: this message may already have landed.")
+
+    typer.echo(f"Confirm: longhouse-server tail {session_id}")
 
 
 @app.command()

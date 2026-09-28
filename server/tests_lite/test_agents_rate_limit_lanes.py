@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import httpx
 import pytest
+import typer
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -166,36 +166,32 @@ def test_parse_retry_after():
     assert _parse_retry_after(resp_invalid, default=1.0) == 1.0
 
 
-def test_continue_session_retries_on_429(monkeypatch):
+def test_continue_session_retries_on_429(monkeypatch, capsys):
     session_id = str(uuid4())
     monkeypatch.setattr("zerg.cli.sessions._load_api_credentials", lambda **kwargs: ("http://test", "zdt_tok"))
 
     attempts = 0
 
-    @contextmanager
-    def mock_stream(method, url, headers=None, json=None):
+    def mock_post(url, headers=None, json=None):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            # First attempt: rate limited with 429
-            yield httpx.Response(
+            return httpx.Response(
                 429,
                 headers={"Retry-After": "1"},
                 content=b'{"detail":"Rate limit exceeded for agents API token."}',
-                request=httpx.Request(method, url),
+                request=httpx.Request("POST", url),
             )
-        else:
-            # Second attempt: success with 200
-            yield httpx.Response(
-                200,
-                headers={"Content-Type": "application/json"},
-                content=b'{"accepted":true,"session_id":"test-session","dispatch_ms":42}',
-                request=httpx.Request(method, url),
-            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            content=b'{"outcome":"queued","live_input_id":"live-1","intent":"queue","client_request_id":"req-1"}',
+            request=httpx.Request("POST", url),
+        )
 
     client_mock = MagicMock()
     client_mock.__enter__.return_value = client_mock
-    client_mock.stream = mock_stream
+    client_mock.post = mock_post
 
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: client_mock)
     monkeypatch.setattr("time.sleep", lambda s: None)
@@ -204,11 +200,60 @@ def test_continue_session_retries_on_429(monkeypatch):
     continue_session(
         session_id=session_id,
         message="hello peer",
+        steer=False,
+        output_json=False,
         current_session_id=None,
         url=None,
         token=None,
         claude_dir=None,
     )
+
+    printed = capsys.readouterr().out
+    assert attempts == 2
+    # The point of the rewrite: the sender is told where the message is, not
+    # merely that a transport accepted it.
+    assert "Queued for" in printed
+    assert "live-1" in printed
+    assert "next turn boundary" in printed
+    assert "expires after 30 minutes" in printed
+    assert "Accepted" not in printed
+
+
+def test_continue_session_explains_a_refused_steer(monkeypatch, capsys):
+    session_id = str(uuid4())
+    monkeypatch.setattr("zerg.cli.sessions._load_api_credentials", lambda **kwargs: ("http://test", "zdt_tok"))
+
+    def mock_post(url, headers=None, json=None):
+        assert json["intent"] == "steer"
+        return httpx.Response(
+            409,
+            headers={"Content-Type": "application/json"},
+            content=b'{"detail":{"error_code":"steer_requires_active_turn","message":"This session has no active turn to steer; nothing was sent.","retry_with_intent":"queue"}}',
+            request=httpx.Request("POST", url),
+        )
+
+    client_mock = MagicMock()
+    client_mock.__enter__.return_value = client_mock
+    client_mock.post = mock_post
+
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client_mock)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        continue_session(
+            session_id=session_id,
+            message="redirect hot",
+            steer=True,
+            output_json=False,
+            current_session_id=None,
+            url=None,
+            token=None,
+            claude_dir=None,
+        )
+
+    assert excinfo.value.exit_code == 1
+    printed = capsys.readouterr().out
+    assert "Not sent" in printed
+    assert "without --steer" in printed
 
 
 def test_interrupt_retries_on_429(monkeypatch):

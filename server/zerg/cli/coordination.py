@@ -372,7 +372,15 @@ def send(
     typer.echo(f"From: {resolved_source_session_id}")
     typer.echo(f"To: {resolved_target_session_id}")
     receipt = payload.get("input_receipt") if isinstance(payload.get("input_receipt"), dict) else None
-    typer.echo(f"Provider input: {receipt.get('status') if receipt else 'not attempted'}")
+    status = receipt.get("status") if receipt else None
+    if status == "queued":
+        typer.echo("Delivery: queued — the target takes it at its next turn boundary.")
+    elif status == "delivered":
+        typer.echo("Delivery: delivered to the provider — read the target transcript to confirm the model received it.")
+    elif status:
+        typer.echo(f"Delivery: {status}")
+    else:
+        typer.echo("Delivery: not attempted")
 
 
 def tail(
