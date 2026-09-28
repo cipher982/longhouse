@@ -1,6 +1,6 @@
 [package]
 name = "longhouse-engine"
-version = "0.1.55"
+version = "0.1.56"
 edition = "2021"
 description = "Longhouse session shipper — high-performance Rust engine"
 license = "Apache-2.0"
