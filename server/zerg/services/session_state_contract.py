@@ -378,6 +378,40 @@ def _activity(runtime_view: SessionRuntimeView | None) -> SessionActivityFacts:
     )
 
 
+# Turn phases a managed Helm session leaves only through an event Longhouse
+# observes (the next hook, tool result, or Stop).
+_HELM_LEASE_HELD_KINDS = frozenset({"thinking", "running"})
+
+
+def helm_activity_held_by_lease(
+    activity: SessionActivityFacts,
+    *,
+    mode: SessionMode,
+    control: SessionControlFacts,
+    now: datetime,
+) -> SessionActivityFacts:
+    """Keep a Helm turn's phase live while its control lease is.
+
+    Phase windows are short (thinking 90 s, running 600 s) because they are
+    the only evidence an unmanaged session has. A managed Helm session's hooks
+    report every way out of thinking/running, and its lease is renewed only
+    while the owning process is alive, so a long tool call or a long model
+    response is still exactly what was last observed. Its horizon becomes the
+    lease's; losing the lease still decays it to "Last observed ...".
+    """
+    if (
+        mode != "helm"
+        or activity.state != "unknown"
+        or activity.raw_kind not in _HELM_LEASE_HELD_KINDS
+        or activity.source in {"fallback", "progress"}
+        or control.connection != "connected"
+        or control.valid_until is None
+        or control.valid_until <= now
+    ):
+        return activity
+    return activity.model_copy(update={"state": _ACTIVITY_MAP[activity.raw_kind], "valid_until": control.valid_until})
+
+
 def _launch(
     *,
     launch_state: str | None,
@@ -1308,6 +1342,7 @@ def build_session_state_facts(
             now=current_now,
         )
     )
+    activity = helm_activity_held_by_lease(activity, mode=mode, control=control, now=current_now)
     interaction = _interaction(pause_request)
     transcript = _transcript(
         session=session,
@@ -1344,6 +1379,7 @@ def build_session_state_facts(
 
 __all__ = [
     "ACCESS_PRESENTATION_KEYS",
+    "helm_activity_held_by_lease",
     "PRESENTATION_POLICY_VERSION",
     "PRIMARY_PRESENTATION_KEYS",
     "STATE_CONTRACT_VERSION",

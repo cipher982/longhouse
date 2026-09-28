@@ -146,12 +146,12 @@ def _facts(*, runtime=None, capabilities=None, liveness=None, session=None, **kw
 
 
 def test_expired_activity_with_live_control_is_unknown_plus_live_control():
-    facts = _facts(runtime=_runtime(phase="running", confidence="stale", tool="Bash"))
+    facts = _facts(runtime=_runtime(phase="blocked", confidence="stale", tool="Bash"))
 
     assert facts.activity.state == "unknown"
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == "no_recent_activity"
-    assert facts.presentation.primary.label == "Last observed running a tool"
+    assert facts.presentation.primary.label == "Last observed blocked"
     assert facts.presentation.access is not None
     assert facts.presentation.access.label == "Live control"
     assert "Ready" not in facts.model_dump_json()
@@ -169,12 +169,12 @@ def test_stale_observation_label_names_what_was_seen_and_carries_its_clock():
     stays a test of the last-seen label itself, not of when it fires.
     """
 
-    facts = _facts(runtime=_runtime(phase="running", confidence="stale", tool="Bash"))
+    facts = _facts(runtime=_runtime(phase="blocked", confidence="stale", tool="Bash"))
 
     primary = facts.presentation.primary
     assert primary is not None
     assert primary.key == "no_recent_activity"
-    assert primary.label == "Last observed running a tool"
+    assert primary.label == "Last observed blocked"
     assert primary.tone == "quiet"
     # The clock the clients render from.
     assert primary.observed_at is not None
@@ -182,7 +182,7 @@ def test_stale_observation_label_names_what_was_seen_and_carries_its_clock():
     # No claim of a current state, and no raw kind in the prose.
     assert "(last:" not in primary.label
     assert facts.activity.state == "unknown"
-    assert facts.activity.raw_kind == "running"
+    assert facts.activity.raw_kind == "blocked"
 
 
 @pytest.mark.parametrize("phase", ["idle", "needs_user"])
@@ -1320,3 +1320,38 @@ def test_branch_availability_is_narrower_than_resume():
         supported_operations={"fork_thread"},
     )
     assert stricter.reason == "permission_mode_unsupported"
+
+
+@pytest.mark.parametrize(
+    ("phase", "tool", "state", "label"),
+    [("running", "Bash", "executing", "Using Shell"), ("thinking", None, "thinking", "Thinking")],
+)
+def test_helm_turn_phase_outlives_its_window_while_the_control_lease_is_live(phase, tool, state, label):
+    """A 10-minute build or a long model reply is still what was last observed.
+
+    A managed Helm session's hooks report every way out of thinking/running,
+    so while its lease renews, the phase holds on the lease's horizon instead
+    of decaying to "Last observed ..." after the short phase window.
+    """
+
+    lease_until = NOW + timedelta(minutes=5)
+    facts = _facts(
+        runtime=_runtime(phase=phase, confidence="stale", tool=tool),
+        liveness=_liveness(expires_at=lease_until),
+    )
+
+    assert facts.mode == "helm"
+    assert facts.activity.state == state
+    assert facts.activity.valid_until == lease_until
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.label == label
+
+
+def test_helm_turn_phase_decays_once_the_control_lease_is_gone():
+    facts = _facts(
+        runtime=_runtime(phase="running", confidence="stale", tool="Bash"),
+        liveness=_liveness(expires_at=NOW - timedelta(seconds=1)),
+    )
+
+    assert facts.activity.state == "unknown"
+    assert facts.presentation.primary is None or facts.presentation.primary.label != "Using Shell"

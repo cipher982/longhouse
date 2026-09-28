@@ -632,7 +632,7 @@ def test_served_projector_describes_expired_activity_without_claiming_it_is_curr
         commit_seq=82,
         catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
         heads=[
-            _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=1)),
+            _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=1), kind="blocked"),
             _control(observed_at=NOW, grants=["interrupt", "send_input"]),
         ],
         supported_operations={"send_input", "interrupt"},
@@ -643,13 +643,40 @@ def test_served_projector_describes_expired_activity_without_claiming_it_is_curr
     )
 
     assert served.activity.state == "unknown"
-    assert served.activity.raw_kind == "running"
+    assert served.activity.raw_kind == "blocked"
     assert served.activity.observed_at == NOW
     assert served.activity.valid_until == NOW + ACTIVITY_OBSERVATION_LEASE
     assert served.presentation.primary is not None
     assert served.presentation.primary.key == "no_recent_activity"
-    assert served.presentation.primary.label == "Last observed running a tool"
+    assert served.presentation.primary.label == "Last observed blocked"
     assert served.presentation.primary.observed_at == NOW
+
+
+def test_served_projector_holds_a_helm_tool_call_on_the_control_lease():
+    """A tool call longer than the phase window is still running while the
+    Helm control lease renews; it must not read "Last observed running"."""
+
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=83,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+        heads=[
+            _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=1)),
+            _control(observed_at=NOW + timedelta(seconds=25), grants=["interrupt", "send_input"]),
+        ],
+        supported_operations={"send_input", "interrupt"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW + timedelta(seconds=30),
+    )
+
+    assert served.mode == "helm"
+    assert served.control.connection == "connected"
+    assert served.activity.state == "executing"
+    assert served.activity.valid_until == served.control.valid_until
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.label == "Using Shell"
 
 
 def test_served_projector_keeps_a_stale_helm_idle_observation_plain_idle():

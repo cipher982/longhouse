@@ -49,6 +49,7 @@ from zerg.services.session_state_contract import SessionRunFacts
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import SessionTranscriptFacts
 from zerg.services.session_state_contract import assemble_session_state_facts
+from zerg.services.session_state_contract import helm_activity_held_by_lease
 
 UnsupportedFactFamily = Literal[
     "mode",
@@ -261,12 +262,13 @@ def project_served_session_state_facts(
         ),
     )
     catalog = _mapping(catalog_facts.get("catalog"))
+    activity = helm_activity_held_by_lease(shadow.activity, mode=served_mode, control=control, now=_aware(now, "now"))
     return assemble_session_state_facts(
         mode=served_mode,
         disposition=shadow.disposition,
         launch=shadow.launch,
         run=shadow.run,
-        activity=shadow.activity,
+        activity=activity,
         delegation=shadow.delegation,
         control=control,
         pending_interaction=pending_interaction,
