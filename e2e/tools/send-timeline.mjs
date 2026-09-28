@@ -161,6 +161,27 @@ if (SCENARIO === "single") {
   const steered = /STEERED OK/.test(last.lastAssistant ?? "");
   record("driver", steered ? "steer answered in-turn" : "steer NOT reflected in the answer", { lastAssistant: last.lastAssistant });
   if (!steered) scenarioFailed = true;
+} else if (SCENARIO === "stop") {
+  // Stop cancels the running tool now; the session must take the next send.
+  await send("Run the shell command `sleep 30 && echo first-done`, then reply with exactly: FIRST DONE");
+  await waitFor(() => /using|running|shell|exec/i.test(last.head ?? ""), 60000, "agent running a tool");
+  await new Promise((r) => setTimeout(r, 1500));
+  const stop = page.locator("[data-testid=session-chat-interrupt]").first();
+  const stopAt = Date.now() - t0;
+  const enabled = await stop.isEnabled().catch(() => false);
+  record("control", "click stop", { enabled });
+  if (enabled) await stop.click();
+  const stopped = await waitFor(() => /idle|stopped|cancel/i.test(last.head ?? ""), 15000, "turn stopped");
+  const stoppedIn = Date.now() - t0 - stopAt;
+  record("driver", stopped ? "turn stopped" : "turn did NOT stop", { stopped_in_ms: stoppedIn });
+  if (!enabled || !stopped || stoppedIn > 15000) scenarioFailed = true;
+  const repliesBefore = last.assistantRows ?? 0;
+  await new Promise((r) => setTimeout(r, 1500));
+  await send("Reply with exactly: AFTER STOP");
+  await waitFor(() => /AFTER STOP/.test(last.lastAssistant ?? "") && /idle/i.test(last.head ?? ""), 120000, "reply after stop");
+  const after = /AFTER STOP/.test(last.lastAssistant ?? "");
+  record("driver", after ? "session sendable after stop" : "no reply after stop", { repliesBefore });
+  if (!after) scenarioFailed = true;
 } else if (SCENARIO === "restart") {
   // A deploy: the Runtime Host goes away just before the send and comes back
   // a few seconds later. --down / --up are shell commands that do that.

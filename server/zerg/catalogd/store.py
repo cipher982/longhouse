@@ -824,13 +824,21 @@ def _settle_console_turn(
     turn.updated_at = now
     turn.error = error
     if receipt is not None:
+        # A Stop after the provider took the input leaves it delivered: the
+        # receipt describes delivery, the turn describes the outcome. Only an
+        # input cancelled before delivery (still queued/starting) is cancelled.
+        stopped_after_delivery = next_state == "cancelled" and receipt.status == "delivered"
         if next_state in {"active", "completed"}:
             receipt.status = "delivered"
         elif next_state == "failed":
             receipt.status = "failed"
-        elif next_state == "cancelled":
+        elif next_state == "cancelled" and not stopped_after_delivery:
             receipt.status = "cancelled"
-        receipt.error_json = json.dumps({"code": error_code, "message": error}, sort_keys=True, separators=(",", ":")) if error else None
+        receipt.error_json = (
+            json.dumps({"code": error_code, "message": error}, sort_keys=True, separators=(",", ":"))
+            if error and not stopped_after_delivery
+            else None
+        )
         receipt.updated_at = now
     if next_state not in CONSOLE_TURN_TERMINAL_STATES:
         return None

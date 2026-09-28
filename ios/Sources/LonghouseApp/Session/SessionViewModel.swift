@@ -1107,7 +1107,12 @@ final class SessionViewModel: ObservableObject {
                 case .accepted:
                     let terminalStatus = receipt.deliveryStatus?.lowercased()
                     let turnState = receipt.turn?.state.lowercased()
+                    // A delivered input whose Console turn was then stopped
+                    // reached the provider: it is sent, not failed.
+                    let stoppedAfterDelivery = terminalStatus == "delivered"
+                        && (turnState == "cancelled" || turnState == "canceled")
                     let terminalSuccess: Bool = {
+                        if stoppedAfterDelivery { return true }
                         if receipt.turn != nil {
                             return turnState == "completed"
                         }
@@ -1119,7 +1124,8 @@ final class SessionViewModel: ObservableObject {
                         continue
                     }
                     let ambiguousDelivery = isUncertainDeliveryError(receipt.error)
-                    let cancelled = terminalStatus == "cancelled" || turnState == "cancelled"
+                    let cancelled = !stoppedAfterDelivery
+                        && (terminalStatus == "cancelled" || turnState == "cancelled")
                     let terminalFailure = cancelled || (
                         !ambiguousDelivery
                             && (terminalStatus == "failed" || turnState == "failed")

@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRATCH = Path("/tmp/agents/send-timeline")
 STATE = SCRATCH / "state.json"
 DEVICE = "send-timeline-mac"
-SCENARIOS = {"single", "midturn", "midtool", "restart", "steer"}
+SCENARIOS = {"single", "midturn", "midtool", "restart", "steer", "stop"}
 
 
 def free_port() -> int:

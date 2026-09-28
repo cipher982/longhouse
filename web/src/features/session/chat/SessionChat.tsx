@@ -546,6 +546,16 @@ function hasProviderDeliveryUnknownError(error?: string | null): boolean {
 // what the agent is doing belongs to the activity headline, not the row.
 const ACCEPTED_INPUT_PHASES = new Set(["starting", "active", "draining", "delivered"]);
 
+// A delivered input whose Console turn was then stopped: the message reached
+// the provider and is in the transcript. Only an input cancelled before
+// delivery (receipt status "cancelled") was never sent.
+function stoppedAfterDelivery(row: {
+  status?: string | null;
+  turn?: { state?: string | null } | null;
+} | null | undefined): boolean {
+  return row?.status === "delivered" && row?.turn?.state === "cancelled";
+}
+
 const NONTERMINAL_CONSOLE_TURN_STATES = new Set([
   "queued",
   "starting",
@@ -1034,6 +1044,15 @@ export function SessionChat({
             detail: STALE_CONSOLE_TURN_DETAIL,
           };
         }
+        if (stoppedAfterDelivery(receipt)) {
+          return {
+            ...pending,
+            phase: "delivered",
+            serverInputId: receipt.id ?? pending.serverInputId,
+            serverLiveInputId:
+              receipt.live_input_id ?? pending.serverLiveInputId,
+          };
+        }
         const failed =
           receipt.status === "failed" ||
           receipt.status === "cancelled" ||
@@ -1252,6 +1271,10 @@ export function SessionChat({
             clientRequestId,
             error: UNCONFIRMED_DELIVERY_ERROR,
           };
+        }
+        if (stoppedAfterDelivery(receipt)) {
+          markInputDelivered(clientRequestId, receipt.id, receipt.live_input_id);
+          return { kind: "accepted", clientRequestId };
         }
         const terminalFailure =
           receipt.status === "failed" ||
@@ -2025,6 +2048,8 @@ export function SessionChat({
           state: "queued",
           actions: [cancelAction(row)],
         });
+      } else if (stoppedAfterDelivery(row)) {
+        // Delivered, then stopped: the transcript already shows it.
       } else if (
         row.status === "failed" ||
         (row.status === "cancelled" && row.last_error)
