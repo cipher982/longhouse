@@ -669,7 +669,13 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
-        #expect(model.detail?.activePauseRequest?.id == "pause-scope")
+        // The tail is held paused, so the structured question can only come
+        // from the primary detail lane. Wait for that lane rather than assert
+        // the instant the tail request is sent: on a slow VM the primary
+        // response may still be in flight.
+        await waitForCondition("primary detail pause request", sourceLocation: #_sourceLocation) {
+            model.detail?.activePauseRequest?.id == "pause-scope"
+        }
         #expect(model.detail?.activePauseRequest?.questions.first?.id == "scope")
 
         await api.resumePausedTailResponses()
