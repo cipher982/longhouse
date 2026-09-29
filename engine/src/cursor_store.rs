@@ -280,6 +280,10 @@ thread_local! {
     /// Blob pages read from a Cursor store on this thread, so a test can say a
     /// scan pass did not open one.
     pub(crate) static BLOB_PAGE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+
+    /// Times a Cursor store was opened for reading on this thread, for any
+    /// reason: a scan pass over a store that did not move must not open it.
+    pub(crate) static STORE_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,56 +357,6 @@ pub fn visit_cursor_blob_records(
         },
         has_more: visited == max_rows,
     })
-}
-
-/// A store written this recently is not called unchanged, whatever its stamp
-/// says. A coarse filesystem clock can give a second write inside the same tick
-/// the same modification time, so a store still being written is walked as it
-/// always was until it has rested.
-const STORE_AT_REST_AFTER: Duration = Duration::from_secs(2);
-
-/// A signature of the store's on-disk state, taken from stat alone: identity,
-/// length and modification time of the database and of its write-ahead log.
-///
-/// Cursor keeps the store in WAL mode, so a commit lands in `-wal` and the main
-/// file moves only at a checkpoint; a change to either moves the stamp. Reading
-/// the store read-only touches neither file. `None` means "cannot vouch for
-/// it": the store is missing, unreadable, or was written too recently to trust.
-pub fn cursor_store_stamp(path: &Path) -> Option<String> {
-    let modified_nanos = |metadata: &std::fs::Metadata| -> Option<u128> {
-        Some(
-            metadata
-                .modified()
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_nanos(),
-        )
-    };
-    let main = path.metadata().ok()?;
-    let main_modified = modified_nanos(&main)?;
-    let mut wal_path = path.as_os_str().to_owned();
-    wal_path.push("-wal");
-    let (wal_part, wal_modified) = match std::fs::metadata(&wal_path) {
-        Ok(wal) => {
-            let modified = modified_nanos(&wal)?;
-            (format!("{}:{modified}", wal.len()), modified)
-        }
-        Err(_) => ("-".to_string(), 0),
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    // A modification time in the future is a clock we cannot reason about.
-    if now.checked_sub(main_modified.max(wal_modified))? < STORE_AT_REST_AFTER.as_nanos() {
-        return None;
-    }
-    Some(format!(
-        "{}:{}:{main_modified}:{wal_part}",
-        identity_from_metadata(&main)?,
-        main.len()
-    ))
 }
 
 /// Return deterministic raw storage-v2 records for all observed Cursor data.
@@ -615,6 +569,8 @@ pub fn longhouse_session_id_for_cursor(conversation_uuid: &str) -> String {
 }
 
 fn open_readonly(path: &Path) -> Result<Connection> {
+    #[cfg(test)]
+    STORE_OPENS.with(|opens| opens.set(opens.get() + 1));
     let conn = Connection::open_with_flags(
         sqlite_readonly_uri(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,

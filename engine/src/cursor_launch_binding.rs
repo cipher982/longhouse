@@ -8,6 +8,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -86,21 +87,15 @@ fn launch_binding_state_for_conversation_in(
 ) -> Result<CursorLaunchBindingState> {
     let mut managed = Vec::new();
     let mut pending = false;
-    for path in claim_paths(dir)? {
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let Ok(claim) = serde_json::from_slice::<LaunchBindingClaim>(&bytes) else {
-            continue;
-        };
-        if valid_claim(&claim, conversation_uuid) {
-            let previous_provider_session_id = active_predecessor(&claim, conversation_uuid);
+    for claim in binding_claims(dir).iter() {
+        if valid_claim(claim, conversation_uuid) {
+            let previous_provider_session_id = active_predecessor(claim, conversation_uuid);
             managed.push(ManagedCursorBinding {
-                session_id: claim.session_id,
-                thread_id: claim.thread_id,
-                turn_id: claim.turn_id,
-                run_id: claim.run_id,
-                client_request_id: claim.client_request_id,
+                session_id: claim.session_id.clone(),
+                thread_id: claim.thread_id.clone(),
+                turn_id: claim.turn_id.clone(),
+                run_id: claim.run_id.clone(),
+                client_request_id: claim.client_request_id.clone(),
                 previous_provider_session_id,
             });
         } else if claim.schema_version == 2
@@ -252,13 +247,11 @@ pub fn launch_reservation_may_be_pending() -> Result<bool> {
 fn launch_reservation_may_be_pending_in(state_root: &Path) -> Result<bool> {
     let reservations = state_root.join("launch-reservations");
     let mut active = 0usize;
-    for path in claim_paths(&reservations)? {
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-            continue;
-        };
+    let listed = crate::dir_cache::parsed_json_dir(&reservations, parse_json_value, |_, _| {
+        std::cmp::Ordering::Equal
+    })
+    .unwrap_or_default();
+    for value in listed.iter() {
         let expires_at = value
             .get("expires_at")
             .and_then(serde_json::Value::as_str)
@@ -278,7 +271,7 @@ fn launch_reservation_may_be_pending_in(state_root: &Path) -> Result<bool> {
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|value| !value.trim().is_empty())
             && (expires_at.is_some_and(|value| value > Utc::now())
-                || reservation_owner_is_alive(&value))
+                || reservation_owner_is_alive(value))
         {
             active += 1;
         }
@@ -323,13 +316,7 @@ fn reset_binding_may_be_pending_in(dir: &Path, conversation_uuid: &str) -> Resul
         return Ok(false);
     };
     let mut candidate_sessions = Vec::new();
-    for path in claim_paths(dir)? {
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let Ok(claim) = serde_json::from_slice::<LaunchBindingClaim>(&bytes) else {
-            continue;
-        };
+    for claim in binding_claims(dir).iter() {
         if claim.schema_version != 2
             || claim.provider != "cursor"
             || claim.status != "observed"
@@ -366,7 +353,7 @@ fn reset_binding_may_be_pending_in(dir: &Path, conversation_uuid: &str) -> Resul
                 .and_then(serde_json::Value::as_u64)
                 .is_some()
         {
-            candidate_sessions.push(claim.session_id);
+            candidate_sessions.push(claim.session_id.clone());
         }
     }
     candidate_sessions.sort();
@@ -384,6 +371,26 @@ fn claim_dir() -> PathBuf {
     PathBuf::from(home).join("managed-local/cursor-helm/binding-probes")
 }
 
+fn parse_binding_claim(
+    _path: &Path,
+    bytes: std::io::Result<Vec<u8>>,
+) -> Option<LaunchBindingClaim> {
+    serde_json::from_slice(&bytes.ok()?).ok()
+}
+
+fn parse_json_value(_path: &Path, bytes: std::io::Result<Vec<u8>>) -> Option<serde_json::Value> {
+    serde_json::from_slice(&bytes.ok()?).ok()
+}
+
+/// Every claim in the directory, read again only when a claim file changed. A
+/// scan asks about each of thousands of conversations, and every ask used to
+/// read and parse every claim.
+fn binding_claims(dir: &Path) -> Arc<Vec<LaunchBindingClaim>> {
+    crate::dir_cache::parsed_json_dir(dir, parse_binding_claim, |_, _| std::cmp::Ordering::Equal)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
 fn claim_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Ok(Vec::new());
@@ -408,6 +415,73 @@ mod tests {
         format!(
             r#"{{"schema_version":1,"provider":"cursor","status":"passed","session_id":"{session_id}","conversation_uuid":"{agent_id}","agent_id":"{agent_id}","launch_token":"{session_id}","expires_at":"{expires_at}","observations":[{{"phase":"before_launch","agent_id":null,"launcher_pid":null,"cursor_pid":null}},{{"phase":"after_prompt","agent_id":"{agent_id}","launcher_pid":1,"cursor_pid":2}},{{"phase":"after_tool_turn","agent_id":"{agent_id}","launcher_pid":1,"cursor_pid":2}},{{"phase":"at_exit","agent_id":"{agent_id}","launcher_pid":null,"cursor_pid":null}}]}}"#
         )
+    }
+
+    fn age(path: &Path) {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+            .unwrap();
+    }
+
+    fn observed_claim(session_id: &str, conversation: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
+            "provider": "cursor",
+            "status": "observed",
+            "session_id": session_id,
+            "conversation_uuid": conversation,
+            "hook_observed_at": "2026-07-17T00:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    fn files_parsed() -> usize {
+        crate::dir_cache::FILES_PARSED.with(|parsed| parsed.get())
+    }
+
+    /// A scan asks about each of thousands of conversations, and every ask used
+    /// to read and parse every claim on the machine.
+    #[test]
+    fn asking_about_many_conversations_reads_the_claims_once() {
+        let dir = tempdir().unwrap();
+        let claim_path = dir.path().join("claim.json");
+        fs::write(&claim_path, observed_claim("longhouse-id", "cursor-id")).unwrap();
+        age(&claim_path);
+
+        let before = files_parsed();
+        for index in 0..5 {
+            assert_eq!(
+                launch_binding_state_for_conversation_in(dir.path(), &format!("other-{index}"))
+                    .unwrap(),
+                CursorLaunchBindingState::Unclaimed
+            );
+        }
+        let CursorLaunchBindingState::Managed(binding) =
+            launch_binding_state_for_conversation_in(dir.path(), "cursor-id").unwrap()
+        else {
+            panic!("the claimed conversation is managed");
+        };
+        assert_eq!(binding.session_id, "longhouse-id");
+        assert_eq!(files_parsed() - before, 1, "the claims were re-read");
+
+        // A claim that changed under the same name is read again, and what it
+        // now says is what the next ask is told.
+        fs::write(&claim_path, observed_claim("other-session", "cursor-id")).unwrap();
+        age(&claim_path);
+        let CursorLaunchBindingState::Managed(binding) =
+            launch_binding_state_for_conversation_in(dir.path(), "cursor-id").unwrap()
+        else {
+            panic!("the claimed conversation is managed");
+        };
+        assert_eq!(binding.session_id, "other-session");
+        fs::remove_file(&claim_path).unwrap();
+        assert_eq!(
+            launch_binding_state_for_conversation_in(dir.path(), "cursor-id").unwrap(),
+            CursorLaunchBindingState::Unclaimed
+        );
     }
 
     #[test]

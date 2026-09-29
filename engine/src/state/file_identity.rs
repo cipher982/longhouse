@@ -7,6 +7,7 @@
 use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use sha2::{Digest, Sha256};
 
@@ -49,6 +50,63 @@ pub fn identity_from_metadata(metadata: &Metadata) -> Option<String> {
             .as_millis();
         Some(format!("generic:{}:{}", metadata.len(), modified_ms))
     }
+}
+
+/// A file written this recently is not called unchanged, whatever its stamp
+/// says. A coarse filesystem clock can give a second write inside the same tick
+/// the same modification time, so a file still being written is read as it
+/// always was until it has rested.
+pub const AT_REST_AFTER: Duration = Duration::from_secs(2);
+
+/// When a file last changed, in nanoseconds since the epoch, or `None` if it
+/// was written too recently to vouch for (or in the future, a clock we cannot
+/// reason about).
+pub fn rested_modification_nanos(metadata: &Metadata) -> Option<u128> {
+    let modified = metadata.modified().ok()?;
+    let age = SystemTime::now().duration_since(modified).ok()?;
+    if age < AT_REST_AFTER {
+        return None;
+    }
+    Some(
+        modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()?
+            .as_nanos(),
+    )
+}
+
+/// A signature of a file's state from stat alone: identity, length and
+/// modification time. `None` means "cannot vouch for it": it was written too
+/// recently to trust. Taken before a file is read, a write that lands during
+/// the read moves the stamp the next call sees.
+pub fn rest_stamp(metadata: &Metadata) -> Option<String> {
+    let modified = rested_modification_nanos(metadata)?;
+    Some(format!(
+        "{}:{}:{modified}",
+        identity_from_metadata(metadata)?,
+        metadata.len()
+    ))
+}
+
+/// A signature of a SQLite database's on-disk state, taken from stat alone:
+/// identity, length and modification time of the database and of its
+/// write-ahead log.
+///
+/// The providers keep their stores in WAL mode, so a commit lands in `-wal` and
+/// the main file moves only at a checkpoint; a change to either moves the
+/// stamp. Reading the store read-only touches neither file. `None` means
+/// "cannot vouch for it": the store is missing, unreadable, or was written too
+/// recently to trust (`AT_REST_AFTER`).
+pub fn wal_database_stamp(path: &Path) -> Option<String> {
+    let main = path.metadata().ok()?;
+    let main_stamp = rest_stamp(&main)?;
+    let mut wal_path = path.as_os_str().to_owned();
+    wal_path.push("-wal");
+    let wal_part = match std::fs::metadata(&wal_path) {
+        Ok(wal) => format!("{}:{}", wal.len(), rested_modification_nanos(&wal)?),
+        Err(_) => "-".to_string(),
+    };
+    Some(format!("{main_stamp}:{wal_part}"))
 }
 
 /// Compare persisted file identities using the platform's durable semantics.
@@ -154,6 +212,67 @@ pub fn cursor_fingerprint(path: &Path, offset: u64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn age(path: &Path, seconds: u64) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    /// A stamp vouches for a file only once it has rested: a write inside the
+    /// clock's resolution can leave the modification time exactly as it was.
+    #[test]
+    fn a_file_written_just_now_has_no_stamp_until_it_has_rested() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        std::fs::write(&path, "data").unwrap();
+        assert_eq!(rest_stamp(&path.metadata().unwrap()), None);
+
+        age(&path, 60);
+        let stamp = rest_stamp(&path.metadata().unwrap()).expect("a rested file has a stamp");
+        assert_eq!(rest_stamp(&path.metadata().unwrap()).as_ref(), Some(&stamp));
+
+        // Longer, or written again, and it is a different file state.
+        std::fs::write(&path, "more data").unwrap();
+        age(&path, 30);
+        assert_ne!(rest_stamp(&path.metadata().unwrap()), Some(stamp));
+
+        // A modification time in the future is a clock nothing can reason about.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(3600))
+            .unwrap();
+        assert_eq!(rest_stamp(&path.metadata().unwrap()), None);
+    }
+
+    #[test]
+    fn a_database_stamp_needs_both_its_files_to_have_rested() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let wal = dir.path().join("opencode.db-wal");
+        std::fs::write(&db, "main").unwrap();
+        age(&db, 60);
+        let without_wal = wal_database_stamp(&db).expect("a database without a log has a stamp");
+
+        // A commit landed in the log this instant: the main file being old
+        // does not make the database's state a known one.
+        std::fs::write(&wal, "frames").unwrap();
+        assert_eq!(wal_database_stamp(&db), None);
+
+        age(&wal, 60);
+        let with_wal = wal_database_stamp(&db).expect("both files have rested");
+        assert_ne!(with_wal, without_wal);
+
+        // More frames appended: the log's length and time moved the stamp.
+        std::fs::write(&wal, "frames and more").unwrap();
+        age(&wal, 30);
+        assert_ne!(wal_database_stamp(&db), Some(with_wal));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

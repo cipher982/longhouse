@@ -33,6 +33,7 @@ mod cursor_visibility;
 mod daemon;
 mod daily_log;
 mod device;
+mod dir_cache;
 mod discovery;
 mod disk_guard;
 mod durability_audit;

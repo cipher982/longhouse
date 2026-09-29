@@ -477,15 +477,23 @@ pub fn cursor_record_exists(
     ))
 }
 
+/// The sealed records an epoch has not shipped yet, with the length of what its
+/// row holds inline (zero when the bytes are a file).
+///
+/// The lane position is a constant of the epoch, so it is a subquery rather than
+/// a join: as a join the planner cannot use it to bound the search, and every row
+/// of the epoch (all of them, for a source that is caught up and has nothing to
+/// repair) was read only to be filtered out.
+const MISSING_PAYLOAD_SQL: &str = "SELECT raw.record_hash, length(raw.record_bytes)
+     FROM cursor_store_raw_record AS raw
+     WHERE raw.source_epoch = ?1 AND raw.record_bytes_len > 0
+       AND raw.source_position >= COALESCE(
+           (SELECT lane.last_position FROM source_epoch_lane_state AS lane
+            WHERE lane.source_epoch = ?1 AND lane.lane = 'durable'),
+           0)";
+
 fn has_missing_file_payload(conn: &Connection, source_epoch: Uuid) -> Result<bool> {
-    let mut statement = conn.prepare(
-        "SELECT raw.record_hash, length(raw.record_bytes)
-         FROM cursor_store_raw_record AS raw
-         LEFT JOIN source_epoch_lane_state AS lane
-           ON lane.source_epoch = raw.source_epoch AND lane.lane = 'durable'
-         WHERE raw.source_epoch = ?1 AND raw.record_bytes_len > 0
-           AND raw.source_position >= COALESCE(lane.last_position, 0)",
-    )?;
+    let mut statement = conn.prepare(MISSING_PAYLOAD_SQL)?;
     let rows = statement.query_map([source_epoch.to_string()], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
     })?;
@@ -597,6 +605,70 @@ pub fn store_capture_cursor(
             last_blob_id,
             Utc::now().to_rfc3339(),
             cycle_stamp
+        ],
+    )?;
+    Ok(())
+}
+
+/// What the last complete pass over a Cursor store found, keyed by its path.
+///
+/// `rest_key` folds together everything outside the database that the pass
+/// depended on (the store's stat stamp, the launch claim naming its
+/// conversation, the build), so the same key later means the same inputs. The
+/// rest of the evidence, that the source is still on the same epoch and owes
+/// nothing, is read live from the database when the key is used.
+pub struct StoreRest {
+    pub source_epoch: Uuid,
+    pub conversation_uuid: String,
+    pub rest_key: String,
+}
+
+pub fn load_store_rest(conn: &Connection, store_path: &str) -> Result<Option<StoreRest>> {
+    let row: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT source_epoch, conversation_uuid, rest_key FROM cursor_store_rest
+             WHERE store_path = ?1",
+            [store_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .context("reading Cursor store rest state")?;
+    row.map(|(source_epoch, conversation_uuid, rest_key)| {
+        Ok(StoreRest {
+            source_epoch: Uuid::parse_str(&source_epoch)
+                .context("Cursor store rest epoch is not a UUID")?,
+            conversation_uuid,
+            rest_key,
+        })
+    })
+    .transpose()
+}
+
+/// Record that a pass finished with the store at rest. A pass that ends where
+/// the last one did leaves the row as it is.
+pub fn record_store_rest(conn: &Connection, store_path: &str, rest: &StoreRest) -> Result<()> {
+    if load_store_rest(conn, store_path)?.is_some_and(|recorded| {
+        recorded.source_epoch == rest.source_epoch
+            && recorded.conversation_uuid == rest.conversation_uuid
+            && recorded.rest_key == rest.rest_key
+    }) {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO cursor_store_rest
+             (store_path, source_epoch, conversation_uuid, rest_key, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(store_path) DO UPDATE SET
+             source_epoch = excluded.source_epoch,
+             conversation_uuid = excluded.conversation_uuid,
+             rest_key = excluded.rest_key,
+             updated_at = excluded.updated_at",
+        params![
+            store_path,
+            rest.source_epoch.to_string(),
+            rest.conversation_uuid,
+            rest.rest_key,
+            Utc::now().to_rfc3339()
         ],
     )?;
     Ok(())
@@ -998,6 +1070,46 @@ mod tests {
         let walk = capture_walk(&conn, epoch).unwrap();
         assert!(walk.repairing);
         assert!(!walk.store_is_unchanged_since_last_cycle(Some("stamp-1")));
+    }
+
+    /// Every pass asks each source whether a sealed payload was lost. For a
+    /// source that has shipped everything the answer is no without looking at any
+    /// of its records, so the search must be bounded by the lane position.
+    #[test]
+    fn asking_whether_a_caught_up_epoch_lost_a_payload_does_not_read_its_records() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+        let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
+        let records: Vec<Vec<u8>> = (0..50)
+            .map(|n| format!("record-{n}").into_bytes())
+            .collect();
+        append_unseen_cursor_records(&mut conn, epoch, &records).unwrap();
+        set_durable_cursor(&conn, epoch, 50);
+
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {MISSING_PAYLOAD_SQL}"))
+            .unwrap()
+            .query_map([epoch.to_string()], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step.contains("source_position>?")),
+            "the payload check reads every record of the epoch: {plan:?}"
+        );
+        assert!(!has_missing_file_payload(&conn, epoch).unwrap());
+
+        // The same question is still answered for what has not shipped.
+        set_durable_cursor(&conn, epoch, 10);
+        let hash = cursor_record_hash(&records[30]);
+        let root = records_root(&conn).unwrap();
+        crate::state::payload_store::remove(
+            &root,
+            &crate::state::payload_store::relative_path_for(&hash, "rec"),
+        )
+        .unwrap();
+        assert!(has_missing_file_payload(&conn, epoch).unwrap());
     }
 
     #[test]

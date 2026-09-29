@@ -319,6 +319,17 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );
 
+        -- What the last complete pass over a Cursor store left behind, keyed by
+        -- the path of the store: enough to say that it is unchanged and owes
+        -- the host nothing, without opening it. Absent means read it.
+        CREATE TABLE IF NOT EXISTS cursor_store_rest (
+            store_path TEXT PRIMARY KEY,
+            source_epoch TEXT NOT NULL,
+            conversation_uuid TEXT NOT NULL,
+            rest_key TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS source_inventory (
             singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
             schema_version INTEGER NOT NULL,

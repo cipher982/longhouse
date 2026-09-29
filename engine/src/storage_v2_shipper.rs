@@ -33,7 +33,7 @@ use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, Storag
 use crate::state::cursor_store_records;
 use crate::state::cursor_store_root;
 use crate::state::file_identity::{
-    cursor_fingerprint, file_identities_match, identity_from_metadata,
+    cursor_fingerprint, file_identities_match, identity_from_metadata, wal_database_stamp,
 };
 use crate::state::file_state::FileState;
 use crate::state::pending_source_envelope::{self, PendingSourceEnvelope};
@@ -3713,6 +3713,65 @@ fn should_wait_for_unclaimed_cursor_source(
     (!source_was_seen && launch_reservation_may_be_pending) || reset_binding_may_be_pending
 }
 
+/// Everything outside the database that a pass over a Cursor store depended on:
+/// the store's stamp, the launch claim naming its conversation (a claim that
+/// arrives later rebinds the source with no store write), and the build (a new
+/// build may read a store differently). The same key later means the same
+/// inputs.
+fn cursor_store_rest_key(store_stamp: Option<&str>, launch_binding_key: &str) -> String {
+    format!(
+        "{}|{launch_binding_key}|{}",
+        store_stamp.unwrap_or_default(),
+        crate::build_identity::COMMIT
+    )
+}
+
+/// Whether this Cursor store is exactly as the last complete pass left it and
+/// owes the host nothing, so the store need not be opened at all.
+///
+/// The last pass wrote a rest row when it ended with everything it had
+/// captured shipped. A stamp and claim key that still match say the store and
+/// the evidence around it did not move; the database is asked again for the
+/// rest, because that can change with no store write: the source
+/// rotated to a new epoch or parser revision, some epoch of it has records the
+/// host has not received (a lane rewound, or a repair of a missing payload,
+/// which announces itself the same way), or the capture walk no longer says its
+/// last cycle finished. An envelope already waiting for the path was handed back
+/// before this is asked.
+fn cursor_store_is_settled(
+    conn: &Connection,
+    path_text: &str,
+    store_stamp: Option<&str>,
+) -> Result<bool> {
+    let Some(store_stamp) = store_stamp else {
+        return Ok(false);
+    };
+    let Some(rest) = cursor_store_records::load_store_rest(conn, path_text)? else {
+        return Ok(false);
+    };
+    let launch_binding_key = format!(
+        "{:?}",
+        crate::cursor_launch_binding::launch_binding_state_for_conversation(
+            &rest.conversation_uuid
+        )?
+    );
+    if rest.rest_key != cursor_store_rest_key(Some(store_stamp), &launch_binding_key) {
+        return Ok(false);
+    }
+    let opaque_source_id = cursor_store::cursor_opaque_source_id(&rest.conversation_uuid);
+    if source_epoch::active_source_epoch(conn, "cursor", &opaque_source_id)?
+        != Some(rest.source_epoch)
+        || source_epoch::active_source_revision(conn, "cursor", &opaque_source_id)?.as_deref()
+            != Some(CURSOR_PARSER_REVISION)
+        || cursor_store_records::oldest_undrained_epoch(conn, "cursor", &opaque_source_id)?
+            .is_some()
+    {
+        return Ok(false);
+    }
+    Ok(cursor_store_records::capture_walk(conn, rest.source_epoch)?
+        .store_is_unchanged_since_last_cycle(Some(store_stamp)))
+}
+
 fn prepare_next_cursor_envelope_outcome_with_limit(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
@@ -3757,7 +3816,10 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         .context("Cursor store has no stable file incarnation")?;
     // Stamped before anything is read from the store, so a write that lands
     // while this pass reads is seen as a change by the next one.
-    let store_stamp = cursor_store::cursor_store_stamp(db_path);
+    let store_stamp = wal_database_stamp(db_path);
+    if cursor_store_is_settled(conn, &path_text, store_stamp.as_deref())? {
+        return Ok(CursorPreparationOutcome::Current);
+    }
     // Cursor records its working directory in the sidecar beside the store, not
     // in the transcript, so recover it here and let the shared project
     // derivation do the rest. Absent or unreadable leaves the session
@@ -3796,9 +3858,11 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         .unwrap_or(false);
     let launch_reservation_may_be_pending =
         crate::cursor_launch_binding::launch_reservation_may_be_pending()?;
-    let claimed_binding = match crate::cursor_launch_binding::launch_binding_state_for_conversation(
+    let launch_binding_state = crate::cursor_launch_binding::launch_binding_state_for_conversation(
         &snapshot.conversation_uuid,
-    )? {
+    )?;
+    let launch_binding_key = format!("{launch_binding_state:?}");
+    let claimed_binding = match launch_binding_state {
         crate::cursor_launch_binding::CursorLaunchBindingState::Managed(binding) => Some(binding),
         crate::cursor_launch_binding::CursorLaunchBindingState::Pending => {
             return Ok(CursorPreparationOutcome::WaitingOnClaim);
@@ -4072,6 +4136,23 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     let range_start =
         source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
     if range_start >= logical_len {
+        // Whether the walk also finished against this same store state is
+        // asked again by `cursor_store_is_settled` when the row is used.
+        let store_is_settled = !source_capture_has_more
+            && target_source_epoch == active_source_epoch
+            && !walk.repairing
+            && store_stamp.is_some();
+        if store_is_settled {
+            cursor_store_records::record_store_rest(
+                conn,
+                &path_text,
+                &cursor_store_records::StoreRest {
+                    source_epoch: active_source_epoch,
+                    conversation_uuid: snapshot.conversation_uuid.clone(),
+                    rest_key: cursor_store_rest_key(store_stamp.as_deref(), &launch_binding_key),
+                },
+            )?;
+        }
         return Ok(
             if source_capture_has_more && target_source_epoch == active_source_epoch {
                 CursorPreparationOutcome::Continue
@@ -5804,8 +5885,12 @@ mod tests {
     }
 
     fn cursor_metadata(root_blob_id: &str) -> String {
+        cursor_metadata_for(CURSOR_CONVERSATION_ID, root_blob_id)
+    }
+
+    fn cursor_metadata_for(conversation_id: &str, root_blob_id: &str) -> String {
         let json = format!(
-            r#"{{"agentId":"{CURSOR_CONVERSATION_ID}","latestRootBlobId":"{root_blob_id}","createdAt":1773403200000}}"#
+            r#"{{"agentId":"{conversation_id}","latestRootBlobId":"{root_blob_id}","createdAt":1773403200000}}"#
         );
         json.as_bytes()
             .iter()
@@ -11870,7 +11955,7 @@ mod tests {
         )
     }
 
-    /// Make a store look like it has been idle: `cursor_store_stamp` does not
+    /// Make a store look like it has been idle: `wal_database_stamp` does not
     /// vouch for a store written in the last couple of seconds.
     fn rest_cursor_store(path: &Path) {
         let long_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
@@ -12038,6 +12123,400 @@ mod tests {
                     .any(|id| id == "-blob-written-just-now"),
                 "a store written this instant must be walked"
             );
+        });
+    }
+
+    /// An OpenCode database whose one session is named `session_id` and lives in
+    /// `directory`. The managed-state root is process-wide while a test using it
+    /// runs, and tests that do not take the guard read it too, so these tests
+    /// name a session and workspace that no other test's database has.
+    fn opencode_db_with_session(path: &Path, session_id: &str, directory: &str) {
+        create_opencode_db(path);
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(&format!(
+            "UPDATE session SET id = '{session_id}', directory = '{directory}';
+             UPDATE message SET session_id = '{session_id}';
+             UPDATE part SET session_id = '{session_id}';"
+        ))
+        .unwrap();
+    }
+
+    /// A Cursor store shipped and then left alone: the state a laptop's history
+    /// is in nearly all the time.
+    fn settled_cursor_store(dir: &Path) -> (PathBuf, Connection) {
+        let store_path = dir
+            .join("cursor/chats/workspace")
+            .join(CURSOR_CONVERSATION_ID)
+            .join("store.db");
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        let store = make_cursor_store(&store_path);
+        // Cursor keeps its stores in WAL mode.
+        store
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
+            .unwrap();
+        // A write is what creates the `-wal` file, which a store that has been
+        // used has and `rest_cursor_store` needs to be able to age.
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES ('orphan', X'0900')",
+                [],
+            )
+            .unwrap();
+        (store_path, store)
+    }
+
+    fn store_opens() -> usize {
+        cursor_store::STORE_OPENS.with(|opens| opens.get())
+    }
+
+    fn settle(conn: &mut Connection, store_path: &Path) {
+        rest_cursor_store(store_path);
+        drain_cursor_store(conn, store_path);
+        // The pass that found it current is the one that recorded it at rest.
+        let opens = store_opens();
+        assert!(matches!(
+            prepare_next_cursor_envelope_outcome(conn, &capabilities(), store_path).unwrap(),
+            CursorPreparationOutcome::Current
+        ));
+        assert_eq!(store_opens(), opens, "the store did not settle");
+    }
+
+    fn grow_cursor_store(store: &Connection) {
+        let mut extended_root = vec![0xbb; 32];
+        extended_root.extend_from_slice(&[0xdd; 32]);
+        set_cursor_root(store, CURSOR_ROOT_B, &extended_root);
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                params![
+                    CURSOR_MESSAGE_B,
+                    br#"{"role":"assistant","content":[{"type":"text","text":"second turn"}]}"#
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_scan_pass_over_a_settled_cursor_store_does_not_open_it() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, _store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+
+            let opens = store_opens();
+            let window = WalWindow::open(&conn);
+            for _pass in 0..3 {
+                assert!(matches!(
+                    prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                        .unwrap(),
+                    CursorPreparationOutcome::Current
+                ));
+            }
+            assert_eq!(
+                store_opens(),
+                opens,
+                "a settled Cursor store was opened again"
+            );
+            let cost = window.cost(&conn);
+            assert!(cost.is_zero(), "a settled Cursor store wrote: {cost:?}");
+        });
+    }
+
+    #[test]
+    fn a_settled_cursor_store_that_changed_is_read_and_ships_again() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+
+            // Written this instant: inside the stamp's resolution, so nothing
+            // may vouch for it, whatever the files' times say.
+            grow_cursor_store(&store);
+            let opens = store_opens();
+            let CursorPreparationOutcome::Envelope(prepared) =
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+            else {
+                panic!("a store written just now must ship its new turn");
+            };
+            assert!(store_opens() > opens);
+            acknowledge_prepared(&mut conn, &prepared);
+            drain_cursor_store(&mut conn, &store_path);
+
+            // Written, then left alone long enough to be stamped: the stamp
+            // moved, so the last look no longer describes it.
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES ('late-blob', X'0708')",
+                    [],
+                )
+                .unwrap();
+            rest_cursor_store(&store_path);
+            let opens = store_opens();
+            drain_cursor_store(&mut conn, &store_path);
+            assert!(store_opens() > opens, "a changed store was not read");
+            assert!(
+                captured_blob_ids(&conn).iter().any(|id| id == "late-blob"),
+                "a blob added to a settled store must still be discovered"
+            );
+
+            // And it settles again.
+            let opens = store_opens();
+            assert!(matches!(
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap(),
+                CursorPreparationOutcome::Current
+            ));
+            assert_eq!(store_opens(), opens);
+        });
+    }
+
+    #[test]
+    fn a_launch_claim_that_arrives_for_a_settled_cursor_store_still_rebinds_it() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, store) = settled_cursor_store(dir.path());
+        // The claim directory is process-wide while this runs, and tests that do
+        // not take the guard read it too, so the claim names a conversation
+        // that no other test's store has.
+        let conversation_id = "0d0c5c2e-8d8b-4a6e-9a51-6f4b3c0f6a11";
+        store
+            .execute(
+                "UPDATE meta SET value = ?1 WHERE key = '0'",
+                [cursor_metadata_for(conversation_id, CURSOR_ROOT_A)],
+            )
+            .unwrap();
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+
+            // Nothing was written to the store, but a managed launch now owns
+            // the conversation: the source rebinds to that session.
+            let managed_session_id = "018f0c3a-7b2d-7f10-8a11-123456789abd";
+            let claim_dir = dir
+                .path()
+                .join("longhouse/managed-local/cursor-helm/binding-probes");
+            fs::create_dir_all(&claim_dir).unwrap();
+            fs::write(
+                claim_dir.join("claim.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "schema_version": 2,
+                    "provider": "cursor",
+                    "status": "observed",
+                    "session_id": managed_session_id,
+                    "conversation_uuid": conversation_id,
+                    "hook_observed_at": "2026-07-17T00:00:00Z"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let CursorPreparationOutcome::Envelope(prepared) =
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+            else {
+                panic!("a claim for a settled store must rebind it");
+            };
+            assert_eq!(prepared.envelope.session_id, managed_session_id);
+        });
+    }
+
+    #[test]
+    fn a_settled_cursor_store_whose_lane_was_rewound_is_still_read() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, _store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+
+            // The store is untouched and every payload is on disk, but the
+            // host's receipts no longer cover what it holds.
+            conn.execute(
+                "UPDATE source_epoch_lane_state SET last_position = 0 WHERE lane = 'durable'",
+                [],
+            )
+            .unwrap();
+            let opens = store_opens();
+            let CursorPreparationOutcome::Envelope(prepared) =
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+            else {
+                panic!("a rewound lane owes the host its records again");
+            };
+            assert!(store_opens() > opens);
+            assert_eq!(prepared.range_start, 0);
+        });
+    }
+
+    #[test]
+    fn a_settled_cursor_store_that_lost_a_sealed_payload_is_still_repaired() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, _store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+            let epoch = source_epoch::active_source_epoch(
+                &conn,
+                "cursor",
+                &cursor_store::cursor_opaque_source_id(CURSOR_CONVERSATION_ID),
+            )
+            .unwrap()
+            .unwrap();
+
+            // The lane was rewound and a sealed payload was lost from disk:
+            // with the store itself untouched, the whole-store repair walk
+            // must still run.
+            conn.execute(
+                "UPDATE source_epoch_lane_state SET last_position = 0 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+            )
+            .unwrap();
+            let records_root = crate::state::payload_store::root_for_connection(&conn)
+                .unwrap()
+                .join("records");
+            let hashes: Vec<String> = conn
+                .prepare("SELECT record_hash FROM cursor_store_raw_record WHERE source_epoch = ?1")
+                .unwrap()
+                .query_map([epoch.to_string()], |row| row.get(0))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap();
+            let lost = hashes
+                .iter()
+                .map(|hash| {
+                    records_root.join(crate::state::payload_store::relative_path_for(hash, "rec"))
+                })
+                .filter(|path| fs::remove_file(path).is_ok())
+                .count();
+            assert!(lost > 0, "the records are sealed to files");
+
+            let opens = store_opens();
+            let CursorPreparationOutcome::Envelope(prepared) =
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+            else {
+                panic!("a rewound lane owes the host its records again");
+            };
+            assert!(store_opens() > opens);
+            assert_eq!(prepared.range_start, 0);
+            assert!(
+                hashes.iter().all(|hash| records_root
+                    .join(crate::state::payload_store::relative_path_for(hash, "rec"))
+                    .exists()),
+                "the repair walk re-sealed what was lost"
+            );
+        });
+    }
+
+    #[test]
+    fn a_settled_cursor_store_whose_walk_is_not_finished_is_still_read() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, _store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+
+            // The store is as it was, but the walk is said to be part-way.
+            conn.execute(
+                "UPDATE cursor_store_capture_cursor SET last_blob_id = 'mid-walk'",
+                [],
+            )
+            .unwrap();
+            let opens = store_opens();
+            assert!(matches!(
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap(),
+                CursorPreparationOutcome::Current
+            ));
+            assert!(
+                store_opens() > opens,
+                "a walk that had not finished was called settled"
+            );
+        });
+    }
+
+    #[test]
+    fn a_settled_cursor_store_whose_epoch_rotated_is_still_read() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, _store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+            let opaque_source_id = cursor_store::cursor_opaque_source_id(CURSOR_CONVERSATION_ID);
+            let epoch = source_epoch::active_source_epoch(&conn, "cursor", &opaque_source_id)
+                .unwrap()
+                .unwrap();
+            let incarnation =
+                source_epoch::active_source_incarnation(&conn, "cursor", &opaque_source_id)
+                    .unwrap()
+                    .unwrap();
+
+            // The source moved to a fresh epoch (a rewrite the host asked for)
+            // that holds none of the store yet, on the same parser revision.
+            let rotated = source_epoch::observe_source(
+                &mut conn,
+                "cursor",
+                &opaque_source_id,
+                &incarnation,
+                0,
+                SourceLane::Durable,
+                0,
+                Some(CURSOR_PARSER_REVISION),
+                None,
+                SourceChangeHint::Rewrite,
+            )
+            .unwrap();
+            assert_ne!(rotated.source_epoch, epoch);
+
+            let CursorPreparationOutcome::Envelope(prepared) =
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+            else {
+                panic!("a new epoch is owed the whole store");
+            };
+            assert_eq!(prepared.source_epoch, rotated.source_epoch);
+            assert_eq!(prepared.range_start, 0);
+        });
+    }
+
+    #[test]
+    fn a_parser_upgrade_replays_a_settled_cursor_store() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, _store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+            let epoch = source_epoch::active_source_epoch(
+                &conn,
+                "cursor",
+                &cursor_store::cursor_opaque_source_id(CURSOR_CONVERSATION_ID),
+            )
+            .unwrap()
+            .unwrap();
+
+            // The source was rendered by an older parser than this build.
+            conn.execute(
+                "UPDATE source_epoch_registry SET source_revision = 'cursor-store-render-old'
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+            )
+            .unwrap();
+            let CursorPreparationOutcome::Envelope(prepared) =
+                prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+            else {
+                panic!("an out-of-date render must be replayed from the store");
+            };
+            assert_ne!(prepared.source_epoch, epoch);
+            assert_eq!(prepared.range_start, 0);
         });
     }
 
