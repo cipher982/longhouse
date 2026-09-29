@@ -649,6 +649,53 @@ pub fn wake_blocked_for_new_engine(conn: &Connection) -> Result<usize> {
     Ok(changed)
 }
 
+/// Whether a blocked row is still inside the backoff its last verdict earned.
+///
+/// `wake_at` was only ever read by `retry_paths`, the restart-and-timer
+/// scheduler, so the backoff bound one caller and nothing else. Every other
+/// route to the shipper (the one-second bound-source reconciler, watcher
+/// events, wakes, hook-driven ships) reached a blocked row and re-asked the
+/// host. On 2026-09-28 thirty blocked Codex sources were re-examined that way
+/// at ~7 requests a second for hours, each one a manifest 404 and a 409 that
+/// could not change. The gate belongs where the network attempt is made.
+///
+/// A row that is not blocked is never deferred: an ordinary pending envelope
+/// retries on the caller's own schedule.
+pub fn reexamination_is_deferred(conn: &Connection, source_epoch: Uuid) -> Result<bool> {
+    conn.query_row(
+        "SELECT blocked_at IS NOT NULL AND wake_at > ?2
+         FROM pending_source_envelope WHERE source_epoch = ?1",
+        params![source_epoch.to_string(), sortable_wake_at(&Utc::now())],
+        |row| row.get(0),
+    )
+    .optional()
+    .map(|deferred| deferred.unwrap_or(false))
+    .context("checking storage-v2 blocked source backoff")
+}
+
+/// The same question for a source, as the scheduler asks it: about the row the
+/// shipper would pick up next.
+pub fn source_reexamination_is_deferred(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<bool> {
+    conn.query_row(
+        "SELECT pending.blocked_at IS NOT NULL AND pending.wake_at > ?3
+         FROM pending_source_envelope AS pending
+         JOIN source_epoch_registry AS epoch
+           ON epoch.source_epoch = pending.source_epoch
+         WHERE epoch.provider = ?1 AND epoch.opaque_source_id = ?2
+         ORDER BY pending.created_at, pending.source_epoch
+         LIMIT 1",
+        params![provider, opaque_source_id, sortable_wake_at(&Utc::now())],
+        |row| row.get(0),
+    )
+    .optional()
+    .map(|deferred| deferred.unwrap_or(false))
+    .context("checking storage-v2 source backoff")
+}
+
 pub fn source_is_blocked(
     conn: &Connection,
     provider: &str,

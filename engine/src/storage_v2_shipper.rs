@@ -995,18 +995,29 @@ pub(crate) async fn ship_prepared_envelope(
     let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
         .context("prepared storage-v2 envelope is not durable")?;
     validate_pending_matches_prepared(&pending, &prepared)?;
-    if pending.blocked_at.is_some() {
-        // Every blocked source gets one host-truth re-examination, whatever its
-        // provider. This branch used to be gated on `provider == "cursor"`, so a
-        // blocked Claude, Codex, OpenCode or Antigravity source returned
-        // `StorageV2SourceBlocked` below without ever touching the wire again —
-        // recovery existed only for the provider whose incident prompted it, and
-        // every other provider's blocks were permanent by default.
+    // A refusal is a verdict, not a transient failure: it stands until its
+    // backoff elapses or something wakes the row (an engine restart, a repaired
+    // request body). Every route reaches this function -- the one-second
+    // bound-source reconciler, watcher events, wakes, hook-driven ships -- so
+    // the gate is here, where the network attempt is made. It used to live only
+    // in `retry_paths`, and a blocked source that stayed behind its file was
+    // re-asked at every one of those callers' cadence: ~7 refused requests a
+    // second from thirty sources on 2026-09-28.
+    if pending.blocked_at.is_some()
+        && !pending_source_envelope::reexamination_is_deferred(conn, prepared.source_epoch)?
+    {
+        // Every blocked source gets one host-truth re-examination when it is
+        // due, whatever its provider. This branch used to be gated on
+        // `provider == "cursor"`, so a blocked Claude, Codex, OpenCode or
+        // Antigravity source returned `StorageV2SourceBlocked` below without
+        // ever touching the wire again — recovery existed only for the
+        // provider whose incident prompted it, and every other provider's
+        // blocks were permanent by default.
         //
         // Re-examination starts from current host manifests. Admission
         // conflicts retry the exact frozen request to obtain typed evidence;
         // human-readable block detail is never parsed as control state.
-        if reexamine_blocked_source(
+        match reexamine_blocked_source(
             conn,
             client,
             capabilities,
@@ -1015,13 +1026,26 @@ pub(crate) async fn ship_prepared_envelope(
             lane,
             request_timeout,
         )
-        .await?
+        .await
         {
-            return Ok(StorageV2ShipOutcome {
-                bytes_shipped: 0,
-                events_shipped: 0,
-                has_more: true,
-            });
+            Ok(true) => {
+                return Ok(StorageV2ShipOutcome {
+                    bytes_shipped: 0,
+                    events_shipped: 0,
+                    has_more: true,
+                });
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // Some looks end in "still blocked" through an error return
+                // (the host is behind local evidence, for one). That is the
+                // same nothing-changed answer, so it earns the same backoff;
+                // without it the row stays due and is re-asked immediately.
+                if error.downcast_ref::<StorageV2SourceBlocked>().is_some() {
+                    pending_source_envelope::defer_reexamination(conn, prepared.source_epoch)?;
+                }
+                return Err(error);
+            }
         }
     }
     if let Some(blocked_at) = pending.blocked_at.as_deref() {
@@ -1448,6 +1472,16 @@ async fn reexamine_blocked_source(
                 let Some(conflict) =
                     error.downcast_ref::<crate::shipping::client::StorageV2Conflict>()
                 else {
+                    // A structurally invalid envelope is as deterministic as a
+                    // conflict: fall through to the backoff instead of handing
+                    // the daemon an error it retries every half second.
+                    if error
+                        .downcast_ref::<crate::shipping::client::StorageV2EnvelopeRejected>()
+                        .is_some()
+                    {
+                        pending_source_envelope::defer_reexamination(conn, prepared.source_epoch)?;
+                        return Ok(false);
+                    }
                     return Err(error);
                 };
                 if reconcile_cross_provider_session_binding(conn, pending, prepared, conflict)?
@@ -10083,6 +10117,182 @@ mod tests {
             .unwrap();
         assert!(phantom_ended);
         server.await.unwrap();
+    }
+
+    /// 2026-09-29: from the moment thirty sources were blocked, the bound-source
+    /// reconciler (one-second tick, source still behind its file) sent each of
+    /// them straight back into the shipper, which re-asked the host every time:
+    /// a manifest 404 and a 409 per attempt, ~7 refused requests a second for
+    /// hours. The six-hour backoff was only honoured by the restart scheduler.
+    /// A refusal now stands until its backoff elapses or a restart wakes it.
+    #[tokio::test]
+    async fn a_refused_source_is_not_asked_again_until_its_backoff_elapses() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // 0: phantom-predecessor 409 with nothing to adopt; 1: invalid-envelope 422.
+        let mode = Arc::new(AtomicUsize::new(0));
+        let posts = Arc::new(AtomicUsize::new(0));
+        let manifests = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = {
+            let (mode, posts, manifests) = (mode.clone(), posts.clone(), manifests.clone());
+            tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let (request_line, body) = read_http_request(&mut socket).await;
+                    let (status, response_body) = if request_line.starts_with("POST ") {
+                        posts.fetch_add(1, Ordering::SeqCst);
+                        let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                        if mode.load(Ordering::SeqCst) == 0 {
+                            (
+                                "409 Conflict",
+                                serde_json::json!({
+                                    "detail": {
+                                        "code": "source_epoch_conflict",
+                                        "message": "source range overlaps or conflicts with the registered epoch",
+                                        "details": {
+                                            "reason": "predecessor_not_open_for_this_identity",
+                                            "predecessor_exists": false,
+                                            "expected_predecessor": envelope.predecessor_source_epoch,
+                                        }
+                                    }
+                                })
+                                .to_string(),
+                            )
+                        } else {
+                            (
+                                "422 Unprocessable Entity",
+                                r#"{"detail":{"code":"invalid_envelope","message":"refused","details":{}}}"#
+                                    .to_string(),
+                            )
+                        }
+                    } else {
+                        manifests.fetch_add(1, Ordering::SeqCst);
+                        (
+                            "404 Not Found",
+                            r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#
+                                .to_string(),
+                        )
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                }
+            })
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first_line = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        fs::write(&path, first_line).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        // The production shape: a local epoch the host never heard of, then the
+        // provider rewrites the file, so the replacement names a phantom.
+        let phantom = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        pending_source_envelope::acknowledge_and_delete(
+            &mut conn,
+            phantom.source_epoch,
+            &phantom.envelope.expected_envelope_id,
+            phantom.range_start,
+            phantom.range_end,
+        )
+        .unwrap();
+        fs::rename(&path, dir.path().join("rewritten.old")).unwrap();
+        let rewritten = [first_line.as_slice(), b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"world\"}}\n".as_slice()].concat();
+        fs::write(&path, &rewritten).unwrap();
+
+        async fn attempt(conn: &mut Connection, client: &ShipperClient, path: &Path) -> bool {
+            let error = ship_next_envelope(
+                conn,
+                client,
+                &capabilities(),
+                path,
+                "claude",
+                None,
+                "live",
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("a refused source stays blocked");
+            error
+                .downcast_ref::<StorageV2SourceBlocked>()
+                .unwrap_or_else(|| panic!("blocked, not a transient failure: {error:#}"))
+                .newly_blocked
+        }
+        let wire_requests = || posts.load(Ordering::SeqCst) + manifests.load(Ordering::SeqCst);
+
+        // The refusal itself: one POST, one manifest probe, then quarantined.
+        assert!(attempt(&mut conn, &client, &path).await, "newly blocked");
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        let after_first_refusal = wire_requests();
+
+        // A minute of one-second reconciler ticks, and then some: no network.
+        for _ in 0..90 {
+            assert!(!attempt(&mut conn, &client, &path).await);
+        }
+        assert_eq!(
+            wire_requests(),
+            after_first_refusal,
+            "a refusal within its backoff must cost the host nothing"
+        );
+
+        // The backoff elapses: exactly one re-examination, which finds the same
+        // refusal and pushes the next look out again.
+        conn.execute(
+            "UPDATE pending_source_envelope SET wake_at = '1970-01-01T00:00:00.000000000Z'",
+            [],
+        )
+        .unwrap();
+        attempt(&mut conn, &client, &path).await;
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        let after_reexamination = wire_requests();
+        for _ in 0..90 {
+            attempt(&mut conn, &client, &path).await;
+        }
+        assert_eq!(wire_requests(), after_reexamination);
+        assert!(
+            pending_source_envelope::retry_paths(&conn)
+                .unwrap()
+                .is_empty(),
+            "an unchanged re-examination earns a longer backoff, not an immediate retry"
+        );
+
+        // A new engine is new evidence: the restart wake still forces one look.
+        assert_eq!(
+            pending_source_envelope::wake_blocked_for_new_engine(&conn).unwrap(),
+            1
+        );
+        attempt(&mut conn, &client, &path).await;
+        assert_eq!(posts.load(Ordering::SeqCst), 3);
+
+        // An invalid-envelope verdict on a re-examination is just as
+        // deterministic. It used to escape as a plain error, which the daemon
+        // retries every half second on the live lane.
+        mode.store(1, Ordering::SeqCst);
+        pending_source_envelope::wake_blocked_for_new_engine(&conn).unwrap();
+        attempt(&mut conn, &client, &path).await;
+        assert_eq!(posts.load(Ordering::SeqCst), 4);
+        for _ in 0..90 {
+            attempt(&mut conn, &client, &path).await;
+        }
+        assert_eq!(posts.load(Ordering::SeqCst), 4);
+
+        server.abort();
     }
 
     #[tokio::test]

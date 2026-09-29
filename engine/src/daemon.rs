@@ -5644,6 +5644,20 @@ fn reconcile_target_for(
         return None;
     }
     let provider = binding.provider.as_str();
+    // A source the host refused stays behind its file by construction: the
+    // frozen envelope cannot ship, so the lane never advances. Scheduling it
+    // every tick re-loads its whole request body to be told "blocked" (and,
+    // before the shipper honoured the backoff, re-asked the host). It is due
+    // again when its backoff elapses or a restart wakes it.
+    if crate::state::pending_source_envelope::source_reexamination_is_deferred(
+        conn,
+        provider,
+        &crate::storage_v2_shipper::opaque_source_id(&binding.path),
+    )
+    .unwrap_or(false)
+    {
+        return None;
+    }
     let (position, never_shipped) =
         match crate::storage_v2_shipper::durable_lane_position(conn, provider, &binding.path) {
             Ok(Some(position)) => (position, false),
@@ -9112,6 +9126,67 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].provider, "omp");
         assert!(targets[0].lag_bytes >= STARVED_LIVE_TRANSCRIPT_BYTES);
+    }
+
+    /// A refused source stays behind its file for as long as it is refused, so
+    /// "behind" alone would schedule it every tick forever. It is left alone
+    /// while its backoff runs and picked up again when the row is woken.
+    #[test]
+    fn a_refused_source_is_not_scheduled_until_its_backoff_elapses() {
+        let dir = tempfile::tempdir().unwrap();
+        let (canonical, conn, _) =
+            bound_source(dir.path(), "omp-refused.jsonl", 300 * 1024, "session-omp");
+        let mut conn = conn;
+        let opaque = crate::storage_v2_shipper::opaque_source_id(&canonical.to_string_lossy());
+        let resolution = crate::state::source_epoch::observe_file(
+            &mut conn,
+            "omp",
+            &opaque,
+            &canonical,
+            crate::state::source_epoch::SourceLane::Durable,
+            0,
+            None,
+            Some("session-omp"),
+            crate::state::source_epoch::SourceChangeHint::None,
+        )
+        .unwrap();
+        let pending = crate::state::pending_source_envelope::PendingSourceEnvelope::new(
+            resolution.source_epoch,
+            canonical.to_string_lossy().to_string(),
+            0,
+            10,
+            "a".repeat(64),
+            vec![1],
+            vec![2],
+            10,
+            1,
+            true,
+            false,
+        );
+        crate::state::pending_source_envelope::persist_or_load(&mut conn, &pending).unwrap();
+        assert_eq!(
+            reconcile_targets_for(&conn).len(),
+            1,
+            "an unblocked pending source is scheduled as before"
+        );
+
+        crate::state::pending_source_envelope::quarantine(
+            &conn,
+            resolution.source_epoch,
+            "source_epoch_conflict_unresolved",
+            "predecessor_not_open_for_this_identity",
+        )
+        .unwrap();
+        assert!(
+            reconcile_targets_for(&conn).is_empty(),
+            "a refused source inside its backoff must not be re-scheduled every tick"
+        );
+
+        assert_eq!(
+            crate::state::pending_source_envelope::wake_blocked_for_new_engine(&conn).unwrap(),
+            1
+        );
+        assert_eq!(reconcile_targets_for(&conn).len(), 1);
     }
 
     #[test]
