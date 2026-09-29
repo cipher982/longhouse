@@ -995,17 +995,7 @@ pub(crate) async fn ship_prepared_envelope(
     let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
         .context("prepared storage-v2 envelope is not durable")?;
     validate_pending_matches_prepared(&pending, &prepared)?;
-    // A refusal is a verdict, not a transient failure: it stands until its
-    // backoff elapses or something wakes the row (an engine restart, a repaired
-    // request body). Every route reaches this function -- the one-second
-    // bound-source reconciler, watcher events, wakes, hook-driven ships -- so
-    // the gate is here, where the network attempt is made. It used to live only
-    // in `retry_paths`, and a blocked source that stayed behind its file was
-    // re-asked at every one of those callers' cadence: ~7 refused requests a
-    // second from thirty sources on 2026-09-28.
-    if pending.blocked_at.is_some()
-        && !pending_source_envelope::reexamination_is_deferred(conn, prepared.source_epoch)?
-    {
+    if pending.blocked_at.is_some() {
         // Every blocked source gets one host-truth re-examination when it is
         // due, whatever its provider. This branch used to be gated on
         // `provider == "cursor"`, so a blocked Claude, Codex, OpenCode or
@@ -1017,7 +1007,8 @@ pub(crate) async fn ship_prepared_envelope(
         // Re-examination starts from current host manifests. Admission
         // conflicts retry the exact frozen request to obtain typed evidence;
         // human-readable block detail is never parsed as control state.
-        match reexamine_blocked_source(
+        // Whether it is due yet is `reexamine_blocked_source`'s question.
+        if reexamine_blocked_source(
             conn,
             client,
             capabilities,
@@ -1026,26 +1017,13 @@ pub(crate) async fn ship_prepared_envelope(
             lane,
             request_timeout,
         )
-        .await
+        .await?
         {
-            Ok(true) => {
-                return Ok(StorageV2ShipOutcome {
-                    bytes_shipped: 0,
-                    events_shipped: 0,
-                    has_more: true,
-                });
-            }
-            Ok(false) => {}
-            Err(error) => {
-                // Some looks end in "still blocked" through an error return
-                // (the host is behind local evidence, for one). That is the
-                // same nothing-changed answer, so it earns the same backoff;
-                // without it the row stays due and is re-asked immediately.
-                if error.downcast_ref::<StorageV2SourceBlocked>().is_some() {
-                    pending_source_envelope::defer_reexamination(conn, prepared.source_epoch)?;
-                }
-                return Err(error);
-            }
+            return Ok(StorageV2ShipOutcome {
+                bytes_shipped: 0,
+                events_shipped: 0,
+                has_more: true,
+            });
         }
     }
     if let Some(blocked_at) = pending.blocked_at.as_deref() {
@@ -1396,8 +1374,55 @@ async fn reconcile_storage_v2_conflict(
 /// Cursor-specific lineage and replacement repairs remain for the epoch-identity
 /// failures only they understand; they are reached through this one door rather
 /// than gating whether the door opens.
+///
+/// A refusal is a verdict, not a transient failure: it stands until its backoff
+/// elapses or something wakes the row (an engine restart, a repaired request
+/// body). This is the single door to the wire for a blocked row -- the generic
+/// shipper and the Cursor store lane both come through it -- so the backoff is
+/// checked here, where the network attempt is made. It used to be read only by
+/// `retry_paths`, and a blocked source that stayed behind its file was re-asked
+/// at every other caller's cadence (the one-second bound-source reconciler,
+/// watcher events, wakes, hook ships): ~7 refused requests a second from thirty
+/// sources on 2026-09-28. Returns false, having done nothing, while the row is
+/// inside its backoff.
 #[allow(clippy::too_many_arguments)]
 async fn reexamine_blocked_source(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    lane: &str,
+    request_timeout: Duration,
+) -> Result<bool> {
+    if pending_source_envelope::reexamination_is_deferred(conn, prepared.source_epoch)? {
+        return Ok(false);
+    }
+    match examine_blocked_source(
+        conn,
+        client,
+        capabilities,
+        pending,
+        prepared,
+        lane,
+        request_timeout,
+    )
+    .await
+    {
+        // Some looks end in "still blocked" through an error return (the host
+        // is behind local evidence, for one). That is the same nothing-changed
+        // answer, so it earns the same backoff; without it the row stays due
+        // and is re-asked immediately.
+        Err(error) if error.downcast_ref::<StorageV2SourceBlocked>().is_some() => {
+            pending_source_envelope::defer_reexamination(conn, prepared.source_epoch)?;
+            Err(error)
+        }
+        other => other,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn examine_blocked_source(
     conn: &mut Connection,
     client: &ShipperClient,
     capabilities: &StorageV2Capabilities,
@@ -7450,6 +7475,42 @@ mod tests {
         )
         .unwrap();
 
+        // Inside its backoff the Cursor store lane must not touch the wire: it
+        // reaches re-examination without passing through `ship_prepared_envelope`,
+        // so a client with nothing listening proves the gate is on this door too.
+        let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_address = closed.local_addr().unwrap();
+        drop(closed);
+        let unreachable = ShipperClient::with_compression(
+            &ShipperConfig {
+                api_url: format!("http://{closed_address}"),
+                timeout_seconds: 1,
+                ..ShipperConfig::default()
+            },
+            CompressionAlgo::Gzip,
+        )
+        .unwrap();
+        for _ in 0..3 {
+            assert!(matches!(
+                ship_next_cursor_envelope(
+                    &mut conn,
+                    &unreachable,
+                    &capabilities(),
+                    &path,
+                    "live",
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap(),
+                CursorStorageV2ShipResult::Current
+            ));
+        }
+        // A restart is new evidence: the row is due and the recovery runs.
+        assert_eq!(
+            pending_source_envelope::wake_blocked_for_new_engine(&conn).unwrap(),
+            1
+        );
+
         let host_epoch = Uuid::new_v4();
         let host_manifest = serde_json::json!({
             "v": 2,
@@ -9336,6 +9397,11 @@ mod tests {
         )
         .unwrap();
 
+        // The block's backoff is still running; a restart is what makes it due.
+        assert_eq!(
+            pending_source_envelope::wake_blocked_for_new_engine(&conn).unwrap(),
+            1
+        );
         assert!(reexamine_blocked_source(
             &mut conn,
             &client,
@@ -9501,6 +9567,11 @@ mod tests {
         )
         .unwrap();
 
+        // The block's backoff is still running; a restart is what makes it due.
+        assert_eq!(
+            pending_source_envelope::wake_blocked_for_new_engine(&conn).unwrap(),
+            1
+        );
         assert!(reexamine_blocked_source(
             &mut conn,
             &client,
