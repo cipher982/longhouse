@@ -300,7 +300,7 @@ def served_commit(url: str) -> str:
 
 # --- reporting -------------------------------------------------------------
 
-def refusal(kind: str, what: str, verdicts: list[Verdict]) -> str:
+def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict]) -> str:
     lines = [f"review-gate: REFUSED {kind}: {len(verdicts)} commit(s) {what}", ""]
     for v in verdicts:
         area = f" [{', '.join(v.areas)}]" if v.areas else ""
@@ -311,9 +311,8 @@ def refusal(kind: str, what: str, verdicts: list[Verdict]) -> str:
     if unreviewed:
         first, last = unreviewed[0], unreviewed[-1]
         lines += [
-            f"Get a receipt (a checkout at the exact head, then review from the oldest commit's parent):",
-            f"  git worktree add --detach /tmp/agents/review-{last[:8]} {last} && \\",
-            f"  hatch review -C /tmp/agents/review-{last[:8]} --base {first[:12]}^ --no-intent   # --no-intent for someone else's commits",
+            "Get a receipt (reviews an exact commit range in a throwaway checkout; --no-intent for someone else's commits):",
+            f"  hatch review -C {repo} --base {first[:12]}^ --head {last[:12]} --no-intent",
             "A rebase after review keeps the receipt. A partial review (a pass hit its budget) does not count.",
         ]
     lines += [
@@ -393,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if override(repo, kind, target, verdicts):
         return 0
-    print(refusal(kind, what, verdicts), file=sys.stderr)
+    print(refusal(repo, kind, what, verdicts), file=sys.stderr)
     return 1
 
 

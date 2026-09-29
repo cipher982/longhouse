@@ -328,6 +328,7 @@ class PromotionRuleTests(unittest.TestCase):
         self.assertIn(sha[:12], result.stderr)
         self.assertIn("feature a", result.stderr)
         self.assertIn("hatch review -C", result.stderr)
+        self.assertIn(f"--base {sha[:12]}^ --head {sha[:12]}", result.stderr)
         self.assertIn("David only", result.stderr)
 
     def test_override_is_david_only_needs_a_reason_and_is_logged(self):
