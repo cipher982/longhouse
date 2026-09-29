@@ -7,7 +7,10 @@ import logging
 import multiprocessing
 import os
 from collections.abc import AsyncIterator
+from collections.abc import Callable
+from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import asynccontextmanager
 from multiprocessing.connection import wait as wait_for_process_exit
@@ -157,6 +160,18 @@ def _terminate_owned_executor(
     return True
 
 
+def _submit_to_executor(executor: ProcessPoolExecutor, fn: Callable[..., Any], args: tuple[Any, ...]) -> ConcurrentFuture[Any]:
+    try:
+        return executor.submit(fn, *args)
+    except BrokenProcessPool:
+        raise
+    except RuntimeError as exc:
+        # Our own retirement shut this generation down between the caller
+        # choosing it and the dispatcher thread reaching it: the same recovery
+        # as a crashed pool.
+        raise BrokenProcessPool(str(exc)) from exc
+
+
 def _future_completed_normally(future: asyncio.Future[Any]) -> bool:
     if not future.done() or future.cancelled():
         return False
@@ -177,6 +192,9 @@ class _OwnedProcessPool:
         self._replace_lock = asyncio.Lock()
         self._cleanup_tasks: dict[ProcessPoolExecutor, asyncio.Task[bool]] = {}
         self._deferred_slots: dict[ProcessPoolExecutor, list[asyncio.Semaphore]] = {}
+        # One dispatcher thread per pool: a wedged submit must not delay the
+        # other lanes, and it must never be the event-loop thread (see submit).
+        self._dispatcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="object-worker-submit")
         self._closed = False
 
     def _new_executor(self) -> ProcessPoolExecutor:
@@ -184,6 +202,27 @@ class _OwnedProcessPool:
             max_workers=self.workers,
             mp_context=multiprocessing.get_context("spawn"),
         )
+
+    def submit(self, executor: ProcessPoolExecutor, fn: Callable[..., Any], *args: Any) -> asyncio.Future[Any]:
+        """Run ``fn(*args)`` on ``executor`` without blocking the event loop.
+
+        ``ProcessPoolExecutor.submit`` takes the executor's shutdown lock, and
+        when one child dies the stdlib's manager thread holds that same lock
+        while it joins the survivors. A survivor that ignores SIGTERM (stopped,
+        or stuck in uninterruptible I/O) keeps the lock, so a submit on the
+        loop thread would stop every route on the host, and the SIGKILL in
+        ``retire`` that frees the survivor runs on that same loop. The submit
+        therefore runs on this pool's dispatcher thread. The returned future
+        covers submit and result, so a caller's operation deadline bounds a
+        wedged submit too; the caller abandons it like any stalled operation
+        and ``retire`` kills the children, which releases the lock.
+        """
+
+        return asyncio.ensure_future(self._submit_and_wait(executor, fn, args))
+
+    async def _submit_and_wait(self, executor: ProcessPoolExecutor, fn: Callable[..., Any], args: tuple[Any, ...]) -> Any:
+        submitted = await asyncio.get_running_loop().run_in_executor(self._dispatcher, _submit_to_executor, executor, fn, args)
+        return await asyncio.wrap_future(submitted)
 
     def defer_slot(self, executor: ProcessPoolExecutor, slots: asyncio.Semaphore) -> None:
         """Retain child identities and the permit before any cancellable await."""
@@ -301,11 +340,8 @@ class RawObjectWorkerPool:
     async def start(self) -> None:
         if self._closed:
             raise RawObjectWorkerError("raw worker pool is closed")
-        loop = asyncio.get_running_loop()
         await asyncio.gather(
-            loop.run_in_executor(self._live_pool.executor, _worker_ping),
-            loop.run_in_executor(self._repair_pool.executor, _worker_ping),
-            loop.run_in_executor(self._user_read_pool.executor, _worker_ping),
+            *(owner.submit(owner.executor, _worker_ping) for owner in (self._live_pool, self._repair_pool, self._user_read_pool))
         )
 
     async def _retire_broken_executor(
@@ -390,7 +426,7 @@ class RawObjectWorkerPool:
                 owner = self._pool_for_lane(lane)
                 executor = owner.executor
                 try:
-                    future = asyncio.get_running_loop().run_in_executor(
+                    future = owner.submit(
                         executor,
                         _seal_media_in_worker,
                         str(self.root),
@@ -468,7 +504,7 @@ class RawObjectWorkerPool:
                 owner = self._pool_for_lane(lane)
                 executor = owner.executor
                 try:
-                    future = asyncio.get_running_loop().run_in_executor(
+                    future = owner.submit(
                         executor,
                         _seal_in_worker,
                         str(self.root),
@@ -566,7 +602,7 @@ class RawObjectWorkerPool:
             for attempt in range(2):
                 executor = owner.executor
                 try:
-                    future = asyncio.get_running_loop().run_in_executor(
+                    future = owner.submit(
                         executor,
                         _read_in_worker,
                         str(self.root),
@@ -630,7 +666,7 @@ class RawObjectWorkerPool:
             for attempt in range(2):
                 executor = owner.executor
                 try:
-                    future = asyncio.get_running_loop().run_in_executor(
+                    future = owner.submit(
                         executor,
                         _read_media_in_worker,
                         str(self.root),
@@ -701,7 +737,7 @@ class RawObjectWorkerPool:
             for attempt in range(2):
                 executor = owner.executor
                 try:
-                    future = asyncio.get_running_loop().run_in_executor(
+                    future = owner.submit(
                         executor,
                         _read_compressed_in_worker,
                         str(self.root),

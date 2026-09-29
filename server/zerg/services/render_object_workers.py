@@ -97,11 +97,8 @@ class RenderObjectWorkerPool:
     async def start(self) -> None:
         if self._closed:
             raise RenderObjectWorkerError("render worker pool is closed")
-        loop = asyncio.get_running_loop()
         await asyncio.gather(
-            loop.run_in_executor(self._live_pool.executor, _worker_ping),
-            loop.run_in_executor(self._repair_pool.executor, _worker_ping),
-            loop.run_in_executor(self._user_read_pool.executor, _worker_ping),
+            *(owner.submit(owner.executor, _worker_ping) for owner in (self._live_pool, self._repair_pool, self._user_read_pool))
         )
 
     async def _retire_broken_executor(
@@ -187,7 +184,7 @@ class RenderObjectWorkerPool:
                 owner = self._pool_for_lane(lane)
                 executor = owner.executor
                 try:
-                    future = asyncio.get_running_loop().run_in_executor(executor, _seal_in_worker, str(self.root), spec)
+                    future = owner.submit(executor, _seal_in_worker, str(self.root), spec)
                     async with asyncio.timeout(timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
@@ -283,7 +280,7 @@ class RenderObjectWorkerPool:
             for attempt in range(2):
                 executor = owner.executor
                 try:
-                    future = asyncio.get_running_loop().run_in_executor(
+                    future = owner.submit(
                         executor,
                         _read_in_worker,
                         str(self.root),

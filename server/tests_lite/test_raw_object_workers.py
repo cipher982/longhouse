@@ -4,13 +4,16 @@ import asyncio
 import os
 import signal
 import sys
+import threading
 import time
+from concurrent.futures.process import BrokenProcessPool
 from uuid import uuid4
 
 import pytest
 
 import zerg.services.raw_object_workers as worker_module
 from tests_lite._process_helpers import child_is_gone
+from tests_lite._process_helpers import ignore_sigterm_and_park
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import RawObjectWorkerPool
@@ -265,13 +268,12 @@ async def test_broken_pool_cleanup_terminates_surviving_owned_child(tmp_path, mo
         _wait_until_stopped(survivor.pid)
         monkeypatch.setattr(worker_module, "_terminate_owned_executor", lambda *_: False)
         worker_busy = RawObjectWorkerBusy if pool_type is RawObjectWorkerPool else RenderObjectWorkerBusy
-        # The read must be submitted while the pool is still whole. The moment
-        # the stdlib manager thread sees a child die it takes the executor's
-        # shutdown lock and holds it while joining the stopped survivor; a
-        # submit from this event-loop thread then blocks on that lock for good
-        # (about 1 run in 20 under CPU contention, which hung a whole xdist
-        # worker). So stop both children, queue the read behind them, and only
-        # then kill one.
+        # Queue the read while the pool is still whole so the outcome is fixed:
+        # a submit that arrives after the manager thread noticed the death
+        # blocks on the executor's shutdown lock instead, and times out (that
+        # ordering is test_submit_to_a_broken_pool_never_blocks_the_event_loop).
+        # So stop both children, queue the read behind them, and only then
+        # kill one.
         os.kill(broken.pid, signal.SIGSTOP)
         _wait_until_stopped(broken.pid)
         read = asyncio.create_task(repair_read())
@@ -298,6 +300,158 @@ async def test_broken_pool_cleanup_terminates_surviving_owned_child(tmp_path, mo
                 if child.is_alive():
                     child.kill()
                     child.join(3.0)
+
+
+async def _break_repair_pool_around_a_sigterm_proof_child(pool, ready):
+    """Kill one repair child while the other ignores SIGTERM.
+
+    Returns once the stdlib manager thread has marked the pool broken and is
+    joining the survivor, so it holds the executor's shutdown lock until the
+    survivor is killed.
+    """
+    executor = pool._repair_pool.executor
+    loop = asyncio.get_running_loop()
+    parked = [loop.run_in_executor(executor, ignore_sigterm_and_park, str(ready), 60.0) for _ in range(2)]
+    async with asyncio.timeout(15):
+        while len(list(ready.iterdir())) < 2:
+            await asyncio.sleep(0.01)
+    children = list(executor._processes.values())
+    assert len(children) >= 2
+    broken, survivor = children[:2]
+    os.kill(broken.pid, signal.SIGKILL)
+    async with asyncio.timeout(10):
+        while not executor._broken:
+            await asyncio.sleep(0.005)
+    await asyncio.gather(*parked, return_exceptions=True)
+    assert executor._shutdown_lock.locked()
+    assert survivor.is_alive()
+    return executor, broken, survivor, children
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pool_type", "worker_error"),
+    [(RawObjectWorkerPool, RawObjectWorkerError), (RenderObjectWorkerPool, RenderObjectWorkerError)],
+)
+async def test_submit_to_a_broken_pool_never_blocks_the_event_loop(tmp_path, pool_type, worker_error):
+    """One dead child plus one SIGTERM-proof child must not wedge the API loop.
+
+    The stdlib manager thread holds the executor's shutdown lock while it joins
+    the survivor, and ``submit`` takes the same lock. Submitting from the loop
+    thread therefore froze every route on the host until something killed the
+    survivor, which only the frozen loop could do. A heartbeat measured from a
+    plain thread, so a stopped loop is observed rather than hanging the test,
+    proves the loop keeps ticking; the operation then fails with the pool's
+    own typed error at its deadline and the next one recovers.
+    """
+    pool = pool_type(tmp_path, live_workers=1, repair_workers=2, user_read_workers=1, queue_multiplier=1)
+    ready = tmp_path / "ready"
+    ready.mkdir()
+    last_tick = time.monotonic()
+    stop_watching = threading.Event()
+    loop_stalled = threading.Event()
+    children = []
+    heartbeat = None
+    watcher = None
+    try:
+        await pool.start()
+        spec = _spec() if pool_type is RawObjectWorkerPool else _render_spec()
+        sealed = await pool.seal(spec, lane="live")
+
+        async def repair_read():
+            if pool_type is RawObjectWorkerPool:
+                return await pool.read(
+                    sealed.object_path,
+                    sealed.object_hash,
+                    spec.tenant_id,
+                    lane="repair",
+                    operation_timeout_seconds=1.0,
+                )
+            return await pool.read(sealed.object_path, sealed.object_hash, lane="background", operation_timeout_seconds=1.0)
+
+        executor, broken, survivor, children = await _break_repair_pool_around_a_sigterm_proof_child(pool, ready)
+
+        async def beat():
+            nonlocal last_tick
+            while True:
+                last_tick = time.monotonic()
+                await asyncio.sleep(0.01)
+
+        def watch():
+            while not stop_watching.wait(0.05):
+                if time.monotonic() - last_tick > 1.5:
+                    loop_stalled.set()
+                    # Free the lock so a regression fails this test instead of hanging the run.
+                    os.kill(survivor.pid, signal.SIGKILL)
+                    return
+
+        heartbeat = asyncio.create_task(beat())
+        last_tick = time.monotonic()
+        watcher = threading.Thread(target=watch, name="loop-stall-watcher", daemon=True)
+        watcher.start()
+
+        started = time.monotonic()
+        outcome = (await asyncio.gather(repair_read(), return_exceptions=True))[0]
+        elapsed = time.monotonic() - started
+        assert not loop_stalled.is_set(), "the event loop stopped responding while a broken pool was submitted to"
+        assert isinstance(outcome, worker_error), outcome
+        assert "deadline" in str(outcome)
+        assert elapsed < 5.0
+
+        # The abandoned operation's cleanup killed the survivor and the pool
+        # recovers: the same read now succeeds on a fresh generation.
+        recovered = await repair_read()
+        assert recovered.spec == spec
+        assert all(child_is_gone(child) for child in children[:2])
+    finally:
+        stop_watching.set()
+        if heartbeat is not None:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+        if watcher is not None:
+            watcher.join(2.0)
+        try:
+            await asyncio.wait_for(pool.close(), timeout=5.0)
+        finally:
+            for child in children:
+                if child.is_alive():
+                    child.kill()
+                    child.join(3.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pool_type", [RawObjectWorkerPool, RenderObjectWorkerPool])
+async def test_close_kills_a_sigterm_proof_child_of_a_broken_pool(tmp_path, pool_type):
+    pool = pool_type(tmp_path, live_workers=1, repair_workers=2, user_read_workers=1, queue_multiplier=1)
+    ready = tmp_path / "ready"
+    ready.mkdir()
+    children = []
+    try:
+        await pool.start()
+        _, _, survivor, children = await _break_repair_pool_around_a_sigterm_proof_child(pool, ready)
+        await asyncio.wait_for(pool.close(), timeout=5.0)
+        assert all(child_is_gone(child) for child in children[:2])
+    finally:
+        for child in children:
+            if child.is_alive():
+                child.kill()
+                child.join(3.0)
+
+
+@pytest.mark.asyncio
+async def test_submit_to_a_retired_generation_is_a_broken_pool_so_the_caller_retries(tmp_path):
+    """Between a caller choosing an executor and the dispatcher thread reaching
+    it, another operation's cleanup may retire that generation."""
+    owner = worker_module._OwnedProcessPool(1)
+    retired = owner.executor
+    try:
+        assert await owner.retire(retired)
+        assert owner.executor is not retired
+        with pytest.raises(BrokenProcessPool):
+            await owner.submit(retired, worker_module._worker_ping)
+        assert isinstance(await owner.submit(owner.executor, worker_module._worker_ping), int)
+    finally:
+        await owner.close()
 
 
 @pytest.mark.asyncio
