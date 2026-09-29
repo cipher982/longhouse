@@ -115,6 +115,7 @@ paths = [
   "scripts/ops/review_gate.py",
   "scripts/ops/review-policy.toml",
   "scripts/ops/check-push-readiness.sh",
+  "scripts/ops/ship.sh",
 ]
 
 [[repos.longhouse.blocking]]

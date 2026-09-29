@@ -17,6 +17,8 @@ remote="${PUSH_READINESS_REMOTE:-origin}"
 # Landing rule: commits touching the blocking list (scripts/ops/review-policy.toml) need a
 # completed review receipt before they land. Independent of the branch: agents push
 # `HEAD:main` from topic branches.
+# A stale `$remote/main` would widen the range with commits others already landed.
+git fetch --quiet "$remote" main 2>/dev/null || true
 python3 "$(dirname "${BASH_SOURCE[0]}")/review_gate.py" push --base "$remote/main" || exit 1
 
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"

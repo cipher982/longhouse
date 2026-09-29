@@ -125,6 +125,33 @@ class GlobTests(unittest.TestCase):
         self.assertFalse(m("a.b", "axb"))  # `.` is literal
 
 
+class EnforcementWiringTests(unittest.TestCase):
+    """Every script that pushes to main asks the gate first, and the gate's own path is on the list."""
+
+    def source(self, name):
+        return (ROOT / "scripts" / "ops" / name).read_text()
+
+    def test_every_pushing_script_calls_the_gate_before_it_pushes(self):
+        ship = self.source("ship.sh")
+        self.assertLess(ship.index("review_gate.py"), ship.index('push origin "$SHA:refs/heads/$BRANCH"'))
+        release = self.source("release.sh")
+        self.assertLess(release.index("review_gate.py"), release.index('git -C "$ROOT" push'))
+        self.assertIn("review_gate.py", self.source("check-push-readiness.sh"))
+
+    def test_promotions_ask_before_they_change_anything(self):
+        dogfood = self.source("promote-dogfood.sh")
+        self.assertLess(dogfood.index("lh_review_gate_promotion"), dogfood.index("deploy_json="))
+        production = self.source("promote-production.sh")
+        self.assertLess(production.index("lh_review_gate_promotion"), production.index("lh_hosted_prepare_control_plane_auth\n"))
+
+    def test_the_enforcement_path_is_itself_blocking(self):
+        policy = gate.Policy.load(POLICY, "longhouse")
+        for path in ("scripts/ops/ship.sh", "scripts/ops/release.sh", "scripts/ops/check-push-readiness.sh",
+                     "scripts/ops/promote-dogfood.sh", "scripts/ops/promote-production.sh",
+                     "scripts/lib/review-gate.sh", "scripts/ops/review_gate.py", "scripts/ops/review-policy.toml"):
+            self.assertTrue(policy.blocking_areas([path]), f"{path} must be on the blocking list")
+
+
 class RepoNameTests(unittest.TestCase):
     def test_policy_table_comes_from_the_origin_url(self):
         with tempfile.TemporaryDirectory() as directory:
