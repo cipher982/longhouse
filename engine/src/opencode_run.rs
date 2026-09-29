@@ -17,6 +17,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -27,7 +28,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::console_adapter::{stderr_tail, ClaimLiveness};
+use crate::console_adapter::{stderr_tail, ClaimLiveness, ConsoleSteerOutcome};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::opencode_server::{HttpStatusError, OpenCodeServer};
@@ -104,8 +105,13 @@ struct ServeState {
     password: String,
     directory: String,
     provider_session_id: Option<String>,
-    /// Every user message this turn submitted, in order.
+    /// Every user message this turn submitted, in order: the prompt, then each
+    /// steer. Turn end is judged against all of them.
     message_ids: Vec<String>,
+    /// The turn has settled and its server is being stopped: a steer arriving
+    /// now is refused rather than posted to a session about to be torn down.
+    #[serde(default)]
+    closed: bool,
 }
 
 impl ServeState {
@@ -151,6 +157,10 @@ struct MessageView {
     finish: Option<String>,
     /// `(error name, message)` when the message ended in an error.
     error: Option<(String, String)>,
+    /// OpenCode's own clock (epoch ms) for when the message was created and, for
+    /// a reply, completed: the evidence a steer's outcome rests on.
+    created_ms: Option<i64>,
+    completed_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +211,8 @@ fn parse_messages(list: &Value) -> Vec<MessageView> {
                             .and_then(Value::as_str)
                             .map(str::to_string),
                         error,
+                        created_ms: time_ms(info, "created"),
+                        completed_ms: time_ms(info, "completed"),
                     })
                 })
                 .collect()
@@ -208,26 +220,52 @@ fn parse_messages(list: &Value) -> Vec<MessageView> {
         .unwrap_or_default()
 }
 
+fn time_ms(info: &Value, key: &str) -> Option<i64> {
+    let value = info.get("time")?.get(key)?;
+    value
+        .as_i64()
+        .or_else(|| value.as_f64().map(|ms| ms as i64))
+}
+
+/// Is this an assistant reply to something the turn submitted?
+fn answers_submission(message: &MessageView, submitted: &[String]) -> bool {
+    message.role == "assistant"
+        && message
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| submitted.contains(parent))
+}
+
+/// Nothing has replied since the newest message this turn submitted. After a
+/// steer the reply to the prompt is not the end of the turn: the steer is a new
+/// user message, and the turn is over only once OpenCode has answered past it
+/// (its own loop stops when the last reply is newer than the last user message).
+fn awaiting_answer(messages: &[MessageView], submitted: &[String]) -> bool {
+    let Some(newest) = messages
+        .iter()
+        .rposition(|message| submitted.contains(&message.id))
+    else {
+        return true;
+    };
+    !messages[newest + 1..]
+        .iter()
+        .any(|message| answers_submission(message, submitted))
+}
+
 /// Is the turn over, and how did it end?
 ///
 /// The assistant messages that answer anything this turn submitted (the prompt
-/// and, later, each steer) are the turn: after a steer the continuation is
-/// parented at the steer message, not the prompt, so the parent id alone would
-/// lose it. An errored answer ends the turn at once. Otherwise the turn is over
-/// only when the session is idle and the last answer finished with `stop`;
-/// `tool-calls` means another step is coming (idle then is `Stalled`, which the
-/// caller times out), and no answer yet means the turn has not started (the
-/// caller times that out too).
+/// and each steer) are the turn: after a steer the continuation is parented at
+/// the steer message, not the prompt, so the parent id alone would lose it. An
+/// errored answer ends the turn at once. Otherwise the turn is over only when
+/// the session is idle, the newest submission has been answered, and the last
+/// answer finished with `stop`; `tool-calls` means another step is coming (idle
+/// then is `Stalled`, which the caller times out), and no answer yet means the
+/// turn has not started (the caller times that out too).
 fn turn_outcome(messages: &[MessageView], submitted: &[String], busy: bool) -> TurnOutcome {
     let answers: Vec<&MessageView> = messages
         .iter()
-        .filter(|message| {
-            message.role == "assistant"
-                && message
-                    .parent_id
-                    .as_ref()
-                    .is_some_and(|parent| submitted.contains(parent))
-        })
+        .filter(|message| answers_submission(message, submitted))
         .collect();
     if let Some((name, message)) = answers.iter().find_map(|message| message.error.as_ref()) {
         return if name == "MessageAbortedError" {
@@ -238,7 +276,7 @@ fn turn_outcome(messages: &[MessageView], submitted: &[String], busy: bool) -> T
             TurnOutcome::Failed(format!("OpenCode provider error: {name}: {message}"))
         };
     }
-    if busy {
+    if busy || awaiting_answer(messages, submitted) {
         return TurnOutcome::Running;
     }
     match answers.last().map(|message| message.finish.as_deref()) {
@@ -794,6 +832,7 @@ async fn start_reserved_turn(
             directory: server.directory.clone(),
             provider_session_id: resume_provider_thread_id.clone(),
             message_ids: Vec::new(),
+            closed: false,
         };
         state.save(&run_dir)?;
         let model = normalized_optional(&config.model);
@@ -919,7 +958,7 @@ async fn drive_turn(
         }
     };
     let mut projector = Projector::new(&provider_session_id);
-    let outcome = follow_turn(
+    let (outcome, submitted) = follow_turn(
         Some(&mut child),
         &server,
         &sink,
@@ -942,7 +981,7 @@ async fn drive_turn(
         &mut projector,
         Some(child),
         Some(&provider_session_id),
-        &state.message_ids,
+        &submitted,
         outcome,
         &run_dir,
     )
@@ -1124,7 +1163,8 @@ async fn emit(
 }
 
 /// Follow the turn until OpenCode's own state says it is over. Returns how it
-/// ended; never returns `Running`.
+/// ended (never `Running`) and every message the turn submitted, which grows
+/// when a steer is posted while this runs.
 #[allow(clippy::too_many_arguments)]
 async fn follow_turn(
     mut child: Option<&mut Child>,
@@ -1137,7 +1177,9 @@ async fn follow_turn(
     submitted: &[String],
     posted_at: Instant,
     run_dir: &Path,
-) -> TurnOutcome {
+) -> (TurnOutcome, Vec<String>) {
+    let mut submitted = submitted.to_vec();
+    let mut posted_at = posted_at;
     let mut ticker = tokio::time::interval(RECONCILE_EVERY);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut unreachable_since: Option<Instant> = None;
@@ -1169,9 +1211,12 @@ async fn follow_turn(
                 let tail = stderr_tail(&run_dir.join("stderr.log"))
                     .map(|tail| format!(": {tail}"))
                     .unwrap_or_default();
-                return TurnOutcome::Failed(format!(
-                    "OpenCode server exited during the turn ({status}){tail}"
-                ));
+                return (
+                    TurnOutcome::Failed(format!(
+                        "OpenCode server exited during the turn ({status}){tail}"
+                    )),
+                    submitted,
+                );
             }
         }
         if !reconcile {
@@ -1180,44 +1225,63 @@ async fn follow_turn(
         // The stream delivers permission and question requests, but a dropped
         // stream or a restarted engine must not leave one waiting for ever.
         answer_pending(server, &mut replied).await;
+        // A steer posted since the last look is part of this turn.
+        if let Ok(state) = ServeState::load(run_dir) {
+            if state.message_ids.len() > submitted.len() {
+                submitted = state.message_ids;
+                posted_at = Instant::now();
+            }
+        }
         match observe(server, provider_session_id).await {
             Ok((messages, busy)) => {
                 unreachable_since = None;
-                let outcome = turn_outcome(&messages, submitted, busy);
+                let outcome = turn_outcome(&messages, &submitted, busy);
                 if !matches!(outcome, TurnOutcome::Stalled(_)) {
                     stalled_since = None;
                 }
                 match outcome {
                     TurnOutcome::Running => {
-                        let answered = messages.iter().any(|message| {
-                            message.role == "assistant"
-                                && message
-                                    .parent_id
-                                    .as_ref()
-                                    .is_some_and(|parent| submitted.contains(parent))
-                        });
-                        if !busy && !answered && posted_at.elapsed() > START_TIMEOUT {
-                            return TurnOutcome::Failed(
-                                "OpenCode accepted the prompt but never started the turn"
-                                    .to_string(),
+                        if !busy
+                            && awaiting_answer(&messages, &submitted)
+                            && posted_at.elapsed() > START_TIMEOUT
+                        {
+                            return (
+                                TurnOutcome::Failed(
+                                    "OpenCode accepted the prompt but never started the turn"
+                                        .to_string(),
+                                ),
+                                submitted,
                             );
                         }
                     }
                     TurnOutcome::Stalled(reason) => {
                         let since = *stalled_since.get_or_insert_with(Instant::now);
                         if since.elapsed() >= STALL_GRACE {
-                            return TurnOutcome::Failed(reason);
+                            return (TurnOutcome::Failed(reason), submitted);
                         }
                     }
-                    settled => return settled,
+                    settled => {
+                        // Stop accepting steers, unless one landed as the turn
+                        // ended: that one is part of the turn, so follow it.
+                        match close_turn(run_dir, &sink.run_id, Some(&submitted)).await {
+                            None => return (settled, submitted),
+                            Some(latest) => {
+                                submitted = latest;
+                                posted_at = Instant::now();
+                            }
+                        }
+                    }
                 }
             }
             Err(error) => {
                 let since = *unreachable_since.get_or_insert_with(Instant::now);
                 if since.elapsed() > SERVER_DOWN_AFTER {
-                    return TurnOutcome::Failed(format!(
-                        "OpenCode server became unreachable: {error:#}"
-                    ));
+                    return (
+                        TurnOutcome::Failed(format!(
+                            "OpenCode server became unreachable: {error:#}"
+                        )),
+                        submitted,
+                    );
                 }
             }
         }
@@ -1295,6 +1359,8 @@ async fn finish_turn(
     outcome: TurnOutcome,
     run_dir: &Path,
 ) {
+    // Whatever ended the turn, no steer may be posted from here on.
+    close_turn(run_dir, &sink.run_id, None).await;
     if let Some(session_id) = provider_session_id {
         if let Ok(list) = server.get(&format!("/session/{session_id}/message")).await {
             for event in backfill(&list, submitted, projector) {
@@ -1335,6 +1401,7 @@ async fn finish_turn(
     });
     sink.post_terminal(terminal, None, error, provider_session_id)
         .await;
+    forget_steer_gate(&sink.run_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1456,7 +1523,7 @@ async fn recover_turn(run_dir: PathBuf, sink: OpenCodeRunSink, _lock: File) {
     let pump = tokio::spawn(pump_events(server.clone(), frames_tx));
     let mut projector = Projector::new(&session_id);
     projector.seed_from_log(&run_dir.join("stdout.jsonl"));
-    let outcome = follow_turn(
+    let (outcome, submitted) = follow_turn(
         None,
         &server,
         &sink,
@@ -1477,7 +1544,7 @@ async fn recover_turn(run_dir: PathBuf, sink: OpenCodeRunSink, _lock: File) {
         &mut projector,
         None,
         Some(&session_id),
-        &state.message_ids,
+        &submitted,
         outcome,
         &run_dir,
     )
@@ -1590,12 +1657,270 @@ fn interrupt_server_group(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Steer.
+// ---------------------------------------------------------------------------
+//
+// OpenCode has one endpoint for a follow-up and a steer, `prompt_async`. Posted
+// while the session is busy, the running loop consumes it at its next step (the
+// tool finishes, then the steer parents the next reply). Posted to an idle
+// session it starts a turn, and v1 has no "only while a turn runs" flag the way
+// Codex has `expectedTurnId`. So a steer cannot be refused atomically; it can
+// only be reported honestly. After posting, the outcome is read from OpenCode's
+// own messages (`classify_steer`): `Steered` only with proof the session never
+// went idle, `StartedNewTurn` when the turn had already produced its final
+// answer, and neither when the evidence is missing (`steer_outcome_unknown`).
+// Never compensated with an abort: the text was delivered, and the run simply
+// follows the turn it started.
+
+/// How long a posted steer may take to show up in the session's messages.
+const STEER_VISIBLE_WITHIN: Duration = Duration::from_secs(5);
+
+/// One lock per run orders a steer against the monitor settling the turn: the
+/// steer records and posts its message under it, and the monitor closes the turn
+/// under it, so a steer is either followed by the monitor or refused, never
+/// posted to a server that is about to be stopped.
+fn steer_gates() -> &'static std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    static GATES: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    GATES.get_or_init(Default::default)
+}
+
+fn steer_gate(run_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    steer_gates()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(run_id.to_string())
+        .or_default()
+        .clone()
+}
+
+fn forget_steer_gate(run_id: &str) {
+    steer_gates()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(run_id);
+}
+
+/// Close the turn to steers. With `seen`, only if nothing was submitted beyond
+/// it; otherwise the ids the turn must follow are returned and it stays open.
+async fn close_turn(run_dir: &Path, run_id: &str, seen: Option<&[String]>) -> Option<Vec<String>> {
+    let gate = steer_gate(run_id);
+    let _held = gate.lock().await;
+    let mut state = ServeState::load(run_dir).ok()?;
+    if let Some(seen) = seen {
+        if state.message_ids != seen {
+            return Some(state.message_ids);
+        }
+    }
+    state.closed = true;
+    if let Err(error) = state.save(run_dir) {
+        eprintln!("[opencode-run] could not close run {run_id} to steers: {error:#}");
+    }
+    None
+}
+
+/// A message id OpenCode's own loop will not mistake for stale. Its ids are
+/// `msg_`, twelve hex digits of `(epoch ms << 12) | counter`, then fourteen
+/// base62 characters, and its loop stops as soon as the newest reply sorts
+/// after the newest user message, so a steer id must sort after everything in
+/// the session. The counter is the largest a millisecond holds: OpenCode's own
+/// ids in the same millisecond count up from one.
+fn mint_message_id() -> String {
+    const ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or_default();
+    let stamp = ((millis << 12) | 0xfff) & 0xffff_ffff_ffff;
+    let suffix: String = Uuid::new_v4().as_bytes()[..14]
+        .iter()
+        .map(|byte| ALPHABET[*byte as usize % ALPHABET.len()] as char)
+        .collect();
+    format!("msg_{stamp:012x}{suffix}")
+}
+
+/// What a steer did, from OpenCode's own message timestamps. Judged on the last
+/// reply to something this turn submitted that came before the steer:
+///
+/// - still being written, or finished with `tool-calls`: the loop must run
+///   another step, so it cannot have stopped: `Steered`;
+/// - finished (any reason) after the steer was created: it was mid-step when the
+///   steer arrived, and the loop re-reads the session before it stops: `Steered`;
+/// - finished before the steer was created, or ended in an error or abort: the
+///   turn had already produced its final answer, so the text began a new turn:
+///   `StartedNewTurn`.
+///
+/// Anything else (no earlier reply, missing timestamps) proves neither, and the
+/// caller must not claim either.
+fn classify_steer(
+    messages: &[MessageView],
+    steer_id: &str,
+    prior_submitted: &[String],
+) -> Option<ConsoleSteerOutcome> {
+    let at = messages.iter().position(|message| message.id == steer_id)?;
+    let created = messages[at].created_ms?;
+    let prior = messages[..at]
+        .iter()
+        .rev()
+        .find(|message| answers_submission(message, prior_submitted))?;
+    if prior.error.is_some() {
+        return Some(ConsoleSteerOutcome::StartedNewTurn);
+    }
+    match (prior.finish.as_deref(), prior.completed_ms) {
+        (None, None) | (Some("tool-calls"), _) => Some(ConsoleSteerOutcome::Steered),
+        (Some(_), Some(completed)) if completed > created => Some(ConsoleSteerOutcome::Steered),
+        (Some(_), Some(_)) => Some(ConsoleSteerOutcome::StartedNewTurn),
+        (None, Some(_)) | (Some(_), None) => None,
+    }
+}
+
+/// Has the turn already ended, as far as OpenCode's messages and status say?
+fn turn_is_over(messages: &[MessageView], submitted: &[String], busy: bool) -> bool {
+    matches!(
+        turn_outcome(messages, submitted, busy),
+        TurnOutcome::Completed | TurnOutcome::Cancelled | TurnOutcome::Failed(_)
+    )
+}
+
+enum Submission {
+    /// The message is in the session; these are its messages now.
+    Admitted(Vec<MessageView>),
+    /// The server answered and refused: nothing was admitted.
+    Refused(String),
+    /// No answer, or the message never appeared: it may or may not have landed.
+    Unknown(String),
+}
+
+/// Post one steer with a caller-chosen id and wait for it to appear. The id is
+/// never posted twice: a second post with an existing id appends to the stored
+/// message rather than being ignored, so a lost reply is settled by looking.
+async fn submit_steer(
+    server: &OpenCodeServer,
+    session_id: &str,
+    steer_id: &str,
+    text: &str,
+) -> Submission {
+    let parts = match crate::opencode_control::prompt_parts(text, &[]) {
+        Ok(parts) => parts,
+        Err(error) => return Submission::Refused(format!("{error:#}")),
+    };
+    let posted = server
+        .post(
+            &format!("/session/{session_id}/prompt_async"),
+            Some(json!({"messageID": steer_id, "parts": parts})),
+        )
+        .await;
+    if let Err(error) = &posted {
+        if http_status(error).is_some_and(|status| (400..500).contains(&status)) {
+            return Submission::Refused(format!("{error:#}"));
+        }
+    }
+    let deadline = Instant::now() + STEER_VISIBLE_WITHIN;
+    loop {
+        if let Ok(list) = server.get(&format!("/session/{session_id}/message")).await {
+            let messages = parse_messages(&list);
+            if messages.iter().any(|message| message.id == steer_id) {
+                return Submission::Admitted(messages);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Submission::Unknown(match posted {
+                Ok(_) => "OpenCode accepted the steer but never recorded it".to_string(),
+                Err(error) => format!("{error:#}"),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Steer a running Console turn. Errors are the codes a Console steer speaks:
+/// `turn_not_steerable` (the turn is over or not yet steerable; nothing was
+/// posted), `steer_failed` (nothing was posted) and `steer_outcome_unknown`
+/// (the text may have landed, or landed and could not be classified).
+pub async fn steer_opencode_console_turn(
+    run_id: &str,
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<ConsoleSteerOutcome, String> {
+    let not_steerable = || "turn_not_steerable".to_string();
+    let registry = crate::turn_claims::default_registry().map_err(|error| error.to_string())?;
+    let claim = registry.read(run_id).map_err(|_| not_steerable())?;
+    if claim.session_id != session_id
+        || claim.provider != "opencode"
+        || claim.adapter.as_deref() != Some(OPENCODE_RUN_ADAPTER)
+        || claim.state != "spawned"
+        || crate::console_adapter::claim_process_liveness(&claim) != ClaimLiveness::Live
+    {
+        return Err(not_steerable());
+    }
+    let run_dir = claim
+        .stdout_path
+        .as_deref()
+        .map(PathBuf::from)
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .ok_or_else(not_steerable)?;
+
+    let gate = steer_gate(run_id);
+    let _held = gate.lock().await;
+    let mut state = ServeState::load(&run_dir).map_err(|_| not_steerable())?;
+    // No submission recorded yet is the start race: the turn is not steerable
+    // until its prompt is in.
+    let Some(native_session) = state
+        .provider_session_id
+        .clone()
+        .filter(|_| !state.closed && !state.message_ids.is_empty())
+    else {
+        return Err(not_steerable());
+    };
+    let server = state.server();
+    let (messages, busy) = observe(&server, &native_session).await.map_err(|error| {
+        eprintln!("[opencode-run] steer not posted, the session could not be read: {error:#}");
+        "steer_failed".to_string()
+    })?;
+    if turn_is_over(&messages, &state.message_ids, busy) {
+        return Err(not_steerable());
+    }
+
+    let steer_id = mint_message_id();
+    if messages.iter().any(|message| message.id >= steer_id) {
+        eprintln!("[opencode-run] steer not posted: {steer_id} would not sort after the session");
+        return Err("steer_failed".to_string());
+    }
+    let messages = match submit_steer(&server, &native_session, &steer_id, text).await {
+        Submission::Admitted(messages) => messages,
+        Submission::Refused(reason) => {
+            eprintln!("[opencode-run] steer refused by OpenCode: {reason}");
+            return Err("steer_failed".to_string());
+        }
+        Submission::Unknown(reason) => {
+            eprintln!("[opencode-run] steer outcome unknown: {reason}");
+            return Err("steer_outcome_unknown".to_string());
+        }
+    };
+    // In the session, so part of this turn from here on: the monitor follows it.
+    let prior = state.message_ids.clone();
+    state.message_ids.push(steer_id.clone());
+    if let Err(error) = state.save(&run_dir) {
+        eprintln!("[opencode-run] steer {steer_id} landed but was not recorded: {error:#}");
+        return Err("steer_outcome_unknown".to_string());
+    }
+    let outcome = classify_steer(&messages, &steer_id, &prior);
+    eprintln!("[opencode-run] steer {steer_id} on run {run_id}: {outcome:?}");
+    outcome.ok_or_else(|| "steer_outcome_unknown".to_string())
+}
+
 /// A stand-in for `opencode serve`, speaking the slice of the v1 API the adapter
 /// uses, for tests that drive the real adapter end to end (here and in the
 /// control channel). Modes, from `OPENCODE_FAKE_MODE`: `ok` answers at once,
 /// `error` answers with a provider error, `missing` has no such session,
-/// `permission` waits for a permission reply, `hold` waits for an abort.
-/// Requests are appended to `OPENCODE_FAKE_LOG`.
+/// `permission` waits for a permission reply, `hold` waits for an abort,
+/// `steer` runs a two-second tool that a steer posted meanwhile is consumed
+/// after (the reply parented at the steer), and `flip` has the running turn end
+/// just as the steer arrives, so the steer starts a turn of its own.
+/// Requests are appended to `OPENCODE_FAKE_LOG`. Message ids are OpenCode's
+/// ascending shape and carry its timestamps, which a steer's outcome rests on.
 #[cfg(test)]
 pub(crate) mod fake_server {
     pub(crate) const SESSION: &str = "ses_console_test";
@@ -1608,7 +1933,8 @@ SES = "ses_console_test"
 mode = os.environ.get("OPENCODE_FAKE_MODE", "ok")
 log_path = os.environ.get("OPENCODE_FAKE_LOG")
 lock = threading.Lock()
-state = {"messages": [], "busy": False, "turn": 0, "permissions": [], "released": threading.Event()}
+state = {"messages": [], "busy": False, "loops": 0, "permissions": [], "steers": [],
+         "reply": None, "flipped": False, "counter": 0, "released": threading.Event()}
 
 
 def record(line):
@@ -1617,31 +1943,98 @@ def record(line):
             handle.write(line + "\n")
 
 
-def add_reply(turn, error=None):
-    info = {"id": "msg_a%d" % turn, "role": "assistant", "parentID": "msg_u%d" % turn,
-            "sessionID": SES, "finish": None if error else "stop", "time": {"completed": 1}}
+def now():
+    return int(time.time() * 1000)
+
+
+def mid(kind):
+    state["counter"] += 1
+    stamp = ((now() << 12) + state["counter"]) & 0xffffffffffff
+    return "msg_%012x%s" % (stamp, ("%s%d" % (kind, state["counter"])).ljust(14, "0"))
+
+
+def add_user(user_id):
+    state["messages"].append({"info": {"id": user_id, "role": "user", "sessionID": SES,
+                                       "time": {"created": now()}},
+                              "parts": [{"id": "prt_" + user_id, "type": "text", "text": "prompt"}]})
+
+
+def start_reply(parent):
+    info = {"id": mid("a"), "role": "assistant", "parentID": parent, "sessionID": SES,
+            "time": {"created": now()}}
+    state["messages"].append({"info": info, "parts": []})
+    return state["messages"][-1]
+
+
+def finish_reply(message, finish, text=None, error=None, completed=None):
+    info = message["info"]
     if error:
         info["error"] = error
-    parts = [] if error else [{"id": "prt_a%d" % turn, "type": "text", "text": "done",
-                               "sessionID": SES, "messageID": info["id"], "time": {"end": 2}}]
-    state["messages"].append({"info": info, "parts": parts})
+    else:
+        info["finish"] = finish
+        info["time"]["completed"] = completed or now()
+    if text:
+        message["parts"].append({"id": "prt_" + info["id"], "type": "text", "text": text,
+                                 "sessionID": SES, "messageID": info["id"], "time": {"end": 2}})
 
 
-def answer(turn):
+def run_loop(loop_no, reply):
     time.sleep(0.15)
     if mode == "error":
-        add_reply(turn, {"name": "APIError", "data": {"message": "boom"}})
+        with lock:
+            finish_reply(reply, None, error={"name": "APIError", "data": {"message": "boom"}})
     elif mode == "hold":
         state["released"].wait(60)
-        add_reply(turn, {"name": "MessageAbortedError", "data": {"message": "aborted"}})
+        with lock:
+            finish_reply(reply, None, error={"name": "MessageAbortedError", "data": {"message": "aborted"}})
     elif mode == "permission":
         state["permissions"].append({"id": "per_1", "sessionID": SES, "permission": "bash",
                                      "patterns": [], "metadata": {}, "always": []})
         state["released"].wait(60)
-        add_reply(turn)
+        with lock:
+            finish_reply(reply, "stop", text="done")
+    elif mode == "steer":
+        time.sleep(2.0)
+        with lock:
+            if state["steers"]:
+                finish_reply(reply, "tool-calls")
+                follow = start_reply(state["steers"][-1])
+                finish_reply(follow, "stop", text="steered")
+            else:
+                finish_reply(reply, "stop", text="done")
+    elif mode == "flip" and loop_no == 1:
+        state["released"].wait(8)
+        with lock:
+            if state["flipped"]:
+                return
+            finish_reply(reply, "stop", text="done")
     else:
-        add_reply(turn)
-    state["busy"] = False
+        with lock:
+            finish_reply(reply, "stop", text="done")
+    with lock:
+        if state["loops"] == loop_no:
+            state["busy"] = False
+
+
+def prompt(body):
+    user_id = body.get("messageID") or mid("u")
+    with lock:
+        if state["busy"] and mode == "flip" and not state["flipped"]:
+            # The running loop ended a moment before this arrived.
+            finish_reply(state["reply"], "stop", text="done", completed=now() - 40)
+            state["flipped"] = True
+            state["busy"] = False
+            state["released"].set()
+        add_user(user_id)
+        if state["busy"]:
+            # The running loop reads the session again before its next step.
+            state["steers"].append(user_id)
+            return
+        state["busy"] = True
+        state["loops"] += 1
+        state["reply"] = start_reply(user_id)
+        loop_no, reply = state["loops"], state["reply"]
+    threading.Thread(target=run_loop, args=(loop_no, reply), daemon=True).start()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1672,7 +2065,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(404, {"name": "NotFoundError"})
             return self.send_json(200, {"id": SES})
         if path == "/session/%s/message" % SES:
-            return self.send_json(200, state["messages"])
+            with lock:
+                return self.send_json(200, json.loads(json.dumps(state["messages"])))
         if path == "/event":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -1686,17 +2080,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?")[0]
         length = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(length)
+        raw = self.rfile.read(length)
         record("POST " + path)
         if path == "/session":
             return self.send_json(200, {"id": SES})
         if path == "/session/%s/prompt_async" % SES:
-            state["turn"] += 1
-            turn = state["turn"]
-            state["messages"].append({"info": {"id": "msg_u%d" % turn, "role": "user", "sessionID": SES},
-                                      "parts": [{"id": "prt_u%d" % turn, "type": "text", "text": "prompt"}]})
-            state["busy"] = True
-            threading.Thread(target=answer, args=(turn,), daemon=True).start()
+            body = json.loads(raw or b"{}")
+            record("MESSAGE_ID " + str(body.get("messageID")))
+            prompt(body)
             self.send_response(204)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -2093,7 +2484,16 @@ mod tests {
             parent_id: parent.map(str::to_string),
             finish: finish.map(str::to_string),
             error: None,
+            created_ms: None,
+            completed_ms: None,
         }
+    }
+
+    /// A message with OpenCode's own timestamps, for the steer evidence.
+    fn timed(mut message: MessageView, created: i64, completed: Option<i64>) -> MessageView {
+        message.created_ms = Some(created);
+        message.completed_ms = completed;
+        message
     }
 
     fn ids(values: &[&str]) -> Vec<String> {
@@ -2207,6 +2607,178 @@ mod tests {
             Some(("MessageAbortedError".to_string(), "aborted".to_string()))
         );
         assert!(parse_messages(&json!({"not": "a list"})).is_empty());
+    }
+
+    #[test]
+    fn message_times_come_from_the_time_block() {
+        let list = json!([
+            {"info": {"id": "msg_1", "role": "user", "time": {"created": 1000}}, "parts": []},
+            {"info": {"id": "msg_2", "role": "assistant", "parentID": "msg_1",
+                      "time": {"created": 1001, "completed": 1500.0}}, "parts": []},
+            {"info": {"id": "msg_3", "role": "assistant", "parentID": "msg_1"}, "parts": []}
+        ]);
+        let messages = parse_messages(&list);
+        assert_eq!(
+            (messages[0].created_ms, messages[0].completed_ms),
+            (Some(1000), None)
+        );
+        assert_eq!(
+            (messages[1].created_ms, messages[1].completed_ms),
+            (Some(1001), Some(1500))
+        );
+        assert_eq!(
+            (messages[2].created_ms, messages[2].completed_ms),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn a_steer_is_steered_only_with_proof_the_session_never_went_idle() {
+        let prior = ids(&["msg_u1"]);
+        let steer = timed(view("msg_s1", "user", None, None), 1_000, None);
+        let case = |finish: Option<&str>, completed: Option<i64>| {
+            let reply = timed(
+                view("msg_a1", "assistant", Some("msg_u1"), finish),
+                100,
+                completed,
+            );
+            classify_steer(
+                &[view("msg_u1", "user", None, None), reply, steer.clone()],
+                "msg_s1",
+                &prior,
+            )
+        };
+        use ConsoleSteerOutcome::{StartedNewTurn, Steered};
+        // The reply was still being written when the steer arrived.
+        assert_eq!(case(None, None), Some(Steered));
+        // A step that leads to another cannot be the last.
+        assert_eq!(case(Some("tool-calls"), Some(900)), Some(Steered));
+        // It finished only after the steer existed, and the loop reads the
+        // session again before it stops.
+        assert_eq!(case(Some("stop"), Some(1_050)), Some(Steered));
+        // The final answer was complete before the steer was created.
+        assert_eq!(case(Some("stop"), Some(900)), Some(StartedNewTurn));
+        assert_eq!(case(Some("length"), Some(900)), Some(StartedNewTurn));
+        // Finished without a completion time, or completed without a finish:
+        // neither is proven.
+        assert_eq!(case(Some("stop"), None), None);
+        assert_eq!(case(None, Some(900)), None);
+    }
+
+    #[test]
+    fn a_steer_after_an_errored_or_aborted_reply_started_a_new_turn() {
+        let mut aborted = timed(view("msg_a1", "assistant", Some("msg_u1"), None), 100, None);
+        aborted.error = Some(("MessageAbortedError".to_string(), String::new()));
+        let steer = timed(view("msg_s1", "user", None, None), 1_000, None);
+        assert_eq!(
+            classify_steer(&[aborted, steer], "msg_s1", &ids(&["msg_u1"])),
+            Some(ConsoleSteerOutcome::StartedNewTurn)
+        );
+    }
+
+    #[test]
+    fn a_steer_without_evidence_is_never_called_steered() {
+        let prior = ids(&["msg_u1"]);
+        let reply = timed(
+            view("msg_a1", "assistant", Some("msg_u1"), Some("tool-calls")),
+            100,
+            Some(200),
+        );
+        let steer = timed(view("msg_s1", "user", None, None), 1_000, None);
+        // No reply before the steer: nothing shows the turn was running.
+        assert_eq!(
+            classify_steer(
+                &[view("msg_u1", "user", None, None), steer.clone()],
+                "msg_s1",
+                &prior
+            ),
+            None
+        );
+        // No creation time on the steer.
+        assert_eq!(
+            classify_steer(
+                &[reply.clone(), view("msg_s1", "user", None, None)],
+                "msg_s1",
+                &prior
+            ),
+            None
+        );
+        // The steer is not in the session.
+        assert_eq!(classify_steer(&[reply], "msg_s1", &prior), None);
+    }
+
+    #[test]
+    fn a_second_steer_is_judged_against_the_reply_before_it() {
+        // The reply to the first steer is the prior answer for the second.
+        let messages = vec![
+            view("msg_u1", "user", None, None),
+            timed(
+                view("msg_a1", "assistant", Some("msg_u1"), Some("tool-calls")),
+                100,
+                Some(500),
+            ),
+            timed(view("msg_s1", "user", None, None), 400, None),
+            timed(
+                view("msg_a2", "assistant", Some("msg_s1"), Some("stop")),
+                600,
+                Some(900),
+            ),
+            timed(view("msg_s2", "user", None, None), 1_000, None),
+        ];
+        assert_eq!(
+            classify_steer(&messages, "msg_s2", &ids(&["msg_u1", "msg_s1"])),
+            Some(ConsoleSteerOutcome::StartedNewTurn)
+        );
+    }
+
+    #[test]
+    fn a_steer_the_session_has_not_answered_keeps_the_turn_open() {
+        let mut messages = vec![
+            view("msg_u1", "user", None, None),
+            view("msg_a1", "assistant", Some("msg_u1"), Some("stop")),
+            view("msg_s1", "user", None, None),
+        ];
+        let submitted = ids(&["msg_u1", "msg_s1"]);
+        // The first reply stopped, but the steer after it has no answer yet.
+        assert!(awaiting_answer(&messages, &submitted));
+        assert_eq!(
+            turn_outcome(&messages, &submitted, false),
+            TurnOutcome::Running
+        );
+        messages.push(view("msg_a2", "assistant", Some("msg_s1"), Some("stop")));
+        assert!(!awaiting_answer(&messages, &submitted));
+        assert_eq!(
+            turn_outcome(&messages, &submitted, false),
+            TurnOutcome::Completed
+        );
+    }
+
+    #[test]
+    fn a_turn_that_is_over_is_not_steerable() {
+        let messages = vec![
+            view("msg_u1", "user", None, None),
+            view("msg_a1", "assistant", Some("msg_u1"), Some("stop")),
+        ];
+        let submitted = ids(&["msg_u1"]);
+        assert!(turn_is_over(&messages, &submitted, false));
+        // Busy, or not yet answered, is a turn that can still be steered.
+        assert!(!turn_is_over(&messages, &submitted, true));
+        assert!(!turn_is_over(&messages[..1], &submitted, false));
+    }
+
+    #[test]
+    fn a_steer_id_sorts_after_everything_opencode_minted_in_that_millisecond() {
+        let id = mint_message_id();
+        assert!(id.starts_with("msg_") && id.len() == 4 + 12 + 14, "{id}");
+        assert!(id[4..16]
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        let stamp = u64::from_str_radix(&id[4..16], 16).unwrap();
+        // OpenCode counts up from one within a millisecond; ours is the top.
+        let same_ms = format!("msg_{:012x}{}", stamp - 1, "z".repeat(14));
+        let next_ms = format!("msg_{:012x}{}", stamp + 1, "0".repeat(14));
+        assert!(same_ms < id && id < next_ms);
+        assert_ne!(mint_message_id(), mint_message_id());
     }
 
     #[test]
@@ -2491,6 +3063,7 @@ mod tests {
             directory: "/work".into(),
             provider_session_id: Some("ses_1".into()),
             message_ids: ids(&["msg_1"]),
+            closed: false,
         };
         state.save(temp.path()).unwrap();
         let mode = std::fs::metadata(ServeState::path(temp.path()))
@@ -2612,6 +3185,46 @@ mod tests {
                 .lines()
                 .map(str::to_string)
                 .collect()
+        }
+
+        /// Wait until the server has been asked for this many turns or steers.
+        async fn wait_for_prompts(&self, count: usize) {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+            while self
+                .requests()
+                .iter()
+                .filter(|line| line.ends_with("/prompt_async"))
+                .count()
+                < count
+            {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "prompt never reached the server"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+
+        /// Steer once the turn's prompt is recorded. Until then the turn is not
+        /// steerable, which is the start race a caller retries.
+        async fn steer(
+            &self,
+            run_id: &str,
+            text: &str,
+        ) -> std::result::Result<ConsoleSteerOutcome, String> {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+            loop {
+                match steer_opencode_console_turn(run_id, &self.session_id, text).await {
+                    Err(code) if code == "turn_not_steerable" => {
+                        assert!(
+                            tokio::time::Instant::now() < deadline,
+                            "turn never became steerable"
+                        );
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    other => return other,
+                }
+            }
         }
     }
 
@@ -2789,6 +3402,320 @@ mod tests {
             .map(|event| event["type"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(kinds, ["step_finish"]);
+    }
+
+    fn served_state(summary: &OpenCodeRunSummary) -> ServeState {
+        ServeState::load(Path::new(&summary.stdout_path).parent().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_steer_while_the_session_is_busy_is_steered_and_the_run_follows_it() {
+        let fake = FakeOpenCode::new("steer");
+        let (run_id, _turn, summary) = fake.start(None).await;
+        fake.wait_for_prompts(1).await;
+        assert_eq!(
+            fake.steer(&run_id, "change of plan").await,
+            Ok(ConsoleSteerOutcome::Steered)
+        );
+        // The run is not over until OpenCode has answered the steer.
+        assert_eq!(
+            terminal_state(&fake.terminal(&run_id).await),
+            "run_completed"
+        );
+        let stream = std::fs::read_to_string(&summary.stdout_path).unwrap();
+        assert!(stream.contains("steered"), "{stream}");
+        // The steer carried a caller-chosen id, was posted once, and nothing
+        // was aborted.
+        let requests = fake.requests();
+        let ids: Vec<&String> = requests
+            .iter()
+            .filter(|line| line.starts_with("MESSAGE_ID "))
+            .collect();
+        assert_eq!(ids.len(), 2, "{requests:?}");
+        assert!(ids[1].starts_with("MESSAGE_ID msg_"), "{requests:?}");
+        assert!(!requests.iter().any(|line| line.ends_with("/abort")));
+        let state = served_state(&summary);
+        assert_eq!(state.message_ids.len(), 2);
+        assert!(state.closed, "a settled run refuses further steers");
+    }
+
+    #[tokio::test]
+    async fn a_steer_that_arrives_after_the_turn_ended_starts_a_new_turn_and_says_so() {
+        let fake = FakeOpenCode::new("flip");
+        let (run_id, _turn, summary) = fake.start(None).await;
+        fake.wait_for_prompts(1).await;
+        assert_eq!(
+            fake.steer(&run_id, "one more thing").await,
+            Ok(ConsoleSteerOutcome::StartedNewTurn)
+        );
+        // No abort compensates: the turn it started is the run's to finish, and
+        // its answer is retained beside the first one.
+        assert_eq!(
+            terminal_state(&fake.terminal(&run_id).await),
+            "run_completed"
+        );
+        let stream = std::fs::read_to_string(&summary.stdout_path).unwrap();
+        assert_eq!(stream.matches("\"text\":\"done\"").count(), 2, "{stream}");
+        assert!(!fake.requests().iter().any(|line| line.ends_with("/abort")));
+        assert_eq!(served_state(&summary).message_ids.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_closed_turn_refuses_a_steer_without_posting_it() {
+        let fake = FakeOpenCode::new("hold");
+        let (run_id, turn_id, summary) = fake.start(None).await;
+        fake.wait_for_prompts(1).await;
+        let run_dir = Path::new(&summary.stdout_path)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while ServeState::load(&run_dir).is_ok_and(|state| state.message_ids.is_empty()) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "prompt never recorded"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // What the monitor does when it settles the turn.
+        assert_eq!(close_turn(&run_dir, &run_id, None).await, None);
+        assert_eq!(
+            steer_opencode_console_turn(&run_id, &fake.session_id, "too late").await,
+            Err("turn_not_steerable".to_string())
+        );
+        assert_eq!(
+            fake.requests()
+                .iter()
+                .filter(|line| line.ends_with("/prompt_async"))
+                .count(),
+            1
+        );
+        interrupt_opencode_run_turn(&run_id, &fake.session_id, &fake.thread_id, &turn_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            terminal_state(&fake.terminal(&run_id).await),
+            "run_cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_steer_for_a_run_that_has_settled_is_not_steerable() {
+        let fake = FakeOpenCode::new("ok");
+        let (run_id, _turn, _summary) = fake.start(None).await;
+        assert_eq!(
+            terminal_state(&fake.terminal(&run_id).await),
+            "run_completed"
+        );
+        assert_eq!(
+            steer_opencode_console_turn(&run_id, &fake.session_id, "late").await,
+            Err("turn_not_steerable".to_string())
+        );
+        assert_eq!(
+            fake.requests()
+                .iter()
+                .filter(|line| line.ends_with("/prompt_async"))
+                .count(),
+            1
+        );
+    }
+
+    /// Stops a real `opencode serve` the test started, however the test ends.
+    struct ServerGroup(i32);
+
+    impl Drop for ServerGroup {
+        fn drop(&mut self) {
+            unsafe { libc::killpg(self.0, libc::SIGKILL) };
+        }
+    }
+
+    /// A steer proven against stock opencode: the running-turn side through the
+    /// whole production adapter, the idle side (which the adapter refuses up
+    /// front, so it can only be provoked directly) on a real server. Run under a
+    /// scratch HOME/XDG (see the docket: never David's real OpenCode state).
+    #[tokio::test]
+    #[ignore = "requires an authenticated stock opencode and spends provider tokens"]
+    async fn installed_opencode_steer_reports_what_happened() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe { std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse")) };
+        let bin =
+            std::env::var("LONGHOUSE_OPENCODE_BIN").unwrap_or_else(|_| "opencode".to_string());
+        let tag = Uuid::new_v4().simple().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let cwd = temp.path().join("work");
+        std::fs::create_dir(&cwd).unwrap();
+
+        // 1. A steer while a real tool runs enters the turn and the run follows it.
+        let turn_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let request_id = format!("steer-live-{tag}");
+        assert!(matches!(
+            crate::turn_claims::default_registry()
+                .unwrap()
+                .claim(
+                    &run_id,
+                    &session_id,
+                    &thread_id,
+                    Some(&turn_id),
+                    Some(&request_id),
+                    "opencode"
+                )
+                .unwrap(),
+            crate::turn_claims::ClaimOutcome::Acquired
+        ));
+        let steer_marker = format!("LH_STEERED_{tag}");
+        let summary = start_opencode_run_turn(OpenCodeRunConfig {
+            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
+            turn_id: Some(turn_id),
+            run_id: run_id.clone(),
+            client_request_id: Some(request_id),
+            cwd: cwd.clone(),
+            opencode_bin: bin.clone(),
+            prompt: "Use the bash tool to run exactly: sleep 20. Wait for it to finish, then reply with exactly LH_ORIGINAL and nothing else."
+                .to_string(),
+            image_paths: Vec::new(),
+            resume_provider_thread_id: None,
+            model: None,
+            permission_mode: "bypass".to_string(),
+            machine_name: "opencode-steer-live".to_string(),
+            local_db_path: None,
+        })
+        .await
+        .unwrap();
+        let tool_deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let stream = std::fs::read_to_string(&summary.stdout_path).unwrap_or_default();
+            if stream.contains("\"type\":\"tool_use\"") {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < tool_deadline,
+                "the tool never started: {stream}\n{}",
+                std::fs::read_to_string(&summary.stderr_path).unwrap_or_default()
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let outcome = steer_opencode_console_turn(
+            &run_id,
+            &session_id,
+            &format!("Change of plan: when the command finishes, reply with exactly {steer_marker} and nothing else."),
+        )
+        .await;
+        assert_eq!(outcome, Ok(ConsoleSteerOutcome::Steered));
+        let settle_deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+        let claim = loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(&run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                break claim;
+            }
+            assert!(
+                tokio::time::Instant::now() < settle_deadline,
+                "the steered run never settled"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        let stream = std::fs::read_to_string(&summary.stdout_path).unwrap();
+        assert_eq!(terminal_state(&claim), "run_completed", "{stream}");
+        assert!(stream.contains(&steer_marker), "{stream}");
+        assert_eq!(served_state(&summary).message_ids.len(), 2);
+        let native_session = claim.provider_thread_id.clone().unwrap();
+        assert_ne!(unsafe { libc::killpg(summary.process_group_id, 0) }, 0);
+
+        // 2. A prompt posted after the turn ended starts a turn of its own, and
+        // the classification says so from the real timestamps.
+        let spawned = spawn_server(
+            &bin,
+            &cwd,
+            private_output_file(&temp.path().join("idle-server.log")).unwrap(),
+            private_output_file(&temp.path().join("idle-server.err")).unwrap(),
+            &session_id,
+            &Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+        let SpawnedServer {
+            mut child,
+            process_group_id,
+            server,
+            ..
+        } = spawned;
+        let _group = ServerGroup(process_group_id);
+        crate::opencode_server::wait_ready(&server, &mut child)
+            .await
+            .unwrap();
+        let path = format!("/session/{native_session}/message");
+        let first_id = mint_message_id();
+        let second_marker = format!("LH_NEW_TURN_{tag}");
+        let admitted = |submission: Submission| match submission {
+            Submission::Admitted(messages) => messages,
+            Submission::Refused(reason) | Submission::Unknown(reason) => panic!("{reason}"),
+        };
+        admitted(
+            submit_steer(
+                &server,
+                &native_session,
+                &first_id,
+                "Reply with exactly LH_FIRST and nothing else.",
+            )
+            .await,
+        );
+        let mut submitted = vec![first_id.clone()];
+        let over_deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let (messages, busy) = observe(&server, &native_session).await.unwrap();
+            if turn_is_over(&messages, &submitted, busy) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < over_deadline,
+                "the first prompt never finished"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let second_id = mint_message_id();
+        let messages = admitted(
+            submit_steer(
+                &server,
+                &native_session,
+                &second_id,
+                &format!("Reply with exactly {second_marker} and nothing else."),
+            )
+            .await,
+        );
+        assert_eq!(
+            classify_steer(&messages, &second_id, &submitted),
+            Some(ConsoleSteerOutcome::StartedNewTurn)
+        );
+        submitted.push(second_id.clone());
+        let new_turn_deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let (messages, busy) = observe(&server, &native_session).await.unwrap();
+            let answered = messages.iter().any(|message| {
+                message.role == "assistant"
+                    && message.parent_id.as_deref() == Some(second_id.as_str())
+            });
+            if answered && turn_is_over(&messages, &submitted, busy) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < new_turn_deadline,
+                "the text posted after the turn ended never started a turn"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let raw = server.get(&path).await.unwrap().to_string();
+        assert!(raw.contains(&second_marker), "{raw}");
+
+        match previous_home {
+            Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
     }
 
     #[tokio::test]

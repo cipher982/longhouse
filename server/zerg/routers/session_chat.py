@@ -2209,6 +2209,20 @@ def _provider_supports_steer(session) -> bool:
     return bool(contract is not None and contract.steer_active_turn)
 
 
+def _steer_receipt_turn(outcome: str, target) -> ConsoleTurnReceiptResponse | None:
+    """The turn a steer receipt carries: none when the text entered the running turn.
+
+    A steer that started a new turn instead (OpenCode cannot refuse one once its turn
+    ended) says so the way a Send does, by carrying the turn it belongs to. That is how
+    the factory's `no_new_turn` already tells a steer from a follow-up.
+    """
+    from zerg.services.console_turns import STEER_OUTCOME_STARTED_NEW_TURN
+
+    if outcome != STEER_OUTCOME_STARTED_NEW_TURN:
+        return None
+    return ConsoleTurnReceiptResponse(turn_id=target.turn_id, run_id=target.run_id, state="active", is_fresh=True)
+
+
 async def _steer_console_session_input(
     *,
     source_session,
@@ -2217,6 +2231,7 @@ async def _steer_console_session_input(
     db: Session,
 ) -> SessionInputResponse:
     """Enter a running Console turn, with a durable receipt like a Helm steer."""
+    from zerg.services.console_turns import STEER_OUTCOME_STARTED_NEW_TURN
     from zerg.services.console_turns import console_steer_target
     from zerg.services.console_turns import steer_console_turn
 
@@ -2288,25 +2303,33 @@ async def _steer_console_session_input(
                 client_request_id=client_request_id,
             ),
         )
-    failure = await steer_console_turn(
+    steer = await steer_console_turn(
         target,
         owner_id=owner_id,
         session_id=session_uuid,
         text=body.text,
         client_request_id=client_request_id,
     )
-    if failure is None:
+    if steer.failure is None:
         await _finish_catalog_input_receipt(receipt_id=receipt_id, delivery_request_id=delivery_request_id)
+        if steer.outcome == STEER_OUTCOME_STARTED_NEW_TURN:
+            logger.info(
+                "console steer started a new turn: session=%s run=%s provider=%s",
+                session_uuid,
+                target.run_id,
+                target.provider,
+            )
         return SessionInputResponse(
             outcome="sent",
             disposition="accepted",
             input_id=None,
             live_input_id=receipt_id,
             client_request_id=client_request_id,
+            turn=_steer_receipt_turn(steer.outcome, target),
             intent=INPUT_INTENT_STEER,
             queued=[],
         )
-    code, message = failure
+    code, message = steer.failure
     if code == "delivery_unknown":
         await _set_catalog_live_receipt_error(
             receipt_id=receipt_id,

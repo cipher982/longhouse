@@ -1270,6 +1270,28 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+    # Mid-turn steer on a running Console turn: `prompt_async` with a caller-chosen
+    # message id on the turn's own `opencode serve`. OpenCode's one prompt endpoint
+    # cannot refuse a steer that arrives after the turn ended (it starts a turn), so
+    # the adapter reports `steered` or `started_new_turn` from OpenCode's own message
+    # timestamps and never claims `steered` without proof the session stayed busy
+    # (docs/specs/console-full-control.md, B3). `ceiling`, not `strict`: a steer
+    # failure never gates session.turn.start.
+    session.turn.steer:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.turn_steer
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: console_turn_steer_preserved
+        scenario_id: opencode_console_adapter_lifecycle
+        oracle_source: server/zerg/qa/provider_console_lifecycle.py
+        minimum_scenario_revision: 6
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.turn.start:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1413,9 +1435,9 @@ providers:
       level: hermetic
       source: opencode_run durable claims, one owned `opencode serve` per turn driven
         over the v1 HTTP API with message-chain completion, native session resume, and
-        Console dispatch tests
+        Console dispatch and steer-outcome tests
       disposition: "implemented"
-      owner_action: "opencode_run live Console dispatch canary"
+      owner_action: "opencode_run live Console dispatch canary; factory console_turn_steer_preserved cell for steer"
   machine_control_supports:
   - opencode.send
   - opencode.interrupt
@@ -1424,6 +1446,7 @@ providers:
   - opencode.terminate
   - opencode.turn_start
   - opencode.turn_interrupt
+  - opencode.turn_steer
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented

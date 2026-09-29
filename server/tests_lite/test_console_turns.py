@@ -747,11 +747,12 @@ async def test_console_steer_enters_the_running_codex_turn(monkeypatch):
     registry = Registry()
     session_id = uuid4()
     target = await console_steer_target(owner_id=1, session_id=session_id, registry=registry)
-    failure = await steer_console_turn(
+    result = await steer_console_turn(
         target, owner_id=1, session_id=session_id, text="also check the logs", client_request_id="steer-1", registry=registry
     )
 
-    assert failure is None
+    assert result.failure is None
+    assert result.outcome == "steered"
     assert registry.command["command_type"] == "session.turn.steer"
     assert registry.command["payload"] == {
         "provider": "codex",
@@ -797,4 +798,66 @@ async def test_console_steer_reports_a_turn_that_ended_before_it_arrived(monkeyp
     session_id = uuid4()
     target = await console_steer_target(owner_id=1, session_id=session_id, registry=registry)
     failure = await steer_console_turn(target, owner_id=1, session_id=session_id, text="x", client_request_id="c", registry=registry)
-    assert failure == ("turn_not_steerable", "gone")
+    assert failure.failure == ("turn_not_steerable", "gone")
+
+
+@pytest.mark.asyncio
+async def test_console_steer_says_when_the_text_started_a_new_turn_instead(monkeypatch):
+    from zerg.services.console_turns import console_steer_target
+    from zerg.services.console_turns import steer_console_turn
+
+    turn = _running_turn(provider="opencode")
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _steer_catalog(turn))
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            # OpenCode cannot refuse a steer once its turn ended; the Machine Agent says which happened.
+            result = {"steered": False, "outcome": "started_new_turn", "transport": "opencode_run"}
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": result}, error=None)
+
+    registry = Registry()
+    session_id = uuid4()
+    target = await console_steer_target(owner_id=1, session_id=session_id, registry=registry)
+    result = await steer_console_turn(target, owner_id=1, session_id=session_id, text="x", client_request_id="c", registry=registry)
+    assert result.failure is None
+    assert result.outcome == "started_new_turn"
+
+
+@pytest.mark.asyncio
+async def test_console_steer_that_could_not_be_classified_is_delivery_unknown_never_steered(monkeypatch):
+    from zerg.services.console_turns import console_steer_target
+    from zerg.services.console_turns import steer_console_turn
+
+    turn = _running_turn(provider="opencode")
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _steer_catalog(turn))
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(
+                transport_ok=True,
+                message={"ok": False, "error": {"code": "steer_outcome_unknown", "message": "no proof"}},
+                error=None,
+            )
+
+    registry = Registry()
+    session_id = uuid4()
+    target = await console_steer_target(owner_id=1, session_id=session_id, registry=registry)
+    result = await steer_console_turn(target, owner_id=1, session_id=session_id, text="x", client_request_id="c", registry=registry)
+    assert result.failure == ("delivery_unknown", "no proof")
+
+
+def test_a_steer_receipt_carries_a_turn_only_when_the_steer_started_one():
+    from zerg.routers.session_chat import _steer_receipt_turn
+    from zerg.services.console_turns import ConsoleSteerTarget
+
+    target = ConsoleSteerTarget(turn_id="turn-1", run_id="run-1", provider="opencode", device_id="cinder")
+    # Entering the running turn is the plain steer receipt: no turn of its own.
+    assert _steer_receipt_turn("steered", target) is None
+    started = _steer_receipt_turn("started_new_turn", target)
+    assert (started.turn_id, started.run_id, started.state) == ("turn-1", "run-1", "active")

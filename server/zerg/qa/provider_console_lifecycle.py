@@ -59,7 +59,7 @@ ASSERTION_ID = "console_adapter_release_contract_preserved"
 # the strict gate on session.turn.start, so a steer failure cannot switch off
 # Console turns (docs/specs/console-full-control.md, A2).
 STEER_ASSERTION_ID = "console_turn_steer_preserved"
-STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp"})
+STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp", "opencode"})
 SUPPORTED_VARIANT = "interrupt_supported"
 UNSUPPORTED_VARIANT = "interrupt_unsupported"
 SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
@@ -121,11 +121,12 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=15,
+    producer_revision=16,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
+    # (producer 16: OpenCode joins the steer cells; the step is unchanged.)
     scenario_revision=6,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.

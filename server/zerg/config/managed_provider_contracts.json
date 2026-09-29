@@ -202,7 +202,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
+              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
             }
           ]
         },
@@ -230,7 +230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
+              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
             }
           ]
         },
@@ -1336,7 +1336,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
+              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
             }
           ]
         },
@@ -1364,7 +1364,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
+              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
             },
             {
               "id": "real_print_marker_returned",
@@ -1991,6 +1991,33 @@
             }
           ]
         },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "opencode_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 6,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+            }
+          ]
+        },
         "session.turn.start": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -2015,7 +2042,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
+              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
             }
           ]
         },
@@ -2421,9 +2448,9 @@
         },
         "turn_start": {
           "level": "hermetic",
-          "source": "opencode_run durable claims, one owned `opencode serve` per turn driven over the v1 HTTP API with message-chain completion, native session resume, and Console dispatch tests",
+          "source": "opencode_run durable claims, one owned `opencode serve` per turn driven over the v1 HTTP API with message-chain completion, native session resume, and Console dispatch and steer-outcome tests",
           "disposition": "implemented",
-          "owner_action": "opencode_run live Console dispatch canary"
+          "owner_action": "opencode_run live Console dispatch canary; factory console_turn_steer_preserved cell for steer"
         }
       },
       "machine_control_supports": [
@@ -2433,7 +2460,8 @@
         "opencode.answer_pause",
         "opencode.terminate",
         "opencode.turn_start",
-        "opencode.turn_interrupt"
+        "opencode.turn_interrupt",
+        "opencode.turn_steer"
       ],
       "transcript_signals": {
         "delegation.spawn": {
@@ -2526,7 +2554,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "e0eb72ced591a7f4644b2fb77cbcff390306332ff0665172983cb5c00f0b51e0"
+      "adapter_digest": "0f4e80081631c6261e5d5ba5e98b12aa7fffdefa25056de35f785622caf60feb"
     },
     {
       "provider": "antigravity",
@@ -3130,7 +3158,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
+              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
             }
           ]
         },
@@ -4911,7 +4939,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "8ae0b1cd26277c5758ea4b0f3ea150caec61f843d4306ffcea8541f2ca973e25"
+      "adapter_digest": "4c43e1f8f44103d998d68fb6b08bc8d18a4bb74af30c99267da7dda2103d1c1a"
     }
   ]
 }

@@ -39,6 +39,7 @@ use crate::codex_bridge::{
 };
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig, CODEX_EXEC_ADAPTER};
 use crate::config::ShipperConfig;
+use crate::console_adapter::ConsoleSteerOutcome;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
 use crate::omp_print::{start_omp_print_turn, OmpPrintRunConfig, OMP_PRINT_ADAPTER};
@@ -1234,7 +1235,7 @@ async fn execute_command(
                     "steered": true,
                 }));
             }
-            let transport = match provider.as_str() {
+            let (transport, outcome) = match provider.as_str() {
                 "codex" => {
                     crate::codex_exec::steer_codex_console_turn(&run_id, &text)
                         .await
@@ -1244,7 +1245,7 @@ async fn execute_command(
                                 "Codex Console turn {run_id} did not take the steer: {reason}"
                             ),
                         })?;
-                    CODEX_EXEC_ADAPTER
+                    (CODEX_EXEC_ADAPTER, ConsoleSteerOutcome::Steered)
                 }
                 "claude" => {
                     crate::claude_print::steer_claude_print_turn(&run_id, &session_id, &text)
@@ -1258,7 +1259,7 @@ async fn execute_command(
                                 "Claude Console turn {run_id} did not take the steer: {reason}"
                             ),
                         })?;
-                    CLAUDE_PRINT_ADAPTER
+                    (CLAUDE_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
                 }
                 "pi" => {
                     crate::pi_print::steer_pi_print_turn(&run_id, &session_id, &text)
@@ -1269,7 +1270,7 @@ async fn execute_command(
                                 "Pi Console turn {run_id} did not take the steer: {reason}"
                             ),
                         })?;
-                    PI_PRINT_ADAPTER
+                    (PI_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
                 }
                 "omp" => {
                     crate::omp_print::steer_omp_print_turn(&run_id, &session_id, &text)
@@ -1280,7 +1281,22 @@ async fn execute_command(
                                 "OMP Console turn {run_id} did not take the steer: {reason}"
                             ),
                         })?;
-                    OMP_PRINT_ADAPTER
+                    (OMP_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
+                }
+                "opencode" => {
+                    let outcome = crate::opencode_run::steer_opencode_console_turn(
+                        &run_id,
+                        &session_id,
+                        &text,
+                    )
+                    .await
+                    .map_err(|reason| CommandError {
+                        code: reason.clone(),
+                        message: format!(
+                            "OpenCode Console turn {run_id} did not take the steer: {reason}"
+                        ),
+                    })?;
+                    (OPENCODE_RUN_ADAPTER, outcome)
                 }
                 _ => {
                     return Err(CommandError {
@@ -1289,11 +1305,14 @@ async fn execute_command(
                     });
                 }
             };
+            // `steered` is false when the text started a new turn instead of
+            // entering the running one; `outcome` says which.
             Ok(json!({
                 "provider": provider,
                 "transport": transport,
                 "run_id": run_id,
-                "steered": true,
+                "steered": outcome == ConsoleSteerOutcome::Steered,
+                "outcome": outcome.as_str(),
             }))
         }
         COMMAND_TURN_INTERRUPT => {
@@ -4068,6 +4087,7 @@ mod tests {
         ("omp", "turn_start", COMMAND_TURN_START),
         ("omp", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("omp", "turn_steer", COMMAND_TURN_STEER),
+        ("opencode", "turn_steer", COMMAND_TURN_STEER),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
@@ -4803,6 +4823,7 @@ mod tests {
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
                 "opencode.turn_interrupt".to_string(),
+                "opencode.turn_steer".to_string(),
             ]
         );
 
@@ -4820,6 +4841,7 @@ mod tests {
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
                 "opencode.turn_interrupt".to_string(),
+                "opencode.turn_steer".to_string(),
                 "opencode.live_proof".to_string(),
             ]
         );

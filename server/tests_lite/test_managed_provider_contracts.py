@@ -223,6 +223,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "session.resume.helm",
         "session.transcript.search",
         "session.turn.start",
+        "session.turn.steer",
     }
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
@@ -497,6 +498,7 @@ def test_opencode_contract_is_server_bridge_control_provider_with_active_turn_st
         "opencode.terminate",
         "opencode.turn_start",
         "opencode.turn_interrupt",
+        "opencode.turn_steer",
     )
     assert opencode.connection_capabilities == {
         "can_send_input": 1,
@@ -618,6 +620,7 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("opencode", "session.terminate", "opencode.terminate"),
         ("opencode", "session.turn.start", "opencode.turn_start"),
         ("opencode", "session.turn.interrupt", "opencode.turn_interrupt"),
+        ("opencode", "session.turn.steer", "opencode.turn_steer"),
         ("pi", "session.turn.start", "pi.turn_start"),
         ("pi", "session.turn.interrupt", "pi.turn_interrupt"),
         ("omp", "session.turn.start", "omp.turn_start"),

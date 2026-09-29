@@ -1071,7 +1071,7 @@ def test_steer_cell_is_its_own_factory_invocation():
     steer = lifecycle.STEER_VARIANTS["codex"]
     assert steer not in (lifecycle.SUPPORTED_VARIANT, lifecycle.UNSUPPORTED_VARIANT)
     assert lifecycle._parser().parse_args([*base, "--variant", steer]).variant == steer
-    assert set(lifecycle.STEER_VARIANTS) == {"codex", "claude"}
+    assert set(lifecycle.STEER_VARIANTS) == {"codex", "claude", "opencode"}
     for producer in (pi_console_tool_producer, omp_console_producer):
         assert producer._STEER_VARIANT != producer._VARIANT
         assert producer._STEER_VARIANT.endswith(f":{lifecycle.STEER_ASSERTION_ID}:{producer.SCENARIO_ID}")

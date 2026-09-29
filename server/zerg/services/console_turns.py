@@ -246,6 +246,25 @@ async def console_steer_target(*, owner_id: int, session_id: UUID, registry=None
     )
 
 
+STEER_OUTCOME_STEERED = "steered"
+STEER_OUTCOME_STARTED_NEW_TURN = "started_new_turn"
+
+
+@dataclass(frozen=True)
+class ConsoleSteerResult:
+    """What a Console steer did: a failure, or how the text landed.
+
+    Providers that refuse a steer once their turn ended (Codex, Claude, Pi, OMP)
+    only ever land as `steered`. OpenCode's one prompt endpoint cannot refuse: sent
+    after the turn ended it starts a turn of its own, and the Machine Agent says so
+    (`started_new_turn`) from OpenCode's own message timestamps. A result from an
+    engine that says nothing is `steered`, as it always was.
+    """
+
+    outcome: str = STEER_OUTCOME_STEERED
+    failure: tuple[str, str] | None = None
+
+
 async def steer_console_turn(
     target: ConsoleSteerTarget,
     *,
@@ -254,10 +273,11 @@ async def steer_console_turn(
     text: str,
     client_request_id: str,
     registry=None,
-) -> tuple[str, str] | None:
-    """Enter the running Console turn. Returns None, or (code, message) on failure.
+) -> ConsoleSteerResult:
+    """Enter the running Console turn, or say what happened instead.
 
-    `delivery_unknown` means the Machine Agent may have taken it.
+    A failure is (code, message); `delivery_unknown` means the Machine Agent may
+    have taken it.
     """
 
     from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -273,15 +293,18 @@ async def steer_console_turn(
         timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS + 10,
     )
     if not response.transport_ok:
-        return ("delivery_unknown", str(response.error or "Console steer outcome is unknown"))
+        return ConsoleSteerResult(failure=("delivery_unknown", str(response.error or "Console steer outcome is unknown")))
     message = dict(response.message or {})
     if message.get("ok") is True:
-        return None
+        result = message.get("result") if isinstance(message.get("result"), dict) else {}
+        if result.get("outcome") == STEER_OUTCOME_STARTED_NEW_TURN:
+            return ConsoleSteerResult(outcome=STEER_OUTCOME_STARTED_NEW_TURN)
+        return ConsoleSteerResult()
     detail = message.get("error") if isinstance(message.get("error"), dict) else {}
     code = str(detail.get("code") or "steer_failed")
     if code == "steer_outcome_unknown":
         code = "delivery_unknown"
-    return (code, str(detail.get("message") or response.error or "Console steer failed"))
+    return ConsoleSteerResult(failure=(code, str(detail.get("message") or response.error or "Console steer failed")))
 
 
 async def enqueue_catalog_console_turn(

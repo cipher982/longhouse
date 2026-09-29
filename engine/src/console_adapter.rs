@@ -20,6 +20,29 @@ use crate::turn_claims::TurnClaim;
 /// How much of a provider's stderr rides along on a terminal event.
 const STDERR_TAIL_LINES: usize = 40;
 
+/// How a Console steer landed, reported on the `session.turn.steer` result.
+///
+/// Providers whose steer is refused when the turn already ended (Codex
+/// `expectedTurnId`, the Pi/OMP RPC, Claude's hook) can only ever report
+/// `Steered`. OpenCode's one prompt endpoint cannot refuse: posted after the
+/// turn ended it starts a turn of its own, so that adapter says which happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleSteerOutcome {
+    /// The text entered the running turn; the session never went idle.
+    Steered,
+    /// The turn had ended: the text started a new turn instead.
+    StartedNewTurn,
+}
+
+impl ConsoleSteerOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Steered => "steered",
+            Self::StartedNewTurn => "started_new_turn",
+        }
+    }
+}
+
 /// What the process inventory says about the worker behind a turn claim.
 ///
 /// `Unknown` is the reason this is not a `bool`. A terminal is an actuator: it
