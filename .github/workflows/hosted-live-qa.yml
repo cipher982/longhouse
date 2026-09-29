@@ -281,7 +281,9 @@ jobs:
 
       - name: Validate cohort journey contracts
         id: cohort_contracts
-        if: always() && steps.qa_live.outcome == 'success'
+        # Never touches the canary, so it also runs when QA stood down before
+        # starting (the canary was already replaced).
+        if: always() && (steps.qa_live.outcome == 'success' || steps.runtime_before.outputs.stale == 'true')
         run: python3 scripts/qa/test-isolation.py --target validate-cohort-journey
 
       - name: Run privacy-safe isolated cohort journey
@@ -380,7 +382,7 @@ jobs:
 
       - name: Stand down, canary superseded
         if: always() && (steps.verdict.outputs.verdict == 'superseded' || steps.runtime_before.outputs.stale == 'true')
-        run: echo "The canary was replaced during this run; the newer commit's own Hosted Live QA carries the verdict. See the summary."
+        run: echo "The canary was replaced before or during this run; the newer commit's own Hosted Live QA carries the verdict. See the summary."
 
       - name: Upload privacy-safe cohort journey artifact
         # A failed journey writes no artifact; its failure is already reported
