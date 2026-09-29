@@ -19,7 +19,7 @@ dir, `review-receipts/receipts.jsonl`, and finding dispositions are appended wit
 `hatch review disposition`. The format is described in
 control-plane/docs/specs/review-receipts.md. A receipt covers a commit when it
 lists the commit's SHA or its stable patch-id, so a rebase after review keeps the
-review; any other change to the commit does not.
+review; a change to the patch itself (amend, conflict resolution) does not.
 
   review_gate.py push [--base origin/main]
   review_gate.py promotion --target SHA (--served SHA | --served-url URL)
@@ -365,12 +365,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         policy = Policy.load(policy_path, args.name or repo_name(repo))
         if args.mode == "push":
-            if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
-                print("review-gate: push check skipped in CI (receipts live on the author's machine).")
-                return 0
             if not git(repo, "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}", check=False).strip():
-                print(f"review-gate: {args.base} not found; push check skipped.")
+                print(f"review-gate: {args.base} not found; push check skipped.", file=sys.stderr)
                 return 0
+            if not policy.blocking:
+                raise GateError(f"review-policy.toml has no [[repos.{args.name or repo_name(repo)}.blocking]] table, so "
+                                "the landing rule would enforce nothing here; add one or pass --name")
             verdicts = push_verdicts(repo, policy, args.base, args.head)
             kind, what, target = "push", "touch the blocking list without a completed review", args.head
         elif args.mode == "promotion":

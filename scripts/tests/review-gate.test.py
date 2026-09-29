@@ -303,12 +303,21 @@ class PushRuleTests(unittest.TestCase):
         self.assertIn(gate.OVERRIDE_ENV, result.stderr)
         self.assertIn("hatch review disposition", result.stderr)
 
-    def test_cli_skips_in_ci_and_without_the_base_ref(self):
+    def test_an_inherited_ci_variable_does_not_switch_the_rule_off(self):
         self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
-        self.assertEqual(self.repo.run("push", "--base", self.base, env={"CI": "true"}).returncode, 0)
+        for name in ("CI", "GITHUB_ACTIONS"):
+            self.assertEqual(self.repo.run("push", "--base", self.base, env={name: "true"}).returncode, 1, name)
+
+    def test_cli_skips_loudly_without_the_base_ref_and_errors_for_a_repo_with_no_policy_table(self):
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
         skipped = self.repo.run("push", "--base", "origin/nowhere")
         self.assertEqual(skipped.returncode, 0)
-        self.assertIn("skipped", skipped.stdout)
+        self.assertIn("skipped", skipped.stderr)
+        no_table = subprocess.run(
+            [sys.executable, str(GATE), "--repo", str(self.repo.dir), "--policy", str(self.repo.dir / "policy.toml"),
+             "--name", "some-fork", "push", "--base", self.base], capture_output=True, text=True)
+        self.assertEqual(no_table.returncode, 2)
+        self.assertIn("enforce nothing", no_table.stderr)
 
 
 class PromotionRuleTests(unittest.TestCase):
