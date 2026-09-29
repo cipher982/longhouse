@@ -1265,7 +1265,6 @@ pub fn attach_host_authority_predecessor(
             // has never heard the epoch's name; the frozen successor re-sends
             // its own range, so nothing the claim covered is lost. A claim the
             // host does not corroborate stays blocked.
-            let host_position = to_sql_u64(host_accepted_through)?;
             if provider != local.0
                 || opaque_source_id != local.1
                 || ended_at.is_none()
