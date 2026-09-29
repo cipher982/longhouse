@@ -43,7 +43,9 @@ thread_local! {
 }
 
 /// A copy is for one directory read one way: the same files parsed or ordered
-/// differently are a different copy.
+/// differently are a different copy. Function addresses can miss (one function
+/// emitted twice reads as two, costing a re-parse) or merge (two identical
+/// bodies read as one, and read the same), so neither can serve a wrong copy.
 type CacheKey = (PathBuf, TypeId, usize, usize);
 
 static CACHE: LazyLock<Mutex<HashMap<CacheKey, Entry>>> =
@@ -85,18 +87,25 @@ where
             }
         }
     }
+    // A file that could not be read is left out, and asked for again next time:
+    // whatever stopped the read (a permission, say) can change with no change to
+    // the name, length, inode or mtime that a copy is trusted on.
+    let mut every_file_read = true;
     let mut parsed: Vec<T> = listing
         .paths
         .into_iter()
         .filter_map(|path| {
             #[cfg(test)]
             FILES_PARSED.with(|parsed| parsed.set(parsed.get() + 1));
-            parse(&path, fs::read(&path))
+            let bytes = fs::read(&path);
+            every_file_read &= bytes.is_ok();
+            parse(&path, bytes)
         })
         .collect();
     parsed.sort_by(order);
     let parsed = Arc::new(parsed);
-    if let (Some(signature), Ok(mut cache)) = (listing.signature, CACHE.lock()) {
+    let signature = listing.signature.filter(|_| every_file_read);
+    if let (Some(signature), Ok(mut cache)) = (signature, CACHE.lock()) {
         if cache.len() >= MAX_DIRECTORIES && !cache.contains_key(&key) {
             cache.clear();
         }
@@ -315,6 +324,37 @@ mod tests {
         assert_eq!(ascending(dir.path()), ["a.json", "b.json"]);
         assert_eq!(descending(dir.path()), ["b.json", "a.json"]);
         assert_eq!(ascending(dir.path()), ["a.json", "b.json"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_could_not_be_read_is_asked_for_again() {
+        use std::os::unix::fs::PermissionsExt;
+        // Root reads anything, so there is no unreadable file to make.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.json");
+        fs::write(&path, "one").unwrap();
+        age(&path, 60);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        for _ in 0..2 {
+            assert!(parsed_json_dir(dir.path(), parse, Ord::cmp)
+                .unwrap()
+                .is_empty());
+        }
+        assert_eq!(files_parsed(), 2, "an unreadable file was cached as absent");
+
+        // Made readable again, with nothing a stat can see having changed.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            parsed_json_dir(dir.path(), parse, Ord::cmp)
+                .unwrap()
+                .to_vec(),
+            ["one"]
+        );
     }
 
     #[test]

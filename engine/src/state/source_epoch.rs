@@ -314,20 +314,27 @@ pub fn lane_position(conn: &Connection, source_epoch: Uuid, lane: SourceLane) ->
         .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))
 }
 
-/// A fingerprint of the durable lane of every active epoch of one provider: how
-/// many there are, how far the host has received each, and when any last moved.
-/// It changes when a lane is rewound, an epoch is added or rotated away, or a
-/// receipt lands, and otherwise reads the same.
+/// A fingerprint of the durable lane of every active epoch of one provider: which
+/// epochs there are and how far the host has received each. It changes when a
+/// lane is rewound (however another lane moved at the same time), an epoch is
+/// added or rotated away, or a receipt lands, and otherwise reads the same.
 pub fn active_lane_fingerprint(conn: &Connection, provider: &str) -> Result<String> {
-    let (count, received, last_moved): (i64, i64, String) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(lane.last_position), 0), COALESCE(MAX(lane.updated_at), '')
+    let mut statement = conn.prepare(
+        "SELECT lane.source_epoch, lane.last_position
          FROM source_epoch_lane_state AS lane
          JOIN source_epoch_registry AS epoch ON epoch.source_epoch = lane.source_epoch
-         WHERE epoch.provider = ?1 AND epoch.ended_at IS NULL AND lane.lane = 'durable'",
-        [provider],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+         WHERE epoch.provider = ?1 AND epoch.ended_at IS NULL AND lane.lane = 'durable'
+         ORDER BY lane.source_epoch",
     )?;
-    Ok(format!("{count}:{received}:{last_moved}"))
+    let mut rows = statement.query([provider])?;
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+    let mut lanes = 0usize;
+    while let Some(row) = rows.next()? {
+        sha2::Digest::update(&mut hasher, row.get::<_, String>(0)?.as_bytes());
+        sha2::Digest::update(&mut hasher, row.get::<_, i64>(1)?.to_be_bytes());
+        lanes += 1;
+    }
+    Ok(format!("{lanes}:{:x}", sha2::Digest::finalize(hasher)))
 }
 
 pub fn active_source_incarnation(
@@ -865,6 +872,40 @@ mod tests {
         )
         .unwrap();
         (conn, resolution.source_epoch)
+    }
+
+    #[test]
+    fn the_lane_fingerprint_notices_a_rewind_that_another_lane_cancels_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, first) = epoch_at(dir.path(), 100);
+        let other = dir.path().join("other.jsonl");
+        fs::write(&other, vec![b'x'; 4096]).unwrap();
+        let second = observe_file(
+            &mut conn,
+            "claude",
+            "other.jsonl",
+            &other,
+            SourceLane::Durable,
+            200,
+            Some("revision-1"),
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap()
+        .source_epoch;
+        let before = active_lane_fingerprint(&conn, "claude").unwrap();
+        assert_eq!(active_lane_fingerprint(&conn, "claude").unwrap(), before);
+
+        // One lane rewound by what another advanced: the total does not move.
+        for (epoch, position) in [(first, 99), (second, 201)] {
+            conn.execute(
+                "UPDATE source_epoch_lane_state SET last_position = ?2
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                params![epoch.to_string(), position],
+            )
+            .unwrap();
+        }
+        assert_ne!(active_lane_fingerprint(&conn, "claude").unwrap(), before);
     }
 
     #[test]
