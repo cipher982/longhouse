@@ -21,6 +21,7 @@ import argparse
 import collections
 import concurrent.futures as futures
 import json
+import math
 import statistics
 import subprocess
 import sys
@@ -55,7 +56,7 @@ def minutes(a: str | None, b: str | None) -> float | None:
 
 def pct(values: list[float], q: float) -> float:
     ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int(len(ordered) * q))]
+    return ordered[max(0, math.ceil(len(ordered) * q) - 1)]
 
 
 def summary(values: list[float]) -> str:
