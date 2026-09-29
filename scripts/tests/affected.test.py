@@ -54,6 +54,29 @@ def test_shared_manifest_selects_every_relevant_filter() -> None:
     }
 
 
+def test_release_version_bump_does_not_select_the_ios_lane() -> None:
+    # `make release` edits Version.xcconfig alone under ios/; the iOS lane is the
+    # slowest CI job and a version string proves nothing to it. Any other iOS
+    # path still selects it.
+    bump = resolve("ios/XcodeHarness/Configs/Version.xcconfig")
+    assert "ios" not in bump["categories"], bump
+    other = resolve("ios/XcodeHarness/Configs/Version.xcconfig", "ios/XcodeHarness/Sources/App.swift")
+    assert "ios" in other["categories"], other
+    assert "ios" in resolve("ios/XcodeHarness/project.yml")["categories"]
+
+
+def test_exclusion_only_filters_are_rejected() -> None:
+    with tempfile.TemporaryDirectory(prefix="affected-filters-") as raw:
+        path = Path(raw) / "filters.yml"
+        path.write_text("ios:\n  - '!ios/x'\n", encoding="utf-8")
+        try:
+            affected._load_filters(path)
+        except affected.ResolverError as exc:
+            assert "only exclusions" in str(exc)
+        else:
+            raise AssertionError("an exclusion-only filter must be rejected")
+
+
 def test_dirty_and_nonignored_untracked_paths_are_collected() -> None:
     with tempfile.TemporaryDirectory(prefix="affected-git-") as raw:
         repo = Path(raw)

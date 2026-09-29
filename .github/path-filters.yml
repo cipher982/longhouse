@@ -37,6 +37,12 @@ runner:
 
 ios:
   - 'ios/**'
+  # `make release` edits MARKETING_VERSION here and nothing else in ios/. That
+  # bump commit is the exact SHA every release gate waits on, and the iOS lane
+  # (15-20 min on a hosted macOS VM) was its long pole while proving nothing
+  # about a version string. Readers of `ios` must pass predicate-quantifier:
+  # some-with-excludes (contract-first-ci.yml does; scripts/ci/affected.py mirrors it).
+  - '!ios/XcodeHarness/Configs/Version.xcconfig'
   - 'scripts/build/generate_build_identity.py'
   - 'scripts/build/stage_ios_build_identity.sh'
   - 'scripts/ci/run_ios_tests.sh'

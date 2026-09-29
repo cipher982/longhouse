@@ -88,6 +88,8 @@ jobs:
         id: filter
         with:
           filters: .github/path-filters.yml
+          # `!` patterns in the filters exclude (ios: a release's version bump).
+          predicate-quantifier: some-with-excludes
           # A branch push qualifies that push, not every commit since main.
           # PRs still use GitHub's changed-file API against their base branch.
           base: ${{ github.ref_name }}

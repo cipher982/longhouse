@@ -100,7 +100,7 @@ UNKNOWN_PLAN = FilterPlan(
 # The current authority uses ordinary repository-relative globs.  Rejecting
 # minimatch-only constructs is intentional: a newly introduced pattern that
 # this local resolver cannot reproduce must fail closed rather than disappear.
-_UNSUPPORTED_PATTERN = re.compile(r"(?:^!|\{|\}|\(|\)|\[|\]|\\)")
+_UNSUPPORTED_PATTERN = re.compile(r"(?:\{|\}|\(|\)|\[|\]|\\)")
 
 
 def _git(root: Path, args: Sequence[str]) -> bytes:
@@ -181,18 +181,22 @@ def _load_filters(path: Path) -> dict[str, tuple[str, ...]]:
             raise ResolverError(f"path filter {category!r} must be a non-empty list")
         normalized: list[str] = []
         for pattern in patterns:
+            # A leading `!` excludes (dorny predicate-quantifier some-with-excludes).
+            body = pattern[1:] if isinstance(pattern, str) and pattern.startswith("!") else pattern
             if (
                 not isinstance(pattern, str)
-                or not pattern
-                or pattern.startswith("/")
-                or _UNSUPPORTED_PATTERN.search(pattern)
-                or pattern.count("[") != pattern.count("]")
+                or not body
+                or body.startswith(("/", "!"))
+                or _UNSUPPORTED_PATTERN.search(body)
+                or body.count("[") != body.count("]")
             ):
                 raise ResolverError(f"path filter {category!r} contains unsupported pattern {pattern!r}")
             if "\x00" in pattern:
                 raise ResolverError(f"path filter {category!r} contains NUL in pattern")
-            _compile_pattern(pattern)
+            _compile_pattern(body)
             normalized.append(pattern)
+        if all(pattern.startswith("!") for pattern in normalized):
+            raise ResolverError(f"path filter {category!r} has only exclusions")
         filters[category] = tuple(normalized)
     return filters
 
@@ -234,6 +238,14 @@ def _matches(path: str, pattern: str) -> bool:
     return _compile_pattern(pattern).fullmatch(path) is not None
 
 
+def _in_category(path: str, patterns: tuple[str, ...]) -> bool:
+    """A path is in a category when some pattern matches and no `!` pattern does."""
+
+    excluded = any(_matches(path, pattern[1:]) for pattern in patterns if pattern.startswith("!"))
+    included = any(_matches(path, pattern) for pattern in patterns if not pattern.startswith("!"))
+    return included and not excluded
+
+
 def resolve(filters: dict[str, tuple[str, ...]], paths_by_source: dict[str, list[str]]) -> dict[str, Any]:
     """Resolve files to every matching category and its execution advice."""
 
@@ -242,7 +254,7 @@ def resolve(filters: dict[str, tuple[str, ...]], paths_by_source: dict[str, list
     category_paths: dict[str, list[str]] = {category: [] for category in filters}
     unknown_paths: list[str] = []
     for path in all_paths:
-        categories = [category for category, patterns in filters.items() if any(_matches(path, pattern) for pattern in patterns)]
+        categories = [category for category, patterns in filters.items() if _in_category(path, patterns)]
         matches[path] = categories
         if not categories:
             unknown_paths.append(path)
