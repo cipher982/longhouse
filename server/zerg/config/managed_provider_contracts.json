@@ -202,7 +202,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5495d23c67b24e058249912c0b5d60188de022a476e1a4c33c245cd713a2f931"
+              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
             }
           ]
         },
@@ -230,7 +230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5495d23c67b24e058249912c0b5d60188de022a476e1a4c33c245cd713a2f931"
+              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
             }
           ]
         },
@@ -1336,7 +1336,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5495d23c67b24e058249912c0b5d60188de022a476e1a4c33c245cd713a2f931"
+              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
             }
           ]
         },
@@ -1364,7 +1364,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5495d23c67b24e058249912c0b5d60188de022a476e1a4c33c245cd713a2f931"
+              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
             },
             {
               "id": "real_print_marker_returned",
@@ -2015,7 +2015,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5495d23c67b24e058249912c0b5d60188de022a476e1a4c33c245cd713a2f931"
+              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
             }
           ]
         },
@@ -3130,7 +3130,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5495d23c67b24e058249912c0b5d60188de022a476e1a4c33c245cd713a2f931"
+              "oracle_digest": "1b668b952ea33c9ed4b1daf43a9cf13e7dae4a9472f4c6c45e99b08da34f0858"
             }
           ]
         },
@@ -4911,7 +4911,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "583e4486fc37a4e4445c343cd7f8d5fb36e014073673788a7fe263b08d3203d2"
+      "adapter_digest": "a42c7b4e9a871ce0929eb9819e3e67ceae8d7e5231b4a54fe661e1d71b9792cf"
     }
   ]
 }

@@ -621,6 +621,27 @@ def test_omp_job_notice_completes_the_steered_tool_and_a_miss_says_what_was_serv
     ]
 
 
+# One line of a real OMP run's captured stdout (factory epoch 076529750, steer cell):
+# the background job's result as OMP handed it to the model. The label in `details`
+# carries the command's uncomputed text; only `content` holds the computed marker.
+_OMP_REAL_JOB_NOTICE = json.loads(
+    r"""{"type":"message_end","message":{"role":"custom","customType":"async-result","content":"<system-notice>\nBackground job bg_1 has completed. Resume your work using the result below.\nLH_OMP_STEER_TOOL_42_467d351979c44995bf597a86ee9dd285\nWall time: 15.03 seconds\n</system-notice>","display":true,"attribution":"agent","details":{"meta":{"source":{"type":"report","value":"background job delivery"}},"jobs":[{"jobId":"bg_1","type":"bash","label":"sleep 15 && echo LH_OMP_STEER_TOOL_$((40+2))_467d351979c44995bf597a86ee9dd285","durationMs":15030}]},"timestamp":1790663323476},"messageId":"msg-6"}"""
+)
+
+
+def test_the_real_omp_job_notice_satisfies_the_stream_check(tmp_path) -> None:
+    tag = "467d351979c44995bf597a86ee9dd285"
+    path = tmp_path / "stdout.log"
+    path.write_text(json.dumps(_OMP_REAL_JOB_NOTICE) + "\n", encoding="utf-8")
+    claim = {"stdout_path": str(path)}
+    marker, first = f"LH_OMP_STEER_TOOL_42_{tag}", f"LH_OMP_STEER_FIRST_{tag}"
+
+    assert lifecycle._provider_stream_reports_tool_result(claim, tool_marker=marker, first_marker=first)
+    # The command text in the job's label is not its result.
+    assert not lifecycle._provider_stream_reports_tool_result(claim, tool_marker=f"LH_OMP_STEER_TOOL_$((40+2))_{tag}", first_marker=first)
+    assert not lifecycle._provider_stream_reports_tool_result(claim, tool_marker=marker.replace("42", "43"), first_marker=first)
+
+
 def test_omp_steered_command_result_is_read_from_the_provider_stream(tmp_path) -> None:
     marker = "LH_OMP_STEER_TOOL_42_abc"
     first = "LH_OMP_STEER_FIRST_abc"

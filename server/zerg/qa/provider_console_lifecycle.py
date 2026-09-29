@@ -1967,6 +1967,7 @@ def _run_steer_step(
     ):
         receipt["tool_ran_to_completion"] = True
         receipt["tool_result_source"] = "provider_stream"
+        receipt["tool_result_stream_path"] = str(terminal.get("stdout_path"))
     if not receipt["tool_ran_to_completion"]:
         # Say what was served, so a failure is explained by the receipt alone.
         receipt["tool_marker_events"] = _tool_marker_rows(events, tool_marker)
