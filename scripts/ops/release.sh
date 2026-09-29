@@ -171,8 +171,20 @@ run_heavy() {
 export LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}"
 export LONGHOUSE_TEST_MEMORY="${LONGHOUSE_TEST_MEMORY:-8g}"
 
-echo "Running full release validation on the exact candidate commit..."
-run_heavy bash -c 'cd "$1" && make test-ci' _ "$ROOT"
+# A resume (same version, candidate already committed) must not repeat a
+# validation the exact commit already passed: v0.1.58's gate failed after a green
+# validation and a retry would have paid it again. The stamp is keyed by commit
+# SHA under the gitignored .build/, written only after make test-ci succeeds
+# (set -e), so an edited candidate has a new SHA and revalidates.
+VALIDATED_STAMP="$ROOT/.build/release-validated/$BUMP_SHA"
+if [[ -z "${RELEASE_REVALIDATE:-}" && -f "$VALIDATED_STAMP" ]]; then
+  echo "Candidate ${BUMP_SHA:0:10} already passed make test-ci ($(cat "$VALIDATED_STAMP")); skipping. RELEASE_REVALIDATE=1 forces it."
+else
+  echo "Running full release validation on the exact candidate commit..."
+  run_heavy bash -c 'cd "$1" && make test-ci' _ "$ROOT"
+  mkdir -p "$(dirname "$VALIDATED_STAMP")"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$VALIDATED_STAMP"
+fi
 
 if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
   echo "Release validation changed tracked files. Commit the generated updates, then rerun the same release." >&2
