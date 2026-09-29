@@ -41,6 +41,9 @@ const START_TIMEOUT: Duration = Duration::from_secs(90);
 const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 /// How long an unreachable server is tolerated before the turn is failed.
 const SERVER_DOWN_AFTER: Duration = Duration::from_secs(15);
+/// How long "idle before the work finished" must persist before it is a failure:
+/// a brief gap between steps is not the end of the turn.
+const STALL_GRACE: Duration = Duration::from_secs(5);
 /// The newest text preview per part is re-emitted at most this often.
 const TEXT_PREVIEW_EVERY: Duration = Duration::from_millis(200);
 
@@ -155,6 +158,9 @@ enum TurnOutcome {
     Running,
     Completed,
     Cancelled,
+    /// Idle with work unfinished. Not yet a failure: it must persist for
+    /// `STALL_GRACE`, so a gap between steps is not mistaken for the end.
+    Stalled(String),
     Failed(String),
 }
 
@@ -209,8 +215,9 @@ fn parse_messages(list: &Value) -> Vec<MessageView> {
 /// parented at the steer message, not the prompt, so the parent id alone would
 /// lose it. An errored answer ends the turn at once. Otherwise the turn is over
 /// only when the session is idle and the last answer finished with `stop`;
-/// `tool-calls` means another step is coming, and no answer yet means the turn
-/// has not started (the caller times that out).
+/// `tool-calls` means another step is coming (idle then is `Stalled`, which the
+/// caller times out), and no answer yet means the turn has not started (the
+/// caller times that out too).
 fn turn_outcome(messages: &[MessageView], submitted: &[String], busy: bool) -> TurnOutcome {
     let answers: Vec<&MessageView> = messages
         .iter()
@@ -238,7 +245,7 @@ fn turn_outcome(messages: &[MessageView], submitted: &[String], busy: bool) -> T
         None => TurnOutcome::Running,
         Some(Some("stop")) => TurnOutcome::Completed,
         Some(Some("tool-calls")) | Some(None) => {
-            TurnOutcome::Failed("OpenCode went idle before it finished its work".to_string())
+            TurnOutcome::Stalled("OpenCode went idle before it finished its work".to_string())
         }
         Some(Some(other)) => {
             TurnOutcome::Failed(format!("OpenCode ended the turn with finish={other}"))
@@ -347,6 +354,45 @@ impl Projector {
     /// True the first time `(part, key)` is delivered, false after.
     fn mark_delivered(&mut self, part_id: &str, key: &str) -> bool {
         self.emitted.insert((part_id.to_string(), key.to_string()))
+    }
+
+    /// A restarted engine has not seen what the previous one already logged;
+    /// learn it from the stream log so backfill never repeats it.
+    fn seed_from_log(&mut self, path: &Path) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        for line in text.lines() {
+            let Ok(event) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let Some(part) = event.get("part") else {
+                continue;
+            };
+            let Some(id) = part.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let key = match event.get("type").and_then(Value::as_str) {
+                Some("step_start") => "step_start".to_string(),
+                Some("step_finish") => "step_finish".to_string(),
+                Some("tool_use") => part
+                    .get("state")
+                    .and_then(|state| state.get("status"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("pending")
+                    .to_string(),
+                Some("text")
+                    if part
+                        .get("time")
+                        .and_then(|time| time.get("end"))
+                        .is_some_and(|end| !end.is_null()) =>
+                {
+                    "final".to_string()
+                }
+                _ => continue,
+            };
+            self.mark_delivered(id, &key);
+        }
     }
 
     fn stream_event(kind: &str, part: &Value) -> Action {
@@ -1011,6 +1057,45 @@ async fn observe(server: &OpenCodeServer, session_id: &str) -> Result<(Vec<Messa
     Ok((parse_messages(&list), busy))
 }
 
+/// Approve a permission once; each request id is answered at most once.
+fn approve(server: &OpenCodeServer, replied: &mut HashSet<String>, id: String) {
+    if replied.insert(id.clone()) {
+        spawn_reply(
+            server,
+            format!("/permission/{id}/reply"),
+            Some(json!({"reply": "once"})),
+        );
+    }
+}
+
+/// Reject a question: there is no human to answer it, and it must not hang the turn.
+fn reject(server: &OpenCodeServer, replied: &mut HashSet<String>, id: String) {
+    if replied.insert(id.clone()) {
+        spawn_reply(server, format!("/question/{id}/reject"), None);
+    }
+}
+
+/// Answer whatever the server is waiting on, asking it directly.
+async fn answer_pending(server: &OpenCodeServer, replied: &mut HashSet<String>) {
+    for (path, is_permission) in [("/permission", true), ("/question", false)] {
+        let Ok(pending) = server.get(path).await else {
+            continue;
+        };
+        for id in pending
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|request| request.get("id").and_then(Value::as_str))
+        {
+            if is_permission {
+                approve(server, replied, id.to_string());
+            } else {
+                reject(server, replied, id.to_string());
+            }
+        }
+    }
+}
+
 fn spawn_reply(server: &OpenCodeServer, path: String, body: Option<Value>) {
     let server = server.clone();
     tokio::spawn(async move {
@@ -1056,6 +1141,8 @@ async fn follow_turn(
     let mut ticker = tokio::time::interval(RECONCILE_EVERY);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut unreachable_since: Option<Instant> = None;
+    let mut stalled_since: Option<Instant> = None;
+    let mut replied = HashSet::new();
     loop {
         let mut reconcile = false;
         tokio::select! {
@@ -1066,14 +1153,8 @@ async fn follow_turn(
                             Action::Stream(event) => {
                                 emit(stream, sink, event, provider_session_id).await;
                             }
-                            Action::ApprovePermission(id) => spawn_reply(
-                                server,
-                                format!("/permission/{id}/reply"),
-                                Some(json!({"reply": "once"})),
-                            ),
-                            Action::RejectQuestion(id) => {
-                                spawn_reply(server, format!("/question/{id}/reject"), None)
-                            }
+                            Action::ApprovePermission(id) => approve(server, &mut replied, id),
+                            Action::RejectQuestion(id) => reject(server, &mut replied, id),
                             Action::Reconcile => reconcile = true,
                         }
                     }
@@ -1096,10 +1177,17 @@ async fn follow_turn(
         if !reconcile {
             continue;
         }
+        // The stream delivers permission and question requests, but a dropped
+        // stream or a restarted engine must not leave one waiting for ever.
+        answer_pending(server, &mut replied).await;
         match observe(server, provider_session_id).await {
             Ok((messages, busy)) => {
                 unreachable_since = None;
-                match turn_outcome(&messages, submitted, busy) {
+                let outcome = turn_outcome(&messages, submitted, busy);
+                if !matches!(outcome, TurnOutcome::Stalled(_)) {
+                    stalled_since = None;
+                }
+                match outcome {
                     TurnOutcome::Running => {
                         let answered = messages.iter().any(|message| {
                             message.role == "assistant"
@@ -1113,6 +1201,12 @@ async fn follow_turn(
                                 "OpenCode accepted the prompt but never started the turn"
                                     .to_string(),
                             );
+                        }
+                    }
+                    TurnOutcome::Stalled(reason) => {
+                        let since = *stalled_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= STALL_GRACE {
+                            return TurnOutcome::Failed(reason);
                         }
                     }
                     settled => return settled,
@@ -1227,7 +1321,7 @@ async fn finish_turn(
         TurnOutcome::Cancelled => ("run_cancelled", None),
         TurnOutcome::Failed(_) if cancel_requested => ("run_cancelled", None),
         TurnOutcome::Failed(reason) => ("run_failed", Some(reason)),
-        TurnOutcome::Running => (
+        TurnOutcome::Running | TurnOutcome::Stalled(_) => (
             "run_failed",
             Some("OpenCode turn ended without an outcome".to_string()),
         ),
@@ -1361,6 +1455,7 @@ async fn recover_turn(run_dir: PathBuf, sink: OpenCodeRunSink, _lock: File) {
     let (frames_tx, mut frames) = mpsc::channel::<Frame>(256);
     let pump = tokio::spawn(pump_events(server.clone(), frames_tx));
     let mut projector = Projector::new(&session_id);
+    projector.seed_from_log(&run_dir.join("stdout.jsonl"));
     let outcome = follow_turn(
         None,
         &server,
@@ -1418,18 +1513,22 @@ pub async fn interrupt_opencode_run_turn(
         .map(PathBuf::from)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .context("OpenCode Console turn has no run directory")?;
-    let state = ServeState::load(&run_dir)?;
-    registry.mark_cancel_requested(run_id)?;
-    let abort = match state.provider_session_id.as_deref() {
-        Some(session) => state
-            .server()
-            .post(&format!("/session/{session}/abort"), None)
-            .await
-            .map(|_| ()),
-        None => Err(anyhow::anyhow!("the turn has no native session yet")),
+    let served = ServeState::load(&run_dir).ok().and_then(|state| {
+        let session = state.provider_session_id.clone()?;
+        Some((state, session))
+    });
+    let Some((state, session)) = served else {
+        // Nothing to ask (no native session yet, or the server state is
+        // unreadable): stop the identity-checked process group instead.
+        return interrupt_server_group(&registry, &claim);
     };
-    match abort {
-        Ok(()) => Ok(()),
+    registry.mark_cancel_requested(run_id)?;
+    match state
+        .server()
+        .post(&format!("/session/{session}/abort"), None)
+        .await
+    {
+        Ok(_) => Ok(()),
         // The server answered and refused: that is the answer.
         Err(error) if http_status(&error).is_some() => Err(error),
         Err(error) => {
@@ -1450,12 +1549,15 @@ pub async fn interrupt_opencode_run_turn(
             eprintln!(
                 "[opencode-run] abort request failed, interrupting the process group: {error:#}"
             );
-            interrupt_server_group(&claim)
+            interrupt_server_group(&registry, &claim)
         }
     }
 }
 
-fn interrupt_server_group(claim: &crate::turn_claims::TurnClaim) -> Result<()> {
+fn interrupt_server_group(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    claim: &crate::turn_claims::TurnClaim,
+) -> Result<()> {
     let pid = claim
         .pid
         .context("OpenCode Console turn has no provider pid")?;
@@ -1477,6 +1579,8 @@ fn interrupt_server_group(claim: &crate::turn_claims::TurnClaim) -> Result<()> {
     if actual_pgid != pgid || crate::process_group::leader_group_for(pid) != Some(pgid) {
         anyhow::bail!("OpenCode Console provider process-group identity changed");
     }
+    // Only a group whose identity was just proven is signalled or marked.
+    registry.mark_cancel_requested(&claim.run_id)?;
     if unsafe { libc::killpg(pgid, libc::SIGINT) } != 0 {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() != Some(libc::ESRCH) {
@@ -1484,6 +1588,133 @@ fn interrupt_server_group(claim: &crate::turn_claims::TurnClaim) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A stand-in for `opencode serve`, speaking the slice of the v1 API the adapter
+/// uses, for tests that drive the real adapter end to end (here and in the
+/// control channel). Modes, from `OPENCODE_FAKE_MODE`: `ok` answers at once,
+/// `error` answers with a provider error, `missing` has no such session,
+/// `permission` waits for a permission reply, `hold` waits for an abort.
+/// Requests are appended to `OPENCODE_FAKE_LOG`.
+#[cfg(test)]
+pub(crate) mod fake_server {
+    pub(crate) const SESSION: &str = "ses_console_test";
+    pub(crate) const SCRIPT: &str = r##"#!/usr/bin/env python3
+import json, os, sys, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+port = int(sys.argv[sys.argv.index("--port") + 1])
+SES = "ses_console_test"
+mode = os.environ.get("OPENCODE_FAKE_MODE", "ok")
+log_path = os.environ.get("OPENCODE_FAKE_LOG")
+lock = threading.Lock()
+state = {"messages": [], "busy": False, "turn": 0, "permissions": [], "released": threading.Event()}
+
+
+def record(line):
+    if log_path:
+        with lock, open(log_path, "a") as handle:
+            handle.write(line + "\n")
+
+
+def add_reply(turn, error=None):
+    info = {"id": "msg_a%d" % turn, "role": "assistant", "parentID": "msg_u%d" % turn,
+            "sessionID": SES, "finish": None if error else "stop", "time": {"completed": 1}}
+    if error:
+        info["error"] = error
+    parts = [] if error else [{"id": "prt_a%d" % turn, "type": "text", "text": "done",
+                               "sessionID": SES, "messageID": info["id"], "time": {"end": 2}}]
+    state["messages"].append({"info": info, "parts": parts})
+
+
+def answer(turn):
+    time.sleep(0.15)
+    if mode == "error":
+        add_reply(turn, {"name": "APIError", "data": {"message": "boom"}})
+    elif mode == "hold":
+        state["released"].wait(60)
+        add_reply(turn, {"name": "MessageAbortedError", "data": {"message": "aborted"}})
+    elif mode == "permission":
+        state["permissions"].append({"id": "per_1", "sessionID": SES, "permission": "bash",
+                                     "patterns": [], "metadata": {}, "always": []})
+        state["released"].wait(60)
+        add_reply(turn)
+    else:
+        add_reply(turn)
+    state["busy"] = False
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def send_json(self, code, body=None):
+        data = b"" if body is None else json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        record("GET " + path)
+        if path == "/global/health":
+            return self.send_json(200, {"healthy": True})
+        if path == "/session/status":
+            return self.send_json(200, {SES: {"type": "busy"}} if state["busy"] else {})
+        if path == "/permission":
+            return self.send_json(200, state["permissions"])
+        if path == "/question":
+            return self.send_json(200, [])
+        if path == "/session/" + SES:
+            if mode == "missing":
+                return self.send_json(404, {"name": "NotFoundError"})
+            return self.send_json(200, {"id": SES})
+        if path == "/session/%s/message" % SES:
+            return self.send_json(200, state["messages"])
+        if path == "/event":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b'data: {"type":"server.connected","properties":{}}\n\n')
+            self.wfile.flush()
+            while True:
+                time.sleep(1)
+        self.send_json(404, {"name": "NotFoundError"})
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        record("POST " + path)
+        if path == "/session":
+            return self.send_json(200, {"id": SES})
+        if path == "/session/%s/prompt_async" % SES:
+            state["turn"] += 1
+            turn = state["turn"]
+            state["messages"].append({"info": {"id": "msg_u%d" % turn, "role": "user", "sessionID": SES},
+                                      "parts": [{"id": "prt_u%d" % turn, "type": "text", "text": "prompt"}]})
+            state["busy"] = True
+            threading.Thread(target=answer, args=(turn,), daemon=True).start()
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/session/%s/abort" % SES:
+            state["released"].set()
+            return self.send_json(200, True)
+        if path == "/permission/per_1/reply":
+            state["permissions"] = []
+            state["released"].set()
+            return self.send_json(200, True)
+        self.send_json(404, {"name": "NotFoundError"})
+
+
+server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+server.daemon_threads = True
+server.serve_forever()
+"##;
 }
 
 // ---------------------------------------------------------------------------
@@ -1920,10 +2151,10 @@ mod tests {
             TurnOutcome::Completed
         );
         // Until the steer's reply exists the last answer is a tool-calls step
-        // and an idle session means OpenCode stopped mid-work.
+        // and an idle session is stalled mid-work (a failure only if it lasts).
         assert!(matches!(
             turn_outcome(&messages[..2], &ids(&["msg_u1", "msg_s1"]), false),
-            TurnOutcome::Failed(_)
+            TurnOutcome::Stalled(_)
         ));
     }
 
@@ -2270,6 +2501,294 @@ mod tests {
         let loaded = ServeState::load(temp.path()).unwrap();
         assert_eq!(loaded.message_ids, ids(&["msg_1"]));
         assert_eq!(loaded.server().password, "secret");
+    }
+
+    /// The fake server, the process environment that points the adapter at it,
+    /// and the lock that serializes tests sharing that environment.
+    struct FakeOpenCode {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        temp: tempfile::TempDir,
+        bin: PathBuf,
+        log: PathBuf,
+        workspace: PathBuf,
+        session_id: String,
+        thread_id: String,
+    }
+
+    impl FakeOpenCode {
+        fn new(mode: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let lock = crate::console_adapter::agent_state_guard();
+            let temp = tempfile::tempdir().unwrap();
+            let bin = temp.path().join("opencode");
+            std::fs::write(&bin, fake_server::SCRIPT).unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let log = temp.path().join("requests.log");
+            let workspace = temp.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            let mut saved = Vec::new();
+            for (key, value) in [
+                (
+                    "LONGHOUSE_HOME",
+                    temp.path().join("longhouse").into_os_string(),
+                ),
+                ("OPENCODE_FAKE_MODE", mode.into()),
+                ("OPENCODE_FAKE_LOG", log.clone().into_os_string()),
+            ] {
+                saved.push((key, std::env::var_os(key)));
+                unsafe { std::env::set_var(key, value) };
+            }
+            Self {
+                _lock: lock,
+                saved,
+                temp,
+                bin,
+                log,
+                workspace,
+                session_id: Uuid::new_v4().to_string(),
+                thread_id: Uuid::new_v4().to_string(),
+            }
+        }
+
+        /// Claim a run and start its turn.
+        async fn start(&self, resume: Option<&str>) -> (String, String, OpenCodeRunSummary) {
+            let run_id = Uuid::new_v4().to_string();
+            let turn_id = Uuid::new_v4().to_string();
+            let request_id = format!("fake-{run_id}");
+            assert!(matches!(
+                crate::turn_claims::default_registry()
+                    .unwrap()
+                    .claim(
+                        &run_id,
+                        &self.session_id,
+                        &self.thread_id,
+                        Some(&turn_id),
+                        Some(&request_id),
+                        "opencode",
+                    )
+                    .unwrap(),
+                crate::turn_claims::ClaimOutcome::Acquired
+            ));
+            let summary = start_opencode_run_turn(OpenCodeRunConfig {
+                session_id: self.session_id.clone(),
+                thread_id: self.thread_id.clone(),
+                turn_id: Some(turn_id.clone()),
+                run_id: run_id.clone(),
+                client_request_id: Some(request_id),
+                cwd: self.workspace.clone(),
+                opencode_bin: self.bin.display().to_string(),
+                prompt: "reply once".to_string(),
+                image_paths: Vec::new(),
+                resume_provider_thread_id: resume.map(str::to_string),
+                model: None,
+                permission_mode: "bypass".to_string(),
+                machine_name: "fake-opencode".to_string(),
+                local_db_path: None,
+            })
+            .await
+            .unwrap();
+            (run_id, turn_id, summary)
+        }
+
+        async fn terminal(&self, run_id: &str) -> crate::turn_claims::TurnClaim {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let claim = crate::turn_claims::default_registry()
+                    .unwrap()
+                    .read(run_id)
+                    .unwrap();
+                if claim.state == "terminal" {
+                    return claim;
+                }
+                assert!(tokio::time::Instant::now() < deadline, "turn never settled");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+
+        fn requests(&self) -> Vec<String> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    impl Drop for FakeOpenCode {
+        fn drop(&mut self) {
+            for (key, value) in self.saved.drain(..) {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+            let _ = &self.temp;
+        }
+    }
+
+    fn terminal_state(claim: &crate::turn_claims::TurnClaim) -> String {
+        claim
+            .result
+            .as_ref()
+            .and_then(|result| result["terminal_state"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_turn_completes_on_an_owned_server_and_retains_the_reply() {
+        let fake = FakeOpenCode::new("ok");
+        let (run_id, _turn, summary) = fake.start(None).await;
+        let claim = fake.terminal(&run_id).await;
+        assert_eq!(terminal_state(&claim), "run_completed");
+        assert_eq!(
+            claim.provider_thread_id.as_deref(),
+            Some(fake_server::SESSION)
+        );
+        // A server was started, not a `run`, and the model never rides on argv.
+        assert!(summary.argv.iter().any(|arg| arg == "serve"));
+        assert!(!summary
+            .argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "run" | "--auto")));
+        // The reply is in the retained stream evidence.
+        let stream = std::fs::read_to_string(&summary.stdout_path).unwrap();
+        assert!(
+            stream.contains("\"type\":\"text\"") && stream.contains("done"),
+            "{stream}"
+        );
+        // The server died with the turn, and its credentials are private.
+        assert_ne!(unsafe { libc::killpg(summary.process_group_id, 0) }, 0);
+        let state_path = ServeState::path(Path::new(&summary.stdout_path).parent().unwrap());
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(state_path).unwrap().permissions().mode() & 0o077,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_verifies_the_native_session_and_never_creates_one() {
+        let fake = FakeOpenCode::new("ok");
+        let (first, _turn, _summary) = fake.start(None).await;
+        let claim = fake.terminal(&first).await;
+        let native = claim.provider_thread_id.unwrap();
+        let (second, _turn, _summary) = fake.start(Some(&native)).await;
+        assert_eq!(
+            terminal_state(&fake.terminal(&second).await),
+            "run_completed"
+        );
+        let requests = fake.requests();
+        // One session was created, by the first turn; the second only looked.
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|line| *line == "POST /session")
+                .count(),
+            1
+        );
+        assert!(requests
+            .iter()
+            .any(|line| *line == format!("GET /session/{native}")));
+    }
+
+    #[tokio::test]
+    async fn resuming_a_session_the_server_does_not_have_fails_the_turn() {
+        let fake = FakeOpenCode::new("missing");
+        let (run_id, _turn, _summary) = fake.start(Some(fake_server::SESSION)).await;
+        assert_eq!(terminal_state(&fake.terminal(&run_id).await), "run_failed");
+        // Never a silent new session.
+        assert!(!fake.requests().iter().any(|line| line == "POST /session"));
+    }
+
+    #[tokio::test]
+    async fn a_provider_error_fails_the_turn() {
+        let fake = FakeOpenCode::new("error");
+        let (run_id, _turn, _summary) = fake.start(None).await;
+        assert_eq!(terminal_state(&fake.terminal(&run_id).await), "run_failed");
+    }
+
+    #[tokio::test]
+    async fn a_pending_permission_is_approved_even_when_the_stream_never_says_so() {
+        // The fake's event stream carries no permission event; the turn only
+        // completes because the adapter asks the server what it is waiting on.
+        let fake = FakeOpenCode::new("permission");
+        let (run_id, _turn, _summary) = fake.start(None).await;
+        assert_eq!(
+            terminal_state(&fake.terminal(&run_id).await),
+            "run_completed"
+        );
+        assert!(fake
+            .requests()
+            .iter()
+            .any(|line| line == "POST /permission/per_1/reply"));
+    }
+
+    #[tokio::test]
+    async fn interrupt_aborts_the_session_and_the_run_settles_cancelled() {
+        let fake = FakeOpenCode::new("hold");
+        let (run_id, turn_id, summary) = fake.start(None).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while !fake
+            .requests()
+            .iter()
+            .any(|line| line.ends_with("/prompt_async"))
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "prompt never reached the server"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        interrupt_opencode_run_turn(&run_id, &fake.session_id, &fake.thread_id, &turn_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            terminal_state(&fake.terminal(&run_id).await),
+            "run_cancelled"
+        );
+        assert!(fake
+            .requests()
+            .iter()
+            .any(|line| line == &format!("POST /session/{}/abort", fake_server::SESSION)));
+        assert_ne!(unsafe { libc::killpg(summary.process_group_id, 0) }, 0);
+    }
+
+    #[test]
+    fn recovery_learns_what_the_previous_engine_logged_and_backfills_nothing_twice() {
+        let temp = tempfile::tempdir().unwrap();
+        let log = temp.path().join("stdout.jsonl");
+        let mut stream = StreamLog::open(&log).unwrap();
+        stream
+            .append(&json!({"type": "step_start", "part": {"id": "prt_s", "type": "step-start"}}))
+            .unwrap();
+        stream
+            .append(
+                &json!({"type": "text", "part": {"id": "prt_1", "type": "text",
+                            "text": "LH_MARKER", "time": {"end": 2}}}),
+            )
+            .unwrap();
+        let list = json!([
+            {"info": {"id": "msg_u", "role": "user"}, "parts": []},
+            {"info": {"id": "msg_a", "role": "assistant", "parentID": "msg_u", "finish": "stop"},
+             "parts": [
+                {"id": "prt_s", "type": "step-start", "sessionID": "ses_1"},
+                {"id": "prt_1", "type": "text", "text": "LH_MARKER", "sessionID": "ses_1"},
+                {"id": "prt_f", "type": "step-finish", "sessionID": "ses_1"}
+             ]}
+        ]);
+        let submitted = ids(&["msg_u"]);
+        // A fresh projector would replay everything; a seeded one only the gap.
+        let mut fresh = Projector::new("ses_1");
+        assert_eq!(backfill(&list, &submitted, &mut fresh).len(), 3);
+        let mut seeded = Projector::new("ses_1");
+        seeded.seed_from_log(&log);
+        let kinds: Vec<String> = backfill(&list, &submitted, &mut seeded)
+            .iter()
+            .map(|event| event["type"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(kinds, ["step_finish"]);
     }
 
     #[tokio::test]

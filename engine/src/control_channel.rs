@@ -5907,20 +5907,19 @@ exit 1
     }
 
     #[test]
-    fn opencode_console_turn_start_uses_stock_run_and_resumes_native_session() {
+    fn opencode_console_turn_start_runs_an_owned_server_and_resumes_the_native_session() {
         let _guard = crate::console_adapter::agent_state_guard();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let temp = tempfile::TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
         let fake = temp.path().join("opencode");
-        write_test_executable(
-            &fake,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"text\",\"sessionID\":\"ses_console_test\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}' '{\"type\":\"step_finish\",\"sessionID\":\"ses_console_test\",\"part\":{\"reason\":\"stop\"}}'\n",
-        );
+        write_test_executable(&fake, crate::opencode_run::fake_server::SCRIPT);
+        let requests = temp.path().join("requests.log");
         let longhouse_home = temp.path().join("longhouse");
         let session_id = Uuid::new_v4().to_string();
         let thread_id = Uuid::new_v4().to_string();
+        let native = crate::opencode_run::fake_server::SESSION;
 
         let vars = vec![
             (
@@ -5930,6 +5929,10 @@ exit 1
             (
                 "LONGHOUSE_OPENCODE_BIN".to_string(),
                 Some(fake.display().to_string()),
+            ),
+            (
+                "OPENCODE_FAKE_LOG".to_string(),
+                Some(requests.display().to_string()),
             ),
         ];
         temp_env::with_vars(vars, || {
@@ -5961,25 +5964,23 @@ exit 1
                     &test_config(),
                 ));
                 assert_eq!(response["ok"], true, "{response}");
+                // A server the engine owns, never a `run` and never a session flag.
                 let argv = response["result"]["argv"].as_array().unwrap();
-                assert!(argv.iter().any(|value| value == "--auto"));
+                assert!(argv.iter().any(|value| value == "serve"));
                 assert!(!argv.iter().any(|value| {
                     matches!(
                         value.as_str(),
-                        Some("--continue" | "--attach" | "--dangerously-skip-permissions")
+                        Some("run" | "--auto" | "--session" | "--attach" | "--continue")
                     )
                 }));
-                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let deadline = std::time::Instant::now() + Duration::from_secs(20);
                 loop {
                     let claim = crate::turn_claims::default_registry()
                         .unwrap()
                         .read(&run_id)
                         .unwrap();
                     if claim.state == "terminal" {
-                        assert_eq!(
-                            claim.provider_thread_id.as_deref(),
-                            Some("ses_console_test")
-                        );
+                        assert_eq!(claim.provider_thread_id.as_deref(), Some(native));
                         assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
                         break;
                     }
@@ -5992,16 +5993,22 @@ exit 1
                 response
             };
 
-            let first = run_turn(None);
-            assert!(!first["result"]["argv"]
-                .as_array()
+            let created = |log: &Path| {
+                std::fs::read_to_string(log)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|line| *line == "POST /session")
+                    .count()
+            };
+            run_turn(None);
+            assert_eq!(created(&requests), 1);
+            run_turn(Some(native));
+            // The resume turn looked the session up and did not create another.
+            assert_eq!(created(&requests), 1);
+            assert!(std::fs::read_to_string(&requests)
                 .unwrap()
-                .iter()
-                .any(|value| value == "--session"));
-            let second = run_turn(Some("ses_console_test"));
-            let argv = second["result"]["argv"].as_array().unwrap();
-            let session_flag = argv.iter().position(|value| value == "--session").unwrap();
-            assert_eq!(argv[session_flag + 1], "ses_console_test");
+                .lines()
+                .any(|line| line == format!("GET /session/{native}")));
         });
     }
 

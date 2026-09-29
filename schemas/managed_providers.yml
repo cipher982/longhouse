@@ -1158,6 +1158,7 @@ providers:
   - server/zerg/mcp_server/server.py
   - engine/src/opencode_control.rs
   - engine/src/opencode_run.rs
+  - engine/src/opencode_server.rs
   wire_families: [opencode_storage, opencode_server_events]
   observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: opencode
@@ -1410,8 +1411,9 @@ providers:
       blocker: "budget"
     turn_start:
       level: hermetic
-      source: opencode_run durable claims, structured JSONL projection, native --session
-        resume, and Console dispatch tests
+      source: opencode_run durable claims, one owned `opencode serve` per turn driven
+        over the v1 HTTP API with message-chain completion, native session resume, and
+        Console dispatch tests
       disposition: "implemented"
       owner_action: "opencode_run live Console dispatch canary"
   machine_control_supports:

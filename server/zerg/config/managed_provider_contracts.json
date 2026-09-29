@@ -1829,7 +1829,8 @@
       "adapter_sources": [
         "server/zerg/mcp_server/server.py",
         "engine/src/opencode_control.rs",
-        "engine/src/opencode_run.rs"
+        "engine/src/opencode_run.rs",
+        "engine/src/opencode_server.rs"
       ],
       "wire_families": [
         "opencode_storage",
@@ -2420,7 +2421,7 @@
         },
         "turn_start": {
           "level": "hermetic",
-          "source": "opencode_run durable claims, structured JSONL projection, native --session resume, and Console dispatch tests",
+          "source": "opencode_run durable claims, one owned `opencode serve` per turn driven over the v1 HTTP API with message-chain completion, native session resume, and Console dispatch tests",
           "disposition": "implemented",
           "owner_action": "opencode_run live Console dispatch canary"
         }
@@ -2525,7 +2526,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "95fd8b0e84910c0049b8fb08a4ba8aade20a6174883fe8afcb1213b1b135a9b9"
+      "adapter_digest": "e0eb72ced591a7f4644b2fb77cbcff390306332ff0665172983cb5c00f0b51e0"
     },
     {
       "provider": "antigravity",

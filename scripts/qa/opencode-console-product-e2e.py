@@ -194,10 +194,22 @@ def run(args: argparse.Namespace) -> dict:
     second_claim = json.loads(
         (Path.home() / ".longhouse" / "agent" / "turn-claims" / f"{second['run_id']}.json").read_text()
     )
-    argv = list((second_claim.get("result") or {}).get("argv") or [])
-    resume_flag = "--session" if provider == "opencode" else "--resume"
-    if resume_flag not in argv:
-        raise RuntimeError(f"second {provider_label} turn did not use explicit native resume: {argv}")
+    if provider == "opencode":
+        # `opencode serve` takes no session on argv: native resume is the second
+        # turn's claim bound to the same native session as the first turn's.
+        first_claim = json.loads(
+            (Path.home() / ".longhouse" / "agent" / "turn-claims" / f"{first['run_id']}.json").read_text()
+        )
+        native = second_claim.get("provider_thread_id")
+        if not native or native != first_claim.get("provider_thread_id"):
+            raise RuntimeError(
+                f"second {provider_label} turn did not resume the first turn's native session: "
+                f"{first_claim.get('provider_thread_id')!r} vs {native!r}"
+            )
+    else:
+        argv = list((second_claim.get("result") or {}).get("argv") or [])
+        if "--resume" not in argv:
+            raise RuntimeError(f"second {provider_label} turn did not use explicit native resume: {argv}")
     tool_turn = _start_turn(
         api_url,
         token,
