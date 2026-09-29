@@ -71,8 +71,10 @@ def admit_preview_publication(heads: OrderedDict[str, PublishedPreviewHead], can
 
     The fast path publishes before catalogd applies the batch, so a batch the
     machine resends after a lost response arrives here a second time. This is
-    the projection's own acceptance rule (``upsert_live_session_live_preview``),
-    applied to what was published instead of what was stored: the same
+    the projection's own ordering rule (``upsert_live_session_live_preview``),
+    applied to what was published instead of what was stored. It does not know
+    when durable content supersedes a turn; only durable ingest does, and the
+    client already retires a preview the durable rows replace. The same
     observation is never shown twice, and a preview that is not newer than the
     head, by seq within an item or by observation time across items, is a
     replay or a straggler and must not step the client backwards. A later

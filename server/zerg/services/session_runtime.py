@@ -756,14 +756,14 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
             event,
             observation_id=f"live:{event.source}:{event.dedupe_key}",
         )
-        preview_stored = preview_candidate is not None and upsert_live_session_live_preview(db, preview_candidate)
+        preview_rejected = preview_candidate is not None and not upsert_live_session_live_preview(db, preview_candidate)
         if overlay_stream:
             # Provider print streams are transcript overlays. Their activity
             # and terminal lifecycle arrive separately; reducing their text as
-            # runtime phase evidence would fabricate provider state. Only an
-            # overlay the projection accepted is news: a replay is ignored, so
-            # it wakes no one.
-            outcome = "stored_live_overlay" if preview_stored else "ignored"
+            # runtime phase evidence would fabricate provider state. An overlay
+            # the projection already holds or has moved past is a replay or a
+            # straggler, not news, so it wakes no one.
+            outcome = "ignored" if preview_rejected else "stored_live_overlay"
         else:
             outcome = _apply_runtime_event(db, event)
         if event.kind == "terminal_signal" and expire_live_interactions_for_terminal(db, event):
