@@ -15,3 +15,5 @@ pub mod source_epoch;
 pub mod source_inventory;
 pub mod spool;
 pub mod unmanaged_process_binding;
+#[cfg(test)]
+pub mod wal_window;

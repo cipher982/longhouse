@@ -145,6 +145,42 @@ pub fn observe_source(
         .filter(|value| !value.is_empty());
     let source_len = i64::try_from(source_len).context("source length exceeds SQLite INTEGER")?;
     let position = i64::try_from(position).context("source position exceeds SQLite INTEGER")?;
+    let observation = Observation {
+        file_incarnation,
+        source_len,
+        position,
+        source_revision,
+        bound_session_id,
+        change_hint,
+    };
+
+    // A reconciliation scan re-observes every source on the machine and almost
+    // none of them moved. Decide that from a read-only snapshot: an unchanged
+    // source must not take SQLite's writer lock, dirty a WAL page, or move a
+    // timestamp. Anything that would change the registry falls through to the
+    // write path below, which re-reads under the writer lock.
+    {
+        let snapshot = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        if let Some(active) = load_active_epoch(&snapshot, provider, opaque_source_id)? {
+            if let Some(lane_position) = load_lane_position(&snapshot, active.source_epoch, lane)? {
+                if rotation_reason(&active, lane_position, &observation).is_none()
+                    && registry_row_is_current(&active, &observation)
+                {
+                    return Ok(SourceEpochResolution {
+                        source_epoch: active.source_epoch,
+                        predecessor_epoch: active.predecessor_epoch,
+                        created: false,
+                        start_reason: active.start_reason,
+                        opened_at: active.opened_at,
+                        bound_session_id: active
+                            .bound_session_id
+                            .or_else(|| bound_session_id.map(str::to_string)),
+                    });
+                }
+            }
+        }
+    }
+
     let now = Utc::now().to_rfc3339();
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -158,34 +194,9 @@ pub fn observe_source(
             "source position {observed_position} exceeds new source length {observed_source_len}"
         );
     }
-    let rotate_reason = if let Some(active) = &active {
-        if !file_identities_match(
-            Some(active.file_incarnation.as_str()),
-            Some(file_incarnation),
-        ) {
-            Some(EpochStartReason::Replacement)
-        } else if source_len < active.max_observed_len as i64 || position > source_len {
-            Some(EpochStartReason::Truncation)
-        } else if active.source_revision.as_deref().is_some()
-            && source_revision.is_some()
-            && active.source_revision.as_deref() != source_revision
-        {
-            Some(EpochStartReason::RevisionChange)
-        } else if bound_session_id.is_some()
-            && active.bound_session_id.as_deref() != bound_session_id
-            && (active.bound_session_id.is_some() || active_lane_position > 0)
-        {
-            Some(EpochStartReason::SessionRebind)
-        } else {
-            match change_hint {
-                SourceChangeHint::None => None,
-                SourceChangeHint::Rewrite => Some(EpochStartReason::Rewrite),
-                SourceChangeHint::Rewind => Some(EpochStartReason::Rewind),
-            }
-        }
-    } else {
-        None
-    };
+    let rotate_reason = active
+        .as_ref()
+        .and_then(|active| rotation_reason(active, active_lane_position, &observation));
 
     let resolved = match (active, rotate_reason) {
         (Some(active), None) => {
@@ -613,6 +624,67 @@ pub fn acknowledge_position(
     Ok(())
 }
 
+/// One observation of a source, as the registry sees it.
+struct Observation<'a> {
+    file_incarnation: &'a str,
+    source_len: i64,
+    position: i64,
+    source_revision: Option<&'a str>,
+    bound_session_id: Option<&'a str>,
+    change_hint: SourceChangeHint,
+}
+
+/// Why an observation ends the active epoch, if it does.
+fn rotation_reason(
+    active: &ActiveEpoch,
+    active_lane_position: u64,
+    observed: &Observation<'_>,
+) -> Option<EpochStartReason> {
+    if !file_identities_match(
+        Some(active.file_incarnation.as_str()),
+        Some(observed.file_incarnation),
+    ) {
+        Some(EpochStartReason::Replacement)
+    } else if observed.source_len < active.max_observed_len as i64
+        || observed.position > observed.source_len
+    {
+        Some(EpochStartReason::Truncation)
+    } else if active.source_revision.as_deref().is_some()
+        && observed.source_revision.is_some()
+        && active.source_revision.as_deref() != observed.source_revision
+    {
+        Some(EpochStartReason::RevisionChange)
+    } else if observed.bound_session_id.is_some()
+        && active.bound_session_id.as_deref() != observed.bound_session_id
+        && (active.bound_session_id.is_some() || active_lane_position > 0)
+    {
+        Some(EpochStartReason::SessionRebind)
+    } else {
+        match observed.change_hint {
+            SourceChangeHint::None => None,
+            SourceChangeHint::Rewrite => Some(EpochStartReason::Rewrite),
+            SourceChangeHint::Rewind => Some(EpochStartReason::Rewind),
+        }
+    }
+}
+
+/// Whether the registry row already says everything this observation would
+/// record. `updated_at` is the time the row last changed, so an observation
+/// that changes nothing leaves it alone.
+fn registry_row_is_current(active: &ActiveEpoch, observed: &Observation<'_>) -> bool {
+    let persisted_incarnation =
+        strongest_matching_file_identity(&active.file_incarnation, observed.file_incarnation)
+            .expect("non-rotated source identities must match");
+    persisted_incarnation == active.file_incarnation
+        && observed.source_len <= active.max_observed_len as i64
+        && observed
+            .source_revision
+            .is_none_or(|revision| active.source_revision.as_deref() == Some(revision))
+        && observed
+            .bound_session_id
+            .is_none_or(|bound| active.bound_session_id.as_deref() == Some(bound))
+}
+
 fn load_active_epoch(
     conn: &Connection,
     provider: &str,
@@ -822,6 +894,100 @@ mod tests {
             lane_position(&conn, epoch, SourceLane::Durable).unwrap(),
             900
         );
+    }
+
+    #[test]
+    fn re_observing_an_unchanged_source_writes_nothing_and_a_change_still_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, epoch) = epoch_at(dir.path(), 100);
+        let source = dir.path().join("history.jsonl");
+        let observe = |conn: &mut Connection| {
+            observe_file(
+                conn,
+                "claude",
+                "history.jsonl",
+                &source,
+                SourceLane::Durable,
+                100,
+                Some("revision-1"),
+                None,
+                SourceChangeHint::None,
+            )
+            .unwrap()
+        };
+        let row = |conn: &Connection| -> (String, i64) {
+            conn.query_row(
+                "SELECT updated_at, max_observed_len FROM source_epoch_registry
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+        };
+        let (updated_at, max_len) = row(&conn);
+        let changes = conn.total_changes();
+
+        // Every reconciliation scan re-observes the source exactly like this.
+        for _ in 0..3 {
+            let resolution = observe(&mut conn);
+            assert_eq!(resolution.source_epoch, epoch);
+            assert!(!resolution.created);
+        }
+        assert_eq!(conn.total_changes(), changes, "an unchanged source wrote");
+        assert_eq!(row(&conn), (updated_at.clone(), max_len));
+
+        // Growth is a change: it is recorded and the row's clock moves.
+        fs::write(&source, vec![b'x'; 8192]).unwrap();
+        assert_eq!(observe(&mut conn).source_epoch, epoch);
+        let (grown_at, grown_len) = row(&conn);
+        assert_eq!(grown_len, 8192);
+        assert_ne!(grown_at, updated_at);
+        assert!(conn.total_changes() > changes);
+
+        // ...and once recorded it is unchanged again.
+        let changes = conn.total_changes();
+        observe(&mut conn);
+        assert_eq!(conn.total_changes(), changes);
+        assert_eq!(row(&conn), (grown_at, 8192));
+    }
+
+    #[test]
+    fn an_unchanged_observation_that_would_bind_a_session_still_writes() {
+        // The one-way attach of a managed owner to an as-yet unbound epoch is
+        // a change to the registry row, so it must not be mistaken for a no-op.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("state.db");
+        let source = dir.path().join("history.jsonl");
+        fs::write(&source, vec![b'x'; 4096]).unwrap();
+        let mut conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let observe = |conn: &mut Connection, bound: Option<&str>| {
+            observe_file(
+                conn,
+                "claude",
+                "history.jsonl",
+                &source,
+                SourceLane::Durable,
+                0,
+                None,
+                bound,
+                SourceChangeHint::None,
+            )
+            .unwrap()
+        };
+        let first = observe(&mut conn, None);
+        let changes = conn.total_changes();
+        let bound = observe(&mut conn, Some("managed-session"));
+        assert_eq!(bound.source_epoch, first.source_epoch);
+        assert_eq!(bound.bound_session_id.as_deref(), Some("managed-session"));
+        assert!(conn.total_changes() > changes);
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT bound_session_id FROM source_epoch_registry WHERE source_epoch = ?1",
+                [first.source_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("managed-session"));
     }
 
     #[test]

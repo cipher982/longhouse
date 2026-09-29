@@ -5487,6 +5487,7 @@ mod tests {
     use crate::shipping::client::ShipperClient;
     use crate::state::db::open_db;
     use crate::state::file_state::FileState;
+    use crate::state::wal_window::WalWindow;
 
     const CURSOR_CONVERSATION_ID: &str = "60bf2c11-01da-456e-8216-c5dbd2fa52b4";
     const CURSOR_ROOT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -11666,5 +11667,166 @@ mod tests {
         mutated[3] = b'X';
         std::fs::write(&path, &mutated).unwrap();
         assert_ne!(source_stamp(&path).unwrap(), first);
+    }
+
+    /// Sources at rest: an epoch parked at EOF, exactly what a source that has
+    /// finished shipping looks like to the next reconciliation scan.
+    fn parked_file_sources(
+        dir: &Path,
+        conn: &mut Connection,
+        count: usize,
+    ) -> Vec<(PathBuf, &'static str)> {
+        let root = dir.join("sources");
+        fs::create_dir_all(&root).unwrap();
+        (0..count)
+            .map(|index| {
+                let provider = if index % 3 == 0 { "codex" } else { "claude" };
+                let path = root.join(format!("{}.jsonl", Uuid::new_v4()));
+                fs::write(
+                    &path,
+                    format!("{{\"type\":\"user\",\"uuid\":\"{}\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{{\"content\":\"hi {index}\"}}}}\n", Uuid::new_v4()),
+                )
+                .unwrap();
+                let canonical = stable_source_path(&path);
+                let length = fs::metadata(&path).unwrap().len();
+                source_epoch::observe_file(
+                    conn,
+                    provider,
+                    &opaque_source_id(&canonical.to_string_lossy()),
+                    &path,
+                    SourceLane::Durable,
+                    length,
+                    None,
+                    None,
+                    SourceChangeHint::None,
+                )
+                .unwrap();
+                (path, provider)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_scan_pass_over_unchanged_sources_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let sources = parked_file_sources(dir.path(), &mut conn, 200);
+
+        let window = WalWindow::open(&conn);
+        for _pass in 0..2 {
+            for (path, provider) in &sources {
+                assert!(
+                    prepare_next_envelope(&mut conn, &capabilities(), path, provider, None)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+        let cost = window.cost(&conn);
+        assert!(
+            cost.is_zero(),
+            "two scans over {} unchanged sources wrote: {cost:?}",
+            sources.len()
+        );
+
+        // A source that did change still records what it learned.
+        let (path, provider) = &sources[0];
+        let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(
+            file,
+            "{{\"type\":\"user\",\"uuid\":\"{}\",\"timestamp\":\"2026-01-01T00:00:01Z\",\"message\":{{\"content\":\"more\"}}}}",
+            Uuid::new_v4()
+        )
+        .unwrap();
+        drop(file);
+        let window = WalWindow::open(&conn);
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), path, provider, None)
+                .unwrap()
+                .is_some()
+        );
+        assert!(window.cost(&conn).commits > 0);
+    }
+
+    #[test]
+    fn a_scan_pass_over_an_unchanged_opencode_database_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        create_opencode_db(&db_path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let first = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+        assert!(
+            prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .is_none()
+        );
+
+        let window = WalWindow::open(&conn);
+        for _pass in 0..2 {
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let cost = window.cost(&conn);
+        assert!(cost.is_zero(), "an unchanged OpenCode scan wrote: {cost:?}");
+    }
+
+    #[test]
+    fn a_scan_pass_over_an_unchanged_cursor_store_writes_nothing() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let cursor_home = dir.path().join("cursor");
+        let store_path = cursor_home
+            .join("chats/workspace")
+            .join(CURSOR_CONVERSATION_ID)
+            .join("store.db");
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        let _store = make_cursor_store(&store_path);
+        let saved: Vec<(&str, Option<std::ffi::OsString>)> =
+            ["CURSOR_HOME", "XDG_CONFIG_HOME", "LONGHOUSE_HOME"]
+                .into_iter()
+                .map(|name| (name, std::env::var_os(name)))
+                .collect();
+        unsafe {
+            std::env::set_var("CURSOR_HOME", &cursor_home);
+            std::env::set_var("XDG_CONFIG_HOME", dir.path().join("config"));
+            std::env::set_var("LONGHOUSE_HOME", dir.path().join("longhouse"));
+        }
+        // Restore the process environment even if a regression panics.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &store_path)
+                .unwrap()
+                .unwrap();
+            acknowledge_prepared(&mut conn, &first);
+            assert!(
+                prepare_next_cursor_envelope(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+                    .is_none()
+            );
+
+            let window = WalWindow::open(&conn);
+            for _pass in 0..2 {
+                assert!(
+                    prepare_next_cursor_envelope(&mut conn, &capabilities(), &store_path)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            window.cost(&conn)
+        }));
+        for (name, value) in saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+        let cost = outcome.unwrap();
+        assert!(cost.is_zero(), "an unchanged Cursor scan wrote: {cost:?}");
     }
 }

@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use super::file_identity::{
     current_file_identity, cursor_fingerprint, strongest_matching_file_identity,
@@ -219,8 +219,28 @@ impl<'a> FileState<'a> {
 
     /// Advance acked offset only (server confirmed receipt). Monotonic.
     pub fn set_acked_offset(&self, file_path: &str, offset: u64) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
+        // Sealing an untracked path, a position already behind the acked one, or
+        // the exact position and boundary proof already on file changes nothing,
+        // so it writes nothing: `last_updated` is when the row last changed.
+        let recorded: Option<(i64, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT acked_offset, acked_cursor_fingerprint FROM file_state WHERE path = ?",
+                [file_path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((acked_offset, recorded_fingerprint)) = recorded else {
+            return Ok(());
+        };
+        if (offset as i64) < acked_offset {
+            return Ok(());
+        }
         let acked_cursor_fingerprint = cursor_fingerprint(std::path::Path::new(file_path), offset);
+        if offset as i64 == acked_offset && recorded_fingerprint == acked_cursor_fingerprint {
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE file_state
              SET acked_cursor_fingerprint = CASE
@@ -416,6 +436,38 @@ mod tests {
         fs.set_acked_offset("/f", 1500).unwrap();
         assert_eq!(fs.get_offset("/f").unwrap(), 1500);
         assert_eq!(fs.get_queued_offset("/f").unwrap(), 2000);
+    }
+
+    #[test]
+    fn sealing_an_acked_offset_that_is_already_recorded_writes_nothing() {
+        let (_tmp, conn) = setup();
+        let fs = FileState::new(&conn);
+        fs.set_queued_offset("/f", 2000, "claude", "s1", "ps1")
+            .unwrap();
+        fs.set_acked_offset("/f", 2000).unwrap();
+        let stamp = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT last_updated FROM file_state WHERE path = '/f'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        let before = stamp(&conn);
+        let changes = conn.total_changes();
+
+        // The reconciler seals every source it finds current on every scan.
+        fs.set_acked_offset("/f", 2000).unwrap();
+        fs.set_acked_offset("/f", 1500).unwrap();
+        fs.set_acked_offset("/untracked", 10).unwrap();
+        assert_eq!(conn.total_changes(), changes);
+        assert_eq!(stamp(&conn), before);
+        assert_eq!(fs.get_offset("/f").unwrap(), 2000);
+
+        // Real progress is still recorded.
+        fs.set_acked_offset("/f", 2500).unwrap();
+        assert_eq!(fs.get_offset("/f").unwrap(), 2500);
+        assert_ne!(stamp(&conn), before);
     }
 
     #[test]

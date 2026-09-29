@@ -135,6 +135,21 @@ fn upsert_root_state(
         .map(serde_json::to_string)
         .transpose()
         .context("encoding Cursor root message IDs")?;
+    // Every reconciliation scan re-records the root it just read. When it is the
+    // root already on file there is nothing to write, and `updated_at` keeps
+    // meaning "when the root last changed".
+    let recorded: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT root_blob_id, message_blob_ids_json
+             FROM cursor_store_root_state WHERE conversation_uuid = ?1",
+            [conversation_uuid],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .context("loading recorded Cursor root")?;
+    if recorded.is_some_and(|(root, ids)| root == root_blob_id && ids == message_blob_ids_json) {
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO cursor_store_root_state (
              conversation_uuid, root_blob_id, message_blob_ids_json, updated_at
@@ -238,6 +253,45 @@ mod tests {
             observe_cursor_root(&conn, "conversation", "root-c", &parsed(&["a", "b", "c"]))
                 .unwrap(),
             CursorRootOrderRelation::PrefixExtension
+        );
+    }
+
+    #[test]
+    fn re_recording_the_root_already_on_file_writes_nothing() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(temp.path())).unwrap();
+        record_cursor_root(&conn, "conversation", "root-a", &parsed(&["a", "b"])).unwrap();
+        let stamp = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT updated_at FROM cursor_store_root_state WHERE conversation_uuid = 'conversation'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        let before = stamp(&conn);
+        let changes = conn.total_changes();
+
+        // A scan that reads the same root, with or without a parsed ordering.
+        record_cursor_root(&conn, "conversation", "root-a", &parsed(&["a", "b"])).unwrap();
+        record_cursor_root(
+            &conn,
+            "conversation",
+            "root-a",
+            &RootMessageBlobIds::Unavailable {
+                reason: "unchanged".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(conn.total_changes(), changes);
+        assert_eq!(stamp(&conn), before);
+
+        // A new root, or a new ordering under the same root, is recorded.
+        record_cursor_root(&conn, "conversation", "root-b", &parsed(&["a", "b", "c"])).unwrap();
+        assert_ne!(stamp(&conn), before);
+        assert_eq!(
+            previous_message_blob_ids(&conn, "conversation").unwrap(),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
         );
     }
 }

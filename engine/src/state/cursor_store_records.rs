@@ -543,6 +543,19 @@ pub fn store_capture_cursor(
     source_epoch: Uuid,
     last_blob_id: Option<&str>,
 ) -> Result<()> {
+    // A capture that ends where the last one did leaves the cursor as it is:
+    // `updated_at` is when the position last moved, not when it was last checked.
+    let recorded: Option<Option<String>> = conn
+        .query_row(
+            "SELECT last_blob_id FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
+            [source_epoch.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("reading Cursor blob capture cursor")?;
+    if recorded.is_some_and(|recorded| recorded.as_deref() == last_blob_id) {
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO cursor_store_capture_cursor (source_epoch, last_blob_id, updated_at)
          VALUES (?1, ?2, ?3)
@@ -859,6 +872,37 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_capture_that_ends_where_the_last_one_did_writes_nothing() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(temp.path())).unwrap();
+        let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
+        let stamp = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT updated_at FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        store_capture_cursor(&conn, epoch, Some("blob-a")).unwrap();
+        let before = stamp(&conn);
+        let changes = conn.total_changes();
+        store_capture_cursor(&conn, epoch, Some("blob-a")).unwrap();
+        assert_eq!(conn.total_changes(), changes);
+        assert_eq!(stamp(&conn), before);
+
+        // Confirmed EOF clears the continuation once; repeating it is a no-op.
+        store_capture_cursor(&conn, epoch, None).unwrap();
+        assert_ne!(stamp(&conn), before);
+        assert_eq!(capture_walk(&conn, epoch).unwrap().after_blob_id, None);
+        let changes = conn.total_changes();
+        store_capture_cursor(&conn, epoch, None).unwrap();
+        assert_eq!(conn.total_changes(), changes);
     }
 
     #[test]
