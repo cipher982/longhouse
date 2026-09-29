@@ -9609,6 +9609,12 @@ class CatalogStore:
                 "commit_seq": commit_seq,
                 "updated_at": commit_time,
             }
+            if render_manifest is None and _session_keeps_published_render(connection, existing_session):
+                # This envelope's `render_state` is a receipt about the envelope
+                # (no render attached), not a verdict on the session. A commit
+                # with nothing to render cannot unpublish the render the session
+                # already serves.
+                del session_values["render_state"]
             proof_environment = classify_provider_proof_environment(
                 cwd=session_facts["cwd"],
                 machine_id=machine_id,
@@ -14828,12 +14834,31 @@ def _assemble_session_facts(
     for session_id, row in storage_rows.items():
         catalogs[session_id] = _merge_storage_catalog_row(row, catalogs.get(session_id))
         cards[session_id] = _storage_card_compat_row(row)
+    # `source_revision` is the newest raw commit the render is expected to cover,
+    # so it is read only from raw objects that carry a live render object. A
+    # raw-only envelope (Cursor's transcript projection) declares that it has no
+    # render to attach; counting its commit would call the render "behind" a
+    # source it never covers, permanently. `last_append_at` still sees every
+    # append: that is when bytes arrived, whatever renders them.
     raw_transcript_by_session = {
         str(row["session_id"]): row
         for row in connection.execute(
             select(
                 LiveRawObject.session_id,
-                func.max(LiveRawObject.commit_seq).label("source_revision"),
+                func.max(
+                    case(
+                        (
+                            select(RenderObject.object_id)
+                            .where(
+                                RenderObject.source_envelope_id == LiveRawObject.envelope_id,
+                                RenderObject.retired_at.is_(None),
+                            )
+                            .exists(),
+                            LiveRawObject.commit_seq,
+                        ),
+                        else_=None,
+                    )
+                ).label("source_revision"),
                 func.max(LiveRawObject.sealed_at).label("last_append_at"),
             )
             .where(
@@ -15043,7 +15068,7 @@ def _assemble_session_facts(
                     {
                         "source_revision": (
                             int(raw_transcript_by_session[session_id]["source_revision"])
-                            if session_id in raw_transcript_by_session
+                            if raw_transcript_by_session.get(session_id, {}).get("source_revision") is not None
                             else None
                         ),
                         "durable_revision": int(storage_rows[session_id]["commit_seq"]),
@@ -15667,6 +15692,35 @@ def _raw_object_manifest_dto(row) -> dict[str, Any]:
         "retired_at": _encode_datetime(row["retired_at"]),
         "retirement_revision": (str(row["retirement_revision"]) if row["retirement_revision"] is not None else None),
     }
+
+
+def _session_keeps_published_render(connection, session: Mapping[str, Any] | None) -> bool:
+    """Whether a session that publishes a render still does, after a render-less commit.
+
+    ``sessions.render_state`` is a session-level fact: ``ready`` means the
+    session serves a current render generation, and only a commit that carries
+    a manifest (or a repair that restores a generation) publishes one.
+    A raw-only commit -- Cursor's ``agent-transcripts`` projection, which must
+    never claim render authority over ``store.db`` -- attaches no render and
+    withdraws none, so it leaves ``ready`` alone. The exception is a
+    replacement epoch that retires the last live render object of the current
+    generation in the same transaction: nothing is then published, and
+    ``pending`` is the truth.
+    """
+
+    if session is None or session["render_state"] != "ready" or session["current_render_generation"] is None:
+        return False
+    return (
+        connection.execute(
+            select(RenderObject.__table__.c.object_id)
+            .where(
+                RenderObject.__table__.c.generation_id == session["current_render_generation"],
+                RenderObject.__table__.c.retired_at.is_(None),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 def _recompute_render_generation_projection(
