@@ -10,8 +10,13 @@ older pass from certifying. A pass needs no verdict; its proof record is newer
 than the verdict and the fold ignores the verdict from then on.
 
 One file per cell, replaced only by a strictly newer ``observed_at``. Reads are
-strict: an unreadable or inconsistent file raises, so the public route fails
-and the landing page renders "unavailable" rather than a chart missing a fact.
+strict: an unreadable or inconsistent file raises, so every projection route
+(public chart, machine surface, admin page share one path) fails and the
+landing page renders "unavailable" rather than a chart missing a fact.
+
+A verdict never ages on its own: the next passing proof (newer than it) or a
+newer verdict clears it. A cell removed from the authored contract has no row to
+fold into, so a leftover verdict for it is inert.
 """
 
 from __future__ import annotations

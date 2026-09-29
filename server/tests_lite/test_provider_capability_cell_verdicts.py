@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -20,6 +21,7 @@ from tests_lite.test_provider_capability_proof_routes import _client
 from tests_lite.test_provider_capability_proof_routes import _factory_headers
 from tests_lite.test_provider_capability_proof_routes import _record
 from zerg.main import api_app
+from zerg.main import app
 from zerg.services.provider_capability_cell_verdicts import VERDICT_BUNDLE_KIND
 from zerg.services.provider_capability_cell_verdicts import CellVerdict
 from zerg.services.provider_capability_cell_verdicts import CellVerdictStore
@@ -188,6 +190,21 @@ def test_a_corrupt_store_raises_instead_of_reading_as_empty(tmp_path: Path) -> N
     # ...and publishing over a corrupt cell fails loudly rather than clobbering it.
     with pytest.raises(CellVerdictStoreError):
         store.publish([verdict_from_mapping(_row(at=T1 + timedelta(hours=1)))], now=T1 + timedelta(hours=1))
+
+
+def test_the_machine_projection_fails_with_the_public_chart_on_a_corrupt_store(monkeypatch, tmp_path: Path) -> None:
+    # One projection path feeds the public chart, the machine surface and the
+    # admin page. Serving rows without a verdict would show a pass the chart
+    # has revoked, so all of them fail together.
+    client = _client(monkeypatch, tmp_path)
+    try:
+        _post(client, _bundle_of(_row()))
+        (path,) = (tmp_path / "cell-verdicts").glob("*.json")
+        path.write_text("{ corrupt")
+        response = TestClient(app, backend="asyncio", raise_server_exceptions=False).get("/api/agents/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+    assert response.status_code == 500
 
 
 def test_missing_store_is_empty_not_an_error(tmp_path: Path) -> None:
