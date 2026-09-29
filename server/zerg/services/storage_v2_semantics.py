@@ -20,6 +20,7 @@ from zerg.services.provider_interaction_semantics import claude_sequence_depende
 from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_content_candidate
 from zerg.services.provider_interaction_semantics import claude_task_notification_summary
 from zerg.services.provider_interaction_semantics import codex_provider_system_candidate
+from zerg.services.provider_interaction_semantics import provider_display_message_content_candidate
 from zerg.services.provider_interaction_semantics import provider_reasoning_content_candidate
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.raw_object_workers import RawObjectWorkerPool
@@ -91,6 +92,9 @@ async def recover_render_interaction_kinds(
         or (normalized_provider == "claude" and claude_task_notification_summary(getattr(record, "content_text", None)) is not None)
         or (normalized_provider == "codex" and codex_provider_system_candidate(getattr(record, "content_text", None)))
         or (normalized_provider in REASONING_PART_PROVIDERS and provider_reasoning_content_candidate(getattr(record, "content_text", None)))
+        or provider_display_message_content_candidate(
+            normalized_provider, role=getattr(record, "role", None), content_text=getattr(record, "content_text", None)
+        )
         or (reclassify_sequence_controls and claude_sequence_dependent_control_content_candidate(getattr(record, "content_text", None)))
     }
     if stats is not None:

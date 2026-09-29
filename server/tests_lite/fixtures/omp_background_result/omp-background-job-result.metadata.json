@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "fixture": "omp-background-job-result.jsonl",
+  "provider": "omp",
+  "evidence_class": "captured_provider_shape",
+  "source_artifact": {
+    "source_path": "~/.omp/agent/sessions/longhouse-6747f4ab-fe63-4bca-93c8-ecf9cc4edc28.jsonl",
+    "session_id": "01a0e601-a05a-7052-b99e-d1d6e12ace5b",
+    "source_file_sha256": "8ec729e59558b9b159b26f8a274cea4624c7c0b14afd66f52d34263bf82fa684",
+    "source_line_range": [
+      2,
+      15
+    ],
+    "captured_at": "2026-09-28T03:14:21Z"
+  },
+  "normalization": "A real OMP session in which a three-step bash command was backgrounded by a steering message and its result arrived later as an async-result custom_message. The committed JSONL keeps source lines 2-15 (the title padding line is dropped) and removes the providerPayload, usage, timing and contextSnapshot blobs from message records, including the provider's encrypted reasoning content. Every other field is as captured.",
+  "engine_events": "omp-background-job-result.engine-events.jsonl is the output of `longhouse-engine parse --dump-events` (0.1.56-dev+c92873d5) on the committed JSONL with each event's raw_line omitted; the test maps it to render records the way the shipper's render_record does."
+}

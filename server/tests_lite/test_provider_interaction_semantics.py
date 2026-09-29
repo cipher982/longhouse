@@ -26,6 +26,9 @@ from zerg.services.provider_interaction_semantics import codex_internal_context_
 from zerg.services.provider_interaction_semantics import codex_internal_context_record
 from zerg.services.provider_interaction_semantics import codex_provider_system_record
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
+from zerg.services.provider_interaction_semantics import provider_display_message_content_candidate
+from zerg.services.provider_interaction_semantics import provider_display_message_text
+from zerg.services.provider_interaction_semantics import provider_notification_display_text
 from zerg.services.provider_interaction_semantics import provider_reasoning_content_candidate
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
@@ -1043,3 +1046,144 @@ def test_reasoning_selection_candidate_uses_the_engine_projection_prefix() -> No
     assert provider_reasoning_content_candidate("reasoning") is False
     assert provider_reasoning_content_candidate("") is False
     assert provider_reasoning_content_candidate(None) is False
+
+
+_BACKGROUND_JOB_NOTICE = (
+    "<system-notice>\nBackground job bg_1 has completed. Resume your work using the result below.\n"
+    "SMOKE-STEP-1\nSMOKE-STEP-2\nSMOKE-STEP-3\nWall time: 180.02 seconds\n</system-notice>"
+)
+
+
+def _omp_custom_message_raw(*, display: object, custom_type: str = "async-result", content: str = _BACKGROUND_JOB_NOTICE) -> str:
+    record: dict[str, object] = {"type": "custom_message", "customType": custom_type, "content": content, "id": "rec-9"}
+    if display is not None:
+        record["display"] = display
+    return json.dumps(record)
+
+
+def test_provider_displayed_custom_message_is_a_served_notification() -> None:
+    """A background job's result is a row the provider itself shows."""
+
+    for provider in ("omp", "pi"):
+        classification = classify_provider_interaction(
+            provider,
+            role="system",
+            content_text=_BACKGROUND_JOB_NOTICE,
+            raw_json=_omp_custom_message_raw(display=True),
+        )
+        assert classification["interaction_kind"] == INTERACTION_PROVIDER_NOTIFICATION
+        assert classification["changes_provider_state"] is False
+        assert classification["starts_model_turn"] is False
+        assert classification["title_eligible"] is False
+        assert classification["counts_as_user_message"] is False
+
+    # Notifications stay out of search, titles, turns and export.
+    assert (
+        semantic_event_included(
+            "omp",
+            role="system",
+            content_text=_BACKGROUND_JOB_NOTICE,
+            interaction_kind=INTERACTION_PROVIDER_NOTIFICATION,
+        )
+        is False
+    )
+
+
+def test_custom_message_without_the_display_flag_stays_scaffolding() -> None:
+    """Todo nudges, hidden continuation steers and reminders are model-facing."""
+
+    for display in (False, None, "true", 1):
+        classification = classify_provider_interaction(
+            "omp",
+            role="system",
+            content_text="<system-reminder> 6 todo items still open.",
+            raw_json=_omp_custom_message_raw(display=display, custom_type="mid-run-todo-nudge"),
+        )
+        assert classification["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM
+
+
+def test_display_flag_is_only_evidence_on_omp_and_pi_custom_messages() -> None:
+    raw = _omp_custom_message_raw(display=True)
+
+    # Another provider's system row is not a notification because its raw JSON
+    # happens to carry the same fields.
+    for provider in ("claude", "codex", "opencode"):
+        assert (
+            classify_provider_interaction(provider, role="system", content_text=_BACKGROUND_JOB_NOTICE, raw_json=raw)["interaction_kind"]
+            != INTERACTION_PROVIDER_NOTIFICATION
+        )
+    # Only a system-role row: an authored user message never becomes one.
+    assert (
+        classify_provider_interaction("omp", role="user", content_text=_BACKGROUND_JOB_NOTICE, raw_json=raw)["interaction_kind"]
+        != INTERACTION_PROVIDER_NOTIFICATION
+    )
+    # And only the native record type, not any record with a display field.
+    other = json.dumps({"type": "message", "display": True, "message": {"role": "assistant", "content": [{"type": "text", "text": "x"}]}})
+    assert (
+        classify_provider_interaction("omp", role="system", content_text="x", raw_json=other)["interaction_kind"]
+        == INTERACTION_PROVIDER_SYSTEM
+    )
+
+
+def test_stored_provider_system_kind_cannot_demote_a_displayed_custom_message() -> None:
+    """Already-sealed render rows carry the older, too-general kind."""
+
+    classification = classify_provider_interaction(
+        "omp",
+        role="system",
+        content_text=_BACKGROUND_JOB_NOTICE,
+        raw_json=_omp_custom_message_raw(display=True),
+        interaction_kind=INTERACTION_PROVIDER_SYSTEM,
+    )
+
+    assert classification["interaction_kind"] == INTERACTION_PROVIDER_NOTIFICATION
+
+
+def test_display_message_selection_candidate_is_a_system_row_with_text() -> None:
+    assert provider_display_message_content_candidate("omp", role="system", content_text=_BACKGROUND_JOB_NOTICE) is True
+    assert provider_display_message_content_candidate("pi", role="system", content_text="Launch finished") is True
+    assert provider_display_message_content_candidate("omp", role="system", content_text="  ") is False
+    assert provider_display_message_content_candidate("omp", role="system", content_text=None) is False
+    assert provider_display_message_content_candidate("omp", role="assistant", content_text="text") is False
+    assert provider_display_message_content_candidate("claude", role="system", content_text="text") is False
+
+
+def test_background_job_notice_is_served_as_its_header_and_output() -> None:
+    assert provider_notification_display_text("omp", _BACKGROUND_JOB_NOTICE) == (
+        "Background job bg_1 has completed.\nSMOKE-STEP-1\nSMOKE-STEP-2\nSMOKE-STEP-3\nWall time: 180.02 seconds"
+    )
+    # Several jobs delivered together keep every job's own header and output.
+    multi = (
+        "<system-notice>\n2 background jobs have completed. Resume your work using the results below.\n\n"
+        "── Job bg_9 (sleep 1) ──\none\n── Job bg_11 (sleep 2) ──\ntwo\n</system-notice>"
+    )
+    assert provider_display_message_text(multi) == (
+        "2 background jobs have completed.\n\n── Job bg_9 (sleep 1) ──\none\n── Job bg_11 (sleep 2) ──\ntwo"
+    )
+    # Other displayed custom messages keep their body; only the wrapper goes.
+    assert provider_display_message_text("<irc>\nIncoming IRC message from agent `Scout`:\n\nfound it\n</irc>") == (
+        "Incoming IRC message from agent `Scout`:\n\nfound it"
+    )
+    assert provider_display_message_text("Supervised process build failed with exit code 1.") == (
+        "Supervised process build failed with exit code 1."
+    )
+    assert provider_display_message_text("<system-notice>\n \n</system-notice>") is None
+
+
+def test_long_job_output_keeps_the_header_and_the_verdict() -> None:
+    body = "\n".join(f"line {index}" for index in range(2_000))
+    text = f"<system-notice>\nBackground job bg_2 has completed. Resume your work using the result below.\n{body}\nFAILED\n</system-notice>"
+
+    display = provider_display_message_text(text)
+
+    assert display is not None
+    assert len(display) <= 2_000
+    assert display.startswith("Background job bg_2 has completed.\n\u2026\n")
+    assert display.endswith("line 1999\nFAILED")
+
+
+def test_notification_display_text_keeps_the_claude_summary_contract() -> None:
+    claude = "<task-notification><summary>Command finished</summary></task-notification>"
+
+    assert provider_notification_display_text("claude", claude) == "Command finished"
+    assert provider_notification_display_text("codex", "plain text") == "plain text"

@@ -39,7 +39,7 @@ from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_task_notification_display
-from zerg.services.provider_interaction_semantics import claude_task_notification_summary
+from zerg.services.provider_interaction_semantics import provider_notification_display_text
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
 from zerg.services.provider_interaction_semantics import semantic_projection_facts
@@ -1808,7 +1808,7 @@ def _render_event_wire(
     content_text = record.content_text
     if effective_interaction_kind == INTERACTION_PROVIDER_NOTIFICATION:
         role = "system"
-        content_text = claude_task_notification_summary(content_text) or content_text
+        content_text = provider_notification_display_text(spec.provider, content_text) or content_text
     return {
         "event_id": record.event_id,
         "cursor": render_detail_cursor_token(cursor),

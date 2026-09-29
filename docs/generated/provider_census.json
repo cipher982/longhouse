@@ -905,7 +905,8 @@
       "providers": [
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "omp"
       ]
     },
     {
@@ -1846,7 +1847,8 @@
       "providers": [
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "omp"
       ]
     },
     {

@@ -7,6 +7,7 @@ import signal
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -1281,6 +1282,95 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
     assert recovered == {0: "local_control"}
     assert reader.reads == 3
     assert stats.raw_companions_read == 3
+
+
+@pytest.mark.asyncio
+async def test_storage_semantic_recovery_reclassifies_a_sealed_omp_background_result(tmp_path):
+    """Rows sealed before background results were served gain them at read.
+
+    Those render objects stored the notice under the general scaffolding kind.
+    Recovery re-reads the immutable raw record, where the provider's own
+    ``display`` flag is the authority, so existing sessions need no re-ingest.
+    """
+
+    fixture = Path(__file__).parent / "fixtures/omp_background_result/omp-background-job-result.jsonl"
+    raw_lines = fixture.read_bytes().splitlines(keepends=True)
+    starts = [sum(len(line) for line in raw_lines[:index]) for index in range(len(raw_lines))]
+    session_id = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    source_epoch = UUID("018f0c3a-7b2d-7f10-8a11-323456789abc")
+    raw = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=session_id,
+        provider="omp",
+        opaque_source_id="session.jsonl",
+        source_epoch=source_epoch,
+        range_kind="byte_offset",
+        range_start=0,
+        range_end=sum(len(line) for line in raw_lines),
+        records=tuple(RawRecord(source_position=start, data=line) for start, line in zip(starts, raw_lines, strict=True)),
+    )
+    sealed = seal_raw_object(tmp_path, raw)
+    notice_ordinal = next(index for index, line in enumerate(raw_lines) if b'"customType":"async-result"' in line)
+    model_ordinal = next(index for index, line in enumerate(raw_lines) if b'"type":"model_change"' in line)
+    stored = tuple(
+        RenderRecord(
+            event_id=event_id,
+            order_time_us=order,
+            source_position=starts[ordinal],
+            event_subordinal=0,
+            role="system",
+            content_text=text,
+            interaction_kind="provider_system",
+            raw_record_ordinal=ordinal,
+        )
+        for order, (event_id, ordinal, text) in enumerate(
+            (
+                ("model", model_ordinal, "Model changed to openai/gpt-6-astra"),
+                ("notice", notice_ordinal, "<system-notice>\nBackground job bg_1 has completed.\nSMOKE-STEP-1\n</system-notice>"),
+            )
+        )
+    )
+
+    class Catalog:
+        async def call(self, method, params, **_kwargs):
+            assert method == "storage.session.raw_neighborhood.v2"
+            return {
+                "found": True,
+                "companion_found": True,
+                "objects": [
+                    {
+                        "envelope_id": sealed.envelope_id,
+                        "machine_id": "cinder",
+                        "provider": "omp",
+                        "opaque_source_id": "session.jsonl",
+                        "source_epoch": str(source_epoch),
+                        "range_start": raw.range_start,
+                        "range_end": raw.range_end,
+                        "object_path": sealed.object_path,
+                        "object_hash": sealed.object_hash,
+                        "tenant_id": "tenant-a",
+                    }
+                ],
+                "objects_truncated": False,
+            }
+
+    class RawReader:
+        async def read(self, object_path, object_hash, tenant_id, **_kwargs):
+            return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
+
+    recovered = await recover_render_interaction_kinds(
+        catalog=Catalog(),
+        raw_workers=RawReader(),
+        session_id=str(session_id),
+        owner_id="42",
+        provider="omp",
+        records=stored,
+        source_envelope_id=sealed.envelope_id,
+        manifest_cache={},
+    )
+
+    assert recovered == {0: "provider_system", 1: "provider_notification"}
 
 
 @pytest.mark.asyncio

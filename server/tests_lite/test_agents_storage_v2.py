@@ -329,6 +329,78 @@ def _claude_effort_payload(*, tenant_id: str, machine_id: str, epoch: UUID) -> d
     return payload
 
 
+_OMP_BACKGROUND_FIXTURE = Path(__file__).parent / "fixtures/omp_background_result"
+
+
+def _omp_background_job_payload(*, tenant_id: str, machine_id: str, epoch: UUID) -> dict:
+    """An envelope built from a real OMP transcript that backgrounds a command.
+
+    The raw records are the captured native lines. The render records are what
+    the engine's parser produced for them (``longhouse-engine parse
+    --dump-events``), mapped the way the shipper's ``render_record`` maps a
+    parsed event, so the test exercises the real seam between the two.
+    """
+
+    raw_lines = (_OMP_BACKGROUND_FIXTURE / "omp-background-job-result.jsonl").read_bytes().splitlines(keepends=True)
+    starts = [sum(len(line) for line in raw_lines[:index]) for index in range(len(raw_lines))]
+    total = sum(len(line) for line in raw_lines)
+    engine_events = [
+        json.loads(line) for line in (_OMP_BACKGROUND_FIXTURE / "omp-background-job-result.engine-events.jsonl").read_text().splitlines()
+    ]
+    subordinals: dict[int, int] = {}
+    records = []
+    for event in engine_events:
+        offset = event["source_offset"]
+        raw_ordinal = max(index for index, start in enumerate(starts) if start <= offset)
+        subordinal = subordinals.get(offset, 0)
+        subordinals[offset] = subordinal + 1
+        timestamp = datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
+        record = {
+            "event_id": event["uuid"],
+            "order_time_us": (timestamp - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(microseconds=1),
+            "source_position": offset,
+            "event_subordinal": subordinal,
+            "role": event["role"],
+            "content_text": event.get("content_text"),
+            "tool_name": event.get("tool_name"),
+            "tool_input_json": event.get("tool_input_json"),
+            "tool_output_text": event.get("tool_output_text"),
+            "tool_call_id": event.get("tool_call_id"),
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": raw_ordinal,
+        }
+        if event.get("parent_uuid") is not None:
+            record["parent_uuid"] = event["parent_uuid"]
+        records.append(record)
+    records.sort(key=lambda item: (item["order_time_us"], item["source_position"], item["event_subordinal"], item["event_id"]))
+
+    payload = _payload(tenant_id=tenant_id, machine_id=machine_id, epoch=epoch)
+    payload["provider"] = "omp"
+    payload["session_id"] = engine_events[0]["session_id"]
+    payload["opaque_source_id"] = "omp-background-job-result.jsonl"
+    payload["range_end"] = total
+    payload["records"] = [
+        {"source_position": start, "data_b64": base64.b64encode(line).decode("ascii")}
+        for start, line in zip(starts, raw_lines, strict=True)
+    ]
+    payload["render"]["records"] = records
+    payload["session"]["cwd"] = "/tmp/agents/smoke"
+    identity = EnvelopeIdentity(
+        tenant_id=tenant_id,
+        machine_id=machine_id,
+        provider="omp",
+        opaque_source_id=payload["opaque_source_id"],
+        source_epoch=epoch,
+        range_kind="byte_offset",
+        range_start=0,
+        range_end=total,
+        record_hashes=hash_records(tuple(raw_lines)),
+    )
+    payload["expected_envelope_id"] = envelope_id(identity)
+    return payload
+
+
 def test_storage_v2_session_facts_accept_provider_conversation_identity():
     payload = _payload(tenant_id="tenant", machine_id="machine", epoch=uuid4())
     payload["session"]["provider_session_id"] = "provider-thread-new"
@@ -1183,6 +1255,93 @@ async def test_storage_v2_first_claude_effort_envelope_is_admitted(monkeypatch):
         assert session["session"]["user_messages"] == 1
         assert session["session"]["assistant_messages"] == 1
         assert session["session"]["first_user_message_preview"] == "Build the real feature after the effort command."
+    finally:
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_serves_an_omp_background_job_result(monkeypatch):
+    """A steered OMP session backgrounds its command; the result must be served.
+
+    OMP moves a running bash command to a background job when a message arrives.
+    The tool row then says only "Backgrounded early ... the command keeps
+    running", and the command's real output reaches the model later as a native
+    ``custom_message`` (``async-result``). It used to be stored as scaffolding
+    and never served, so a viewer saw an unfinished tool and a second reply
+    without its cause.
+    """
+
+    tempdir = TemporaryDirectory(prefix="lh2-omp-background-", dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(root / "objects")
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    payload = _omp_background_job_payload(
+        tenant_id=get_settings().archive_primary_tenant_id,
+        machine_id="cinder",
+        epoch=UUID("018f0c3a-7b2d-7f10-8a11-523456789abc"),
+    )
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["render_state"] == "ready"
+
+            detail = await client.get(f"/agents/storage/v2/sessions/{payload['session_id']}/events?limit=50")
+            assert detail.status_code == 200, detail.text
+            served = detail.json()["events"]
+
+        by_id = {event["event_id"]: event for event in served}
+
+        # The background job's result is a served, ordered row: after the reply
+        # it did not cause and before the reply that answers it.
+        notice = by_id["1b42bcbc"]
+        assert notice["role"] == "system"
+        assert notice["interaction_kind"] == "provider_notification"
+        assert notice["content_text"] == (
+            "Background job bg_1 has completed.\nSMOKE-STEP-1\nSMOKE-STEP-2\nSMOKE-STEP-3\nWall time: 180.02 seconds"
+        )
+        order = [event["event_id"] for event in served]
+        assert order.index("bb8ae34b") < order.index("1b42bcbc") < order.index("4c33c565-text-1")
+        assert notice["raw_locator"]["raw_record_ordinal"] == 9
+
+        # The backgrounded tool keeps its call/result pair, so a client still
+        # pairs the row by tool_call_id; nothing was rewritten to hide it.
+        call, result = by_id["3ac85701"], by_id["530d1202"]
+        assert call["tool_call_id"] == result["tool_call_id"]
+        assert "Backgrounded early" in result["tool_output_text"]
+
+        # Only the provider-displayed message joined the transcript. Model and
+        # thinking-level changes, and lifecycle records, are separate rows that
+        # stay unserved; reasoning keeps its own kind.
+        assert "5ab7d6cf" not in by_id and "9246a85f" not in by_id
+        assert "1a5b636e" not in by_id and "c42f6a86" not in by_id
+        assert by_id["4c33c565"]["interaction_kind"] == "provider_reasoning"
+        assert {event["event_id"] for event in served if event["role"] == "system"} == {"1b42bcbc", "4c33c565"}
+
+        # It is provider output, not something the user said or the model wrote.
+        session = await catalog.call("storage.session.read.v2", {"session_id": payload["session_id"]})
+        assert session["session"]["user_messages"] == 3
+        assert session["session"]["first_user_message_preview"].startswith("Run exactly these bash steps")
     finally:
         await workers.close()
         await catalog.close()

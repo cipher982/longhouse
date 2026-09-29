@@ -34,6 +34,16 @@ _TITLE_ELIGIBLE_KINDS = frozenset({INTERACTION_DURABLE_USER_MESSAGE, INTERACTION
 REASONING_PROJECTION_PREFIX = "Thinking:\n"
 REASONING_PART_PROVIDERS = frozenset({"omp", "pi"})
 
+# Pi and OMP share a native ``custom_message`` record: the runtime or an
+# extension injects a message into the conversation, and its ``display`` flag
+# says whether the provider shows it in its own transcript. A background job's
+# completion (``async-result``) is the case that matters: the tool row only says
+# "Backgrounded early", and the command's real output arrives later as this
+# record. Longhouse serves the display-flagged ones as provider notifications;
+# the ``display: false`` ones are model-facing scaffolding and stay hidden.
+DISPLAY_MESSAGE_PROVIDERS = frozenset({"omp", "pi"})
+_NOTIFICATION_DISPLAY_MAX_CHARS = 2_000
+
 
 def omp_agent_end_is_terminal(event: Mapping[str, Any]) -> bool:
     """Return OMP's terminal contract for a native ``agent_end`` record.
@@ -249,6 +259,79 @@ def provider_reasoning_record(provider: str | None, *, role: str | None, raw_jso
     if not isinstance(content, list):
         return False
     return any(isinstance(part, Mapping) and part.get("type") == "thinking" for part in content)
+
+
+def provider_display_message_content_candidate(provider: str | None, *, role: str | None, content_text: str | None) -> bool:
+    """Return whether a render row may be a provider-displayed custom message.
+
+    Selection runs before the raw companion is read, so it can only use the
+    projected row. Such a message is a system-role row with text; the raw
+    ``display`` flag remains the authority.
+    """
+
+    return (
+        str(provider or "").strip().lower() in DISPLAY_MESSAGE_PROVIDERS
+        and str(role or "").strip().lower() == "system"
+        and isinstance(content_text, str)
+        and bool(content_text.strip())
+    )
+
+
+def provider_display_message_record(provider: str | None, *, role: str | None, raw_json: Any) -> bool:
+    """Recognize a native custom message the provider itself displays.
+
+    The structural evidence is the raw record: ``type=custom_message`` with an
+    explicit ``display: true``. Projected text alone is intentionally
+    insufficient, and a message without the flag is scaffolding.
+    """
+
+    if str(provider or "").strip().lower() not in DISPLAY_MESSAGE_PROVIDERS:
+        return False
+    if str(role or "").strip().lower() != "system":
+        return False
+    raw = _raw_mapping(raw_json)
+    return raw is not None and raw.get("type") == "custom_message" and raw.get("display") is True
+
+
+_DISPLAY_MESSAGE_ENVELOPE_RE = re.compile(r"^\s*<(?P<tag>system-notice|irc)>\s*(?P<body>.*?)\s*</(?P=tag)>\s*$", re.DOTALL)
+_DISPLAY_MESSAGE_RESUME_RE = re.compile(r"[ \t]*Resume your work using the results? below\.")
+
+
+def provider_display_message_text(content_text: str | None) -> str | None:
+    """Return the display text of a provider-displayed custom message.
+
+    The runtime wraps its notices in an envelope and ends the first line with an
+    instruction to the model ("Resume your work using the result below."); both
+    are addressed to the model, not part of the event. What remains is the
+    header and the job's own output, bounded so one long command output cannot
+    turn a transcript row into a page. An over-long body keeps its header and
+    its tail, since a command's verdict is at the end.
+    """
+
+    text = str(content_text or "").strip()
+    envelope = _DISPLAY_MESSAGE_ENVELOPE_RE.fullmatch(text)
+    if envelope is not None:
+        text = envelope.group("body")
+    text = _DISPLAY_MESSAGE_RESUME_RE.sub("", text, count=1).strip()
+    if not text:
+        return None
+    limit = _NOTIFICATION_DISPLAY_MAX_CHARS
+    if len(text) <= limit:
+        return text
+    header, _, body = text.partition("\n")
+    room = max(limit - len(header) - len("\n…\n"), 0)
+    return f"{header}\n…\n{body[-room:]}" if room else f"{header[: limit - 1]}…"
+
+
+def provider_notification_display_text(provider: str | None, content_text: str | None) -> str | None:
+    """Return the served text of a provider notification row."""
+
+    summary = claude_task_notification_summary(content_text)
+    if summary is not None:
+        return summary
+    if str(provider or "").strip().lower() in DISPLAY_MESSAGE_PROVIDERS:
+        return provider_display_message_text(content_text)
+    return content_text
 
 
 def _raw_identifier(raw: Mapping[str, Any] | None, field: str) -> str | None:
@@ -829,12 +912,17 @@ def classify_provider_interaction(
     codex_provider_system = normalized_provider == "codex" and codex_provider_system_record(raw)
     claude_provider_system = normalized_provider == "claude" and claude_provider_system_record(raw)
     provider_reasoning = provider_reasoning_record(normalized_provider, role=normalized_role, raw_json=raw)
+    provider_display_message = provider_display_message_record(normalized_provider, role=normalized_role, raw_json=raw)
     if codex_provider_system or claude_provider_system:
         kind = INTERACTION_PROVIDER_SYSTEM
         changes_provider_state = False
         starts_model_turn = False
     elif provider_reasoning:
         kind = INTERACTION_PROVIDER_REASONING
+        changes_provider_state = False
+        starts_model_turn = False
+    elif provider_display_message:
+        kind = INTERACTION_PROVIDER_NOTIFICATION
         changes_provider_state = False
         starts_model_turn = False
     elif claude_task_notification:
@@ -865,7 +953,9 @@ def classify_provider_interaction(
     # ``interaction_kind`` is parser-owned normalized data. Never accept a
     # Longhouse semantic override from provider raw JSON: raw provider text is
     # evidence to classify, not an authority that can demote itself.
-    explicit_kind = None if codex_provider_system or claude_provider_system or provider_reasoning else interaction_kind
+    explicit_kind = (
+        None if codex_provider_system or claude_provider_system or provider_reasoning or provider_display_message else interaction_kind
+    )
     if explicit_kind in _INTERACTION_KINDS:
         kind = str(explicit_kind)
         if kind in {INTERACTION_LOCAL_CONTROL, INTERACTION_CONVERSATION_BOUNDARY}:
@@ -1082,6 +1172,10 @@ __all__ = [
     "claude_task_notification_summary",
     "interaction_context_key_parts",
     "interaction_contract_snapshot",
+    "provider_display_message_content_candidate",
+    "provider_display_message_record",
+    "provider_display_message_text",
+    "provider_notification_display_text",
     "semantic_projection_facts",
     "seed_persisted_provider_interaction_context",
     "seed_provider_interaction_sequence_context",
