@@ -255,13 +255,15 @@ class PromoteProductionTests(unittest.TestCase):
         self.assertIn("/rollback", result.stderr)
         self.assertIn("PROMOTION_ATTEMPT=2 make promote-production", result.stderr)
 
-    def test_a_promotion_the_control_plane_refuses_says_nothing_was_recorded(self) -> None:
+    def test_a_promotion_the_control_plane_does_not_confirm_has_no_rollback_to_offer(self) -> None:
         # For example its own soak check answering 409: no deployment exists to roll back.
-        result, promotions, ssh_calls, _saved = self.run_promotion(env={"FIXTURE_SUBMIT_REFUSED": "1"})
+        result, promotions, ssh_calls, saved = self.run_promotion(env={"FIXTURE_SUBMIT_REFUSED": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(ssh_calls, [])
-        self.assertIn("did not record the promotion", result.stderr)
+        self.assertIn("did not confirm a deployment", result.stderr)
+        self.assertIn(f"submission_key=promote-production-{w.SHA}", result.stderr)
         self.assertNotIn("/rollback", result.stderr)
+        self.assertEqual(len(saved), 1, "this stop keeps its receipt too")
 
     def test_a_new_attempt_uses_a_new_idempotency_key(self) -> None:
         result, promotions, _ssh, _saved = self.run_promotion(env={"PROMOTION_ATTEMPT": "2"})

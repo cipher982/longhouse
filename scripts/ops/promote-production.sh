@@ -155,7 +155,13 @@ export LH_DEPLOYMENT_IDEMPOTENCY_KEY="promote-production-${SHA}${KEY_SUFFIX}"
 LH_DEPLOYMENT_ID=""
 if ! lh_hosted_reprovision_production "$PROD_IMAGE" "$TARGET_IDS_JSON"; then
   if [[ -z "${LH_DEPLOYMENT_ID:-}" ]]; then
-    echo "The control plane did not record the promotion (see its answer above), so nothing was changed." >&2
+    cat >&2 <<EOF
+
+The control plane did not confirm a deployment (see its answer above), so the run stopped before the demo.
+The submission is idempotent: rerunning replays the same key. If unsure whether it was recorded, read
+  GET ${CONTROL_PLANE_URL%/}/api/deployments?submission_key=$LH_DEPLOYMENT_IDEMPOTENCY_KEY
+EOF
+    save_receipt
     exit 1
   fi
   cat >&2 <<EOF
