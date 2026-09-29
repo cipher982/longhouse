@@ -121,12 +121,11 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=16,
+    producer_revision=15,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
     # 6: a mid-turn steer step, reported as STEER_ASSERTION_ID.
-    # (producer 16: OpenCode joins the steer cells; the step is unchanged.)
     scenario_revision=6,
     assertion_cells=(
         # No provider is interrupt_unsupported since Codex gained turn/interrupt.

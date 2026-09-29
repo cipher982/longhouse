@@ -202,7 +202,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+              "oracle_digest": "3895376ecd77cbc9bd5994e20f6cc93798f761c71b3b92077622cbd91e77bea5"
             }
           ]
         },
@@ -230,7 +230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+              "oracle_digest": "3895376ecd77cbc9bd5994e20f6cc93798f761c71b3b92077622cbd91e77bea5"
             }
           ]
         },
@@ -1336,7 +1336,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+              "oracle_digest": "3895376ecd77cbc9bd5994e20f6cc93798f761c71b3b92077622cbd91e77bea5"
             }
           ]
         },
@@ -1364,7 +1364,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+              "oracle_digest": "3895376ecd77cbc9bd5994e20f6cc93798f761c71b3b92077622cbd91e77bea5"
             },
             {
               "id": "real_print_marker_returned",
@@ -2014,7 +2014,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+              "oracle_digest": "3895376ecd77cbc9bd5994e20f6cc93798f761c71b3b92077622cbd91e77bea5"
             }
           ]
         },
@@ -2042,7 +2042,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+              "oracle_digest": "3895376ecd77cbc9bd5994e20f6cc93798f761c71b3b92077622cbd91e77bea5"
             }
           ]
         },
@@ -2554,7 +2554,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "0f4e80081631c6261e5d5ba5e98b12aa7fffdefa25056de35f785622caf60feb"
+      "adapter_digest": "5e43420b01c2d991df2161fd11f57ec25e1e19eff96138419ea5320c60689bfa"
     },
     {
       "provider": "antigravity",
@@ -3158,7 +3158,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fd296eaedad86a4f9310cee0e245ee91fe343fc1025aa600c632b4d551d614b8"
+              "oracle_digest": "3895376ecd77cbc9bd5994e20f6cc93798f761c71b3b92077622cbd91e77bea5"
             }
           ]
         },
@@ -4939,7 +4939,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "4c43e1f8f44103d998d68fb6b08bc8d18a4bb74af30c99267da7dda2103d1c1a"
+      "adapter_digest": "0505bca615c161ee2fff4770e66cb8e102f7c66f5fba17566ea1aed17f49aa31"
     }
   ]
 }

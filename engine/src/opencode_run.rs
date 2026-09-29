@@ -112,6 +112,10 @@ struct ServeState {
     /// now is refused rather than posted to a session about to be torn down.
     #[serde(default)]
     closed: bool,
+    /// The model the turn was started with; a steer carries it too, so the text
+    /// never runs under a different one.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 impl ServeState {
@@ -833,6 +837,7 @@ async fn start_reserved_turn(
             provider_session_id: resume_provider_thread_id.clone(),
             message_ids: Vec::new(),
             closed: false,
+            model: normalized_optional(&config.model),
         };
         state.save(&run_dir)?;
         let model = normalized_optional(&config.model);
@@ -1741,8 +1746,10 @@ fn mint_message_id() -> String {
     format!("msg_{stamp:012x}{suffix}")
 }
 
-/// What a steer did, from OpenCode's own message timestamps. Judged on the last
-/// reply to something this turn submitted that came before the steer:
+/// What a steer did, from OpenCode's own message timestamps. The steer was
+/// posted only after the session was observed busy (`steerable`), so a loop that
+/// stalled idle never reaches this. Judged on the last reply to something this
+/// turn submitted that came before the steer:
 ///
 /// - still being written, or finished with `tool-calls`: the loop must run
 ///   another step, so it cannot have stopped: `Steered`;
@@ -1784,6 +1791,16 @@ fn turn_is_over(messages: &[MessageView], submitted: &[String], busy: bool) -> b
     )
 }
 
+/// May a steer be posted now? Only to a session observed busy and not over. An
+/// idle session starts a turn for whatever is posted to it, so a steer is never
+/// posted to one: idle after the turn ended, idle while it stalls, and idle in
+/// the instant before its loop starts are all refused (the last is the start
+/// race a caller retries). What remains is the gap between this look and the
+/// post, which `classify_steer` reports rather than hides.
+fn steerable(messages: &[MessageView], submitted: &[String], busy: bool) -> bool {
+    busy && !turn_is_over(messages, submitted, busy)
+}
+
 enum Submission {
     /// The message is in the session; these are its messages now.
     Admitted(Vec<MessageView>),
@@ -1801,16 +1818,18 @@ async fn submit_steer(
     session_id: &str,
     steer_id: &str,
     text: &str,
+    model: Option<&str>,
 ) -> Submission {
     let parts = match crate::opencode_control::prompt_parts(text, &[]) {
         Ok(parts) => parts,
         Err(error) => return Submission::Refused(format!("{error:#}")),
     };
+    let mut body = json!({"messageID": steer_id, "parts": parts});
+    if let Some(model) = model.and_then(model_ref) {
+        body["model"] = model;
+    }
     let posted = server
-        .post(
-            &format!("/session/{session_id}/prompt_async"),
-            Some(json!({"messageID": steer_id, "parts": parts})),
-        )
+        .post(&format!("/session/{session_id}/prompt_async"), Some(body))
         .await;
     if let Err(error) = &posted {
         if http_status(error).is_some_and(|status| (400..500).contains(&status)) {
@@ -1879,7 +1898,7 @@ pub async fn steer_opencode_console_turn(
         eprintln!("[opencode-run] steer not posted, the session could not be read: {error:#}");
         "steer_failed".to_string()
     })?;
-    if turn_is_over(&messages, &state.message_ids, busy) {
+    if !steerable(&messages, &state.message_ids, busy) {
         return Err(not_steerable());
     }
 
@@ -1888,7 +1907,15 @@ pub async fn steer_opencode_console_turn(
         eprintln!("[opencode-run] steer not posted: {steer_id} would not sort after the session");
         return Err("steer_failed".to_string());
     }
-    let messages = match submit_steer(&server, &native_session, &steer_id, text).await {
+    let messages = match submit_steer(
+        &server,
+        &native_session,
+        &steer_id,
+        text,
+        state.model.as_deref(),
+    )
+    .await
+    {
         Submission::Admitted(messages) => messages,
         Submission::Refused(reason) => {
             eprintln!("[opencode-run] steer refused by OpenCode: {reason}");
@@ -2087,6 +2114,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/session/%s/prompt_async" % SES:
             body = json.loads(raw or b"{}")
             record("MESSAGE_ID " + str(body.get("messageID")))
+            model = body.get("model") or {}
+            record("MODEL %s/%s" % (model.get("providerID"), model.get("modelID")))
             prompt(body)
             self.send_response(204)
             self.send_header("Content-Length", "0")
@@ -2754,16 +2783,48 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_that_is_over_is_not_steerable() {
-        let messages = vec![
-            view("msg_u1", "user", None, None),
-            view("msg_a1", "assistant", Some("msg_u1"), Some("stop")),
-        ];
+    fn a_steer_is_only_posted_to_a_session_observed_busy_and_not_over() {
+        let user = view("msg_u1", "user", None, None);
+        let stopped = view("msg_a1", "assistant", Some("msg_u1"), Some("stop"));
+        let working = view("msg_a1", "assistant", Some("msg_u1"), None);
+        let tool_step = view("msg_a1", "assistant", Some("msg_u1"), Some("tool-calls"));
         let submitted = ids(&["msg_u1"]);
-        assert!(turn_is_over(&messages, &submitted, false));
-        // Busy, or not yet answered, is a turn that can still be steered.
-        assert!(!turn_is_over(&messages, &submitted, true));
-        assert!(!turn_is_over(&messages[..1], &submitted, false));
+        // Running: busy, and a reply still being written or leading to another.
+        assert!(steerable(
+            &[user.clone(), working.clone()],
+            &submitted,
+            true
+        ));
+        assert!(steerable(
+            &[user.clone(), tool_step.clone()],
+            &submitted,
+            true
+        ));
+        // Over, idle after its final answer.
+        assert!(turn_is_over(
+            &[user.clone(), stopped.clone()],
+            &submitted,
+            false
+        ));
+        assert!(!steerable(
+            &[user.clone(), stopped.clone()],
+            &submitted,
+            false
+        ));
+        // Idle is never posted to, whatever the messages say: a stalled loop
+        // (idle with a tool step) and a loop that has not started yet would each
+        // start a turn for the steer.
+        assert!(!steerable(&[user.clone(), tool_step], &submitted, false));
+        assert!(!steerable(&[user.clone(), working], &submitted, false));
+        assert!(!steerable(&[user], &submitted, false));
+        // Busy but already errored or aborted: over.
+        let mut aborted = view("msg_a1", "assistant", Some("msg_u1"), None);
+        aborted.error = Some(("MessageAbortedError".to_string(), String::new()));
+        assert!(!steerable(
+            &[view("msg_u1", "user", None, None), aborted],
+            &submitted,
+            true
+        ));
     }
 
     #[test]
@@ -3064,6 +3125,7 @@ mod tests {
             provider_session_id: Some("ses_1".into()),
             message_ids: ids(&["msg_1"]),
             closed: false,
+            model: None,
         };
         state.save(temp.path()).unwrap();
         let mode = std::fs::metadata(ServeState::path(temp.path()))
@@ -3154,7 +3216,7 @@ mod tests {
                 prompt: "reply once".to_string(),
                 image_paths: Vec::new(),
                 resume_provider_thread_id: resume.map(str::to_string),
-                model: None,
+                model: Some("fake/model-1".to_string()),
                 permission_mode: "bypass".to_string(),
                 machine_name: "fake-opencode".to_string(),
                 local_db_path: None,
@@ -3434,6 +3496,12 @@ mod tests {
         assert_eq!(ids.len(), 2, "{requests:?}");
         assert!(ids[1].starts_with("MESSAGE_ID msg_"), "{requests:?}");
         assert!(!requests.iter().any(|line| line.ends_with("/abort")));
+        // The steer runs under the model the turn was started with.
+        let models: Vec<&String> = requests
+            .iter()
+            .filter(|line| line.starts_with("MODEL "))
+            .collect();
+        assert_eq!(models, ["MODEL fake/model-1", "MODEL fake/model-1"]);
         let state = served_state(&summary);
         assert_eq!(state.message_ids.len(), 2);
         assert!(state.closed, "a settled run refuses further steers");
@@ -3579,7 +3647,7 @@ mod tests {
                 .to_string(),
             image_paths: Vec::new(),
             resume_provider_thread_id: None,
-            model: None,
+            model: std::env::var("LONGHOUSE_OPENCODE_MODEL").ok(),
             permission_mode: "bypass".to_string(),
             machine_name: "opencode-steer-live".to_string(),
             local_db_path: None,
@@ -3662,6 +3730,7 @@ mod tests {
                 &native_session,
                 &first_id,
                 "Reply with exactly LH_FIRST and nothing else.",
+                None,
             )
             .await,
         );
@@ -3685,6 +3754,7 @@ mod tests {
                 &native_session,
                 &second_id,
                 &format!("Reply with exactly {second_marker} and nothing else."),
+                None,
             )
             .await,
         );
