@@ -46,6 +46,8 @@ const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
 // v7: failed/aborted managed prose remains inspectable as abandoned output,
 // without authorizing it as a committed head reply. Replay historical sources.
 const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v8-turn-outcome";
+/// Blobs one Cursor capture reads from the hash-sorted store before it yields.
+const CURSOR_BLOB_PAGE_ROWS: usize = 256;
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 const BACKLOG_TARGET_BATCH_BYTES: usize = 2 * 1024 * 1024;
 
@@ -3887,13 +3889,18 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     }
     let mut streamed_records = Vec::new();
     let mut streamed_bytes = 0usize;
-    let capture_cursor = cursor_store_records::capture_cursor(conn, resolution.source_epoch)?;
+    let walk = cursor_store_records::capture_walk(conn, resolution.source_epoch)?;
+    let blob_page_rows = if walk.repairing {
+        usize::MAX
+    } else {
+        CURSOR_BLOB_PAGE_ROWS
+    };
     let blob_visit = cursor_store::visit_cursor_blob_records(
         db_path,
         &snapshot.conversation_uuid,
         &snapshot.store_incarnation,
-        capture_cursor.as_deref(),
-        256,
+        walk.after_blob_id.as_deref(),
+        blob_page_rows,
         |record| {
             let record_hash = cursor_store_records::cursor_record_hash(&record);
             if cursor_store_records::cursor_record_exists(
@@ -6142,6 +6149,79 @@ mod tests {
             .records
             .iter()
             .any(|record| { record.content_text.as_deref() == Some("after drain") }));
+    }
+
+    #[test]
+    fn cursor_payloads_missing_past_the_first_blob_page_are_repaired_from_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        for index in 0..(CURSOR_BLOB_PAGE_ROWS + 44) {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("{index:064x}"), vec![index as u8; 8]],
+                )
+                .unwrap();
+        }
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        // Capture and ship the whole store so the spool holds every record.
+        let mut epoch = None;
+        for _ in 0..30 {
+            match prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &path).unwrap() {
+                CursorPreparationOutcome::Envelope(prepared) => {
+                    epoch = Some(prepared.source_epoch);
+                    acknowledge_prepared(&mut conn, &prepared);
+                }
+                CursorPreparationOutcome::Current => break,
+                _ => {}
+            }
+        }
+        let epoch = epoch.expect("the store must have produced an envelope");
+        let records =
+            cursor_store_records::cursor_records_from(&conn, epoch, 0, 10_000, u64::MAX).unwrap();
+        let mut blobs = records
+            .iter()
+            .filter_map(|record| {
+                let value: Value = serde_json::from_slice(&record.bytes).ok()?;
+                (value["kind"] == "blob").then(|| {
+                    (
+                        value["blob_id"].as_str().unwrap().to_string(),
+                        cursor_store_records::cursor_record_hash(&record.bytes),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        blobs.sort();
+        assert!(blobs.len() > CURSOR_BLOB_PAGE_ROWS);
+
+        // Unshipped again, with the payloads of every blob past the first page
+        // gone: exactly the shape a hash-sorted page from the head cannot reach.
+        conn.execute(
+            "UPDATE source_epoch_lane_state SET last_position = 1
+             WHERE source_epoch = ?1 AND lane = 'durable'",
+            [epoch.to_string()],
+        )
+        .unwrap();
+        let root = crate::state::payload_store::root_for_connection(&conn)
+            .unwrap()
+            .join("records");
+        let lost = blobs[CURSOR_BLOB_PAGE_ROWS..]
+            .iter()
+            .map(|(_, hash)| crate::state::payload_store::relative_path_for(hash, "rec"))
+            .collect::<Vec<_>>();
+        for relative in &lost {
+            crate::state::payload_store::remove(&root, relative).unwrap();
+        }
+
+        let repaired = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .expect("the missing payloads must be re-read from the Cursor store");
+        assert_eq!(repaired.range_start, 1);
+        assert!(lost
+            .iter()
+            .all(|relative| crate::state::payload_store::exists(&root, relative)));
     }
 
     #[test]

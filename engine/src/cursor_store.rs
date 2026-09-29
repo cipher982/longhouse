@@ -299,7 +299,8 @@ pub fn visit_cursor_blob_records(
 ) -> Result<CursorBlobVisit> {
     let mut conn = open_readonly(path)?;
     let snapshot = conn.transaction()?;
-    let maximum = i64::try_from(max_rows).context("Cursor blob page limit exceeds i64")?;
+    // `usize::MAX` means the whole store; SQLite's LIMIT tops out at i64::MAX.
+    let maximum = i64::try_from(max_rows).unwrap_or(i64::MAX);
     let mut statement = snapshot
         .prepare("SELECT id, data FROM blobs WHERE id > COALESCE(?1, '') ORDER BY id LIMIT ?2")?;
     let mut rows = statement.query(rusqlite::params![after_blob_id, maximum])?;

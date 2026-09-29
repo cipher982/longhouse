@@ -504,12 +504,26 @@ fn has_missing_file_payload(conn: &Connection, source_epoch: Uuid) -> Result<boo
     Ok(false)
 }
 
-pub fn capture_cursor(conn: &Connection, source_epoch: Uuid) -> Result<Option<String>> {
+/// Where the next blob walk over the Cursor store starts.
+pub struct CaptureWalk {
+    pub after_blob_id: Option<String>,
+    /// A committed row's sealed payload vanished, so the walk restarted at the
+    /// head. The caller must then cover the whole store, not one page: a page
+    /// counts records the spool already holds, so a page from the head never
+    /// reaches a missing record that sorts past it, and every retry would
+    /// re-read the same page.
+    pub repairing: bool,
+}
+
+pub fn capture_walk(conn: &Connection, source_epoch: Uuid) -> Result<CaptureWalk> {
     // Rewind the source scan when a prior capture committed a row but its
     // sealed payload vanished. The source bytes, not the row or cursor, are
     // the repair authority; deduplication then preserves every prior position.
     if has_missing_file_payload(conn, source_epoch)? {
-        return Ok(None);
+        return Ok(CaptureWalk {
+            after_blob_id: None,
+            repairing: true,
+        });
     }
     let value: Option<Option<String>> = conn
         .query_row(
@@ -519,7 +533,10 @@ pub fn capture_cursor(conn: &Connection, source_epoch: Uuid) -> Result<Option<St
         )
         .optional()
         .context("reading Cursor blob capture cursor")?;
-    Ok(value.flatten())
+    Ok(CaptureWalk {
+        after_blob_id: value.flatten(),
+        repairing: false,
+    })
 }
 pub fn store_capture_cursor(
     conn: &Connection,
@@ -862,7 +879,9 @@ mod tests {
 
         // A restart must not trust the high-water mark past a row whose
         // evidence disappeared. The source walk will revisit that record.
-        assert_eq!(capture_cursor(&conn, epoch).unwrap(), None);
+        let walk = capture_walk(&conn, epoch).unwrap();
+        assert_eq!(walk.after_blob_id, None);
+        assert!(walk.repairing);
         assert!(!cursor_record_exists(&conn, epoch, &hash).unwrap());
 
         // Re-reading the exact source record reseals the same hash row. No
@@ -870,10 +889,9 @@ mod tests {
         // can satisfy the shipper.
         let next = append_unseen_cursor_records(&mut conn, epoch, &[records[1].clone()]).unwrap();
         assert_eq!(next, 3);
-        assert_eq!(
-            capture_cursor(&conn, epoch).unwrap().as_deref(),
-            Some("cursor-at-head")
-        );
+        let walk = capture_walk(&conn, epoch).unwrap();
+        assert_eq!(walk.after_blob_id.as_deref(), Some("cursor-at-head"));
+        assert!(!walk.repairing);
         assert_eq!(
             cursor_records_from(&conn, epoch, 0, 10, 1024)
                 .unwrap()
@@ -1060,11 +1078,11 @@ mod tests {
 
         store_capture_cursor(&conn, epoch, Some("blob-123")).unwrap();
         assert_eq!(
-            capture_cursor(&conn, epoch).unwrap().as_deref(),
+            capture_walk(&conn, epoch).unwrap().after_blob_id.as_deref(),
             Some("blob-123")
         );
         store_capture_cursor(&conn, epoch, None).unwrap();
-        assert_eq!(capture_cursor(&conn, epoch).unwrap(), None);
+        assert_eq!(capture_walk(&conn, epoch).unwrap().after_blob_id, None);
     }
 
     #[test]
