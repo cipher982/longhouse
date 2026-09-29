@@ -31,6 +31,7 @@ OPENCODE_LIVE_CONTROL_OPERATIONS = [
     "terminate",
     "turn_start",
     "turn_interrupt",
+    "turn_steer",
     "answer_pause",
 ]
 
