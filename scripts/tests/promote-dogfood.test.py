@@ -18,7 +18,7 @@ DIGEST = "sha256:" + "b" * 64
 
 
 class PromotionAuthorizationTests(unittest.TestCase):
-    def run_promotion(self, *, receipt_available: bool = True, receipt_sha: str = SHA):
+    def run_promotion(self, *, receipt_available: bool = True, receipt_sha: str = SHA, gate_refuses: bool = False):
         with tempfile.TemporaryDirectory(prefix="longhouse-promotion-test-") as directory:
             root = Path(directory)
             ops = root / "scripts" / "ops"
@@ -47,6 +47,14 @@ class PromotionAuthorizationTests(unittest.TestCase):
                 'lh_hosted_prepare_control_plane_auth() { :; }\n'
                 'lh_hosted_resolve_instance() { LH_INSTANCE_ID=fixture; }\n'
                 'lh_hosted_reprovision() { printf "%s\\n" "$2" >> "$FIXTURE_ROOT/promotions"; }\n'
+            )
+            # The review gate has its own tests (review-gate.test.py); here it only has to be
+            # asked, with the target and the served-health URL, before anything changes.
+            (library / "review-gate.sh").write_text(
+                'lh_review_gate_promotion() {\n'
+                '  printf "%s %s\\n" "$1" "$2" >> "$FIXTURE_ROOT/gate_calls"\n'
+                '  [[ "$FIXTURE_GATE_REFUSES" != 1 ]] || { echo "review-gate: REFUSED" >&2; return 1; }\n'
+                '}\n'
             )
             # External services are isolated; the real receipt verifier and
             # complete promotion entrypoint still make the authorization decision.
@@ -103,6 +111,7 @@ else:
                 "FIXTURE_SHA": SHA,
                 "FIXTURE_HAS_RECEIPT": "1" if receipt_available else "0",
                 "FIXTURE_PYTHON": sys.executable,
+                "FIXTURE_GATE_REFUSES": "1" if gate_refuses else "0",
                 "SUBDOMAIN": "fixture-owner",
                 "GH_TOKEN": "fixture-not-a-credential",
             }
@@ -114,12 +123,25 @@ else:
                 timeout=20,
             )
             promotions = root / "promotions"
+            gate_calls = root / "gate_calls"
+            self.gate_calls = gate_calls.read_text().splitlines() if gate_calls.exists() else []
             return result, promotions.read_text().splitlines() if promotions.exists() else []
 
     def test_manual_canary_receipt_survives_newer_successful_noop(self):
         result, promotions = self.run_promotion()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
+
+    def test_review_gate_is_asked_for_the_target_against_what_dogfood_serves(self):
+        result, _ = self.run_promotion()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gate_calls, [f"{SHA} https://fixture-owner.longhouse.ai/api/health"])
+
+    def test_an_unreviewed_range_promotes_nothing(self):
+        result, promotions = self.run_promotion(gate_refuses=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(promotions, [])
+        self.assertIn("REFUSED", result.stderr)
 
     def test_successful_workflows_without_receipts_cannot_promote(self):
         result, promotions = self.run_promotion(receipt_available=False)

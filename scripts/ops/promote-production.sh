@@ -101,6 +101,16 @@ TARGET_IDS_JSON="$(jq -c '[.plan.targets[].id]' "$receipt")"
 TARGET_COUNT="$(jq -r '.plan.targets | length' "$receipt")"
 DOGFOOD_DEPLOYMENT="$(jq -r '.gates.dogfood.evidence.deployment_id' "$receipt")"
 echo "Gates passed for $SHA ($PROD_IMAGE)." >&2
+
+# --- Review: every code commit between what production serves and SHA needs a completed
+# review receipt (scripts/ops/review_gate.py). It sits outside the receipt's four gates
+# because it reads this machine's review store, not the control plane or GitHub.
+. "$ROOT/scripts/lib/review-gate.sh"
+if ! lh_review_gate_promotion "$SHA" "$DEMO_HEALTH_URL"; then
+  echo "Refusing to promote to production: the range holds commits without a completed review. Nothing was changed." >&2
+  save_receipt
+  exit 1
+fi
 if [[ "$TARGET_COUNT" == "0" ]]; then
   echo "Targets: none (pointer-only promotion)." >&2
 else

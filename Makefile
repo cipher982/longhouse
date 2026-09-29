@@ -59,6 +59,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-format validate-legacy-nouns
+.PHONY: validate-review-gate
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
 .PHONY: test-provider-contract test-isolation
 .PHONY: affected-check
@@ -645,7 +646,7 @@ test-codex-bridge-e2e: ## Codex bridge E2E
 test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
 	@./scripts/qa/test-hooks-e2e.sh
 
-check-push-readiness: ## Detect stale duplicate commits on main before pushing (~1s)
+check-push-readiness: ## Before pushing: stale duplicate commits on main, and blocking-list commits without a completed review (~1s)
 	@./scripts/ops/check-push-readiness.sh
 
 test-ci: ## Broad pre-release CI check (~20min; not required for every push)
@@ -748,6 +749,7 @@ dogfood-check: ## Show installed local runtime status + local health
 # failing member instead of stopping at the first.
 VALIDATE_MEMBERS := \
 	validate-codemap \
+	validate-review-gate \
 	validate-provider-cli-canaries \
 	validate-ops-scripts \
 	validate-sdk \
@@ -814,6 +816,9 @@ validate-format: ## @internal Backend formatting is uniform tree-wide
 
 validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 	@python3 scripts/qa/legacy-nouns-check
+
+validate-review-gate: ## @internal Review gate tests (the landing rule itself runs on the host: check-push-readiness, ship.sh)
+	@python3 scripts/tests/review-gate.test.py
 
 validate-affected-check: ## @internal Affected-path glob and dirty-tree contract
 	@cd server && uv run --no-sync python ../scripts/tests/affected.test.py

@@ -108,6 +108,8 @@ REMOTE_REF="refs/remotes/origin/$BRANCH"
 if git -C "$ROOT" merge-base --is-ancestor "$SHA" "$REMOTE_REF"; then
   echo "Commit ${SHA:0:10} is already on origin/${BRANCH}; skipping push and verifying exact SHA." >&2
 else
+  # Landing rule: blocking-list commits need a completed review receipt (scripts/ops/review-policy.toml).
+  python3 "$ROOT/scripts/ops/review_gate.py" --repo "$ROOT" push --base "origin/$BRANCH" --head "$SHA" >&2
   echo "Pushing exact commit ${SHA:0:10} to ${BRANCH}..." >&2
   git -C "$ROOT" push origin "$SHA:refs/heads/$BRANCH"
 fi

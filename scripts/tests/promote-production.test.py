@@ -41,6 +41,16 @@ lh_hosted_reprovision_production() {
 """
 
 
+# The review gate has its own tests (review-gate.test.py); here it only has to be asked, with the
+# target and the served-health URL, before anything changes.
+REVIEW_GATE_STUB = """\
+lh_review_gate_promotion() {
+  printf '%s %s\\n' "$1" "$2" >> "$FIXTURE_ROOT/gate_calls"
+  [[ "${FIXTURE_GATE_REFUSES:-0}" != "1" ]] || { echo "review-gate: REFUSED" >&2; return 1; }
+}
+"""
+
+
 class PromoteProductionTests(unittest.TestCase):
     def run_promotion(self, world: dict | None = None, *args: str, env: dict | None = None):
         world = world if world is not None else w.green_world()
@@ -53,6 +63,7 @@ class PromoteProductionTests(unittest.TestCase):
                 shutil.copyfile(ROOT / "scripts" / "ops" / name, ops / name)
             (ops / "promote-production.sh").chmod(0o755)
             (library / "hosted-instance.sh").write_text(LIBRARY_STUB)
+            (library / "review-gate.sh").write_text(REVIEW_GATE_STUB)
             with w.Wire(world, root) as wire:
                 result = subprocess.run(
                     ["bash", str(ops / "promote-production.sh"), *args],
@@ -66,7 +77,27 @@ class PromoteProductionTests(unittest.TestCase):
             ssh_calls = ssh_path.read_text().splitlines() if ssh_path.exists() else []
             receipts = sorted((root / "receipts").glob("*.json")) if (root / "receipts").exists() else []
             saved = [json.loads(path.read_text()) for path in receipts]
+            gate_calls = root / "gate_calls"
+            self.gate_calls = gate_calls.read_text().splitlines() if gate_calls.exists() else []
             return result, promotions, ssh_calls, saved
+
+    def test_the_review_gate_is_asked_for_the_target_against_what_production_serves(self) -> None:
+        result, promotions, _ssh, _saved = self.run_promotion(w.green_world(), w.SHA)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(len(self.gate_calls), 1)
+        target, served_url = self.gate_calls[0].split()
+        self.assertEqual(target, w.SHA)
+        self.assertTrue(served_url.endswith("/demo/api/health"), served_url)
+
+    def test_an_unreviewed_range_moves_nothing_and_still_keeps_the_receipt(self) -> None:
+        for args in ((w.SHA,), ("--check", w.SHA)):
+            result, promotions, ssh_calls, saved = self.run_promotion(w.green_world(), *args, env={"FIXTURE_GATE_REFUSES": "1"})
+            self.assertNotEqual(result.returncode, 0, args)
+            self.assertEqual((promotions, ssh_calls), ([], []))
+            self.assertIn("review-gate: REFUSED", result.stderr)
+            self.assertIn("Nothing was changed", result.stderr)
+            self.assertEqual(len(saved), 1)
 
     def test_happy_path_promotes_the_dogfood_digest_and_prints_the_receipt(self) -> None:
         world = w.green_world()

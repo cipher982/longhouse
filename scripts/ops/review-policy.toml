@@ -1,0 +1,191 @@
+# Review policy: the one checked-in list behind scripts/ops/review_gate.py.
+#
+# Reviews are off the landing path (workspace AGENTS.md, "Review"): a reversible
+# change may land and reach canary before its review completes. Two rules keep that
+# safe.
+#   * push:      a commit touching a `blocking` path needs a completed review
+#                receipt covering it before it lands.
+#   * promotion: promote-dogfood/promote-production refuse a range with any commit
+#                that is not `exempt` and lacks a completed receipt, or whose
+#                receipt holds an unresolved blocking/material finding.
+#
+# Globs are repo-relative: `*` stays inside a path segment, `**` crosses segments.
+# Editing this file, the gate, or the promote scripts is itself on the blocking list.
+# scripts/tests/review-gate.test.py fails when a blocking glob matches no tracked
+# file, so a rename cannot silently switch a protection off.
+
+# Never need a review: docs and tests.
+[exempt]
+paths = [
+  "**/*.md",
+  "docs/**",
+  "blog/**",
+  "LICENSE",
+  "NOTICE",
+  "server/tests_lite/**",
+  "server/zerg/tests/**",
+  "server/zerg/testing/**",
+  "engine/tests/**",
+  "e2e/**",
+  "scripts/tests/**",
+  "**/test_*.py",
+  "**/*.test.py",
+  "**/*.test.ts",
+  "**/*.test.tsx",
+  "**/*.spec.ts",
+  "**/__tests__/**",
+  "tests/**",
+]
+
+# `make release` version bookkeeping: exempt only when the subject matches AND every
+# file is one of the bump targets, so a dependency edit cannot hide behind the subject.
+[release_bump]
+subject = '^Bump version to \d+\.\d+\.\d+$'
+paths = [
+  ".bumpversion.toml",
+  "engine/Cargo.toml",
+  "engine/Cargo.lock",
+  "runner/package.json",
+  "server/pyproject.toml",
+  "server/uv.lock",
+  "ios/XcodeHarness/Configs/Version.xcconfig",
+]
+
+# --- cipher982/longhouse -----------------------------------------------------
+
+[[repos.longhouse.blocking]]
+area = "migrations/schema"
+paths = [
+  "server/zerg/db_migrations.py",
+  "server/zerg/database.py",
+  "server/zerg/bootstrap_sqlite.py",
+  "server/zerg/models/**",
+  "server/zerg/catalogd/schema.py",
+  "server/zerg/catalogd/models.py",
+  "server/zerg/storage_v2/**",
+  "server/zerg/cli/storage_migrate.py",
+  "server/zerg/services/legacy_corpus_migration.py",
+  "scripts/ops/runtime-schema.py",
+  "schemas/storage-v2-contract-vectors.json",
+  "schemas/machine-evidence-hash-v1.json",
+  "engine/src/storage_v2_contract.rs",
+]
+
+[[repos.longhouse.blocking]]
+area = "auth"
+paths = [
+  "server/zerg/auth/**",
+  "server/zerg/dependencies/*auth*.py",
+  "server/zerg/dependencies/form_post_origin.py",
+  "server/zerg/routers/auth*.py",
+  "server/zerg/routers/device_tokens.py",
+  "server/zerg/routers/machine_sign_in.py",
+  "server/zerg/routers/admin.py",
+  "server/zerg/middleware/security_headers.py",
+  "server/zerg/middleware/demo_guard.py",
+  "server/zerg/services/runner_auth.py",
+  "engine/src/sign_in.rs",
+]
+
+[[repos.longhouse.blocking]]
+area = "billing/provisioning"
+paths = [
+  "server/zerg/routers/internal_deployments.py",
+  "scripts/lib/hosted-instance.sh",
+  "scripts/lib/review-gate.sh",
+  "scripts/ops/promote-*.sh",
+  "scripts/ops/runtime-deploy.sh",
+  "scripts/ops/release.sh",
+  "scripts/ops/release-artifacts.py",
+  "docker/runtime.dockerfile",
+  "docker/entrypoint.sh",
+]
+
+[[repos.longhouse.blocking]]
+area = "CI/workflows/secrets"
+paths = [
+  ".github/workflows/**",
+  ".github/actions/**",
+  ".github/path-filters.yml",
+  ".github/CODEOWNERS",
+  ".gitleaks.toml",
+  ".pre-commit-config.yaml",
+  "scripts/ci/setup-deploy-ssh.sh",
+  "scripts/ci/export-hosted-instance-env.sh",
+  "scripts/ops/review_gate.py",
+  "scripts/ops/review-policy.toml",
+  "scripts/ops/check-push-readiness.sh",
+]
+
+[[repos.longhouse.blocking]]
+area = "engine storage/shipper/state"
+paths = [
+  "engine/src/storage_v2_shipper.rs",
+  "engine/src/shipping/**",
+  "engine/src/state/**",
+  "engine/src/pipeline/**",
+  "engine/src/outbox.rs",
+  "engine/src/hook_outbox.rs",
+  "engine/src/raw_records.rs",
+  "engine/src/durability_audit.rs",
+  "engine/src/watcher.rs",
+  "engine/src/cursor_store.rs",
+  "engine/src/commands/cmd_ship.rs",
+  "server/zerg/services/shipper/**",
+  "server/zerg/routers/agents_storage_v2.py",
+  "server/zerg/services/storage_v2_*.py",
+  "server/zerg/services/write_serializer.py",
+  "server/zerg/services/write_backpressure.py",
+  "server/zerg/catalogd/**",
+]
+
+[[repos.longhouse.blocking]]
+area = "binding/liveness/control authority"
+paths = [
+  "engine/src/*binding*.rs",
+  "engine/src/managed_identity*.rs",
+  "engine/src/managed_source_claim.rs",
+  "engine/src/managed_launch_*.rs",
+  "engine/src/managed_*_scan.rs",
+  "engine/src/turn_claims.rs",
+  "engine/src/process_identity.rs",
+  "engine/src/control_channel.rs",
+  "engine/src/*_control.rs",
+  "engine/src/heartbeat.rs",
+  "engine/src/machine_presence.rs",
+  "engine/src/codex_bridge_ownership.rs",
+  "engine/src/permission_gate.rs",
+  "engine/src/claude_permission_gate.rs",
+  "server/zerg/services/*control*.py",
+  "server/zerg/services/*liveness*.py",
+  "server/zerg/services/session_state_*.py",
+  "server/zerg/services/session_runtime*.py",
+  "server/zerg/services/session_current_control.py",
+  "server/zerg/services/live_*.py",
+  "server/zerg/services/machine_state.py",
+  "server/zerg/services/runtime_admission.py",
+  "server/zerg/routers/agents_control.py",
+  "server/zerg/routers/heartbeat.py",
+  "server/zerg/routers/presence.py",
+  "server/zerg/routers/agents_machine_presence.py",
+  "server/zerg/routers/permission_gate.py",
+]
+
+# --- cipher982/longhouse-control-plane -----------------------------------------
+# The hosted signup/billing/provisioning app, its deploy, and CI. The provider
+# factory is not on the list.
+
+[[repos.longhouse-control-plane.blocking]]
+area = "billing/provisioning"
+paths = [
+  "control_plane/**",
+  "deploy/**",
+  "Dockerfile",
+  "docker-compose.yml",
+]
+
+[[repos.longhouse-control-plane.blocking]]
+area = "CI/workflows/secrets"
+paths = [
+  ".github/**",
+]
