@@ -3170,6 +3170,30 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
             "reason": "predecessor_not_open_for_this_identity",
             "predecessor_exists": False,
             "expected_predecessor": str(missing_predecessor),
+            "open_source_epochs": [],
+        }
+
+        # Same refusal against an identity that has an open epoch: it names it,
+        # so a shipper whose registry was lost can adopt it instead of stalling.
+        unknown_predecessor = uuid4()
+        with pytest.raises(CatalogRemoteError) as unknown_predecessor_error:
+            await client.call(
+                "storage.raw_object.commit.v2",
+                _raw_params(
+                    epoch=uuid4(),
+                    predecessor=unknown_predecessor,
+                    session_id=session_id,
+                    start=0,
+                    end=6,
+                    records=(b"orphan\n",),
+                    sealed_at=now,
+                ),
+            )
+        assert unknown_predecessor_error.value.details == {
+            "reason": "predecessor_not_open_for_this_identity",
+            "predecessor_exists": False,
+            "expected_predecessor": str(unknown_predecessor),
+            "open_source_epochs": [str(epoch)],
         }
 
         raw = _raw_params(

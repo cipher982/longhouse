@@ -9257,12 +9257,18 @@ class CatalogStore:
                             predecessor_row["state"] != "open",
                         )
                     ):
+                        # Name the epoch that IS open. A shipper whose local
+                        # registry was lost or salvaged can name a predecessor
+                        # the host never saw; without this it can prove only
+                        # that its own lineage is wrong, not what to adopt, and
+                        # the source stays blocked until a human intervenes.
                         return _source_epoch_conflict(
                             connection,
                             reason="predecessor_not_open_for_this_identity",
                             predecessor_exists=predecessor_row is not None,
                             expected_predecessor=expected_predecessor,
                             predecessor_state=(predecessor_row["state"] if predecessor_row is not None else None),
+                            open_source_epochs=[str(row["source_epoch"]) for row in open_rows],
                         )
                     if any(row["source_epoch"] != expected_predecessor for row in open_rows):
                         return _source_epoch_conflict(
