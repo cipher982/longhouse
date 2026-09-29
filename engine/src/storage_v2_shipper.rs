@@ -409,7 +409,13 @@ fn prepare_next_envelope_with_limit(
         return Ok(None);
     }
     let session_id_override = durable_session_id.as_deref();
-    let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
+    let legacy_offset = legacy_offset_for_adoption(
+        conn,
+        provider,
+        &opaque_source_id,
+        &path_text,
+        &canonical_path,
+    )?;
     let source_revision =
         if provider.eq_ignore_ascii_case("omp") || provider.eq_ignore_ascii_case("pi") {
             pi_lineage_source_revision(path)?
@@ -4619,6 +4625,27 @@ impl TryFrom<PersistedMediaObject> for ParsedMediaObject {
             bytes,
         })
     }
+}
+
+/// The legacy cursor's one job is to seed a source's first storage-v2 epoch,
+/// so it is judged once, when the source has none. After that the epoch owns
+/// the position (`observe_source` ignores this value for a source it already
+/// tracks, and a replacement epoch starts at zero whatever it says). Judging it
+/// on every scan proved nothing new, and for a source whose file was rewritten
+/// in place the answer never changes: the stored identity names the old file,
+/// so it warned "replaying from zero" on every pass, forever, while nothing was
+/// replayed.
+fn legacy_offset_for_adoption(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+    path_text: &str,
+    path: &Path,
+) -> Result<u64> {
+    if source_epoch::active_source_epoch(conn, provider, opaque_source_id)?.is_some() {
+        return Ok(0);
+    }
+    validated_legacy_offset(conn, path_text, path)
 }
 
 fn validated_legacy_offset(conn: &Connection, path_text: &str, path: &Path) -> Result<u64> {
@@ -10748,6 +10775,162 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(prepared.range_start, 0);
+    }
+
+    /// Run `run` and return the warnings it logged on this thread.
+    fn warnings_during<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Sink {
+                self.clone()
+            }
+        }
+        let sink = Sink::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let output = tracing::subscriber::with_default(subscriber, run);
+        let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        (output, text.lines().map(str::to_string).collect())
+    }
+
+    const REPLAY_WARNING: &str = "replaying storage-v2 source from zero";
+
+    /// The legacy cursor seeds a source's first epoch. It is judged there, and
+    /// never again: once the source has an epoch and the lane sits at the file
+    /// head, a scan that revisits it has nothing to decide about the cursor.
+    #[test]
+    fn an_unproven_legacy_cursor_is_judged_at_adoption_and_never_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let replacement = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"jello\"}}\n";
+        let second = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"world\"}}\n";
+        fs::write(&path, [first.as_slice(), second.as_slice()].concat()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let canonical = fs::canonicalize(&path).unwrap();
+        FileState::new(&conn)
+            .set_offset(
+                &canonical.to_string_lossy(),
+                first.len() as u64,
+                "018f0c3a-7b2d-7f10-8a11-123456789abc",
+                "provider-session",
+                "claude",
+            )
+            .unwrap();
+        // Truncate and regrow the same file: the cursor no longer holds.
+        fs::write(&path, [replacement.as_slice(), second.as_slice()].concat()).unwrap();
+
+        let (adopted, warnings) = warnings_during(|| {
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                .unwrap()
+                .unwrap()
+        });
+        assert_eq!(adopted.range_start, 0, "an unproven cursor replays");
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|line| line.contains(REPLAY_WARNING))
+                .count(),
+            1,
+            "the adoption says so once: {warnings:?}"
+        );
+        acknowledge_prepared(&mut conn, &adopted);
+
+        // Every later scan finds the lane at the head of a source it tracks.
+        let (passes, warnings) = warnings_during(|| {
+            (0..5)
+                .map(|_| {
+                    prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        });
+        assert!(passes.iter().all(Option::is_none), "nothing left to ship");
+        assert!(
+            warnings.is_empty(),
+            "a tracked source is not re-judged on every scan: {warnings:?}"
+        );
+    }
+
+    /// A provider that rewrites a transcript in place (new inode, same
+    /// content) leaves the legacy cursor naming a file that is gone. The engine
+    /// opens a replacement epoch for it and ships it once; the stale cursor
+    /// must not keep the source in a warn-and-recheck loop afterwards.
+    #[test]
+    fn a_file_rewritten_in_place_does_not_leave_the_legacy_cursor_warning_every_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let second = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"world\"}}\n";
+        let content = [first.as_slice(), second.as_slice()].concat();
+        fs::write(&path, &content).unwrap();
+        let head = content.len() as u64;
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let canonical = fs::canonicalize(&path).unwrap();
+        FileState::new(&conn)
+            .set_offset(
+                &canonical.to_string_lossy(),
+                head,
+                "018f0c3a-7b2d-7f10-8a11-123456789abc",
+                "provider-session",
+                "claude",
+            )
+            .unwrap();
+        // The proven cursor is adopted at the head, so the source is current.
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                .unwrap()
+                .is_none()
+        );
+
+        // The provider rewrites the file in place: same bytes, new inode.
+        let rewrite = dir.path().join("rewrite.tmp");
+        fs::write(&rewrite, &content).unwrap();
+        fs::rename(&rewrite, &path).unwrap();
+
+        let (replacement, warnings) = warnings_during(|| {
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                .unwrap()
+                .expect("a replaced file is shipped again from the start")
+        });
+        assert_eq!(replacement.range_start, 0);
+        acknowledge_prepared(&mut conn, &replacement);
+
+        let (passes, later) = warnings_during(|| {
+            (0..5)
+                .map(|_| {
+                    prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            passes.iter().all(Option::is_none),
+            "the lane is at the head"
+        );
+        let all: Vec<_> = warnings.iter().chain(later.iter()).collect();
+        assert!(
+            all.is_empty(),
+            "the epoch owns the position; the old cursor is not consulted: {all:?}"
+        );
     }
 
     #[test]
