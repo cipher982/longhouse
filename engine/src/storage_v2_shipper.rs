@@ -12134,6 +12134,24 @@ mod tests {
                 before,
                 "a file still on disk is not evidence that its run is alive"
             );
+
+            // A source that did grow still ships, and growth alone does not
+            // make its exited run live either.
+            let mut file = fs::OpenOptions::new().append(true).open(&omp_path).unwrap();
+            writeln!(
+                file,
+                "{{\"type\":\"message\",\"id\":\"late-1\",\"parentId\":null,\"timestamp\":\"2026-09-09T00:00:09.000Z\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"more\"}}]}}}}"
+            )
+            .unwrap();
+            drop(file);
+            let window = WalWindow::open(&conn);
+            assert!(
+                prepare_next_envelope(&mut conn, &capabilities(), &omp_path, "omp", None)
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(window.cost(&conn).commits > 0);
+            assert_eq!(bindings(&conn), before);
         });
     }
 }

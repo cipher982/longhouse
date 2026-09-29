@@ -16,9 +16,9 @@ use rusqlite::{Connection, OptionalExtension};
 /// along with the process.
 ///
 /// The state is liveness evidence, and only liveness evidence writes it: the
-/// managed scan's process observation (`set_state_for_owner`), a released
-/// launch claim (`mark_exited`), or a new or changed ownership assertion, which
-/// starts `active`. Finding the transcript file again is ownership evidence at
+/// managed scan's process observation of a run, a launch claim being projected
+/// (`set_state_for_owner`) or released (`mark_exited`), or a new or changed
+/// ownership assertion, which starts `active`. Finding the transcript file again is ownership evidence at
 /// most, never liveness: a file still sitting on disk says nothing about whether
 /// the run that wrote it is alive, so rediscovery neither revives an exited
 /// binding nor rewrites an unchanged one (`bind_for_thread`).
@@ -75,8 +75,8 @@ impl<'a> SessionBinding<'a> {
             )
             .optional()?;
         if recorded.is_some_and(|(recorded_session, recorded_provider, recorded_thread)| {
-            recorded_session == session_id
-                && recorded_provider == provider
+            recorded_session.eq_ignore_ascii_case(session_id)
+                && recorded_provider.eq_ignore_ascii_case(provider)
                 && recorded_thread.as_deref() == provider_session_id
         }) {
             return Ok(());

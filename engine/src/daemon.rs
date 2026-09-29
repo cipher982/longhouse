@@ -5802,6 +5802,8 @@ const STARVED_LIVE_TRANSCRIPT_STALE_SECONDS: i64 = 120;
 /// stopped owning its source, but ownership ending must not cancel replication
 /// debt: the binding still says which session owns the file, so it stays in the
 /// reconciler's working set until its tail ships. A live one is active again.
+/// Only OMP and Pi runs are observed this way; the other providers' bindings
+/// move on their launch claims (`managed_source_claim`).
 ///
 /// The scan restates this every pass, so a binding already in the observed
 /// state is left alone. Several state files can name one transcript (a resumed

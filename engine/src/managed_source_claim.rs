@@ -587,11 +587,19 @@ fn project_claim(conn: &rusqlite::Connection, claim: &SourceClaim) -> Result<()>
         };
     }
     let stable_path = crate::storage_v2_shipper::stable_source_path(path);
-    crate::state::session_binding::SessionBinding::new(conn).bind_for_thread(
-        &stable_path.to_string_lossy(),
+    let stable_path = stable_path.to_string_lossy();
+    let binding = crate::state::session_binding::SessionBinding::new(conn);
+    binding.bind_for_thread(&stable_path, &claim.session_id, &claim.provider, native_id)?;
+    // A launch that holds a live claim on the path is running again, so a
+    // binding its earlier launch retired is active. Nothing else retires these
+    // providers' bindings but a released claim, and a claim cannot be both, so
+    // this cannot flap. The OMP family is left to its process observation:
+    // a claim outlives a killed launcher by up to `CLAIM_TTL`, and reviving on
+    // it would fight the observation that says the run is gone.
+    binding.set_state_for_owner(
+        &stable_path,
         &claim.session_id,
-        &claim.provider,
-        native_id,
+        crate::state::session_binding::BINDING_STATE_ACTIVE,
     )
 }
 
@@ -753,6 +761,46 @@ mod tests {
                 "a retired tombstone is removed, not accumulated"
             );
             assert!(Path::new(&claimed_path).exists() || !claimed_path.is_empty());
+        });
+    }
+
+    #[test]
+    fn a_new_claim_reactivates_a_retired_binding_except_for_the_omp_family() {
+        let dir = tempfile::tempdir().unwrap();
+        with_home(&dir.path().join("longhouse"), || {
+            let db_path = dir.path().join("agent/longhouse-shipper.db");
+            let conn = crate::state::db::open_db(Some(&db_path)).expect("open agent db");
+            let state_of = |session_id: &str| -> String {
+                conn.query_row(
+                    "SELECT state FROM session_binding WHERE session_id = ?1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .expect("the claim is projected")
+            };
+            for (provider, revived) in [("codex", true), ("omp", false)] {
+                let source = dir.path().join(format!("{provider}.jsonl"));
+                std::fs::write(&source, b"{}\n").unwrap();
+                let session_id = uuid::Uuid::new_v4().to_string();
+                reserve(&session_id, provider, &source, dir.path(), None, None).expect("claim");
+                confirm_identity(&session_id, provider, &source, "native-1", None, None)
+                    .expect("bind");
+                project_claims(&db_path).expect("project");
+                release(&session_id).expect("release");
+                project_claims(&db_path).expect("retire");
+                assert_eq!(state_of(&session_id), "exited");
+
+                // The same session launches again on the same path.
+                reserve(&session_id, provider, &source, dir.path(), None, None).expect("claim");
+                confirm_identity(&session_id, provider, &source, "native-1", None, None)
+                    .expect("bind");
+                project_claims(&db_path).expect("project again");
+                assert_eq!(
+                    state_of(&session_id),
+                    if revived { "active" } else { "exited" },
+                    "{provider}"
+                );
+            }
         });
     }
 
