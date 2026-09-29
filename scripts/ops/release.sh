@@ -15,7 +15,10 @@ Cuts a stable Longhouse release:
      Note: this is the release version, not the per-commit build identity.
      Build identity advances on every commit; release version only moves
      when you run this script.
-   2. Commits the versioned candidate locally and runs the full validation.
+   2. Commits the versioned candidate locally and runs the full validation
+      (`make test-ci`) under the shared heavy-build lock. Only this step holds
+      the lock; the rest of the release waits on GitHub, so other agents' builds
+      are not blocked for the ~half hour that takes.
    3. Pushes the validated candidate to main.
    4. Waits for exact-SHA CI, deploy (including hosted QA), installer, and live-surface gates.
    5. Creates the GitHub release with tag VERSION (fires publish.yml + local-runtime-release.yml).
@@ -132,8 +135,44 @@ fi
 BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 echo "Versioned candidate: ${BUMP_SHA:0:10}"
 
+# The validation is the one heavy step of a release; everything after it waits on
+# GitHub. Hold the machine-wide heavy-build lock for this step only, so other
+# agents can build while the gates and notarization run. An outer
+# `lockf <lock> make release` wrapper already holds it (taking it again would
+# deadlock on ourselves), so detect that and just run.
+HEAVY_BUILD_LOCK="${LONGHOUSE_HEAVY_BUILD_LOCK:-/tmp/agents/longhouse-heavy-build.lock}"
+
+heavy_lock_held_by_ancestor() {
+  local pid=$$ command first
+  while [[ -n "$pid" && "$pid" -gt 1 ]]; do
+    command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+    first="${command%% *}"
+    # argv[0] must be lockf itself: a shell whose -c text merely mentions it is not a holder.
+    [[ "${first##*/}" == lockf && "$command" == *"$HEAVY_BUILD_LOCK"* ]] && return 0
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+  done
+  return 1
+}
+
+run_heavy() {
+  if ! command -v lockf >/dev/null 2>&1 || heavy_lock_held_by_ancestor; then
+    "$@"
+    return
+  fi
+  mkdir -p "$(dirname "$HEAVY_BUILD_LOCK")"
+  echo "Waiting for the heavy-build lock ($HEAVY_BUILD_LOCK) if another build holds it..."
+  lockf "$HEAVY_BUILD_LOCK" "$@"
+}
+
+# The isolated guest defaults to 2 CPU / 4 GiB, sized for cube's shared pods. A
+# release holds the lock alone on a 16-core laptop; the 4 GiB ceiling is what
+# OOM-killed rustc mid-validation on 2026-09-29 (v0.1.58) after ~30 minutes of
+# swap thrash. Callers can still override either value.
+export LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}"
+export LONGHOUSE_TEST_MEMORY="${LONGHOUSE_TEST_MEMORY:-8g}"
+
 echo "Running full release validation on the exact candidate commit..."
-(cd "$ROOT" && make test-ci)
+run_heavy bash -c 'cd "$1" && make test-ci' _ "$ROOT"
 
 if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
   echo "Release validation changed tracked files. Commit the generated updates, then rerun the same release." >&2

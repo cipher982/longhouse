@@ -13,10 +13,26 @@ SOURCE = (ROOT / "scripts" / "ops" / "release.sh").read_text(encoding="utf-8")
 def test_full_validation_gates_candidate_push() -> None:
     bump = SOURCE.index("bump-my-version bump")
     commit = SOURCE.index('git -C "$ROOT" commit')
-    validation = SOURCE.index('(cd "$ROOT" && make test-ci)')
+    validation = SOURCE.index("make test-ci'")
     push = SOURCE.index('git -C "$ROOT" push')
 
     assert bump < commit < validation < push
+
+
+def test_only_the_validation_holds_the_heavy_build_lock() -> None:
+    validation = SOURCE.index("run_heavy bash -c 'cd \"$1\" && make test-ci'")
+    gates = SOURCE.index('echo "Waiting for pre-release exact-SHA gates')
+
+    # The lock is taken by the validation step alone: never around the gate,
+    # publish, or notarization waits that follow it.
+    assert SOURCE.count("run_heavy ") == 1  # the one call; its definition is run_heavy()
+    assert validation < gates
+    assert "heavy_lock_held_by_ancestor" in SOURCE  # an outer lockf wrapper must not deadlock us
+
+
+def test_validation_guest_is_sized_for_the_laptop_not_cubes_shared_pods() -> None:
+    assert 'LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}"' in SOURCE
+    assert 'LONGHOUSE_TEST_MEMORY="${LONGHOUSE_TEST_MEMORY:-8g}"' in SOURCE
 
 
 def test_pre_release_gate_precedes_github_release_and_skips_only_release_evidence() -> None:
@@ -74,6 +90,8 @@ def test_release_fetches_remote_branch_before_building_changelog() -> None:
 
 if __name__ == "__main__":
     test_full_validation_gates_candidate_push()
+    test_only_the_validation_holds_the_heavy_build_lock()
+    test_validation_guest_is_sized_for_the_laptop_not_cubes_shared_pods()
     test_pre_release_gate_precedes_github_release_and_skips_only_release_evidence()
     test_final_launch_readiness_also_skips_only_the_demo()
     test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha()
