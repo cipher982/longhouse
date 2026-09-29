@@ -175,6 +175,12 @@ mod tests {
                 "run_check_tick",
                 "the machine would never learn it is running a stale binary",
             ),
+            (
+                "wake_blocked_for_new_engine",
+                include_str!("pending_source_envelope.rs"),
+                "wake_blocked_for_new_engine",
+                "a fixed engine would wait out the old engine's backoff before re-judging blocked work",
+            ),
         ] {
             assert!(
                 producer_source.contains(producer),

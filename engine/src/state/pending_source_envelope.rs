@@ -630,6 +630,25 @@ pub fn defer_reexamination(conn: &Connection, source_epoch: Uuid) -> Result<()> 
     Ok(())
 }
 
+/// Make every blocked row due now, once, when an engine starts.
+///
+/// A block is a verdict by whichever engine wrote it, and its wake time is
+/// backoff earned under that verdict. The engine that starts next may know how
+/// to resolve what the last one could not; on 2026-09-28 thirty sources sat
+/// blocked behind a recovery the running build did not have, and installing the
+/// fix would still have left each of them waiting out a six-hour floor. A
+/// restart is the only moment a new verdict can appear, so it is the moment the
+/// clock resets. Rows that remain unresolved go straight back to their backoff.
+pub fn wake_blocked_for_new_engine(conn: &Connection) -> Result<usize> {
+    let changed = conn.execute(
+        "UPDATE pending_source_envelope
+         SET wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE blocked_at IS NOT NULL AND wake_at > ?1",
+        [sortable_wake_at(&Utc::now())],
+    )?;
+    Ok(changed)
+}
+
 pub fn source_is_blocked(
     conn: &Connection,
     provider: &str,
@@ -1239,14 +1258,22 @@ pub fn attach_host_authority_predecessor(
             else {
                 bail!("local predecessor is unavailable for host-authority replacement");
             };
+            // A predecessor that claims progress is safe to step over only when
+            // the host holds at least that much under the epoch it has open.
+            // A salvaged registry mints epochs whose cursor was adopted from
+            // the file rather than shipped, so the claim is real but the host
+            // has never heard the epoch's name; the frozen successor re-sends
+            // its own range, so nothing the claim covered is lost. A claim the
+            // host does not corroborate stays blocked.
+            let host_position = to_sql_u64(host_accepted_through)?;
             if provider != local.0
                 || opaque_source_id != local.1
                 || ended_at.is_none()
-                || position != Some(0)
+                || !position.is_some_and(|position| (0..=host_position).contains(&position))
                 || has_pending != 0
                 || has_raw != 0
             {
-                bail!("local predecessor is not an empty ended zero-progress epoch");
+                bail!("local predecessor is not an ended epoch whose progress the host holds");
             }
         }
     } else if local.7 != "initial" {
@@ -2267,6 +2294,50 @@ mod tests {
     }
 
     #[test]
+    fn a_new_engine_re_judges_blocked_rows_without_waiting_out_the_old_backoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let blocked = Uuid::new_v4();
+        let ready = Uuid::new_v4();
+        register_epoch(&conn, blocked, "codex");
+        register_epoch(&conn, ready, "codex");
+        persist_or_load(&mut conn, &candidate(blocked, "/tmp/blocked.jsonl")).unwrap();
+        persist_or_load(&mut conn, &candidate(ready, "/tmp/ready.jsonl")).unwrap();
+        quarantine(
+            &mut conn,
+            blocked,
+            "source_epoch_conflict_unresolved",
+            "old verdict",
+        )
+        .unwrap();
+        assert!(
+            !retry_paths(&conn)
+                .unwrap()
+                .iter()
+                .any(|p| p.source_path == "/tmp/blocked.jsonl"),
+            "the unresolved floor postpones the row for hours"
+        );
+
+        assert_eq!(super::wake_blocked_for_new_engine(&conn).unwrap(), 1);
+
+        assert!(
+            retry_paths(&conn)
+                .unwrap()
+                .iter()
+                .any(|p| p.source_path == "/tmp/blocked.jsonl"),
+            "a restarted engine looks at blocked work now"
+        );
+        // Looking again and finding nothing to do restores the backoff.
+        defer_reexamination(&conn, blocked).unwrap();
+        assert!(!retry_paths(&conn)
+            .unwrap()
+            .iter()
+            .any(|p| p.source_path == "/tmp/blocked.jsonl"));
+        // Only blocked rows are touched.
+        assert_eq!(super::wake_blocked_for_new_engine(&conn).unwrap(), 1);
+    }
+
+    #[test]
     fn host_authority_recovery_completes_an_existing_predecessor_without_a_lane() {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
@@ -2407,7 +2478,7 @@ mod tests {
         .unwrap_err();
         assert!(error
             .to_string()
-            .contains("local predecessor is not an empty ended zero-progress epoch"));
+            .contains("local predecessor is not an ended epoch whose progress the host holds"));
         conn.execute(
             "DELETE FROM cursor_store_raw_record WHERE source_epoch = ?1",
             [stale.to_string()],
@@ -2447,6 +2518,141 @@ mod tests {
         let repaired = super::load_for_epoch(&conn, current).unwrap().unwrap();
         assert!(repaired.blocked_at.is_none());
         assert_eq!(repaired.request_body_zstd, b"replacement-body");
+    }
+
+    /// A successor blocked behind a predecessor the host has never seen, where
+    /// that predecessor is an ended local epoch claiming `stale_position`.
+    fn blocked_successor_of_phantom_predecessor(
+        dir: &tempfile::TempDir,
+        stale_position: i64,
+    ) -> (rusqlite::Connection, Uuid, Uuid, PendingSourceEnvelope) {
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let current = Uuid::new_v4();
+        let stale = Uuid::new_v4();
+        register_epoch(&conn, current, "codex");
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, '2026-09-28T00:00:00Z')",
+            [current.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 predecessor_epoch, start_reason, max_observed_len,
+                 source_revision, bound_session_id, created_at, updated_at,
+                 ended_at, end_reason
+             ) SELECT ?1, provider, opaque_source_id, file_incarnation,
+                      NULL, 'initial', max_observed_len, source_revision,
+                      bound_session_id, created_at, updated_at,
+                      '2026-09-28T00:00:00Z', 'replacement'
+               FROM source_epoch_registry WHERE source_epoch = ?2",
+            params![stale.to_string(), current.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', ?2, '2026-08-31T00:00:00Z')",
+            params![stale.to_string(), stale_position],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_registry
+             SET predecessor_epoch = ?1, start_reason = 'replacement'
+             WHERE source_epoch = ?2",
+            params![stale.to_string(), current.to_string()],
+        )
+        .unwrap();
+        persist_or_load(
+            &mut conn,
+            &candidate(current, "/tmp/rewritten-rollout.jsonl"),
+        )
+        .unwrap();
+        quarantine(
+            &mut conn,
+            current,
+            "source_epoch_conflict_unresolved",
+            "predecessor the host has never seen",
+        )
+        .unwrap();
+        let pending = super::load_for_epoch(&conn, current).unwrap().unwrap();
+        (conn, current, stale, pending)
+    }
+
+    #[test]
+    fn host_authority_recovery_steps_over_a_predecessor_whose_progress_the_host_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, current, stale, pending) =
+            blocked_successor_of_phantom_predecessor(&dir, 78);
+        let host = Uuid::new_v4();
+
+        attach_host_authority_predecessor(
+            &mut conn,
+            current,
+            host,
+            78,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            b"replacement-body",
+            r#"{"proof":"host manifest"}"#,
+        )
+        .unwrap();
+
+        let predecessor: String = conn
+            .query_row(
+                "SELECT predecessor_epoch FROM source_epoch_registry WHERE source_epoch = ?1",
+                [current.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(predecessor, host.to_string());
+        let host_lane: i64 = conn
+            .query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [host.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(host_lane, 78);
+        // The phantom is kept, ended, as the evidence of what local state said.
+        let stale_ended: bool = conn
+            .query_row(
+                "SELECT ended_at IS NOT NULL FROM source_epoch_registry WHERE source_epoch = ?1",
+                [stale.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stale_ended);
+        let repaired = super::load_for_epoch(&conn, current).unwrap().unwrap();
+        assert!(repaired.blocked_at.is_none());
+        assert_eq!(repaired.request_body_zstd, b"replacement-body");
+    }
+
+    #[test]
+    fn host_authority_recovery_refuses_a_predecessor_claiming_more_than_the_host_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut conn, current, _stale, pending) =
+            blocked_successor_of_phantom_predecessor(&dir, 100);
+
+        let error = attach_host_authority_predecessor(
+            &mut conn,
+            current,
+            Uuid::new_v4(),
+            78,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            b"replacement-body",
+            r#"{"proof":"host manifest"}"#,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("local predecessor is not an ended epoch whose progress the host holds"));
+        let still_blocked = super::load_for_epoch(&conn, current).unwrap().unwrap();
+        assert!(still_blocked.blocked_at.is_some());
     }
 
     #[test]

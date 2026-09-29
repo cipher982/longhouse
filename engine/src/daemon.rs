@@ -983,6 +983,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         ),
     }
 
+    // 3b. A block is the last engine's verdict, not this one's. Re-judge every
+    // blocked source now instead of waiting out backoff earned under old logic.
+    match crate::state::pending_source_envelope::wake_blocked_for_new_engine(&conn) {
+        Ok(woken) if woken > 0 => {
+            tracing::info!(
+                woken,
+                "Blocked sources due for re-examination by this engine"
+            )
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(
+            error = %format!("{error:#}"),
+            "Could not wake blocked sources; they keep their existing schedule"
+        ),
+    }
+
     // 4. Create HTTP client and settle the one transcript lane this engine has.
     // Storage-v2 is not a preference here: it is the only shipping protocol the
     // Machine Agent still implements. A host that cannot accept it gets a

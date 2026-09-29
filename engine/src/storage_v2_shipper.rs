@@ -1516,15 +1516,32 @@ async fn reexamine_blocked_source(
     Ok(false)
 }
 
+/// The single open host epoch a lineage conflict discloses, when adopting it is
+/// the recovery.
+///
+/// Two refusals mean "my registry is not the host's registry": an initial epoch
+/// arriving while the host already has one open, and a predecessor the host has
+/// never seen. Both come from a local registry that was lost, salvaged or
+/// rebuilt, and the host's open epoch is the lineage to adopt in either.
 fn host_open_epoch_from_conflict(
     conflict: &crate::shipping::client::StorageV2Conflict,
 ) -> Option<Uuid> {
-    if conflict
+    let reason = conflict
         .details
         .get("reason")
-        .and_then(serde_json::Value::as_str)
-        != Some("another_epoch_is_already_open_for_this_source")
-    {
+        .and_then(serde_json::Value::as_str);
+    let lineage_is_foreign = match reason {
+        Some("another_epoch_is_already_open_for_this_source") => true,
+        Some("predecessor_not_open_for_this_identity") => {
+            conflict
+                .details
+                .get("predecessor_exists")
+                .and_then(serde_json::Value::as_bool)
+                == Some(false)
+        }
+        _ => false,
+    };
+    if !lineage_is_foreign {
         return None;
     }
     let epochs = conflict.details.get("open_source_epochs")?.as_array()?;
@@ -9781,6 +9798,210 @@ mod tests {
             )
             .unwrap();
         assert_eq!(replacement_host_position, 102);
+        server.await.unwrap();
+    }
+
+    /// 2026-09-28: a Codex upgrade rewrote every rollout in place (new inode,
+    /// same content plus an `ordinal` field). Thirty sources whose local
+    /// registry had been salvaged named a predecessor epoch the host had never
+    /// seen, and the host refused each of them with nothing to adopt. The host
+    /// now names its open epoch, and the engine re-parents onto it.
+    #[tokio::test]
+    async fn replacement_over_a_predecessor_the_host_never_saw_adopts_the_host_open_epoch() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let host_epoch = Uuid::new_v4();
+        let first_line = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let host_accepted_through = first_line.len();
+        let server = tokio::spawn(async move {
+            let mut original: Option<StorageV2Envelope> = None;
+            for request_index in 0..4 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (request_line, body) = read_http_request(&mut socket).await;
+                let (status, response_body) = match request_index {
+                    0 => {
+                        let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                        let phantom = envelope
+                            .predecessor_source_epoch
+                            .clone()
+                            .expect("a rewritten source names the epoch it replaces");
+                        assert_eq!(envelope.range_start, 0);
+                        original = Some(envelope);
+                        (
+                            "409 Conflict",
+                            serde_json::json!({
+                                "detail": {
+                                    "code": "source_epoch_conflict",
+                                    "message": "source range overlaps or conflicts with the registered epoch",
+                                    "details": {
+                                        "reason": "predecessor_not_open_for_this_identity",
+                                        "predecessor_exists": false,
+                                        "expected_predecessor": phantom,
+                                        "open_source_epochs": [host_epoch.to_string()],
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        )
+                    }
+                    1 => (
+                        "404 Not Found",
+                        r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#
+                            .to_string(),
+                    ),
+                    2 => {
+                        assert!(request_line.contains(&host_epoch.to_string()));
+                        let envelope = original.as_ref().unwrap();
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "v": 2,
+                                "source_epoch": {
+                                    "source_epoch": host_epoch.to_string(),
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "range_kind": envelope.range_kind,
+                                    "state": "open",
+                                    "predecessor_source_epoch": null,
+                                    "replaced_by_source_epoch": null,
+                                    "accepted_through": host_accepted_through.to_string(),
+                                },
+                                "objects": [{
+                                    "envelope_id": "host-envelope",
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "source_epoch": host_epoch.to_string(),
+                                    "range_kind": envelope.range_kind,
+                                    "range_start": "0",
+                                    "range_end": host_accepted_through.to_string(),
+                                    "retired_at": null,
+                                }],
+                                "commit_seq": "40",
+                                "observed_at": "2026-09-28T00:00:00Z",
+                            })
+                            .to_string(),
+                        )
+                    }
+                    _ => {
+                        let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                        assert_eq!(
+                            envelope.predecessor_source_epoch.as_deref(),
+                            Some(host_epoch.to_string().as_str())
+                        );
+                        assert_eq!(envelope.range_start, 0);
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "v": 2,
+                                "envelope_id": envelope.expected_envelope_id,
+                                "object_hash": "c".repeat(64),
+                                "commit_seq": "41",
+                                "raw_state": "durable",
+                                "render_state": "ready",
+                                "media_state": "complete",
+                                "missing_media_hashes": [],
+                            })
+                            .to_string(),
+                        )
+                    }
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(&path, first_line).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        // The phantom: a local epoch whose cursor was adopted from the file, so
+        // it claims the whole file durable although the host has never heard
+        // its name.
+        let phantom = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        pending_source_envelope::acknowledge_and_delete(
+            &mut conn,
+            phantom.source_epoch,
+            &phantom.envelope.expected_envelope_id,
+            phantom.range_start,
+            phantom.range_end,
+        )
+        .unwrap();
+
+        // The provider rewrites the transcript in place: new inode, same records.
+        fs::rename(&path, dir.path().join("rewritten.old")).unwrap();
+        let rewritten = [first_line.as_slice(), b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"world\"}}\n".as_slice()].concat();
+        fs::write(&path, &rewritten).unwrap();
+
+        let adopted = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(adopted.bytes_shipped, 0);
+        assert!(adopted.has_more);
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
+
+        let shipped = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(shipped.bytes_shipped, rewritten.len() as u64);
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+
+        let (active_predecessor, active_reason): (String, String) = conn
+            .query_row(
+                "SELECT predecessor_epoch, start_reason FROM source_epoch_registry
+                 WHERE ended_at IS NULL AND provider = 'claude'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(active_predecessor, host_epoch.to_string());
+        assert_eq!(active_reason, "host_authority_reconciled");
+        let phantom_ended: bool = conn
+            .query_row(
+                "SELECT ended_at IS NOT NULL FROM source_epoch_registry WHERE source_epoch = ?1",
+                [phantom.source_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(phantom_ended);
         server.await.unwrap();
     }
 
