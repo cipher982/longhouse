@@ -790,6 +790,8 @@ async fn settle_recovered_dead_claim(
 /// minutes so a turn does not pay for a second process start. A binary that
 /// cannot be asked is assumed current: the launch then fails loudly on its own.
 fn omp_supports_no_ui(omp_bin: &str) -> bool {
+    // no managed identity: this only runs `omp --help` to read the flag list. It
+    // starts no agent and no session, so there is nothing for the overlay to claim.
     const TTL: Duration = Duration::from_secs(600);
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, (Instant, bool)>>,

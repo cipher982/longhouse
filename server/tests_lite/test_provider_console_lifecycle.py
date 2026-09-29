@@ -1101,9 +1101,7 @@ def test_steer_tool_completion_is_read_from_the_tool_output_not_only_content_tex
     setup = {"role": "assistant", "content_text": "sleep 15 && echo LH_CLAUDE_STEER_TOOL_$((40+2))_abc"}
     assert not lifecycle._tool_ran_to_completion([setup], tool_marker=marker, first_marker=first)
     # The user's own message and the first turn's marker do not count.
-    assert not lifecycle._tool_ran_to_completion(
-        [{"role": "user", "content_text": marker}], tool_marker=marker, first_marker=first
-    )
+    assert not lifecycle._tool_ran_to_completion([{"role": "user", "content_text": marker}], tool_marker=marker, first_marker=first)
     assert not lifecycle._tool_ran_to_completion(
         [{"role": "tool", "tool_output_text": f"{marker} {first}"}], tool_marker=marker, first_marker=first
     )
