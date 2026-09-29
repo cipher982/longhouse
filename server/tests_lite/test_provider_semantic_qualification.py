@@ -131,6 +131,33 @@ def test_native_source_digest_refresh_fails_closed_without_model_event(tmp_path:
         semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
 
 
+def test_native_store_model_source_needs_no_jsonl_model_event(tmp_path: Path) -> None:
+    # OpenCode's stream (step_start, text, step_finish) never names the model; the
+    # model comes from the native store and is bound by that record's digest.
+    source_path = tmp_path / "native.jsonl"
+    event = {"type": "step_finish", "part": {"type": "step-finish", "tokens": {"total": 1}}}
+    source_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+    record_digest = "a" * 64
+    observation = {
+        "live_model_evidence": {
+            "source_canary": "opencode_real_print",
+            "result_event": {"model_source": "native_store", "model_source_event_sha256": record_digest},
+            "source_artifacts": [
+                {
+                    "path": str(source_path),
+                    "kind": "provider_jsonl_stream",
+                    "event_type": "step_finish",
+                    "event_sha256": semantic._native_event_digest(event),  # noqa: SLF001
+                }
+            ],
+        }
+    }
+
+    refreshed = semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
+
+    assert refreshed["live_model_evidence"]["result_event"]["model_source_event_sha256"] == record_digest
+
+
 def test_native_source_digest_refresh_rebases_semantic_evidence_paths(tmp_path: Path) -> None:
     invocation_root = tmp_path / "invocation"
     output_root = invocation_root / "qualification-v2"

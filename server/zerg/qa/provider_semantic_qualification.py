@@ -250,7 +250,13 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path, source_ro
     refreshed["source_artifacts"] = updated_sources
     result_event = refreshed.get("result_event")
     model_source_digest = result_event.get("model_source_event_sha256") if isinstance(result_event, dict) else None
-    if isinstance(model_source_digest, str) and model_source_digest not in rewrites:
+    # A model read from a native store (OpenCode's sqlite) is bound by that
+    # record's digest, not by a JSONL event: redaction never rewrites it, and no
+    # JSONL event exists to find. Demanding one made every OpenCode release
+    # qualification end "partial" ("native model source event could not be
+    # selected") from the day the store-backed digest was introduced.
+    jsonl_model_source = not (isinstance(result_event, dict) and result_event.get("model_source") == "native_store")
+    if jsonl_model_source and isinstance(model_source_digest, str) and model_source_digest not in rewrites:
         source_events = [
             event
             for source in updated_sources
