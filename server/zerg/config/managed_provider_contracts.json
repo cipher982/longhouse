@@ -202,7 +202,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a0134ecaafcbfa5b7d44fee38a07938d94a1af91ee9df76a444b89fe4b01e379"
+              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
             }
           ]
         },
@@ -230,7 +230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a0134ecaafcbfa5b7d44fee38a07938d94a1af91ee9df76a444b89fe4b01e379"
+              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
             }
           ]
         },
@@ -1336,7 +1336,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a0134ecaafcbfa5b7d44fee38a07938d94a1af91ee9df76a444b89fe4b01e379"
+              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
             }
           ]
         },
@@ -1364,7 +1364,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a0134ecaafcbfa5b7d44fee38a07938d94a1af91ee9df76a444b89fe4b01e379"
+              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
             },
             {
               "id": "real_print_marker_returned",
@@ -2015,7 +2015,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a0134ecaafcbfa5b7d44fee38a07938d94a1af91ee9df76a444b89fe4b01e379"
+              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
             }
           ]
         },
@@ -3130,7 +3130,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "a0134ecaafcbfa5b7d44fee38a07938d94a1af91ee9df76a444b89fe4b01e379"
+              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
             }
           ]
         },
@@ -4911,7 +4911,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "6e4c4267e5ff681d88104b2f2c6bd48be3b0ad861e60f07cc5ffb7dd8a6a311c"
+      "adapter_digest": "cb6d408136f4e642fd999d31f967fceecbb18ddbb60a4cdd104b977cea2f3830"
     }
   ]
 }

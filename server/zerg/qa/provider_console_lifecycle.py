@@ -443,6 +443,7 @@ def _wait_exact_assistant_marker(
     marker: str,
     *,
     timeout: float = 180,
+    may_repeat: bool = False,
 ) -> list[dict[str, Any]]:
     deadline = time.monotonic() + timeout
     stable_since: float | None = None
@@ -450,9 +451,11 @@ def _wait_exact_assistant_marker(
     while time.monotonic() < deadline:
         matches = _assistant_marker_events(api_url, token, session_id, marker)
         last_count = len(matches)
-        if last_count > 1 or any(event_text(event).count(marker) != 1 for event in matches):
+        # Several replies may each carry the marker once when the provider is
+        # known to answer twice; a marker repeated inside one reply never is.
+        if (last_count > 1 and not may_repeat) or any(event_text(event).count(marker) != 1 for event in matches):
             raise RuntimeError("assistant marker did not converge to one event with exactly one occurrence")
-        if last_count == 1:
+        if last_count >= 1:
             stable_since = stable_since or time.monotonic()
             if time.monotonic() - stable_since >= 2:
                 return matches
@@ -1857,6 +1860,12 @@ def _post_steer(
         time.sleep(1)
 
 
+# OMP moves a running shell command to a background job when a steer arrives and
+# reports the result in a later notice. Told to reply "when the command finishes",
+# its model answers once as the steer lands and again when that notice arrives.
+_STEER_ANSWER_MAY_REPEAT = frozenset({"omp"})
+
+
 def _run_steer_step(
     *,
     api_url: str,
@@ -1930,7 +1939,11 @@ def _run_steer_step(
     ) == str(turn["run_id"])
     flush_for_projection("console-steer-turn")
     try:
-        receipt["steer_marker_answered"] = len(_wait_exact_assistant_marker(api_url, token, session_id, steer_marker, timeout=120)) == 1
+        answers = _wait_exact_assistant_marker(
+            api_url, token, session_id, steer_marker, timeout=120, may_repeat=provider in _STEER_ANSWER_MAY_REPEAT
+        )
+        receipt["steer_marker_answered"] = bool(answers)
+        receipt["steer_answer_events"] = len(answers)
     except RuntimeError as exc:
         receipt["steer_marker_answered"] = False
         receipt["steer_marker_error"] = str(exc)[:300]
@@ -1942,6 +1955,10 @@ def _run_steer_step(
     # The newest events: a long session's first 200 need not include the tool row.
     events = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?anchor=tail&limit=200").get("events") or []
     receipt["tool_ran_to_completion"] = _tool_ran_to_completion(events, tool_marker=tool_marker, first_marker=first_marker)
+    if not receipt["tool_ran_to_completion"]:
+        # Say what was served, so a failure is explained by the receipt alone.
+        receipt["tool_marker_events"] = _tool_marker_rows(events, tool_marker)
+        receipt["served_event_roles"] = sorted({str(event.get("role")) for event in events if isinstance(event, dict)})
     receipt["status"] = "pass" if console_steer_assertion(receipt) else "fail"
     return receipt
 
@@ -1962,6 +1979,20 @@ def _tool_ran_to_completion(events: Iterable[object], *, tool_marker: str, first
         if tool_marker in text and first_marker not in text:
             return True
     return False
+
+
+def _tool_marker_rows(events: Iterable[object], tool_marker: str) -> list[dict[str, object]]:
+    return [
+        {
+            "role": event.get("role"),
+            "tool_name": event.get("tool_name"),
+            "origin": event.get("event_origin"),
+            "in_text": tool_marker in event_text(event),
+            "in_tool_output": tool_marker in str(event.get("tool_output_text") or ""),
+        }
+        for event in events
+        if isinstance(event, dict) and tool_marker in f"{event_text(event)}\n{event.get('tool_output_text') or ''}"
+    ][:5]
 
 
 def _observation_from_receipts(

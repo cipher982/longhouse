@@ -579,6 +579,44 @@ def test_archive_convergence_rejects_duplicate_markers_within_one_reply(monkeypa
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
 
 
+def test_a_provider_that_answers_a_steer_twice_passes_only_when_it_is_known_to(monkeypatch):
+    marker = "LH_OMP_STEERED_abc"
+    twice = [
+        {"id": "first", "role": "assistant", "content_text": marker},
+        {"id": "after-job", "role": "assistant", "content_text": marker},
+    ]
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": twice})
+
+    answers = lifecycle._wait_exact_assistant_marker(
+        "https://runtime.example", "token", "session-1", marker, may_repeat=True
+    )
+    assert [event["id"] for event in answers] == ["first", "after-job"]
+    assert "omp" in lifecycle._STEER_ANSWER_MAY_REPEAT
+    assert "claude" not in lifecycle._STEER_ANSWER_MAY_REPEAT
+    with pytest.raises(RuntimeError, match="exactly one occurrence"):
+        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
+
+    # A marker repeated inside one reply is never a second answer.
+    monkeypatch.setattr(
+        lifecycle, "_request", lambda *_args: {"events": [{"id": "x", "role": "assistant", "content_text": f"{marker}{marker}"}]}
+    )
+    with pytest.raises(RuntimeError, match="exactly one occurrence"):
+        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
+
+
+def test_omp_job_notice_completes_the_steered_tool_and_a_miss_says_what_was_served() -> None:
+    marker = "LH_OMP_STEER_TOOL_42_abc"
+    first = "LH_OMP_STEER_FIRST_abc"
+    notice = {"role": "system", "content_text": f"<system-notice>\nBackground job bg_1 has completed.\n{marker}\n</system-notice>"}
+    assert lifecycle._tool_ran_to_completion([notice], tool_marker=marker, first_marker=first)
+
+    served = [{"role": "assistant", "tool_name": "bash", "content_text": "sleep 15 && echo LH_OMP_STEER_TOOL_$((40+2))_abc"}]
+    assert not lifecycle._tool_ran_to_completion(served, tool_marker=marker, first_marker=first)
+    assert lifecycle._tool_marker_rows([notice, *served], marker) == [
+        {"role": "system", "tool_name": None, "origin": None, "in_text": True, "in_tool_output": False}
+    ]
+
+
 def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch):
     monkeypatch.setattr(
         lifecycle,
