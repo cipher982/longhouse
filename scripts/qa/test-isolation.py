@@ -200,11 +200,30 @@ class ImagePreparation:
     source: str
 
 
+# `make release` rewrites the project's own version in five manifests. The
+# fixture image holds dependencies only (the project is installed editable at
+# test time), so a bump must not change its key: it rebuilt both native images,
+# ~6 min on the critical path of every release's exact-SHA CI.
+OWN_VERSION_LINE = {
+    "server/pyproject.toml": re.compile(rb'(?m)^(version = ")[^"\n]*(")'),
+    "engine/Cargo.toml": re.compile(rb'(?m)^(version = ")[^"\n]*(")'),
+    "server/uv.lock": re.compile(rb'(?m)^(name = "longhouse"\nversion = ")[^"\n]*(")'),
+    "engine/Cargo.lock": re.compile(rb'(?m)^(name = "longhouse-engine"\nversion = ")[^"\n]*(")'),
+    "runner/package.json": re.compile(rb'(?m)^(\s*"version": ")[^"\n]*(")'),
+}
+
+
+def manifest_bytes(name: str) -> bytes:
+    data = (ROOT / name).read_bytes()
+    pattern = OWN_VERSION_LINE.get(name)
+    return pattern.sub(rb"\g<1>0.0.0\g<2>", data, count=1) if pattern else data
+
+
 def manifest_sha256() -> str:
     digest = hashlib.sha256()
     for name in MANIFESTS:
         digest.update(name.encode())
-        digest.update((ROOT / name).read_bytes())
+        digest.update(manifest_bytes(name))
     return digest.hexdigest()
 
 

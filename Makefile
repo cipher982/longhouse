@@ -849,6 +849,7 @@ validate-qa-scripts: ## @internal Every scripts/qa check is reachable or declare
 validate-ops-scripts: ## @internal Ops script contracts (backup/restore retention)
 	@bash scripts/qa/test-zerg-ops.sh
 	@python3 scripts/tests/release.test.py
+	@python3 scripts/tests/test-isolation-image-key.test.py
 	@cd server && uv run python ../scripts/tests/testflight.test.py
 	@python3 scripts/tests/ios-upload-preconditions.test.py
 
