@@ -24,9 +24,13 @@
 # What runs in the guest: it has Docker, make, git, python3 and rsync, and nothing else. `make test*`,
 # `make validate*` and the other goals Makefile dispatches to test-isolation.py run in their disposable
 # container exactly as on the laptop (the first run builds the test image, about 10 minutes, then it is
-# cached), sized by LONGHOUSE_TEST_CPUS / LONGHOUSE_TEST_MEMORY (defaults here: 8 and 16g; the container's
-# xdist workers follow PYTEST_XDIST_WORKERS, default here: the CPU count). Anything else must be
-# self-contained (docker run ...). Never run a provider CLI here.
+# cached), sized by LONGHOUSE_TEST_CPUS (default here: 8; memory follows it, and the container's xdist workers
+# follow PYTEST_XDIST_WORKERS, default here: the CPU count). Pass overrides with --env: this shell's environment
+# is not forwarded. Anything else must be self-contained (docker run ...). Never run a provider CLI here.
+#
+# The guest has no .git of yours: it builds a one-commit repository of the mirrored tree (uncommitted edits
+# included), so a goal that stamps git identity or dirtiness (release, validate-build-identity) would record that
+# synthetic commit. The test lanes never see it (their container gets no .git). Keep those goals on the laptop.
 #
 # Up to CRUNCH_SLOTS runs (default 3) execute at once; a fourth waits for a free slot. Each run has its own
 # directory in the guest's tmpfs; the container image, Cargo dependencies and uv cache live in the image and
@@ -122,7 +126,13 @@ cd "$base/src" || exit 97
 mkdir -p "$base/out" /work/agents/slots
 exec 3<&0
 # Its own session (setsid), so the kill below does not take the watchdog with it before the KILL escalation.
-setsid bash -c 'cat >/dev/null; echo "crunch: client went away; stopping run $2" >&2; kill -INT -- "-$1" 2>/dev/null; sleep 25; kill -KILL -- "-$1" 2>/dev/null' _ "$$" "$run" <&3 &
+# `timeout` runs its command in a process group of its own, which this shell's group kill does not reach, so the
+# run's `timeout` pid is recorded and signalled too (it forwards INT to its group; KILL goes to the whole group).
+setsid bash -c 'cat >/dev/null; echo "crunch: client went away; stopping run $2" >&2
+  t="$(cat "$3" 2>/dev/null)"
+  kill -INT -- "-$1" 2>/dev/null; [ -n "$t" ] && kill -INT "$t" 2>/dev/null
+  sleep 25
+  kill -KILL -- "-$1" 2>/dev/null; [ -n "$t" ] && kill -KILL -- "-$t" 2>/dev/null' _ "$$" "$run" "$base/timeout.pid" <&3 &
 watchdog=$!
 trap 'kill "$watchdog" 2>/dev/null' EXIT
 waited=0; slot=
@@ -139,12 +149,14 @@ if [ ! -d .git ]; then
   git init -q -b main . && git add -A -f && git -c user.name=crunch -c user.email=crunch@localhost commit -q -m "crunch sync $run"
 fi
 export CRUNCH_OUT="$base/out" CRUNCH_RUN="$run" CRUNCH_SLOT="$slot"
-export LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}" LONGHOUSE_TEST_MEMORY="${LONGHOUSE_TEST_MEMORY:-16g}"
-export PYTEST_XDIST_WORKERS="${PYTEST_XDIST_WORKERS:-$LONGHOUSE_TEST_CPUS}"
 eval "$extra_env"
+# Sizing defaults come after --env so an override moves the container and its xdist workers together. The
+# container's memory follows its CPU count when LONGHOUSE_TEST_MEMORY is unset (scripts/qa/test-isolation.py).
+export LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}"
+export PYTEST_XDIST_WORKERS="${PYTEST_XDIST_WORKERS:-$LONGHOUSE_TEST_CPUS}"
 echo "crunch: run $run in slot $slot of $slots (waited ${waited}s); load $(cut -d' ' -f1-3 /proc/loadavg)" >&2
 t0=$SECONDS
-timeout --kill-after=30 "$timeout_s" bash -c "$cmd" 2>&1 | tee "$base/run.log"
+bash -c 'echo $$ > "$1"; shift; exec timeout --kill-after=30 "$@"' _ "$base/timeout.pid" "$timeout_s" bash -c "$cmd" 2>&1 | tee "$base/run.log"
 code=${PIPESTATUS[0]}
 echo "$code" > "$base/exit"
 echo "crunch: command exited $code after $((SECONDS - t0))s" >&2
@@ -216,5 +228,5 @@ case "${1:-}" in
   run) shift; cmd_run "$@" ;;
   status) cmd_status ;;
   ssh) write_ssh_config; exec ssh -F "$SSH_CONFIG" -t crunch ;;
-  *) sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac
