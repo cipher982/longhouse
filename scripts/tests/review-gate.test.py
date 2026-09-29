@@ -475,6 +475,11 @@ class PromotionRuleTests(unittest.TestCase):
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                if "Python-urllib" in self.headers.get("User-Agent", ""):
+                    # What Cloudflare does to the default agent in front of every longhouse.ai host.
+                    self.send_response(403)
+                    self.end_headers()
+                    return
                 if self.path == "/redirect":
                     self.send_response(308)
                     self.send_header("Location", "/api/health")

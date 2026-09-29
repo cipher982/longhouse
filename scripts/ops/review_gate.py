@@ -315,8 +315,10 @@ def promotion_verdicts(repo: str | Path, policy: Policy, served: str, target: st
 
 
 def served_commit(url: str) -> str:
+    # Cloudflare answers the default Python-urllib agent with 403 (error 1010).
+    request = urllib.request.Request(url, headers={"User-Agent": "longhouse-review-gate/1"})
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310 - operator-supplied health URL
+        with urllib.request.urlopen(request, timeout=15) as resp:  # noqa: S310 - operator-supplied health URL
             body = json.load(resp)
     except (OSError, ValueError) as exc:
         raise GateError(f"could not read the served commit from {url}: {exc}")
