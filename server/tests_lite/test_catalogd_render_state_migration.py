@@ -84,6 +84,24 @@ def _add_session(connection, *, render_state: str, generation_state: str | None 
     return session_id
 
 
+def _add_migrating_session(connection) -> str:
+    session_id = _add_session(connection, render_state="pending", generation_state="current")
+    connection.execute(
+        RenderGeneration.__table__.insert().values(
+            generation_id=str(uuid4()),
+            session_id=session_id,
+            parser_revision="p2",
+            ordering_revision="o",
+            state="pending",
+            source_chain_hash="0" * 64,
+            commit_seq=1,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    return session_id
+
+
 def _seed(engine) -> dict[str, str]:
     """One session per shape the migration must and must not touch."""
 
@@ -95,6 +113,9 @@ def _seed(engine) -> dict[str, str]:
             "never_rendered": _add_session(connection, render_state="pending"),
             # A legacy migration still publishing holds a 'pending' generation.
             "migration_in_flight": _add_session(connection, render_state="pending", generation_state="pending"),
+            # Serving a current generation while a legacy migration builds a
+            # second one: the flag reads what is served, so it is ready.
+            "serving_while_migrating": _add_migrating_session(connection),
             # The current generation's every render object has retired.
             "render_retired": _add_session(connection, render_state="pending", generation_state="current", live_object=False),
             "ready": _add_session(connection, render_state="ready", generation_state="current"),
@@ -130,6 +151,7 @@ def test_v5_catalog_regains_render_state_only_where_a_render_is_published(tmp_pa
         "demoted": "ready",
         "never_rendered": "pending",
         "migration_in_flight": "pending",
+        "serving_while_migrating": "ready",
         "render_retired": "pending",
         "ready": "ready",
         "retired": "retired",

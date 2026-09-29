@@ -15710,12 +15710,16 @@ def _session_keeps_published_render(connection, session: Mapping[str, Any] | Non
 
     if session is None or session["render_state"] != "ready" or session["current_render_generation"] is None:
         return False
+    objects = RenderObject.__table__
+    generations = RenderGeneration.__table__
     return (
         connection.execute(
-            select(RenderObject.__table__.c.object_id)
+            select(objects.c.object_id)
+            .select_from(objects.join(generations, generations.c.generation_id == objects.c.generation_id))
             .where(
-                RenderObject.__table__.c.generation_id == session["current_render_generation"],
-                RenderObject.__table__.c.retired_at.is_(None),
+                objects.c.generation_id == session["current_render_generation"],
+                generations.c.state == "current",
+                objects.c.retired_at.is_(None),
             )
             .limit(1)
         ).first()
