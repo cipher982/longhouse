@@ -124,7 +124,7 @@ observability-down: ## Stop the god-view observability stack
 # ---------------------------------------------------------------------------
 # Testing — run the tier that matches your change
 #
-#  make test              backend (server/)          ~7.5min
+#  make test              backend (server/)          ~45s at 8 CPUs, ~2min at the 2-CPU default (ARGS=--shuffle=7 for a seeded order)
 #  make test-ios          iOS (ios/)                 ~1m
 #  make test-ios-session-open iOS tap-to-paint benchmark
 #  make test-mobile-chat  mobile chat focused path
@@ -140,8 +140,8 @@ observability-down: ## Stop the god-view observability stack
 affected-check: ## Show affected paths, CI lanes, and local commands (BASE=... HEAD=... JSON=1 RUN=1)
 	@uv run --no-project --with pyyaml python3 scripts/ci/affected.py $(if $(BASE),--base "$(BASE)",) $(if $(HEAD),--head "$(HEAD)",) $(if $(filter 1 true yes,$(JSON)),--json,) $(if $(filter 1 true yes,$(RUN)),--run,)
 
-test: ## Backend unit tests (tests_lite/, ~7.5min)
-	@cd server && ./run_backend_tests_lite.sh
+test: ## Backend unit tests (tests_lite/, xdist: one worker per guest CPU)
+	@cd server && ./run_backend_tests_lite.sh $(ARGS)
 
 test-backend-single: ## Focused backend test file/node (TEST=tests_lite/test_file.py)
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)

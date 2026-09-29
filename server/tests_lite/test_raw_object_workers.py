@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 import zerg.services.raw_object_workers as worker_module
+from tests_lite._process_helpers import child_is_gone
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import RawObjectWorkerPool
@@ -135,7 +136,7 @@ async def test_stopped_repair_read_leaves_user_and_live_work_available(tmp_path)
         with pytest.raises(RawObjectWorkerError, match="deadline"):
             await pending
         await asyncio.to_thread(stopped.join, 3.0)
-        assert not stopped.is_alive()
+        assert child_is_gone(stopped)
         assert (await pool.read(sealed.object_path, sealed.object_hash, spec.tenant_id, lane="repair")).spec == spec
     finally:
         if pending is not None:
@@ -203,7 +204,7 @@ async def test_failed_operation_cleanup_is_bounded_and_next_operation_recovers(
         else:
             recovered = await pool.read(sealed.object_path, sealed.object_hash, lane="background")
         assert recovered.spec == spec
-        assert not stopped.is_alive()
+        assert child_is_gone(stopped)
     finally:
         monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
         try:
@@ -274,7 +275,7 @@ async def test_broken_pool_cleanup_terminates_surviving_owned_child(tmp_path, mo
 
         recovered = await repair_read()
         assert recovered.spec == spec
-        assert not survivor.is_alive()
+        assert child_is_gone(survivor)
     finally:
         monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
         try:
@@ -310,7 +311,7 @@ async def test_failed_close_reports_failure_and_can_retry_child_cleanup(tmp_path
         assert stopped.is_alive()
         monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
         await asyncio.wait_for(pool.close(), timeout=5.0)
-        assert all(not child.is_alive() for child in children)
+        assert all(child_is_gone(child) for child in children)
     finally:
         monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
         try:

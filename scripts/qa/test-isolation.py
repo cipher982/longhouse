@@ -558,6 +558,9 @@ def test_environment(run_id: str, options: dict[str, str]) -> dict[str, str]:
         "LONGHOUSE_HISTORICAL_MIN_FREE_BYTES": "0",
         "LONGHOUSE_HISTORICAL_MIN_FREE_RATIO": "0",
         "CARGO_BUILD_JOBS": CONTAINER_CPUS,
+        # The backend runner sizes its xdist fanout from this, not from the
+        # Docker VM's CPU count that the guest can see.
+        "LONGHOUSE_TEST_CPUS": CONTAINER_CPUS,
         "LONGHOUSE_DEVICE_ID": f"longhouse-test-{run_id}",
     }
     env.update(options)

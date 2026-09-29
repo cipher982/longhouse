@@ -80,13 +80,23 @@ for arg in "$@"; do
 done
 
 if [ "$has_xdist_arg" -eq 0 ]; then
-    # The suite's SQLite/process-heavy tests are not xdist-safe on cube: even
-    # four workers are killed and leave the scheduler hung until the job
-    # timeout. Serial is deterministic and completes inside the CI budget;
-    # developers can still opt into fanout explicitly while debugging.
-    xdist_workers="${PYTEST_XDIST_WORKERS:-0}"
+    # One xdist worker per guest CPU, whole files per worker (--dist=loadfile).
+    # LONGHOUSE_TEST_CPUS is the guest's --cpus, exported by the isolation
+    # launcher: `-n auto` would count the Docker VM's CPUs instead (16 workers
+    # in an 8-CPU guest, slower and 3x the memory). A worker costs ~0.7 GiB;
+    # the guests are sized at 1 GiB or more per CPU (2/4g, 4/13g, 8/8g).
+    # A single file or node (LONGHOUSE_TEST_TARGET) stays serial: worker
+    # startup costs more than it saves. PYTEST_XDIST_WORKERS overrides either
+    # way, and 0 forces serial.
+    if [ -n "${PYTEST_XDIST_WORKERS:-}" ]; then
+        xdist_workers="$PYTEST_XDIST_WORKERS"
+    elif [ -n "${LONGHOUSE_TEST_TARGET:-}" ]; then
+        xdist_workers=0
+    else
+        xdist_workers="${LONGHOUSE_TEST_CPUS:-1}"
+    fi
     case "$xdist_workers" in
-        ""|0|false|False|FALSE|off|Off|OFF|no|No|NO)
+        ""|0|1|false|False|FALSE|off|Off|OFF|no|No|NO)
             ;;
         *)
             pytest_args+=(-n "$xdist_workers" --dist=loadfile)

@@ -16,6 +16,7 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite._process_helpers import child_is_gone
 from zerg.routers.agents_storage_v2 import _parse_render_spec
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
@@ -1440,7 +1441,7 @@ async def test_stopped_render_repair_worker_does_not_block_live_ingest(tmp_path)
         live = await pool.seal(_spec(), lane="live")
         assert (await pool.read(live.object_path, live.object_hash, lane="user")).spec == _spec()
         await asyncio.to_thread(stopped.join, 3.0)
-        assert not stopped.is_alive()
+        assert child_is_gone(stopped)
         assert (await pool.seal(_spec(), lane="repair")).object_hash == live.object_hash
     finally:
         try:

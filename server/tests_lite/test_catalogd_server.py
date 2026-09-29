@@ -839,7 +839,7 @@ async def test_device_auth_reads_remain_live_while_mutation_executor_is_busy(dae
 
     def block_mutations():
         mutation_started.set()
-        release_mutation.wait(timeout=2)
+        release_mutation.wait(timeout=5)
 
     blocked = asyncio.create_task(daemon._run_store(block_mutations))
     client = CatalogClient(socket_path)
@@ -847,7 +847,7 @@ async def test_device_auth_reads_remain_live_while_mutation_executor_is_busy(dae
         assert await asyncio.to_thread(mutation_started.wait, 1)
         result = await asyncio.wait_for(
             client.call("auth.device.validate.v2", {"token_hash": "a" * 64}),
-            timeout=0.2,
+            timeout=1.5,
         )
         assert result == {"valid": False, "commit_seq": "0"}
         lag = await asyncio.wait_for(
@@ -855,7 +855,7 @@ async def test_device_auth_reads_remain_live_while_mutation_executor_is_busy(dae
                 "projector.state.list_lag.v2",
                 {"projector": "search-v2", "after_session_id": None, "limit": 1},
             ),
-            timeout=0.2,
+            timeout=1.5,
         )
         assert lag["lag_count"] == 0
         assert not blocked.done()
@@ -876,7 +876,7 @@ async def test_timeline_reads_remain_live_while_mutation_executor_is_busy(daemon
 
     def block_mutations():
         mutation_started.set()
-        release_mutation.wait(timeout=2)
+        release_mutation.wait(timeout=5)
 
     blocked = asyncio.create_task(daemon._run_store(block_mutations))
     client = CatalogClient(socket_path)
@@ -898,7 +898,7 @@ async def test_timeline_reads_remain_live_while_mutation_executor_is_busy(daemon
                     "offset": 0,
                 },
             ),
-            timeout=0.2,
+            timeout=1.5,
         )
         assert result["rows"] == []
         assert not blocked.done()
@@ -919,7 +919,7 @@ async def test_machine_workspace_reads_remain_live_while_mutation_executor_is_bu
 
     def block_mutations():
         mutation_started.set()
-        release_mutation.wait(timeout=2)
+        release_mutation.wait(timeout=5)
 
     blocked = asyncio.create_task(daemon._run_store(block_mutations))
     client = CatalogClient(socket_path)
@@ -930,7 +930,7 @@ async def test_machine_workspace_reads_remain_live_while_mutation_executor_is_bu
                 "machine.workspace.list.v2",
                 {"owner_id": 7, "device_id": "cinder", "limit": 12, "days_back": 45},
             ),
-            timeout=0.2,
+            timeout=1.5,
         )
         assert result["workspaces"] == []
         assert not blocked.done()

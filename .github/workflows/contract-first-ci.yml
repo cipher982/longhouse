@@ -409,7 +409,6 @@ jobs:
         shard: [0, 1, 2]
     env:
       LONGHOUSE_TEST_SHARD: ${{ matrix.shard }}/3
-      PYTEST_XDIST_WORKERS: "4"
       PYTEST_ADDOPTS: "--durations=25 --durations-min=2.0"
       # Lean fixture: no browsers or node_modules (docker/test.dockerfile).
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref_lean || needs.prepare-test-image.outputs.image_ref_lean }}
