@@ -343,7 +343,8 @@ jobs:
             --step "qa_live=${{ steps.qa_live.outcome }}" \
             --step "hosted_shipper_bench=${{ steps.hosted_shipper_bench.outcome }}" \
             --step "render_canary=${{ steps.render_canary.outcome }}" \
-            --step "cohort_journey=${{ steps.cohort_journey.outcome }}"
+            --step "cohort_journey=${{ steps.cohort_journey.outcome }}" \
+            --step "cohort_contracts=${{ steps.cohort_contracts.outcome }}"
 
       - name: Stand down, canary superseded
         if: always() && steps.verdict.outputs.verdict == 'superseded'

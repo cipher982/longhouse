@@ -55,6 +55,9 @@ IN_FLIGHT = {"queued", "active"}
 # stale row, and must not turn every later verdict into a supersession.
 IN_FLIGHT_MAX_AGE = timedelta(minutes=15)
 REQUIRED_STEP = "qa_live"
+# Checks that never touch the canary: a failure is the commit's, whatever the
+# canary was doing, so no supersession can excuse it.
+CANARY_INDEPENDENT = ("cohort_contracts",)
 
 
 class EvidenceUnavailable(Exception):
@@ -162,6 +165,10 @@ def decide(
     served = canary_commit(health)
     moved = served is not None and served != expected_sha
 
+    own_failures = [name for name in CANARY_INDEPENDENT if step_outcomes.get(name) in {"failure", "cancelled"}]
+    if own_failures:
+        return Verdict("failed", f"a check that does not depend on the canary failed: {', '.join(own_failures)}", failed, served)
+
     if served == expected_sha:
         build = health.get("build") if isinstance(health, dict) and isinstance(health.get("build"), dict) else {}
         if build.get("dirty") is not False:
@@ -180,7 +187,7 @@ def decide(
             get_deployment=get_deployment,
         )
         evidence_error = None
-    except (EvidenceUnavailable, OSError, ValueError, KeyError) as exc:
+    except (EvidenceUnavailable, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         replaced_by, evidence_error = [], f"{type(exc).__name__}: {exc}"
 
     if moved or replaced_by:
@@ -239,6 +246,10 @@ def emit(result: Verdict, args: argparse.Namespace) -> None:
         lines.append(f"QA steps that reported failure and are not a verdict on {args.expected_sha[:9]}: {', '.join(result.failed_steps)}")
     print("\n".join(lines))
     level = {"passed": "notice", "superseded": "notice", "failed": "error"}[result.verdict]
+    if result.verdict == "superseded" and any(row.get("status") not in {"success", "queued", "active"} for row in result.superseded_by):
+        # No successor QA follows a deployment that did not succeed, so nothing
+        # else will judge the commit this run stood down for.
+        level = "warning"
     print(f"::{level} title=Hosted Live QA {result.verdict}::{result.reason}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -287,6 +298,9 @@ def main(argv: list[str] | None = None) -> int:
     list_deployments, get_deployment = (
         control_plane_readers(control_plane, token) if control_plane and token else (unavailable, unavailable)
     )
+    # Read first: the read can take ~25 s while the canary restarts, and a
+    # deployment submitted meanwhile is part of the run.
+    health = read_health(args.health_url or f"https://{args.subdomain}.longhouse.ai/api/health")
     result = decide(
         expected_sha=args.expected_sha,
         started_at=parse_ts(args.started_at),
@@ -294,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         subdomain=args.subdomain,
         own_deployment=args.own_deployment,
         step_outcomes=outcomes,
-        health=read_health(args.health_url or f"https://{args.subdomain}.longhouse.ai/api/health"),
+        health=health,
         list_deployments=list_deployments,
         get_deployment=get_deployment,
     )

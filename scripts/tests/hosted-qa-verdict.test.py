@@ -14,7 +14,6 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from unittest import mock
 
@@ -220,6 +219,22 @@ class FailedTests(unittest.TestCase):
     def test_unreadable_canary_with_no_deployment_fails(self) -> None:
         result = run(expected=sha("f4eff9d7c"), served=None)
         self.assertEqual(result.verdict, "failed")
+
+    def test_a_canary_independent_check_is_never_excused_by_a_moved_canary(self) -> None:
+        result = run(
+            expected=sha("f4eff9d7c"),
+            served=health(sha("05bfd7be7")),
+            steps={**ALL_GREEN, "cohort_contracts": "failure"},
+        )
+        self.assertEqual(result.verdict, "failed")
+        self.assertEqual(result.failed_steps, ["cohort_contracts"])
+
+    def test_a_malformed_receipt_body_is_missing_evidence_not_a_crash(self) -> None:
+        control = Control([])
+        control.list_deployments = lambda: ["not", "rows"]  # type: ignore[method-assign]
+        result = run(expected=sha("f4eff9d7c"), served=health(sha("f4eff9d7c")), steps={**ALL_GREEN, "qa_live": "failure"}, control=control)
+        self.assertEqual(result.verdict, "failed")
+        self.assertIn("receipts unavailable", result.reason)
 
     def test_cancelled_step_is_a_failure(self) -> None:
         result = run(expected=sha("f4eff9d7c"), served=health(sha("f4eff9d7c")), steps={**ALL_GREEN, "cohort_journey": "cancelled"})
