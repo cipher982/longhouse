@@ -1,270 +1,251 @@
 #!/usr/bin/env python3
-"""Production promotion must trust only a soaked, healthy dogfood deployment."""
+"""promote-production.sh moves nothing unless every gate passes, and says where it stopped.
+
+The real script and the real gates run against a fixture control plane and health
+endpoint served over HTTP, with `gh` and `ssh` stubbed on PATH (see
+scripts/tests/promotion_world.py). The gates themselves are covered one by one in
+promotion-gates.test.py; this file covers the orchestration: the refusal moves
+nothing, --check prints the receipt, the sequence and its recovery, and that no
+tag or GitHub release is involved.
+"""
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-SHA = "a" * 40
-DIGEST = "sha256:" + "b" * 64
-IMAGE_REF = f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"
-VERSION = "v9.9.9"
-DOGFOOD_SUBDOMAIN = "fixture-dogfood"
-DOGFOOD_HEALTH_URL = "https://fixture-dogfood.test/api/health"
-DEMO_HEALTH_URL = "https://fixture-demo.test/api/health"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import promotion_world as w  # noqa: E402
 
+ROOT = w.ROOT
 
-def _iso(hours_ago: float) -> str:
-    # The control plane's real shape: UTC with no offset, microseconds included.
-    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).replace(tzinfo=None).isoformat()
-
-
-def _deployments_json(rows: list[dict]) -> str:
-    return json.dumps({"deployments": rows})
-
-
-def _soaked_row(*, hours_ago: float = 30, status: str = "success", source_sha: str = SHA) -> dict:
-    return {
-        "id": "d-fixture-1",
-        "image": IMAGE_REF,
-        "image_digest": IMAGE_REF,
-        "status": status,
-        "submission_key": f"promote-dogfood-{DOGFOOD_SUBDOMAIN}-{SHA}",
-        "completed_at": _iso(hours_ago),
-        "source_sha": source_sha,
-    }
-
-
-CURL_STUB = f'''#!{sys.executable}
-import json
-import os
-import pathlib
-import sys
-
-args = sys.argv[1:]
-root = pathlib.Path(os.environ["FIXTURE_ROOT"])
-has_o = "-o" in args
-url = args[-1]
-
-if has_o:
-    out_path = args[args.index("-o") + 1]
-    stripped = url.rstrip("/")
-    if stripped.endswith("/api/deployments"):
-        body = os.environ.get("FIXTURE_DEPLOYMENTS_JSON", json.dumps({{"deployments": []}}))
-    elif stripped.endswith("/api/instances"):
-        body = os.environ.get("FIXTURE_INSTANCES_JSON", json.dumps({{"instances": []}}))
-    else:
-        raise AssertionError(f"unexpected -o curl url: {{url}}")
-    pathlib.Path(out_path).write_text(body)
-    sys.stdout.write("200")
-else:
-    if url == os.environ.get("FIXTURE_DOGFOOD_HEALTH_URL"):
-        print(os.environ.get("FIXTURE_DOGFOOD_HEALTH_JSON", json.dumps({{"status": "healthy"}})))
-    elif url == os.environ.get("FIXTURE_DEMO_HEALTH_URL"):
-        print(os.environ.get("FIXTURE_DEMO_HEALTH_JSON", "{{}}"))
-    else:
-        raise AssertionError(f"unexpected curl url: {{url}}")
-'''
-
-GIT_STUB = f'''#!{sys.executable}
-import os
-import sys
-
-args = sys.argv[1:]
-if "ls-remote" in args:
-    if os.environ.get("FIXTURE_TAG_EXISTS", "1") == "1":
-        ref = next((a for a in args if a.startswith("refs/tags/") and not a.endswith("^{{}}")), None)
-        if ref:
-            print(f"{{os.environ['FIXTURE_SHA']}}\\t{{ref}}")
-else:
-    raise AssertionError(args)
-'''
-
-GH_STUB = f'''#!{sys.executable}
-import json
-import os
-import sys
-
-args = sys.argv[1:]
-if args[:2] == ["release", "view"]:
-    sys.exit(0 if os.environ.get("FIXTURE_HAS_RELEASE", "1") == "1" else 1)
-elif args[:2] == ["run", "list"]:
-    print(json.dumps([
-        {{
-            "databaseId": 123,
-            "number": 45,
-            "attempt": 1,
-            "headSha": os.environ["FIXTURE_SHA"],
-            "workflowName": "Publish Runtime Image",
-            "conclusion": "success",
-        }}
-    ]))
-else:
-    raise AssertionError(args)
-'''
-
-SSH_STUB = f'''#!{sys.executable}
-import json
-import os
-import pathlib
-import sys
-
-root = pathlib.Path(os.environ["FIXTURE_ROOT"])
-with open(root / "ssh_invocations", "a") as handle:
-    handle.write(json.dumps(sys.argv[1:]) + "\\n")
-'''
+LIBRARY_STUB = """\
+lh_hosted_prepare_control_plane_auth() {
+  CONTROL_PLANE_URL="$FIXTURE_CONTROL_PLANE_URL"
+  CONTROL_PLANE_ADMIN_TOKEN="fixture-token"
+  export CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN
+}
+lh_hosted_reprovision_production() {
+  printf '%s\\t%s\\t%s\\t%s\\n' "$1" "$2" "$LH_DEPLOYMENT_IDEMPOTENCY_KEY" "$LH_DEPLOYMENT_REASON" >> "$FIXTURE_ROOT/promotions"
+  LH_DEPLOYMENT_ID="d-production-fixture"
+  export LH_DEPLOYMENT_ID
+  [[ "${FIXTURE_REPROVISION_FAIL:-0}" != "1" ]]
+}
+"""
 
 
 class PromoteProductionTests(unittest.TestCase):
-    def run_promotion(
-        self,
-        *,
-        tag_exists: bool = True,
-        has_release: bool = True,
-        deployment_rows: list[dict] | None = None,
-        instance_entries: list[dict] | None = None,
-        dogfood_status: str = "healthy",
-        demo_commit: str | None = None,
-        soak_hours: str | None = None,
-    ):
-        if deployment_rows is None:
-            deployment_rows = [_soaked_row()]
-        if instance_entries is None:
-            instance_entries = [
-                {"id": 11, "status": "active", "subdomain": "acme"},
-                {"id": 12, "status": "provisioning", "subdomain": "other"},
-                {"id": 99, "status": "active", "subdomain": DOGFOOD_SUBDOMAIN},
-            ]
-        if demo_commit is None:
-            demo_commit = SHA
-
+    def run_promotion(self, world: dict | None = None, *args: str, env: dict | None = None):
+        world = world if world is not None else w.green_world()
         with tempfile.TemporaryDirectory(prefix="longhouse-promote-production-test-") as directory:
             root = Path(directory)
-            ops = root / "scripts" / "ops"
-            library = root / "scripts" / "lib"
-            binaries = root / "bin"
-            for path in (ops, library, binaries):
-                path.mkdir(parents=True)
-
-            shutil.copyfile(ROOT / "scripts" / "ops" / "promote-production.sh", ops / "promote-production.sh")
+            ops, library = root / "scripts" / "ops", root / "scripts" / "lib"
+            ops.mkdir(parents=True)
+            library.mkdir(parents=True)
+            for name in ("promote-production.sh", "promotion_gates.py"):
+                shutil.copyfile(ROOT / "scripts" / "ops" / name, ops / name)
             (ops / "promote-production.sh").chmod(0o755)
-
-            # The image-inspection / build-identity / submit+wait mechanics are
-            # already exercised by promote-dogfood.test.py via the real
-            # lh_hosted_reprovision. This test isolates promote-production.sh's
-            # own orchestration (soak, health, targets, demo pin) by faking the
-            # shared library's control-plane auth and production submission.
-            (library / "hosted-instance.sh").write_text(
-                'lh_hosted_prepare_control_plane_auth() {\n'
-                '  CONTROL_PLANE_URL="https://control.fixture.test"\n'
-                '  CONTROL_PLANE_ADMIN_TOKEN="fixture-token"\n'
-                '  export CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN\n'
-                '}\n'
-                'lh_hosted_reprovision_production() {\n'
-                '  printf "%s\\t%s\\n" "$1" "$2" >> "$FIXTURE_ROOT/promotions"\n'
-                '}\n'
-            )
-
-            for name, content in (("git", GIT_STUB), ("gh", GH_STUB), ("curl", CURL_STUB), ("ssh", SSH_STUB)):
-                path = binaries / name
-                path.write_text(content)
-                path.chmod(0o755)
-
-            environment = {
-                **os.environ,
-                "PATH": f"{binaries}:{os.environ['PATH']}",
-                "FIXTURE_ROOT": str(root),
-                "FIXTURE_SHA": SHA,
-                "FIXTURE_TAG_EXISTS": "1" if tag_exists else "0",
-                "FIXTURE_HAS_RELEASE": "1" if has_release else "0",
-                "FIXTURE_DEPLOYMENTS_JSON": _deployments_json(deployment_rows),
-                "FIXTURE_INSTANCES_JSON": json.dumps({"instances": instance_entries}),
-                "FIXTURE_DOGFOOD_HEALTH_URL": DOGFOOD_HEALTH_URL,
-                "FIXTURE_DOGFOOD_HEALTH_JSON": json.dumps({"status": dogfood_status}),
-                "FIXTURE_DEMO_HEALTH_URL": DEMO_HEALTH_URL,
-                "FIXTURE_DEMO_HEALTH_JSON": json.dumps({"build": {"commit": demo_commit}}),
-                "SUBDOMAIN": DOGFOOD_SUBDOMAIN,
-                "DOGFOOD_HEALTH_URL": DOGFOOD_HEALTH_URL,
-                "DEMO_HEALTH_URL": DEMO_HEALTH_URL,
-                "DEMO_VERIFY_TIMEOUT": "5",
-                "CONTROL_PLANE_ADMIN_TOKEN": "fixture-not-a-credential",
-                "GH_TOKEN": "fixture-not-a-credential",
-            }
-            if soak_hours is not None:
-                environment["SOAK_HOURS"] = soak_hours
-            result = subprocess.run(
-                ["bash", str(ops / "promote-production.sh"), VERSION],
-                env=environment,
-                text=True,
-                capture_output=True,
-                timeout=30,
-            )
-            promotions_path = root / "promotions"
-            promotions = promotions_path.read_text().splitlines() if promotions_path.exists() else []
-            ssh_path = root / "ssh_invocations"
+            (library / "hosted-instance.sh").write_text(LIBRARY_STUB)
+            with w.Wire(world, root) as wire:
+                result = subprocess.run(
+                    ["bash", str(ops / "promote-production.sh"), *args],
+                    env={**wire.env(), **(env or {})},
+                    text=True,
+                    capture_output=True,
+                    timeout=60,
+                )
+            promotions_path, ssh_path = root / "promotions", root / "ssh_invocations"
+            promotions = [line.split("\t") for line in promotions_path.read_text().splitlines()] if promotions_path.exists() else []
             ssh_calls = ssh_path.read_text().splitlines() if ssh_path.exists() else []
-            return result, promotions, ssh_calls
+            receipts = sorted((root / "receipts").glob("*.json")) if (root / "receipts").exists() else []
+            saved = [json.loads(path.read_text()) for path in receipts]
+            return result, promotions, ssh_calls, saved
 
-    def test_happy_path_with_targets(self) -> None:
-        result, promotions, ssh_calls = self.run_promotion()
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(promotions), 1)
-        image_ref, target_ids_json = promotions[0].split("\t")
-        self.assertEqual(image_ref, IMAGE_REF)
-        self.assertEqual(json.loads(target_ids_json), [11])
-        self.assertEqual(len(ssh_calls), 1)
-        self.assertIn("targets=1", result.stdout)
-        self.assertIn("demo_verified=true", result.stdout)
-
-    def test_pointer_only_with_zero_targets(self) -> None:
-        result, promotions, ssh_calls = self.run_promotion(
-            instance_entries=[{"id": 99, "status": "active", "subdomain": DOGFOOD_SUBDOMAIN}]
-        )
+    def test_happy_path_promotes_the_dogfood_digest_and_prints_the_receipt(self) -> None:
+        world = w.green_world()
+        world["instances"].append({"id": 11, "subdomain": "acme", "status": "active"})
+        result, promotions, ssh_calls, saved = self.run_promotion(world, w.SHA)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(promotions), 1)
-        image_ref, target_ids_json = promotions[0].split("\t")
-        self.assertEqual(image_ref, IMAGE_REF)
-        self.assertEqual(json.loads(target_ids_json), [])
+        image, targets, key, reason = promotions[0]
+        self.assertEqual(image, w.DIGEST)
+        self.assertEqual(json.loads(targets), [11])
+        self.assertEqual(key, f"promote-production-{w.SHA}")
+        self.assertIn(w.SHA, reason)
         self.assertEqual(len(ssh_calls), 1)
-        self.assertIn("targets=0", result.stdout)
+        self.assertIn(w.DIGEST, ssh_calls[0])
 
-    def test_soak_too_young_is_refused(self) -> None:
-        result, promotions, ssh_calls = self.run_promotion(deployment_rows=[_soaked_row(hours_ago=2)], soak_hours="24")
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["promotable"])
+        self.assertEqual(receipt["sha"], w.SHA)
+        self.assertEqual(receipt["image_digest"], w.DIGEST)
+        self.assertTrue(all(gate["ok"] for gate in receipt["gates"].values()))
+        self.assertEqual(receipt["publish_run"], {"id": 555, "number": 44, "attempt": 1})
+        self.assertEqual(receipt["promotion"]["deployment_id"], "d-production-fixture")
+        self.assertEqual(receipt["promotion"]["targets"], 1)
+        self.assertTrue(receipt["promotion"]["demo_verified"])
+        self.assertEqual(saved, [receipt])
+        self.assertIn("demo_verified=true", result.stderr)
 
-        self.assertNotEqual(result.returncode, 0)
+    def test_no_tag_and_no_github_release_is_needed(self) -> None:
+        # The gh stub aborts on anything but `run list` and `api`; a `release view` or
+        # `git ls-remote` for a tag would fail the promotion.
+        result, promotions, _ssh, _saved = self.run_promotion()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        script = (ROOT / "scripts" / "ops" / "promote-production.sh").read_text()
+        for needle in ("ls-remote", "release view", "VERSION", "SOAK_HOURS"):
+            self.assertNotIn(needle, script.replace("PROMOTION_ATTEMPT", ""), needle)
+
+    def test_pointer_only_when_no_tenant_is_active(self) -> None:
+        result, promotions, ssh_calls, _saved = self.run_promotion()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(promotions[0][1]), [])
+        self.assertEqual(len(ssh_calls), 1)
+        self.assertEqual(json.loads(result.stdout)["promotion"]["targets"], 0)
+        self.assertIn("pointer-only", result.stderr)
+
+    def test_the_sha_defaults_to_what_dogfood_serves(self) -> None:
+        result, promotions, _ssh, _saved = self.run_promotion()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["sha"], w.SHA)
+        self.assertEqual(promotions[0][0], w.DIGEST)
+
+    def test_check_prints_the_receipt_and_moves_nothing(self) -> None:
+        result, promotions, ssh_calls, _saved = self.run_promotion(None, "--check")
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(promotions, [])
         self.assertEqual(ssh_calls, [])
-        self.assertIn("soak", result.stderr.lower())
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["promotable"])
+        self.assertNotIn("promotion", receipt)
+        self.assertIn("nothing was changed", result.stderr)
 
-    def test_missing_release_is_refused(self) -> None:
-        result, promotions, ssh_calls = self.run_promotion(has_release=False)
-
+    def test_check_of_a_refused_promotion_still_prints_every_gate_and_exits_nonzero(self) -> None:
+        world = w.green_world()
+        world["artifacts"] = []
+        result, promotions, ssh_calls, _saved = self.run_promotion(world, "--check")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(promotions, [])
-        self.assertEqual(ssh_calls, [])
-        self.assertIn("release", result.stderr.lower())
+        self.assertEqual((promotions, ssh_calls), ([], []))
+        receipt = json.loads(result.stdout)
+        self.assertFalse(receipt["promotable"])
+        self.assertTrue(receipt["gates"]["dogfood"]["ok"])
+        self.assertFalse(receipt["gates"]["hosted_qa"]["ok"])
+        self.assertFalse(receipt["gates"]["engine_compat"]["ok"])
 
-    def test_dogfood_unhealthy_is_refused(self) -> None:
-        result, promotions, ssh_calls = self.run_promotion(dogfood_status="degraded")
+    def assertRefusedUntouched(self, world: dict, gate: str, *args: str, env: dict | None = None) -> str:
+        result, promotions, ssh_calls, saved = self.run_promotion(world, *args, env=env)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(promotions, [], "production was submitted despite a refusal")
+        self.assertEqual(ssh_calls, [], "the demo was touched despite a refusal")
+        self.assertIn(f"REFUSED gate {gate}:", result.stderr)
+        self.assertIn("Nothing was changed", result.stderr)
+        self.assertFalse(json.loads(result.stdout)["promotable"])
+        self.assertEqual(len(saved), 1, "a refusal keeps its receipt too")
+        return result.stderr
 
+    def test_dogfood_not_serving_the_commit_is_refused(self) -> None:
+        world = w.green_world()
+        world["dogfood_health"]["build"]["commit"] = w.OTHER_SHA
+        self.assertRefusedUntouched(world, "dogfood", w.SHA)
+
+    def test_superseded_qa_is_refused(self) -> None:
+        world = w.green_world()
+        world["artifacts"][0]["receipt"] = w.qa_receipt(verdict="superseded")
+        self.assertRefusedUntouched(world, "hosted_qa")
+
+    def test_a_missing_engine_compat_receipt_is_refused(self) -> None:
+        world = w.green_world()
+        world["artifacts"] = world["artifacts"][:1]
+        self.assertRefusedUntouched(world, "engine_compat")
+
+    def test_an_unmet_soak_is_refused(self) -> None:
+        world = w.green_world()
+        w.add_real_tenant(world, satisfied=False, earliest="2026-09-30T22:00:00")
+        stderr = self.assertRefusedUntouched(world, "soak")
+        self.assertIn("24h soak is required", stderr)
+
+    def test_unreadable_tenant_status_is_refused(self) -> None:
+        # A control plane that does not serve the soak answer (an old build) reads as unknown.
+        world = w.green_world()
+        world["soak"] = None
+        stderr = self.assertRefusedUntouched(world, "soak")
+        self.assertIn("unknown is never read as pre-launch", stderr)
+
+    def test_a_stale_soak_hours_variable_cannot_switch_the_soak_off(self) -> None:
+        world = w.green_world()
+        w.add_real_tenant(world, satisfied=False)
+        self.assertRefusedUntouched(world, "soak", env={"SOAK_HOURS": "0"})
+
+    def test_every_refused_gate_is_reported_in_one_run(self) -> None:
+        world = w.green_world()
+        world["artifacts"] = []
+        world["soak"] = None
+        result, promotions, ssh_calls, _saved = self.run_promotion(world)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(promotions, [])
-        self.assertEqual(ssh_calls, [])
-        self.assertIn("healthy", result.stderr.lower())
+        for gate in ("hosted_qa", "engine_compat", "soak"):
+            self.assertIn(f"REFUSED gate {gate}:", result.stderr)
+        self.assertEqual((promotions, ssh_calls), ([], []))
+
+    def test_a_short_sha_and_unknown_options_are_usage_errors(self) -> None:
+        for args in (("abc123",), ("--force",), (w.SHA, w.SHA)):
+            result, promotions, ssh_calls, _saved = self.run_promotion(None, *args)
+            self.assertEqual(result.returncode, 2, args)
+            self.assertEqual((promotions, ssh_calls), ([], []))
+
+    def test_a_missing_publish_run_is_refused_before_anything_moves_and_by_check(self) -> None:
+        for args in ((), ("--check",)):
+            world = w.green_world()
+            world["publish_runs"] = []
+            result, promotions, ssh_calls, _saved = self.run_promotion(world, *args)
+            self.assertNotEqual(result.returncode, 0, args)
+            self.assertIn("no successful Publish Runtime Image run", result.stderr)
+            self.assertEqual((promotions, ssh_calls), ([], []))
+
+    def test_a_halted_wave_leaves_the_demo_alone_and_says_how_to_recover(self) -> None:
+        world = w.green_world()
+        world["instances"].append({"id": 11, "subdomain": "acme", "status": "active"})
+        result, promotions, ssh_calls, _saved = self.run_promotion(world, env={"FIXTURE_REPROVISION_FAIL": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(ssh_calls, [], "the demo must not be touched after a failed wave")
+        self.assertIn("stopped before the public demo was touched", result.stderr)
+        self.assertIn("/rollback", result.stderr)
+        self.assertIn("PROMOTION_ATTEMPT=2 make promote-production", result.stderr)
+
+    def test_a_new_attempt_uses_a_new_idempotency_key(self) -> None:
+        result, promotions, _ssh, _saved = self.run_promotion(env={"PROMOTION_ATTEMPT": "2"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(promotions[0][2], f"promote-production-{w.SHA}-attempt-2")
+
+    def test_a_demo_that_cannot_be_pinned_says_only_the_demo_is_behind(self) -> None:
+        result, promotions, ssh_calls, _saved = self.run_promotion(env={"FIXTURE_SSH_FAIL": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(len(ssh_calls), 1)
+        self.assertIn("only the\npublic demo is not verified", result.stderr)
+        self.assertIn(f"make promote-production SHA={w.SHA}", result.stderr)
+
+    def test_a_demo_that_never_reports_the_commit_says_only_the_demo_is_behind(self) -> None:
+        world = w.green_world()
+        world["demo_health"]["build"]["commit"] = w.OTHER_SHA
+        result, promotions, ssh_calls, _saved = self.run_promotion(world)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((len(promotions), len(ssh_calls)), (1, 1))
+        self.assertIn("Timed out waiting for public demo", result.stderr)
+        self.assertIn("Nothing to roll back", result.stderr)
+
+    def test_a_non_dogfood_subdomain_is_refused(self) -> None:
+        result, promotions, ssh_calls, _saved = self.run_promotion(env={"SUBDOMAIN": "demo"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((promotions, ssh_calls), ([], []))
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=1)

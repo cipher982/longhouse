@@ -820,6 +820,7 @@ validate-ship-monitor: ## @internal Ship monitor regression tests
 validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@bash scripts/tests/dogfood-runtime.test.sh
 	@python3 scripts/tests/promote-dogfood.test.py
+	@python3 scripts/tests/promotion-gates.test.py
 	@python3 scripts/tests/promote-production.test.py
 
 validate-build-identity: ## @internal Build identity freshness check
@@ -1215,9 +1216,8 @@ promote-dogfood: ## Promote a canary-verified runtime image to the dogfood insta
 	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(SHA)
 
 .PHONY: promote-production
-promote-production: ## Promote a release dogfood already ran to production tenants, demo, and the new-tenant pointer (VERSION=vX.Y.Z)
-	@test -n "$(VERSION)" || (echo "Usage: make promote-production VERSION=vX.Y.Z" >&2; exit 2)
-	@./scripts/ops/promote-production.sh $(VERSION)
+promote-production: ## Promote the image dogfood serves to production tenants, demo, and the new-tenant pointer (SHA=<full sha> optional; CHECK=1 prints the gate receipt and moves nothing)
+	@./scripts/ops/promote-production.sh $(if $(CHECK),--check,) $(SHA)
 
 deploy-status: ## Show deployed SHA + health for all surfaces
 	@./scripts/ops/deploy-status.sh
