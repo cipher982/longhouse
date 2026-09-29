@@ -115,6 +115,7 @@ class Policy:
     bump_subject: re.Pattern[str] | None
     bump_files: list[re.Pattern[str]]
     blocking: list[tuple[str, list[re.Pattern[str]]]]  # (area, patterns)
+    blocking_globs: list[str] = field(default_factory=list)  # the globs as written, in the same order
 
     @classmethod
     def load(cls, path: str | Path, name: str) -> "Policy":
@@ -127,7 +128,12 @@ class Policy:
             bump_subject=re.compile(bump["subject"]) if bump.get("subject") else None,
             bump_files=[compile_glob(p) for p in bump.get("paths", [])],
             blocking=blocking,
+            blocking_globs=[p for entry in data.get("repos", {}).get(name, {}).get("blocking", []) for p in entry["paths"]],
         )
+
+    def dead_globs(self, tracked: list[str]) -> list[str]:
+        compiled = [p for _, patterns in self.blocking for p in patterns]
+        return [glob for glob, p in zip(self.blocking_globs, compiled) if not any(p.match(f) for f in tracked)]
 
     def blocking_areas(self, files: list[str]) -> list[str]:
         return [area for area, patterns in self.blocking
@@ -148,11 +154,12 @@ class Commit:
     sha: str
     subject: str
     files: list[str]
+    merge: bool = False
     _patch_id: str | None = field(default=None, repr=False)
 
     def patch_id(self, repo: str | Path) -> str | None:
         if self._patch_id is None:
-            diff = git(repo, "show", "--no-color", "--no-ext-diff", "--patch", self.sha)
+            diff = git(repo, "show", "--no-color", "--no-ext-diff", "--no-renames", "--patch", self.sha)
             out = git(repo, "patch-id", "--stable", stdin=diff).split()
             self._patch_id = out[0] if out else ""
         return self._patch_id or None
@@ -161,12 +168,15 @@ class Commit:
 def commits_in(repo: str | Path, *revs: str) -> list[Commit]:
     # --no-renames: a rename lists both its source and destination, so moving a file out of
     # (or into) a blocking path or docs cannot hide it from the path rules.
-    out = git(repo, "log", "--no-merges", "--reverse", "--no-renames", "--name-only", "--format=%x01%H%x02%s", *revs)
+    # --cc: a merge lists only the files whose merged result differs from every parent (its own
+    # conflict resolutions); a clean merge lists none, so it asks for nothing.
+    out = git(repo, "log", "--cc", "--reverse", "--no-renames", "--name-only", "--format=%x01%H%x02%P%x02%s", *revs)
     commits = []
     for chunk in out.split("\x01")[1:]:
         header, _, names = chunk.partition("\n")
-        sha, _, subject = header.partition("\x02")
-        commits.append(Commit(sha, subject.strip(), [n for n in names.splitlines() if n.strip()]))
+        sha, parents, subject = header.split("\x02", 2)
+        commits.append(Commit(sha, subject.strip(), [n for n in names.splitlines() if n.strip()],
+                              merge=len(parents.split()) > 1))
     return commits
 
 
@@ -197,9 +207,20 @@ def load_events(repo: str | Path) -> list[dict]:
             event = json.loads(line)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("schema") == SCHEMA:
+        if isinstance(event, dict) and event.get("schema") == SCHEMA and _well_formed(event):
             events.append(event)
     return events
+
+
+def _well_formed(event: dict) -> bool:
+    """Skip events the gate could not index (a hand-edited or half-written line) rather than crash on them."""
+    if event.get("type") == "review":
+        return (isinstance(event.get("id"), str) and isinstance(event.get("commits"), list)
+                and all(isinstance(c, dict) and c.get("sha") for c in event["commits"])
+                and all(isinstance(f, dict) and f.get("id") for f in event.get("findings") or []))
+    if event.get("type") == "disposition":
+        return isinstance(event.get("receipt"), str) and bool(event.get("finding"))
+    return True
 
 
 def append_event(repo: str | Path, event: dict) -> None:
@@ -256,6 +277,9 @@ def check_commits(repo: str | Path, commits: list[Commit], events: list[dict]) -
                 latest = covering[-1]
                 why = "; ".join(latest.get("state_reasons") or []) or "not complete"
                 reasons.append(f"only a partial review ({latest['id']}: {why})")
+            elif commit.merge:
+                reasons.append("a merge commit with changes of its own (conflict resolution); receipts cover "
+                               "non-merge commits, so rebase onto the target instead of merging")
             else:
                 reasons.append("no review receipt")
         for r in covering:
@@ -370,6 +394,10 @@ def main(argv: list[str] | None = None) -> int:
             if not git(repo, "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}", check=False).strip():
                 print(f"review-gate: {args.base} not found; push check skipped.", file=sys.stderr)
                 return 0
+            dead = policy.dead_globs(git(repo, "ls-files").split("\n"))
+            if dead:
+                print("review-gate: WARNING these blocking globs match no tracked file (a rename may have switched a "
+                      "protection off; fix scripts/ops/review-policy.toml): " + ", ".join(dead), file=sys.stderr)
             if not policy.blocking:
                 raise GateError(f"review-policy.toml has no [[repos.{args.name or repo_name(repo)}.blocking]] table, so "
                                 "the landing rule would enforce nothing here; add one or pass --name")

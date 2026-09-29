@@ -313,6 +313,49 @@ class PushRuleTests(unittest.TestCase):
         self.assertEqual([v.commit.sha for v in self.push()], [second])
         self.assertNotEqual(first, second)
 
+    def test_a_clean_merge_asks_for_nothing_and_a_merge_with_changes_of_its_own_is_refused(self):
+        repo = self.repo
+        repo.git("checkout", "-q", "-b", "side")
+        repo.commit("side work", {"docs/side.md": "1", "server/zerg/auth/tokens.py": "side\n"})
+        repo.git("checkout", "-q", "main")
+        repo.commit("main work", {"docs/main.md": "1"})
+        repo.git("update-ref", "refs/remotes/origin/main", "main")
+        repo.git("checkout", "-q", "-b", "topic", "main")
+        repo.git("merge", "-q", "--no-ff", "-m", "clean merge", "side")  # brings a reviewed-elsewhere auth change in
+        (clean,) = [c for c in gate.commits_in(self.tmp.name, "main..topic") if c.merge]
+        self.assertEqual(clean.files, [])  # --cc: nothing of its own
+        # an evil merge: conflicting edits to an auth file, resolved by hand
+        repo.git("checkout", "-q", "main")
+        repo.commit("main edits auth", {"server/zerg/auth/tokens.py": "main\n"})
+        repo.git("update-ref", "refs/remotes/origin/main", "main")
+        repo.git("checkout", "-q", "-b", "topic2", "main~1")
+        repo.commit("topic edits auth", {"server/zerg/auth/tokens.py": "topic\n"})
+        subprocess.run(["git", "merge", "-q", "--no-ff", "-m", "resolve", "main"], cwd=self.tmp.name, capture_output=True)
+        (Path(self.tmp.name) / "server/zerg/auth/tokens.py").write_text("resolved by hand\n")
+        repo.git("add", "server/zerg/auth/tokens.py")
+        repo.git("commit", "-q", "--no-edit")
+        merges = [v for v in gate.push_verdicts(self.tmp.name, self.policy, "origin/main", "topic2") if v.commit.merge]
+        self.assertEqual(len(merges), 1)
+        self.assertEqual(merges[0].areas, ["auth"])
+        self.assertIn("rebase", merges[0].reasons[0])
+
+    def test_events_the_gate_cannot_index_are_skipped_not_fatal(self):
+        gate.append_event(self.tmp.name, {"type": "review", "state": "complete", "commits": [{"sha": "a"}]})  # no id
+        gate.append_event(self.tmp.name, {"type": "review", "id": "rv-x", "state": "complete", "commits": "nope"})
+        gate.append_event(self.tmp.name, {"type": "disposition", "finding": "F1"})  # no receipt
+        self.assertEqual(gate.load_events(self.tmp.name), [])
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        self.assertEqual(len(self.push()), 1)
+
+    def test_a_dead_blocking_glob_is_a_warning_not_a_refusal(self):
+        (Path(self.tmp.name) / "policy.toml").write_text(FIXTURE_POLICY + '\n[[repos.fixture.blocking]]\narea = "gone"\npaths = ["nowhere/**"]\n')
+        self.repo.commit("feature", {"server/zerg/services/thing.py": "1"})
+        result = subprocess.run([sys.executable, str(GATE), "--repo", self.tmp.name, "--policy", str(Path(self.tmp.name) / "policy.toml"),
+                                 "--name", "fixture", "push", "--base", self.base], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("WARNING", result.stderr)
+        self.assertIn("nowhere/**", result.stderr)
+
     def test_cli_refuses_and_names_the_override_only_in_the_refusal(self):
         self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
         result = self.repo.run("push", "--base", self.base)
