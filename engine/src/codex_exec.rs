@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -81,6 +81,40 @@ impl Drop for ConsoleSteerRegistration {
     }
 }
 
+/// Console turns that have begun but have no control channel yet: from the
+/// moment the run is accepted until `turn/start` returns the provider turn id.
+/// The user already sees such a turn running, so a Stop or steer that arrives in
+/// this window waits for the channel instead of being told the turn is not
+/// there.
+fn console_starting_registry() -> &'static Mutex<HashSet<String>> {
+    static REGISTRY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+struct ConsoleStartingGuard(String);
+
+impl ConsoleStartingGuard {
+    fn new(run_id: &str) -> Self {
+        if let Ok(mut starting) = console_starting_registry().lock() {
+            starting.insert(run_id.to_string());
+        }
+        Self(run_id.to_string())
+    }
+}
+
+impl Drop for ConsoleStartingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut starting) = console_starting_registry().lock() {
+            starting.remove(&self.0);
+        }
+    }
+}
+
+/// Longest a Stop or steer waits for a starting turn to register. The window is
+/// the worker lease plus the `turn/start` round trip; past it the turn is not
+/// coming up and the caller is told so.
+const CONSOLE_START_GRACE: Duration = Duration::from_secs(8);
+
 /// Enter the running Codex Console turn for `run_id` with `text`, through the
 /// same app-server connection that started it (`turn/steer`, the Helm path).
 /// `Err("turn_not_steerable")` means no turn of that run is running here.
@@ -102,12 +136,43 @@ async fn console_control(
     run_id: &str,
     control: impl FnOnce(ConsoleReply) -> ConsoleControl,
 ) -> std::result::Result<(), String> {
-    let sender = console_steer_registry()
-        .lock()
-        .map_err(|_| "console control registry poisoned".to_string())?
-        .get(run_id)
-        .cloned()
-        .ok_or_else(|| "turn_not_steerable".to_string())?;
+    console_control_within(run_id, CONSOLE_START_GRACE, control).await
+}
+
+/// The control channel of `run_id`'s running turn, waiting up to `grace` for one
+/// that is still starting. A run that is neither registered nor starting has
+/// ended (or never began) and is refused at once.
+async fn console_sender(
+    run_id: &str,
+    grace: Duration,
+) -> std::result::Result<mpsc::UnboundedSender<ConsoleControl>, String> {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        if let Some(sender) = console_steer_registry()
+            .lock()
+            .map_err(|_| "console control registry poisoned".to_string())?
+            .get(run_id)
+            .cloned()
+        {
+            return Ok(sender);
+        }
+        let starting = console_starting_registry()
+            .lock()
+            .map_err(|_| "console control registry poisoned".to_string())?
+            .contains(run_id);
+        if !starting || std::time::Instant::now() >= deadline {
+            return Err("turn_not_steerable".to_string());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn console_control_within(
+    run_id: &str,
+    grace: Duration,
+    control: impl FnOnce(ConsoleReply) -> ConsoleControl,
+) -> std::result::Result<(), String> {
+    let sender = console_sender(run_id, grace).await?;
     let (reply, outcome) = tokio::sync::oneshot::channel();
     sender
         .send(control(reply))
@@ -719,6 +784,9 @@ async fn spawn_initialized_codex_worker(
 }
 
 pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
+    // Held until the turn task ends (moved into it below), so a Stop that lands
+    // while the worker is leased or `turn/start` is in flight waits for the turn.
+    let starting = ConsoleStartingGuard::new(&config.run_id);
     let warm_compatible = warm_pool_compatible(&config);
     let warm_worker = if warm_compatible {
         lease_warm_worker().await
@@ -798,6 +866,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let resume_thread_id = config.resume_thread_id.clone();
     let fork_thread_id = config.fork_thread_id.clone();
     tokio::spawn(async move {
+        let _starting = starting;
         let mut run_result = run_app_server_turn(
             &mut worker.child,
             worker.rpc,
@@ -2281,6 +2350,47 @@ fn find_codex_rollout_path(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn stop_during_turn_start_waits_for_the_turn_to_register() {
+        let run_id = "stop-during-start";
+        let _starting = ConsoleStartingGuard::new(run_id);
+        let (tx, mut rx) = mpsc::unbounded_channel::<ConsoleControl>();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            console_steer_registry()
+                .lock()
+                .unwrap()
+                .insert(run_id.to_string(), tx);
+            if let Some(ConsoleControl::Interrupt { reply }) = rx.recv().await {
+                let _ = reply.send(Ok(()));
+            }
+        });
+        let outcome = interrupt_codex_console_turn(run_id).await;
+        console_steer_registry().lock().unwrap().remove(run_id);
+        assert_eq!(outcome, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn stop_for_a_run_that_is_not_starting_is_refused_at_once() {
+        let started = std::time::Instant::now();
+        let outcome = console_control_within("never-started", Duration::from_secs(5), |reply| {
+            ConsoleControl::Interrupt { reply }
+        })
+        .await;
+        assert_eq!(outcome, Err("turn_not_steerable".to_string()));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn stop_gives_up_when_a_starting_turn_never_registers() {
+        let run_id = "starting-never-registers";
+        let _starting = ConsoleStartingGuard::new(run_id);
+        let outcome = console_control_within(run_id, Duration::from_millis(150), |reply| {
+            ConsoleControl::Interrupt { reply }
+        })
+        .await;
+        assert_eq!(outcome, Err("turn_not_steerable".to_string()));
+    }
 
     #[test]
     fn fork_outranks_resume_when_both_are_present() {
