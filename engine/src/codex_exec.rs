@@ -110,6 +110,11 @@ impl Drop for ConsoleStartingGuard {
     }
 }
 
+/// How often, and how many times, a Stop that Codex answers "no active turn" is
+/// re-sent while the turn is still running on our side.
+const CONSOLE_STOP_RETRY: Duration = Duration::from_millis(200);
+const CONSOLE_STOP_ATTEMPTS: u32 = 25;
+
 /// Longest a Stop or steer waits for a starting turn to register. The window is
 /// the worker lease plus the `turn/start` round trip; past it the turn is not
 /// coming up and the caller is told so.
@@ -129,7 +134,20 @@ pub async fn steer_codex_console_turn(run_id: &str, text: &str) -> std::result::
 /// Stop the running Codex Console turn for `run_id` (`turn/interrupt` on its
 /// live connection); the run then settles as cancelled.
 pub async fn interrupt_codex_console_turn(run_id: &str) -> std::result::Result<(), String> {
-    console_control(run_id, |reply| ConsoleControl::Interrupt { reply }).await
+    // For a moment after `turn/start` acknowledges, Codex can still answer "no
+    // active turn" to a Stop that is already registered, so a Stop sent right
+    // then is retried briefly. If the turn ended in the meantime the Stop is
+    // satisfied: a turn that is over is a turn that stopped.
+    let mut refused_early = false;
+    for _ in 0..CONSOLE_STOP_ATTEMPTS {
+        match console_control(run_id, |reply| ConsoleControl::Interrupt { reply }).await {
+            Err(reason) if reason.contains("no active turn") => refused_early = true,
+            Err(reason) if refused_early && reason == "turn_not_steerable" => return Ok(()),
+            other => return other,
+        }
+        tokio::time::sleep(CONSOLE_STOP_RETRY).await;
+    }
+    Err("turn_not_steerable".to_string())
 }
 
 async fn console_control(
@@ -1253,7 +1271,10 @@ async fn run_app_server_turn(
     // `turn/completed` that lands before the reply.
     let mut pending_steers: HashMap<
         u64,
-        tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+        (
+            tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+            String,
+        ),
     > = HashMap::new();
 
     let turn_outcome = tokio::time::timeout(APP_SERVER_TURN_TIMEOUT, async {
@@ -1290,7 +1311,8 @@ async fn run_app_server_turn(
                     };
                     match rpc.write(&request).await {
                         Ok(()) => {
-                            pending_steers.insert(id, reply);
+                            let method = request["method"].as_str().unwrap_or("turn/steer");
+                            pending_steers.insert(id, (reply, method.to_string()));
                         }
                         Err(error) => {
                             let _ = reply.send(Err(format!("control write failed: {error}")));
@@ -1300,13 +1322,13 @@ async fn run_app_server_turn(
                 }
             };
             if value.get("method").is_none() {
-                if let Some(reply) = value
+                if let Some((reply, method)) = value
                     .get("id")
                     .and_then(Value::as_u64)
                     .and_then(|id| pending_steers.remove(&id))
                 {
                     let outcome = match value.get("error") {
-                        Some(error) => Err(format!("turn/steer failed: {error}")),
+                        Some(error) => Err(format!("{method} failed: {error}")),
                         None => Ok(()),
                     };
                     if outcome.is_ok() {
@@ -1360,7 +1382,7 @@ async fn run_app_server_turn(
     })
     .await;
     drop(_steer_registration);
-    for (_, reply) in pending_steers.drain() {
+    for (_, (reply, _)) in pending_steers.drain() {
         let _ = reply.send(Err("turn_ended".to_string()));
     }
     while let Ok(control) = steer_rx.try_recv() {
@@ -2368,6 +2390,77 @@ mod tests {
         let outcome = interrupt_codex_console_turn(run_id).await;
         console_steer_registry().lock().unwrap().remove(run_id);
         assert_eq!(outcome, Ok(()));
+    }
+
+    /// Register a control channel for `run_id` whose replies to each Stop come
+    /// from `answers` in order (the last one repeats); returns the Stops seen.
+    fn scripted_stop_channel(
+        run_id: &'static str,
+        answers: Vec<std::result::Result<(), String>>,
+        unregister_after: Option<usize>,
+    ) -> Arc<AtomicUsize> {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = seen.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel::<ConsoleControl>();
+        console_steer_registry()
+            .lock()
+            .unwrap()
+            .insert(run_id.to_string(), tx);
+        tokio::spawn(async move {
+            while let Some(ConsoleControl::Interrupt { reply }) = rx.recv().await {
+                let index = counter.fetch_add(1, Ordering::SeqCst);
+                let _ = reply.send(answers[index.min(answers.len() - 1)].clone());
+                if unregister_after == Some(index + 1) {
+                    console_steer_registry().lock().unwrap().remove(run_id);
+                }
+            }
+        });
+        seen
+    }
+
+    const NO_ACTIVE_TURN: &str =
+        "turn/interrupt failed: {\"code\":-32600,\"message\":\"no active turn to interrupt\"}";
+
+    #[tokio::test]
+    async fn a_stop_codex_refuses_just_after_turn_start_is_retried_until_it_lands() {
+        let run_id = "stop-refused-early";
+        let seen = scripted_stop_channel(
+            run_id,
+            vec![
+                Err(NO_ACTIVE_TURN.into()),
+                Err(NO_ACTIVE_TURN.into()),
+                Ok(()),
+            ],
+            None,
+        );
+        let outcome = interrupt_codex_console_turn(run_id).await;
+        console_steer_registry().lock().unwrap().remove(run_id);
+        assert_eq!(outcome, Ok(()));
+        assert_eq!(seen.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_stop_for_a_turn_that_ended_meanwhile_is_a_stop_that_worked() {
+        let run_id = "stop-turn-ended-meanwhile";
+        // Codex says "no active turn" because the turn is over; the channel then
+        // goes away with the turn, so the retry finds no run to stop.
+        let seen = scripted_stop_channel(run_id, vec![Err(NO_ACTIVE_TURN.into())], Some(1));
+        assert_eq!(interrupt_codex_console_turn(run_id).await, Ok(()));
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn any_other_stop_failure_is_not_retried_or_hidden() {
+        let run_id = "stop-real-failure";
+        let seen = scripted_stop_channel(
+            run_id,
+            vec![Err("control write failed: broken".into())],
+            None,
+        );
+        let outcome = interrupt_codex_console_turn(run_id).await;
+        console_steer_registry().lock().unwrap().remove(run_id);
+        assert_eq!(outcome, Err("control write failed: broken".to_string()));
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
