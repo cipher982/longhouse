@@ -35,6 +35,10 @@ from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBl
 from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobTampered
 from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobUnavailable
 from zerg.services.provider_capability_blob_resolver import resolver_from_settings
+from zerg.services.provider_capability_cell_verdicts import VERDICT_BUNDLE_KIND
+from zerg.services.provider_capability_cell_verdicts import VERDICT_SCHEMA_VERSION
+from zerg.services.provider_capability_cell_verdicts import CellVerdictStore
+from zerg.services.provider_capability_cell_verdicts import verdict_from_mapping
 from zerg.services.provider_capability_projection import PROJECTION_VERSION
 from zerg.services.provider_capability_projection import project_capabilities
 from zerg.services.provider_capability_proof import PROOF_SCHEMA_VERSION
@@ -67,6 +71,10 @@ def _proof_store() -> ProviderCapabilityProofStore:
 
 def _legacy_proof_store() -> ProviderCapabilityProofStore:
     return ProviderCapabilityProofStore(_proof_store().root.parent / "historical-factory-v2")
+
+
+def _cell_verdict_store() -> CellVerdictStore:
+    return CellVerdictStore(_proof_store().root.parent / "cell-verdicts")
 
 
 def _blob_resolver() -> ProviderCapabilityBlobResolver | None:
@@ -376,12 +384,41 @@ def _bounded_records(store: ProviderCapabilityProofStore) -> tuple[tuple[Provide
     return tuple(selected), total
 
 
+def _accept_cell_verdicts(payload: dict[str, Any]) -> dict[str, Any]:
+    """Store the newest failed-execution verdict per factory cell.
+
+    Verdicts carry no evidence and cannot certify anything; they only let the
+    chart stop trusting an older pass (`project_capabilities`). A `pass` is a
+    proof, so it is refused here.
+    """
+
+    if set(payload) != {"schema_version", "artifact_kind", "verdicts"} or payload["schema_version"] != VERDICT_SCHEMA_VERSION:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"verdict bundle must be exactly schema_version {VERDICT_SCHEMA_VERSION}, artifact_kind, verdicts",
+        )
+    raw = payload["verdicts"]
+    if not isinstance(raw, list) or not raw or len(raw) > _MAX_RECORDS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"verdicts must be a list of 1 to {_MAX_RECORDS} objects",
+        )
+    try:
+        verdicts = [verdict_from_mapping(item) for item in raw]
+        applied = _cell_verdict_store().publish(verdicts)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"schema_version": VERDICT_SCHEMA_VERSION, "accepted": len(verdicts), "applied": applied}
+
+
 @router.post("/internal/provider-capability-proofs", status_code=status.HTTP_201_CREATED)
 async def publish_provider_capability_proofs(
     request: Request,
     _factory: None = Depends(_verify_factory_token),
 ) -> dict[str, Any]:
     payload = await _read_capped_json(request)
+    if payload.get("artifact_kind") == VERDICT_BUNDLE_KIND:
+        return _accept_cell_verdicts(payload)
     if payload.get("schema_version") == 2:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -674,6 +711,7 @@ def build_capability_projection_payload(
         integrity_reasons=integrity_reasons,
         expected_longhouse_sha=expected_longhouse_sha,
         expected_epoch_digest=expected_epoch_digest,
+        verdicts=_cell_verdict_store().verdicts(),
     )
     return {
         "schema_version": 1,
@@ -738,17 +776,21 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
 
     A chip with no edge is ``unproven``. Otherwise the per-requirement
     projection statuses roll up (`provider_chip_edges.rollup_state`): all
-    admissible passes certify it; an older admissible pass survives a newer
-    failure until it ages out, so one red candidate never revokes a released
-    claim. Rows carry the exact identity and the Longhouse SHA and provider
-    version the supporting proof ran against, so a claim is scoped to what was
-    tested rather than to "latest".
+    admissible passes certify it. A cell that has failed twice in a row since
+    its last pass (a factory verdict) no longer certifies and reads
+    ``unverified``; a single failure does not, so one flaky run never unlights
+    a chip. An unreadable verdict store raises, so the route fails and the page
+    shows "unavailable" instead of a chart missing a fact. Rows carry the exact
+    identity and the Longhouse SHA and provider version the supporting proof ran
+    against, so a claim is scoped to what was tested rather than to "latest".
     """
 
     edges = load_chip_edge_assertions()
     all_records, integrity_reasons = _published_records()
     flat = tuple(assertion for chips in edges.values() for chip in chips.values() if chip for assertion in chip)
-    projected = project_capabilities(flat, all_records, now=now, integrity_reasons=integrity_reasons)
+    projected = project_capabilities(
+        flat, all_records, now=now, integrity_reasons=integrity_reasons, verdicts=_cell_verdict_store().verdicts()
+    )
     by_identity = {(p.provider, p.capability, p.scenario_id, p.assertion_id, p.variant): p for p in projected}
     moment = (now or datetime.now(UTC)).astimezone(UTC)
     providers: list[dict[str, Any]] = []

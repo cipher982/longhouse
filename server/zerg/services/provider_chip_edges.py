@@ -118,10 +118,11 @@ def requirement_key(provider: str, assertion: Mapping[str, Any]) -> tuple[str, s
 def rollup_state(proof_statuses: Iterable[str | None]) -> str:
     """Roll the per-requirement projection statuses up into one chip state.
 
-    `pass` means the projection found a currently admissible proof, which it
-    keeps even when a newer run failed, so a red candidate does not revoke a
-    released claim until that pass ages out (`stale`). With no admissible pass,
-    a semantic failure is `failing`; infrastructure errors, blocked, skipped,
+    `pass` means the projection found a currently admissible proof that no
+    newer verdict has outranked: a cell that failed twice in a row since its
+    last pass reads as that failure's outcome, a single failure does not (one
+    flaky run never unlights a chip), and a pass ages out to `stale`. A
+    semantic failure is `failing`; infrastructure errors, blocked, skipped,
     never-proven and unacceptable evidence are `unverified`, not failures.
     """
 

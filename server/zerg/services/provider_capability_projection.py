@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 
+from zerg.services.provider_capability_cell_verdicts import REVOKING_CONSECUTIVE_FAILURES
+from zerg.services.provider_capability_cell_verdicts import CellKey
+from zerg.services.provider_capability_cell_verdicts import CellVerdict
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof import v3_provenance_gaps
@@ -15,6 +18,7 @@ from zerg.services.provider_capability_schema import CapabilityAssertion
 NEVER_PROVEN = "never_proven"
 STALE = "stale"
 UNACCEPTABLE_EVIDENCE = "unacceptable_evidence"
+NEWER_CELL_FAILURE = "newer_cell_failure"
 PROJECTION_VERSION = "assurance-projection-v1"
 
 
@@ -117,18 +121,28 @@ def project_capabilities(
     baselines: Mapping[tuple[str, str, str, str | None], str] | None = None,
     expected_longhouse_sha: str | None = None,
     expected_epoch_digest: str | None = None,
+    verdicts: Mapping[CellKey, CellVerdict] | None = None,
 ) -> tuple[CapabilityProjection, ...]:
     """Join every exact assertion variant to its currently admissible proof.
 
-    A newer failure remains visible through ``latest_*`` but does not erase an
-    older, still-current admissible pass.  This preserves both release safety
-    and the causal signal that the latest factory run failed.
+    A pass says a cell worked once; the chart claims it works now. So a newer
+    failed execution outranks an older, still-current pass, but only once it
+    has failed ``REVOKING_CONSECUTIVE_FAILURES`` times in a row (one flaky
+    reconnect must not unlight a chip). Proof records hold passes; the failed
+    executions arrive as ``verdicts`` (the newest failure per cell, with its
+    consecutive count). A verdict newer than the qualifying pass with that many
+    failures sets the row's status to the verdict's outcome, and
+    ``rollup_state`` renders an infrastructure error as ``unverified``, never
+    ``failing``. A newer failure below the threshold, or a record that is a
+    lone failure, stays visible through ``latest_*`` and changes nothing else.
+    A verdict older than the qualifying pass is ignored: the cell passed again.
     """
 
     moment = (now or datetime.now(UTC)).astimezone(UTC)
     integrity_reasons = integrity_reasons or {}
     open_cases = open_cases or {}
     baselines = baselines or {}
+    verdicts = verdicts or {}
     by_provider_assertion: dict[tuple[str, str], list[ProviderCapabilityProofRecord]] = {}
     for record in proof_records:
         by_provider_assertion.setdefault((record.provider, record.assertion_id), []).append(record)
@@ -158,10 +172,25 @@ def project_capabilities(
         ]
         qualifying = next((record for record, reasons in evaluated if not reasons), None)
         latest = exact[0] if exact else nearby[0] if nearby else None
+        verdict = verdicts.get((assertion.provider, assertion.assertion_id, assertion.scenario_id, assertion.variant))
+        latest_time = _parse_timestamp(latest.generated_at) if latest else None
+        newer_failure = verdict is not None and (latest_time is None or verdict.observed_at > latest_time)
+        latest_outcome = verdict.outcome if newer_failure else latest.outcome.value if latest else None
         if qualifying is not None:
             support = qualifying
-            status = AssertionOutcome.PASS.value
-            reasons: tuple[str, ...] = ()
+            passed_at = _parse_timestamp(qualifying.generated_at)
+            if (
+                verdict is not None
+                and verdict.consecutive_failures >= REVOKING_CONSECUTIVE_FAILURES
+                and passed_at is not None
+                and verdict.observed_at > passed_at
+            ):
+                status = verdict.outcome
+                reasons: tuple[str, ...] = (NEWER_CELL_FAILURE,)
+                qualifying = None
+            else:
+                status = AssertionOutcome.PASS.value
+                reasons = ()
         elif latest is not None:
             support = latest
             reasons = _rejection_reasons(
@@ -191,7 +220,7 @@ def project_capabilities(
                 evidence_class=support.evidence_class.value if support else None,
                 proof_artifact_id=qualifying.artifact_id if qualifying else None,
                 latest_proof_artifact_id=latest.artifact_id if latest else None,
-                latest_outcome=latest.outcome.value if latest else None,
+                latest_outcome=latest_outcome,
                 admissibility_reasons=reasons,
                 accepted_epoch_id=support.accepted_epoch_id if support else None,
                 accepted_epoch_digest=support.accepted_epoch_digest if support else None,
@@ -213,6 +242,7 @@ __all__ = [
     "NEVER_PROVEN",
     "STALE",
     "UNACCEPTABLE_EVIDENCE",
+    "NEWER_CELL_FAILURE",
     "PROJECTION_VERSION",
     "project_capabilities",
 ]

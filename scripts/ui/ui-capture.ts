@@ -29,6 +29,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
+ *   bunx tsx scripts/ui/ui-capture.ts landing --scene=provider-certification --viewport=desktop-tall
  *   bunx tsx scripts/ui/ui-capture.ts machines
  *   bunx tsx scripts/ui/ui-capture.ts --all
  */
@@ -50,6 +51,7 @@ import {
   SESSION_TONES,
   type SessionTone,
 } from "../ui-fixtures/sessionDetailStress";
+import { buildProviderCertificationFixture } from "../ui-fixtures/providerCertification";
 import { buildTimelineCardStressFixture } from "../ui-fixtures/timelineCardStress";
 import { buildTimelineHearthFixture, buildTimelineHearthStreamBatch } from "../ui-fixtures/timelineHearth";
 import {
@@ -68,10 +70,12 @@ const PAGE_DEFINITIONS = {
   integrations: { path: "/settings/integrations" },
   devices: { path: "/settings/devices" },
   admin: { path: "/admin" },
+  // The public marketing page (always reachable, even when authenticated).
+  landing: { path: "/landing" },
 } as const;
 type PageName = keyof typeof PAGE_DEFINITIONS;
 const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
-const ALL_CAPTURE_PAGES = PAGES.filter((pageName) => pageName !== "session-detail");
+const ALL_CAPTURE_PAGES = PAGES.filter((pageName) => pageName !== "session-detail" && pageName !== "landing");
 
 const SCENES = [
   "empty",
@@ -94,6 +98,7 @@ const SCENES = [
   "landing",
   "landing-search",
   "landing-session",
+  "provider-certification",
   "first-run",
 ] as const;
 type SceneName = (typeof SCENES)[number];
@@ -102,7 +107,9 @@ type SceneName = (typeof SCENES)[number];
 const LANDING_TIMELINE_SCENES: readonly SceneName[] = ["landing", "landing-search"];
 // Scenes that render the launch sheet with a machine that has run models.
 const LAUNCH_MODEL_SCENES: readonly SceneName[] = ["launch-model-picker", "launch-model-picked"];
-const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session"];
+// The marketing page's provider chart, answered by the certification fixture.
+const PROVIDER_CERTIFICATION_SCENE: SceneName = "provider-certification";
+const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session", PROVIDER_CERTIFICATION_SCENE];
 // A brand-new Runtime Host: no sessions, no machines. The timeline shows its
 // connect command; the machines page opens its Connect a machine sheet.
 const FIRST_RUN_SCENE: SceneName = "first-run";
@@ -265,6 +272,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "launch-model-picked" ||
     LANDING_TIMELINE_SCENES.includes(scene) ||
     scene === "landing-session" ||
+    scene === PROVIDER_CERTIFICATION_SCENE ||
     scene === "session-detail-stress" ||
     scene === "session-input-outbox" ||
     scene === "session-remote-image-outbox" ||
@@ -278,6 +286,9 @@ function sceneUsesMockApi(scene: SceneName): boolean {
 }
 
 function validateOptions(opts: Options): void {
+  if ((opts.scene === PROVIDER_CERTIFICATION_SCENE) !== (opts.page === "landing")) {
+    throw new Error(`PAGE=landing and --scene=${PROVIDER_CERTIFICATION_SCENE} capture only each other.`);
+  }
   if (opts.page === "session-detail" && !SESSION_DETAIL_SCENES.includes(opts.scene)) {
     throw new Error(`session-detail requires one of: ${SESSION_DETAIL_SCENES.map((s) => `--scene=${s}`).join(", ")}.`);
   }
@@ -630,6 +641,19 @@ async function installSceneMocks(
         return;
       }
 
+      await sealOrFallback(route, scene, pathname);
+    });
+    return;
+  }
+
+  if (scene === PROVIDER_CERTIFICATION_SCENE) {
+    const certification = buildProviderCertificationFixture();
+    await context.route(`${appOrigin}/api/**`, async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === "/api/public/provider-certification") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(certification) });
+        return;
+      }
       await sealOrFallback(route, scene, pathname);
     });
     return;
@@ -1012,6 +1036,12 @@ async function captureBundle(
   if (scene === FIRST_RUN_SCENE && pageName === "machines") {
     await page.click("[data-testid='runners-add-first-button']");
     await page.waitForSelector("[data-testid='connect-machine-command']", { timeout: 5000 });
+  }
+
+  // The chart fetches after first paint: wait for it to resolve, then frame it.
+  if (scene === PROVIDER_CERTIFICATION_SCENE) {
+    await page.waitForSelector("#providers [data-certification='certified']", { timeout: 5000 });
+    await page.evaluate("document.getElementById('providers').scrollIntoView()");
   }
 
   if (scene === "launch-unavailable") {

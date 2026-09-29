@@ -8,6 +8,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -20,6 +21,9 @@ from tests_lite.test_provider_capability_proof_routes import _write_trusted
 from zerg.main import api_app
 from zerg.main import app
 from zerg.routers import provider_capability_proofs as routes
+from zerg.services.provider_capability_cell_verdicts import CellVerdict
+from zerg.services.provider_capability_cell_verdicts import CellVerdictStore
+from zerg.services.provider_capability_cell_verdicts import CellVerdictStoreError
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
@@ -88,16 +92,112 @@ def test_every_edge_passing_certifies_and_rows_scope_the_claim(monkeypatch, tmp_
     assert _chip(payload, "pi", "resume")["state"] == "unverified"
 
 
-def test_newer_failure_does_not_revoke_an_admissible_pass_until_it_ages_out(monkeypatch, tmp_path: Path) -> None:
+def _verdicts(edge, *, at: datetime, failures: int, outcome: str = "infrastructure_error"):
+    return [
+        CellVerdict(
+            provider=a.provider,
+            assertion_id=a.assertion_id,
+            scenario_id=a.scenario_id,
+            variant=a.variant,
+            outcome=outcome,
+            observed_at=at,
+            consecutive_failures=failures,
+        )
+        for a in edge
+    ]
+
+
+def _payload_with_verdicts(monkeypatch, tmp_path: Path, proofs, verdicts) -> dict:
+    store = CellVerdictStore(tmp_path / "verdicts")
+    store.publish(list(verdicts), now=NOW)
+    monkeypatch.setattr(routes, "_cell_verdict_store", lambda: store)
+    return _payload(monkeypatch, tmp_path, proofs)
+
+
+def test_two_consecutive_failures_after_a_pass_unlight_the_chip_as_unverified(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(a, at=NOW - timedelta(hours=2)) for a in edge]
+    failed_twice = _verdicts(edge, at=NOW - timedelta(minutes=5), failures=2)
+    chip = _chip(_payload_with_verdicts(monkeypatch, tmp_path, passed, failed_twice), "pi", "steerMidTurn")
+    # Not certified, and an infrastructure failure never reads as a product failure.
+    assert chip["state"] == "unverified"
+    for row in chip["requirements"]:
+        assert row["proof_status"] == "infrastructure_error"
+        assert row["latest_outcome"] == "infrastructure_error"
+        assert row["proven_at"] is None
+        # The row still names what the last pass ran against.
+        assert row["longhouse_git_sha"] == "a" * 40
+
+
+def test_one_failure_after_a_pass_leaves_the_chip_certified(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(a, at=NOW - timedelta(hours=2)) for a in edge]
+    failed_once = _verdicts(edge, at=NOW - timedelta(minutes=5), failures=1)
+    chip = _chip(_payload_with_verdicts(monkeypatch, tmp_path, passed, failed_once), "pi", "steerMidTurn")
+    assert chip["state"] == "certified"
+    # The failure stays visible without changing the claim.
+    assert {row["latest_outcome"] for row in chip["requirements"]} == {"infrastructure_error"}
+    assert all(row["proof_status"] == "pass" and row["proven_at"] for row in chip["requirements"])
+
+
+def test_a_lone_failed_proof_record_is_one_failure_and_does_not_revoke(monkeypatch, tmp_path: Path) -> None:
     edge = _edge("pi", "steerMidTurn")
     recent_pass = [_proof(a, at=NOW - timedelta(hours=2), suffix="pass") for a in edge]
     newer_fail = [_proof(a, outcome=AssertionOutcome.SEMANTIC_FAIL, at=NOW - timedelta(minutes=5), suffix="fail") for a in edge]
-    assert _chip(_payload(monkeypatch, tmp_path / "a", recent_pass + newer_fail), "pi", "steerMidTurn")["state"] == "certified"
+    assert _chip(_payload(monkeypatch, tmp_path, recent_pass + newer_fail), "pi", "steerMidTurn")["state"] == "certified"
 
+
+def test_a_failure_older_than_the_pass_is_ignored_because_the_cell_passed_again(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]
+    earlier = _verdicts(edge, at=NOW - timedelta(hours=3), failures=5)
+    assert _chip(_payload_with_verdicts(monkeypatch, tmp_path, passed, earlier), "pi", "steerMidTurn")["state"] == "certified"
+
+
+def test_one_revoked_requirement_unlights_the_whole_chip(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(a, at=NOW - timedelta(hours=2)) for a in edge]
+    chip = _chip(
+        _payload_with_verdicts(monkeypatch, tmp_path, passed, _verdicts(edge[:1], at=NOW - timedelta(minutes=5), failures=2)),
+        "pi",
+        "steerMidTurn",
+    )
+    assert chip["state"] == "unverified"
+    assert sorted(row["proof_status"] for row in chip["requirements"]) == sorted(["infrastructure_error"] + ["pass"] * (len(edge) - 1))
+
+
+def test_a_semantic_verdict_reads_failing_and_only_a_semantic_one(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(a, at=NOW - timedelta(hours=2)) for a in edge]
+    verdicts = _verdicts(edge, at=NOW - timedelta(minutes=5), failures=2, outcome="semantic_fail")
+    assert _chip(_payload_with_verdicts(monkeypatch, tmp_path, passed, verdicts), "pi", "steerMidTurn")["state"] == "failing"
+
+
+def test_a_pass_that_aged_out_is_stale_and_a_failure_cannot_revive_it(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
     expired = NOW - timedelta(seconds=max(a.max_age_seconds for a in edge) + 60)
     old_pass = [_proof(a, at=expired, suffix="old") for a in edge]
-    assert _chip(_payload(monkeypatch, tmp_path / "b", old_pass), "pi", "steerMidTurn")["state"] == "stale"
-    assert _chip(_payload(monkeypatch, tmp_path / "c", old_pass + newer_fail), "pi", "steerMidTurn")["state"] == "failing"
+    newer_fail = [_proof(a, outcome=AssertionOutcome.SEMANTIC_FAIL, at=NOW - timedelta(minutes=5), suffix="fail") for a in edge]
+    assert _chip(_payload(monkeypatch, tmp_path / "a", old_pass), "pi", "steerMidTurn")["state"] == "stale"
+    assert _chip(_payload(monkeypatch, tmp_path / "b", old_pass + newer_fail), "pi", "steerMidTurn")["state"] == "failing"
+
+
+def test_an_unreadable_verdict_store_fails_the_read_instead_of_certifying(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    passed = [_proof(a, at=NOW - timedelta(hours=2)) for a in edge]
+    store = CellVerdictStore(tmp_path / "verdicts")
+    store.publish(_verdicts(edge[:1], at=NOW - timedelta(minutes=5), failures=2), now=NOW)
+    (verdict_file,) = (tmp_path / "verdicts").glob("*.json")
+    verdict_file.write_text("{ corrupt")
+    monkeypatch.setattr(routes, "_cell_verdict_store", lambda: store)
+    with pytest.raises(CellVerdictStoreError):
+        _payload(monkeypatch, tmp_path, passed)
+    # The public route then answers 5xx, which the landing page renders as
+    # "unavailable"; it never caches or serves a chart missing a fact.
+    monkeypatch.setattr(routes, "_certification_cache", None)
+    response = TestClient(app, backend="asyncio", raise_server_exceptions=False).get("/api/public/provider-certification")
+    assert response.status_code == 500
+    assert routes._certification_cache is None
 
 
 def test_infrastructure_error_is_unknown_not_failure(monkeypatch, tmp_path: Path) -> None:
