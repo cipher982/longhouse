@@ -621,6 +621,39 @@ def test_omp_job_notice_completes_the_steered_tool_and_a_miss_says_what_was_serv
     ]
 
 
+def test_omp_steered_command_result_is_read_from_the_provider_stream(tmp_path) -> None:
+    marker = "LH_OMP_STEER_TOOL_42_abc"
+    first = "LH_OMP_STEER_FIRST_abc"
+    notice = {
+        "type": "message_end",
+        "message": {"role": "custom", "customType": "async-result", "content": f"<system-notice>\n{marker}\n</system-notice>"},
+    }
+
+    def stream(*records: dict) -> dict:
+        path = tmp_path / f"stdout-{len(list(tmp_path.iterdir()))}.log"
+        path.write_text("\n".join(json.dumps(record) for record in records) + "\nnot json\n", encoding="utf-8")
+        return {"stdout_path": str(path)}
+
+    assert "omp" in lifecycle._STEER_TOOL_RESULT_IN_PROVIDER_STREAM
+    assert "pi" not in lifecycle._STEER_TOOL_RESULT_IN_PROVIDER_STREAM
+    assert lifecycle._provider_stream_reports_tool_result(stream(notice), tool_marker=marker, first_marker=first)
+    # A synchronous tool result counts the same way.
+    result = {"type": "message_end", "message": {"role": "toolResult", "content": [{"type": "text", "text": marker}]}}
+    assert lifecycle._provider_stream_reports_tool_result(stream(result), tool_marker=marker, first_marker=first)
+    # The prompt and the model's own replies quote markers; only the provider's messages are evidence.
+    quoted = [
+        {"type": "message_end", "message": {"role": role, "content": [{"type": "text", "text": marker}]}} for role in ("user", "assistant")
+    ]
+    assert not lifecycle._provider_stream_reports_tool_result(stream(*quoted), tool_marker=marker, first_marker=first)
+    # The first turn's marker means an earlier command, not the steered one.
+    both = {"type": "message_end", "message": {"role": "custom", "content": f"{marker} {first}"}}
+    assert not lifecycle._provider_stream_reports_tool_result(stream(both), tool_marker=marker, first_marker=first)
+    assert not lifecycle._provider_stream_reports_tool_result({}, tool_marker=marker, first_marker=first)
+    assert not lifecycle._provider_stream_reports_tool_result(
+        {"stdout_path": str(tmp_path / "missing.log")}, tool_marker=marker, first_marker=first
+    )
+
+
 def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch):
     monkeypatch.setattr(
         lifecycle,

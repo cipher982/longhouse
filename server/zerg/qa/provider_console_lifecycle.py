@@ -1865,6 +1865,10 @@ def _post_steer(
 # reports the result in a later notice. Told to reply "when the command finishes",
 # its model answers once as the steer lands and again when that notice arrives.
 _STEER_ANSWER_MAY_REPEAT = frozenset({"omp"})
+# The same background job's result reaches OMP as a `custom` message in its own
+# stream, and the served transcript does not carry that system row. For these
+# providers the stream the Machine Agent captured is the completion evidence.
+_STEER_TOOL_RESULT_IN_PROVIDER_STREAM = frozenset({"omp"})
 
 
 def _run_steer_step(
@@ -1956,6 +1960,13 @@ def _run_steer_step(
     # The newest events: a long session's first 200 need not include the tool row.
     events = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?anchor=tail&limit=200").get("events") or []
     receipt["tool_ran_to_completion"] = _tool_ran_to_completion(events, tool_marker=tool_marker, first_marker=first_marker)
+    if receipt["tool_ran_to_completion"]:
+        receipt["tool_result_source"] = "served_events"
+    elif provider in _STEER_TOOL_RESULT_IN_PROVIDER_STREAM and _provider_stream_reports_tool_result(
+        terminal, tool_marker=tool_marker, first_marker=first_marker
+    ):
+        receipt["tool_ran_to_completion"] = True
+        receipt["tool_result_source"] = "provider_stream"
     if not receipt["tool_ran_to_completion"]:
         # Say what was served, so a failure is explained by the receipt alone.
         receipt["tool_marker_events"] = _tool_marker_rows(events, tool_marker)
@@ -1979,6 +1990,35 @@ def _tool_ran_to_completion(events: Iterable[object], *, tool_marker: str, first
         text = f"{event_text(event)}\n{event.get('tool_output_text') or ''}"
         if tool_marker in text and first_marker not in text:
             return True
+    return False
+
+
+def _provider_stream_reports_tool_result(claim: Mapping[str, object], *, tool_marker: str, first_marker: str) -> bool:
+    """Did the provider's own stream hand the steered command's result to the model?
+
+    Reads the run's captured stdout for a message the provider itself injected
+    (a background job's `custom` notice, or a `toolResult`) that carries the
+    computed marker. The user's and the assistant's messages never count, so
+    neither the prompt nor a reply that quotes the marker can satisfy it.
+    """
+
+    path = Path(str(claim.get("stdout_path") or ""))
+    if not path.is_file():
+        return False
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            if tool_marker not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            message = record.get("message") if isinstance(record, dict) else None
+            if not isinstance(message, dict) or message.get("role") not in {"custom", "toolResult"}:
+                continue
+            content = json.dumps(message.get("content"))
+            if tool_marker in content and first_marker not in content:
+                return True
     return False
 
 
