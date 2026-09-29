@@ -142,7 +142,10 @@ class EnforcementWiringTests(unittest.TestCase):
         dogfood = self.source("promote-dogfood.sh")
         self.assertLess(dogfood.index("lh_review_gate_promotion"), dogfood.index("deploy_json="))
         production = self.source("promote-production.sh")
-        self.assertLess(production.index("lh_review_gate_promotion"), production.index("lh_hosted_prepare_control_plane_auth\n"))
+        gate_at = production.index("lh_review_gate_promotion")
+        self.assertLess(gate_at, production.index("lh_hosted_reprovision_production"))
+        self.assertLess(gate_at, production.index('ssh "$DEMO_SSH_HOST"'))
+        self.assertLess(gate_at, production.index('if [[ "$CHECK_ONLY" == "1" ]]'))  # --check asks too
 
     def test_the_enforcement_path_is_itself_blocking(self):
         policy = gate.Policy.load(POLICY, "longhouse")
