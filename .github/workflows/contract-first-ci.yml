@@ -552,7 +552,13 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: macos-latest
-    timeout-minutes: 25
+    # The same 148 test cases take 10 to 25 minutes depending on the hosted macOS
+    # VM they land on (measured 2026-09-20..29: 106 successes, median 17.7 min,
+    # max 24.8; compile 3.4 vs 10.7 min and test phase 6 vs 15 min between a fast
+    # and a slow VM). At 25 the timeout cancelled healthy runs (3 of the last 12,
+    # and the v0.1.56 and v0.1.58 release gates), which is a failure that costs
+    # the whole 25 minutes. 40 leaves 1.6x headroom over the slowest success.
+    timeout-minutes: 40
     name: "iOS tests"
 
     steps:
