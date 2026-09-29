@@ -168,6 +168,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         config.profile.as_deref(),
         &session_dir,
         &session_file,
+        omp_supports_no_ui(&config.omp_bin),
     );
     // RPC stdin: see `console_rpc`. The prompt and a later steer are written
     // there; stdout still goes to the file the monitors tail.
@@ -782,25 +783,64 @@ async fn settle_recovered_dead_claim(
         .await;
 }
 
+/// `--no-ui` (headless extensions under `--mode rpc`) is newer than `--mode rpc`
+/// itself: OMP 18.2.9 has the mode and rejects the flag ("unknown flag") before
+/// it reads a prompt, so every Console turn on such a build died in seconds.
+/// Ask the installed binary instead of assuming, and keep the answer for a few
+/// minutes so a turn does not pay for a second process start. A binary that
+/// cannot be asked is assumed current: the launch then fails loudly on its own.
+fn omp_supports_no_ui(omp_bin: &str) -> bool {
+    const TTL: Duration = Duration::from_secs(600);
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (Instant, bool)>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some((asked_at, supported)) = cache.lock().ok().and_then(|c| c.get(omp_bin).copied()) {
+        if asked_at.elapsed() < TTL {
+            return supported;
+        }
+    }
+    let supported = std::process::Command::new(omp_bin)
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| help_advertises_no_ui(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or(true);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(omp_bin.to_string(), (Instant::now(), supported));
+    }
+    supported
+}
+
+fn help_advertises_no_ui(help: &str) -> bool {
+    help.lines()
+        .any(|line| line.trim_start().starts_with("--no-ui"))
+}
+
 pub fn build_omp_args(
     model: Option<&str>,
     profile: Option<&str>,
     session_dir: &Path,
     session_file: &Path,
+    headless_extensions: bool,
 ) -> Vec<String> {
     let has_existing_session = std::fs::metadata(session_file)
         .map(|metadata| metadata.len() > 0)
         .unwrap_or(false);
-    let mut args = vec![
-        "--mode".into(),
-        "rpc".into(),
+    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
+    if headless_extensions {
         // Extensions run headless: no extension_ui_request dialogs for a host.
-        "--no-ui".into(),
+        args.push("--no-ui".into());
+    }
+    args.extend([
         "--session-dir".into(),
         session_dir.to_string_lossy().into_owned(),
         "--resume".into(),
         session_file.to_string_lossy().into_owned(),
-    ];
+    ]);
     if has_existing_session {
         args.push("--continue".into());
     }
@@ -1601,6 +1641,7 @@ mod tests {
             Some("work"),
             Path::new("/sessions"),
             Path::new("/sessions/exact.jsonl"),
+            true,
         );
         assert_eq!(
             args,
@@ -1633,8 +1674,32 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let session_file = temp.path().join("session.jsonl");
         std::fs::write(&session_file, b"{\"type\":\"session\"}\n").unwrap();
-        let args = build_omp_args(None, None, temp.path(), &session_file);
+        let args = build_omp_args(None, None, temp.path(), &session_file, true);
         assert!(args.iter().any(|arg| arg == "--continue"));
+    }
+
+    #[test]
+    fn omp_without_no_ui_still_gets_rpc_mode_but_not_the_flag() {
+        let args = build_omp_args(
+            None,
+            None,
+            Path::new("/sessions"),
+            Path::new("/sessions/exact.jsonl"),
+            false,
+        );
+        assert_eq!(args[..2], ["--mode", "rpc"]);
+        assert!(!args.iter().any(|arg| arg == "--no-ui"));
+        assert!(args.iter().any(|arg| arg == "--resume"));
+    }
+
+    #[test]
+    fn help_text_decides_whether_no_ui_is_advertised() {
+        let current = "      --mode=<value>   Output mode: text, json, rpc, or rpc-ui\n      --no-ui          With --mode rpc: run extensions headless\n";
+        let old = "      --mode=<value>   Output mode: text, json, rpc, or rpc-ui\n      --no-tools       Disable all built-in tools\n";
+        assert!(help_advertises_no_ui(current));
+        assert!(!help_advertises_no_ui(old));
+        // A mention in prose is not the flag.
+        assert!(!help_advertises_no_ui("use --no-ui to hide dialogs"));
     }
 
     #[test]
