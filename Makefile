@@ -196,6 +196,7 @@ ios-project-check: ## Regenerate and verify Xcode source membership
 test-ios: ## iOS unit + smoke tests (simulator) — the merge gate (IOS_TEST_SCHEMES / IOS_TEST_SLICE=i/n run part of it)
 	@$(MAKE) ios-project
 	@DESTINATION="$${IOS_DESTINATION:-$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)}"; \
+	if [ -n "$(IOS_TEST_SCHEMES)$(IOS_TEST_SLICE)" ]; then echo "test-ios: PARTIAL run (schemes '$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))', slice '$(IOS_TEST_SLICE)'); the merge gate is '$(IOS_MERGE_TEST_SCHEMES)'"; fi; \
 	IOS_TEST_SCHEMES="$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChatUITests/testName)
@@ -209,7 +210,7 @@ ios-previews: ## Render every SwiftUI #Preview to PNG under artifacts/ios-previe
 test-ios-perf: ## iOS wall-clock benchmarks (simulator) — never gates a merge
 	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
-	IOS_TEST_SCHEMES="$(IOS_PERF_TEST_SCHEMES)" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="$(IOS_PERF_TEST_SCHEMES)" IOS_TEST_SLICE="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
 	@$(MAKE) ios-project
@@ -366,7 +367,7 @@ test-mobile-chat-stress: ## Holistic iOS mobile chat fixture stress test
 	@$(MAKE) ios-project
 	@rm -f /tmp/longhouse-chat-replay.json
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
-	IOS_TEST_SCHEMES="LonghouseChatStress" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_SLICE="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mobile chat stress test
 	@$(MAKE) ios-project
@@ -381,7 +382,7 @@ test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mob
 		--output "$$REPLAY_PATH"; \
 	DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
 	LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH="$$REPLAY_PATH" \
-	IOS_TEST_SCHEMES="LonghouseChatStress" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_SLICE="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-ios-helper: ## iOS simulator and native-dispatch helper script tests
 	@bash scripts/tests/select-ios-simulator.test.sh

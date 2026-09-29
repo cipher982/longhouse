@@ -604,6 +604,7 @@ final class SessionChatUITests: XCTestCase {
     ) {
         let deadline = Date().addingTimeInterval(timeout)
         var visible = true
+        var sawValidFrame = false
         while true {
             if !element.exists {
                 visible = false
@@ -612,13 +613,15 @@ final class SessionChatUITests: XCTestCase {
             let frame = element.frame
             let screen = app.frame
             if frame.isFiniteAndNonNull, screen.isFiniteAndNonNull {
+                sawValidFrame = true
                 visible = frame.intersects(screen)
                 if !visible { break }
             }
             if Date() >= deadline { break }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        XCTAssertFalse(visible, "\(element) is still on screen", file: file, line: line)
+        let reason = sawValidFrame ? "is still on screen" : "never reported a valid frame"
+        XCTAssertFalse(visible, "\(element) \(reason)", file: file, line: line)
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {

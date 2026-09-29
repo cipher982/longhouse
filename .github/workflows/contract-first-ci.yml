@@ -601,6 +601,11 @@ jobs:
       - name: Install XcodeGen
         run: scripts/ci/install_xcodegen.sh
 
+      # The other place this runs (test-ios-helper) is gated on backend paths, so
+      # an edit to only this matrix or the Makefile would skip it.
+      - name: Check these lanes cover the merge gate
+        run: python3 scripts/tests/ios-test-slice.test.py
+
       - name: Run iOS fixture in the isolated GitHub-hosted macOS VM
         env:
           NATIVE_OPTIONS_JSON: >-
