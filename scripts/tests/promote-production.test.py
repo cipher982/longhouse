@@ -47,6 +47,8 @@ REVIEW_GATE_STUB = """\
 lh_review_gate_promotion() {
   printf '%s %s\\n' "$1" "$2" >> "$FIXTURE_ROOT/gate_calls"
   [[ "${FIXTURE_GATE_REFUSES:-0}" != "1" ]] || { echo "review-gate: REFUSED" >&2; return 1; }
+  # The real gate reports success on stdout; the receipt on stdout must stay JSON.
+  echo "review-gate: promotion OK."
 }
 """
 
