@@ -26,6 +26,13 @@ that now serves a different commit than the one QA verified before it started.
                 is never read as a supersession.
 
 Exit 0 for passed and superseded, 1 for failed. Stdlib only.
+
+`--receipt PATH` writes the verdict as JSON (`longhouse.hosted-qa-verdict.v1`),
+which the workflow uploads as the artifact `hosted-live-qa-verdict-<sha>`. It is
+the only Hosted Live QA evidence `make promote-production` accepts: a green run
+is not enough (a superseded run also exits 0 and concludes success), so the
+promotion reads the verdict itself and treats anything but `passed` as no
+evidence (scripts/ops/promotion_gates.py).
 """
 
 from __future__ import annotations
@@ -207,6 +214,60 @@ def decide(
     return Verdict("failed", reason, failed, served)
 
 
+RECEIPT_SCHEMA = "longhouse.hosted-qa-verdict.v1"
+IMAGE_DIGEST_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+
+
+def tested_image(own_deployment: str, get_deployment: Callable[[str], dict[str, Any]]) -> str | None:
+    """The digest the canary was deployed with, when its receipt can be read.
+
+    Best effort: the verdict never depends on it, and a promotion only refuses a
+    receipt whose digest it can read and that differs from the one promoted.
+    """
+    if not own_deployment:
+        return None
+    try:
+        image = get_deployment(own_deployment).get("image_digest")
+    except (EvidenceUnavailable, OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return image if isinstance(image, str) and IMAGE_DIGEST_RE.match(image) else None
+
+
+def build_receipt(
+    result: Verdict,
+    *,
+    expected_sha: str,
+    started_at: datetime,
+    decided_at: datetime,
+    subdomain: str,
+    own_deployment: str,
+    step_outcomes: dict[str, str],
+    image_digest: str | None,
+    environ: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "schema": RECEIPT_SCHEMA,
+        "verdict": result.verdict,
+        "reason": result.reason,
+        "verified_sha": expected_sha,
+        "canary_sha": result.canary_now,
+        "canary_subdomain": subdomain,
+        "canary_deployment_id": own_deployment or None,
+        "canary_image_digest": image_digest,
+        "started_at": started_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "decided_at": decided_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "failed_steps": result.failed_steps,
+        "steps": step_outcomes,
+        "superseded_by": [row.get("id") for row in result.superseded_by],
+        "run": {
+            "repository": environ.get("GITHUB_REPOSITORY"),
+            "workflow": environ.get("GITHUB_WORKFLOW"),
+            "id": environ.get("GITHUB_RUN_ID"),
+            "attempt": environ.get("GITHUB_RUN_ATTEMPT"),
+        },
+    }
+
+
 def http_json(url: str, *, headers: dict[str, str] | None = None, timeout: float = 15) -> Any:
     # Cloudflare answers the default Python-urllib agent with 403 (error 1010).
     request = urllib.request.Request(url, headers={"User-Agent": "longhouse-hosted-qa-verdict/1", **(headers or {})})
@@ -280,6 +341,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--own-deployment", default="", help="Deployment receipt this QA run observed, if any.")
     parser.add_argument("--step", action="append", default=[], metavar="NAME=OUTCOME", help="QA step outcome (repeatable).")
     parser.add_argument("--health-url", help="Defaults to https://<subdomain>.longhouse.ai/api/health.")
+    parser.add_argument("--receipt", help="Write the verdict here as JSON (uploaded as the promotion evidence).")
     args = parser.parse_args(argv)
     if not SHA_RE.match(args.expected_sha):
         parser.error("--expected-sha must be a full 40-character commit SHA")
@@ -301,10 +363,11 @@ def main(argv: list[str] | None = None) -> int:
     # Read first: the read can take ~25 s while the canary restarts, and a
     # deployment submitted meanwhile is part of the run.
     health = read_health(args.health_url or f"https://{args.subdomain}.longhouse.ai/api/health")
+    started_at, now = parse_ts(args.started_at), datetime.now(timezone.utc)
     result = decide(
         expected_sha=args.expected_sha,
-        started_at=parse_ts(args.started_at),
-        now=datetime.now(timezone.utc),
+        started_at=started_at,
+        now=now,
         subdomain=args.subdomain,
         own_deployment=args.own_deployment,
         step_outcomes=outcomes,
@@ -313,6 +376,21 @@ def main(argv: list[str] | None = None) -> int:
         get_deployment=get_deployment,
     )
     emit(result, args)
+    if args.receipt:
+        receipt = build_receipt(
+            result,
+            expected_sha=args.expected_sha,
+            started_at=started_at,
+            decided_at=now,
+            subdomain=args.subdomain,
+            own_deployment=args.own_deployment,
+            step_outcomes=outcomes,
+            image_digest=tested_image(args.own_deployment, get_deployment),
+            environ=dict(os.environ),
+        )
+        with open(args.receipt, "w", encoding="utf-8") as handle:
+            json.dump(receipt, handle, indent=2, sort_keys=True)
+            handle.write("\n")
     return 0 if result.ok else 1
 
 

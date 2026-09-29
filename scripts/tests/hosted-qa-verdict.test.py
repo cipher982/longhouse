@@ -9,6 +9,7 @@ plane's own (UTC, no offset) and the runs' recorded windows.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -347,6 +348,95 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertEqual(out["verdict"], "passed")
+
+
+class ReceiptTests(unittest.TestCase):
+    """`--receipt` is the only Hosted Live QA evidence a production promotion accepts."""
+
+    DIGEST = "ghcr.io/cipher982/longhouse-runtime@sha256:" + "b" * 64
+
+    def receipt(self, *, served: dict | None, steps: list[str], control: Control, own: str = "d-own") -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "receipt.json")
+            argv = [
+                "--expected-sha", sha("f4eff9d7c"),
+                "--started-at", "2026-09-29T17:35:10Z",
+                "--subdomain", CANARY,
+                "--own-deployment", own,
+                "--receipt", str(path),
+                *[part for step in steps for part in ("--step", step)],
+            ]  # fmt: skip
+            env = {
+                "CONTROL_PLANE_URL": "https://control.test",
+                "CONTROL_PLANE_ADMIN_TOKEN": "token",
+                "GITHUB_REPOSITORY": "cipher982/longhouse",
+                "GITHUB_WORKFLOW": "Hosted Live QA",
+                "GITHUB_RUN_ID": "36000000001",
+                "GITHUB_RUN_ATTEMPT": "1",
+            }
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(verdict, "read_health", return_value=served),
+                mock.patch.object(verdict, "control_plane_readers", return_value=(control.list_deployments, control.get_deployment)),
+                mock.patch.object(verdict, "datetime", wraps=datetime) as clock,
+            ):
+                clock.now.return_value = utc("2026-09-29T17:41:21Z")
+                code = verdict.main(argv)
+            return code, json.loads(path.read_text())
+
+    green = ["qa_live=success", "hosted_shipper_bench=success", "render_canary=skipped", "cohort_journey=success"]
+
+    def test_passed_receipt_names_the_commit_run_and_tested_image(self) -> None:
+        control = Control([])
+        control.targets["d-own"] = {"image_digest": self.DIGEST, "targets": []}
+        code, receipt = self.receipt(served=health(sha("f4eff9d7c")), steps=self.green, control=control)
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["schema"], "longhouse.hosted-qa-verdict.v1")
+        self.assertEqual(receipt["verdict"], "passed")
+        self.assertEqual(receipt["verified_sha"], sha("f4eff9d7c"))
+        self.assertEqual(receipt["canary_sha"], sha("f4eff9d7c"))
+        self.assertEqual(receipt["canary_deployment_id"], "d-own")
+        self.assertEqual(receipt["canary_image_digest"], self.DIGEST)
+        self.assertEqual(receipt["run"], {"repository": "cipher982/longhouse", "workflow": "Hosted Live QA", "id": "36000000001", "attempt": "1"})
+        self.assertEqual(receipt["failed_steps"], [])
+
+    def test_superseded_receipt_says_so_and_names_what_replaced_the_canary(self) -> None:
+        rows = [deployment("d-new", "05bfd7be7", "2026-09-29T17:39:53", "2026-09-29T17:40:32.4")]
+        code, receipt = self.receipt(
+            served=health(sha("f4eff9d7c")),
+            steps=["qa_live=success", "hosted_shipper_bench=failure", "render_canary=skipped", "cohort_journey=skipped"],
+            control=Control(rows),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["verdict"], "superseded")
+        self.assertEqual(receipt["superseded_by"], ["d-new"])
+        self.assertEqual(receipt["failed_steps"], ["hosted_shipper_bench"])
+
+    def test_failed_receipt_is_written_too(self) -> None:
+        code, receipt = self.receipt(
+            served=health(sha("f4eff9d7c")),
+            steps=["qa_live=failure", "hosted_shipper_bench=skipped", "render_canary=skipped", "cohort_journey=skipped"],
+            control=Control([]),
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt["verdict"], "failed")
+
+    def test_an_unreadable_deployment_receipt_leaves_the_image_unnamed_not_the_verdict_wrong(self) -> None:
+        code, receipt = self.receipt(served=health(sha("f4eff9d7c")), steps=self.green, control=Control([], down=True))
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["verdict"], "passed")
+        self.assertIsNone(receipt["canary_image_digest"])
+
+    def test_a_tag_is_not_a_digest(self) -> None:
+        control = Control([])
+        control.targets["d-own"] = {"image_digest": "ghcr.io/cipher982/longhouse-runtime:latest", "targets": []}
+        _code, receipt = self.receipt(served=health(sha("f4eff9d7c")), steps=self.green, control=control)
+        self.assertIsNone(receipt["canary_image_digest"])
+
+    def test_a_scheduled_run_has_no_deployment_and_names_no_image(self) -> None:
+        _code, receipt = self.receipt(served=health(sha("f4eff9d7c")), steps=self.green, control=Control([]), own="")
+        self.assertIsNone(receipt["canary_deployment_id"])
+        self.assertIsNone(receipt["canary_image_digest"])
 
 
 if __name__ == "__main__":

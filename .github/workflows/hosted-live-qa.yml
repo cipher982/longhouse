@@ -378,7 +378,22 @@ jobs:
             --step "hosted_shipper_bench=${{ steps.hosted_shipper_bench.outcome }}" \
             --step "render_canary=${{ steps.render_canary.outcome }}" \
             --step "cohort_journey=${{ steps.cohort_journey.outcome }}" \
-            --step "cohort_contracts=${{ steps.cohort_contracts.outcome }}"
+            --step "cohort_contracts=${{ steps.cohort_contracts.outcome }}" \
+            --receipt "$RUNNER_TEMP/hosted-live-qa-verdict.json"
+
+      # The verdict, not the run's conclusion, is the QA evidence: a superseded
+      # run also concludes success. `make promote-production` reads this
+      # artifact by name, per commit, and accepts only verdict "passed"
+      # (scripts/ops/promotion_gates.py). A re-run of the same commit replaces it.
+      - name: Upload verdict receipt
+        if: always() && steps.verdict.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-live-qa-verdict-${{ steps.runtime_before.outputs.runtime_sha }}
+          path: ${{ runner.temp }}/hosted-live-qa-verdict.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 90
 
       - name: Stand down, canary superseded
         if: always() && (steps.verdict.outputs.verdict == 'superseded' || steps.runtime_before.outputs.stale == 'true')

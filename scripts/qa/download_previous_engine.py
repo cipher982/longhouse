@@ -18,6 +18,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -145,6 +146,14 @@ def download_asset(*, repo: str, tag: str, asset_name: str, output: Path) -> Non
     output.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -163,6 +172,11 @@ def main() -> int:
         default=os.environ.get("GITHUB_REPOSITORY", "cipher982/longhouse"),
         help="owner/repo to read releases from (default: %(default)s).",
     )
+    parser.add_argument(
+        "--metadata",
+        type=Path,
+        help="Write what was downloaded (or why nothing was) here as JSON; engine_compat_receipt.py turns it into the per-commit receipt.",
+    )
     args = parser.parse_args()
 
     if shutil.which("gh") is None:
@@ -177,8 +191,23 @@ def main() -> int:
         download_asset(repo=args.repo, tag=tag, asset_name=asset_name, output=args.output)
     except Skip as skip:
         print(f"SKIP: {skip}", file=sys.stderr)
+        if args.metadata:
+            args.metadata.write_text(json.dumps({"skipped": str(skip)}) + "\n", encoding="utf-8")
         return SKIP
 
+    if args.metadata:
+        args.metadata.write_text(
+            json.dumps(
+                {
+                    "previous_release_tag": tag,
+                    "asset": asset_name,
+                    "platform": engine_platform,
+                    "engine_sha256": sha256_of(args.output),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     print(f"engine-compat: downloaded {asset_name} from {tag} -> {args.output}")
     print(f"TAG={tag}")
     return 0

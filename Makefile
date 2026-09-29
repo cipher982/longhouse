@@ -583,18 +583,23 @@ test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
 # release-rings.md change 5: prove the candidate server still accepts the
 # engine that is actually running on users' laptops right now (the newest
 # published release that isn't the candidate's own already-tagged version).
-engine-compat: ## Ship a transcript with the last released engine against the candidate server (~10s; skips when no previous release exists for this platform)
+engine-compat: ## Ship a transcript with the last released engine against the candidate server (~10s; writes .build/engine-compat/receipt.json; skips when no previous release exists for this platform)
 	@mkdir -p .build/engine-compat
-	@python3 scripts/qa/download_previous_engine.py --output .build/engine-compat/longhouse-engine; status=$$?; \
+	@rm -f .build/engine-compat/previous.json .build/engine-compat/junit.xml .build/engine-compat/receipt.json
+	@python3 scripts/qa/download_previous_engine.py --output .build/engine-compat/longhouse-engine --metadata .build/engine-compat/previous.json; status=$$?; \
 	if [ "$$status" -eq 3 ]; then \
 		echo "engine-compat: skipped — no previous released engine binary for this platform"; \
+		python3 scripts/qa/engine_compat_receipt.py --metadata .build/engine-compat/previous.json --output .build/engine-compat/receipt.json; \
 		exit 0; \
 	elif [ "$$status" -ne 0 ]; then \
 		exit "$$status"; \
 	fi; \
-	cd server && LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
+	(cd server && LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
 		LONGHOUSE_ENGINE_BIN=$(CURDIR)/.build/engine-compat/longhouse-engine \
-		uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v -k TestClaudeShipping
+		uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v -k TestClaudeShipping \
+		--junitxml=$(CURDIR)/.build/engine-compat/junit.xml) && \
+	python3 scripts/qa/engine_compat_receipt.py --metadata .build/engine-compat/previous.json \
+		--junit .build/engine-compat/junit.xml --output .build/engine-compat/receipt.json
 
 test-shipper-synthetic-bench: ## Synthetic shipper bench fixture gate
 	@python3 scripts/build/generate_build_identity.py
@@ -851,6 +856,7 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@python3 scripts/tests/release.test.py
 	@python3 scripts/tests/test-isolation-image-key.test.py
 	@python3 scripts/tests/hosted-qa-verdict.test.py
+	@python3 scripts/tests/engine-compat-receipt.test.py
 	@cd server && uv run python ../scripts/tests/testflight.test.py
 	@python3 scripts/tests/ios-upload-preconditions.test.py
 
