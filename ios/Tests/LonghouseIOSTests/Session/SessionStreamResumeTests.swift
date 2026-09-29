@@ -215,17 +215,23 @@ struct SessionStreamResumeTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(recorder.lastSinceSeq == 777)
         #expect(recorder.lastKnownWorkspaceFingerprint == "sha256:cached-gap")
 
+        // The stream attaches on its own task; a gap yielded before its
+        // continuation exists is dropped, and one still queued when the pause
+        // cancels the consumer is never handled. Both left the persisted cursor
+        // in place on a loaded runner (run 36625099718), so wait on the state
+        // the gap handler sets instead of a fixed delay. It sets the connection
+        // state and clears the cursor in one main-actor step.
+        await waitForStartCount(recorder, atLeast: 1)
         recorder.emitReplayGap(latestSeq: 0)
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await waitUntil { model.realtimeConnection == .connected }, "the replay gap was never handled")
+        await waitForTailRequests(api, atLeast: 1)
         #expect(await api.tailRequestCount() >= 1)
 
         model.pauseRealtime()
         await model.start(sessionId: "session-1", appState: appState)
-        try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(recorder.lastSinceSeq == nil, "replay gap should clear stale persisted cursor")
         #expect(recorder.lastKnownWorkspaceFingerprint == nil, "tail refresh should replace a stale cached fingerprint")
 
@@ -610,6 +616,19 @@ struct SessionStreamResumeTests {
     /// ceiling does not weaken any assertion: the condition must still become
     /// true, and every #expect still runs against the real value.
     private let waitBudget: Duration = .seconds(10)
+
+    /// Poll `condition` until it holds or the budget runs out. Prefer this to a
+    /// fixed sleep: it returns the moment the state is reached and only fails
+    /// when the state never arrives.
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: waitBudget)
+        while clock.now < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return condition()
+    }
 
     private func waitForLastItemId(_ model: SessionViewModel, _ expected: String) async {
         let clock = ContinuousClock()

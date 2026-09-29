@@ -327,7 +327,7 @@ final class WebTranscriptScrollPinningTests: XCTestCase, WKNavigationDelegate {
         webView.layoutIfNeeded()
         window.layoutIfNeeded()
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(3))
+        let deadline = clock.now.advanced(by: Self.webKitCeiling)
         while clock.now < deadline {
             if abs(try await number("window.innerHeight") - Double(height)) <= 1 { break }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -364,7 +364,7 @@ final class WebTranscriptScrollPinningTests: XCTestCase, WKNavigationDelegate {
 
     private func waitUntil(
         _ context: String,
-        timeout: Duration = .seconds(3),
+        timeout: Duration = WebTranscriptScrollPinningTests.webKitCeiling,
         condition: () -> Bool
     ) async throws {
         let clock = ContinuousClock()
@@ -376,6 +376,19 @@ final class WebTranscriptScrollPinningTests: XCTestCase, WKNavigationDelegate {
         XCTFail("Timed out waiting for \(context)")
     }
 
+    /// Ceiling for anything that waits on WebKit's frame clock or layout.
+    ///
+    /// Every wait below returns the moment its condition holds, so a generous
+    /// ceiling costs nothing on a healthy machine. It only decides how long a
+    /// stalled WebKit gets to recover before the test calls it a failure. On a
+    /// hosted macOS VM the simulator's GPU process can stop answering for ten
+    /// seconds or more before WebKit's watchdog replaces it; requestAnimationFrame
+    /// does not fire meanwhile, and the old 10s and 3s ceilings failed
+    /// testContentResizeRepinsNativeContentOffset with "frame did not settle"
+    /// (run 36604632609). Killing the GPU process for 12s reproduces that failure.
+    private static let webKitCeiling: Duration = .seconds(45)
+    private static let webKitCeilingMilliseconds = 45_000
+
     /// Two frames: `scrollToBottom` re-scrolls inside a requestAnimationFrame,
     /// and the resize re-pin schedules one of its own.
     private func settle() async throws {
@@ -384,7 +397,7 @@ final class WebTranscriptScrollPinningTests: XCTestCase, WKNavigationDelegate {
                 """
                 return await Promise.race([
                     new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(1)))),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error("frame did not settle")), 10000))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("frame did not settle")), \(Self.webKitCeilingMilliseconds)))
                 ]);
                 """,
                 arguments: [:],

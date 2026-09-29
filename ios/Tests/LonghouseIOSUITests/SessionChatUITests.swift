@@ -135,7 +135,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 5))
         XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
 
     func testTranscriptStartsPinnedWithUserTailClearOfBottomChrome() {
@@ -145,7 +145,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 5))
         XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
 
     func testSendShowsOptimisticMessageImmediatelyAndClearsComposer() {
@@ -388,7 +388,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: 5))
         assertAnchoredAboveBottomChrome(currentLastMessage, app: app)
         assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
         let frame = XCTAttachment(screenshot: app.screenshot())
         frame.name = "ledger-keyboard-draft"
         frame.lifetime = .keepAlways
@@ -403,7 +403,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 5))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
 
     func testLongAssistantUpdateKeepsWrappedTailAboveBottomChrome() {
@@ -413,7 +413,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 20))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
 
     func testAssistantUpdateWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
@@ -431,7 +431,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(liveUpdate.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
 
     func testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
@@ -449,7 +449,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(finalChunk.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(finalChunk, app: app)
         assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
 
     func disabled_testLargeTranscriptScrollPerformance() {
@@ -586,12 +586,39 @@ final class SessionChatUITests: XCTestCase {
         app.descendants(matching: .any)["session-chat-transcript"]
     }
 
+    /// The element is gone, or its settled frame lies outside the screen.
+    ///
+    /// This does not ask `isHittable`. While WebKit relayouts under the keyboard
+    /// it publishes text with a frame that is briefly invalid (the same window
+    /// `waitForBottomGap` waits out), and XCTest answers `isHittable` on such an
+    /// element with a hard failure, "Activation point invalid and no suggested
+    /// hit points based on element frame", instead of `false`. It failed
+    /// testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom on
+    /// hosted CI (run 36368089332) and once in thirty runs on a loaded bench.
     private func assertNotVisible(
         _ element: XCUIElement,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        XCTAssertFalse(element.exists && element.isHittable, file: file, line: line)
+        let deadline = Date().addingTimeInterval(timeout)
+        var visible = true
+        while true {
+            if !element.exists {
+                visible = false
+                break
+            }
+            let frame = element.frame
+            let screen = app.frame
+            if frame.isFiniteAndNonNull, screen.isFiniteAndNonNull {
+                visible = frame.intersects(screen)
+                if !visible { break }
+            }
+            if Date() >= deadline { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertFalse(visible, "\(element) is still on screen", file: file, line: line)
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
@@ -774,5 +801,13 @@ final class SessionChatUITests: XCTestCase {
             luminanceTotal += 0.2126 * red + 0.7152 * green + 0.0722 * blue
         }
         return luminanceTotal / Double(width * height)
+    }
+}
+
+private extension CGRect {
+    /// `frame` on a WebKit accessibility element can be infinite or NaN while
+    /// layout is in flux; such a rect says nothing about where the element is.
+    var isFiniteAndNonNull: Bool {
+        !isNull && !isInfinite && origin.x.isFinite && origin.y.isFinite && size.width.isFinite && size.height.isFinite
     }
 }
