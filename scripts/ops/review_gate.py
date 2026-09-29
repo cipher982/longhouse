@@ -159,7 +159,9 @@ class Commit:
 
 
 def commits_in(repo: str | Path, *revs: str) -> list[Commit]:
-    out = git(repo, "log", "--no-merges", "--reverse", "--name-only", "--format=%x01%H%x02%s", *revs)
+    # --no-renames: a rename lists both its source and destination, so moving a file out of
+    # (or into) a blocking path or docs cannot hide it from the path rules.
+    out = git(repo, "log", "--no-merges", "--reverse", "--no-renames", "--name-only", "--format=%x01%H%x02%s", *revs)
     commits = []
     for chunk in out.split("\x01")[1:]:
         header, _, names = chunk.partition("\n")

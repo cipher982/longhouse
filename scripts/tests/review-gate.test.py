@@ -185,6 +185,22 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(exempt("Bump version to 0.1.61", ["server/pyproject.toml", "server/zerg/auth/x.py"]))
         self.assertFalse(exempt("Bump dependency", ["server/pyproject.toml"]))
 
+    def test_a_rename_out_of_a_blocking_path_still_counts_as_touching_it(self):
+        repo = self.repo
+        base = repo.commit("base", {"server/zerg/auth/tokens.py": "x = 1\n" * 40})
+        repo.git("update-ref", "refs/remotes/origin/main", base)
+        repo.git("mv", "server/zerg/auth/tokens.py", "server/zerg/security_tokens.py")
+        repo.git("commit", "-q", "-m", "move tokens out of auth")
+        (commit,) = gate.commits_in(self.tmp.name, f"{base}..HEAD")
+        self.assertIn("server/zerg/auth/tokens.py", commit.files)
+        self.assertEqual(self.policy.blocking_areas(commit.files), ["auth"])
+        # and a code file renamed into docs is not exempt
+        (Path(self.tmp.name) / "docs").mkdir()
+        repo.git("mv", "server/zerg/security_tokens.py", "docs/tokens.md")
+        repo.git("commit", "-q", "-m", "hide code in docs")
+        (last,) = gate.commits_in(self.tmp.name, "HEAD~1..HEAD")
+        self.assertFalse(self.policy.exempt_commit(last.subject, last.files))
+
     def test_blocking_areas(self):
         areas = self.policy.blocking_areas
         self.assertEqual(areas(["server/zerg/auth/tokens.py"]), ["auth"])
