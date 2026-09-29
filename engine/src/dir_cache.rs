@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
 
+use sha2::{Digest, Sha256};
+
 use crate::state::file_identity::AT_REST_AFTER;
 
 /// Directories kept at once. Claim directories are few; the bound only keeps a
@@ -98,6 +100,22 @@ where
         );
     }
     Ok(parsed)
+}
+
+/// A short signature of the `*.json` entries in `dir`, for a caller that keeps
+/// its own conclusion drawn from them: the same signature later means the same
+/// files. `None` when something in the directory was written too recently to
+/// vouch for, or it cannot be read; a directory that does not exist has a
+/// signature of its own.
+pub(crate) fn rested_signature(dir: &Path) -> Option<String> {
+    match list_json(dir) {
+        Ok(listing) => {
+            let signature = listing.signature?;
+            Some(format!("{:x}", Sha256::digest(format!("{signature:?}"))))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Some("absent".to_string()),
+        Err(_) => None,
+    }
 }
 
 struct Listing {

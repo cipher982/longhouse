@@ -375,31 +375,16 @@ impl TurnClaimRegistry {
     }
 
     pub fn list_all(&self) -> Result<Vec<TurnClaim>> {
-        let entries = match fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error).context("reading turn claim registry"),
-        };
-        let mut claims = Vec::new();
-        for entry in entries {
-            let path = entry?.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                continue;
-            }
-            let claim = fs::read(&path)
-                .map_err(anyhow::Error::from)
-                .and_then(|bytes| {
-                    serde_json::from_slice::<TurnClaim>(&bytes).map_err(anyhow::Error::from)
-                });
-            match claim {
-                Ok(claim) => claims.push(claim),
-                Err(error) => {
-                    tracing::warn!(path = %path.display(), %error, "Skipping unreadable turn claim")
-                }
-            }
-        }
-        claims.sort_by(|left, right| left.claimed_at.cmp(&right.claimed_at));
-        Ok(claims)
+        Ok(self.list_all_shared()?.to_vec())
+    }
+
+    /// The same claims as `list_all`, shared. A scan asks this once per source it
+    /// examines, so the directory is read again only when a claim file changed.
+    pub fn list_all_shared(&self) -> Result<Arc<Vec<TurnClaim>>> {
+        crate::dir_cache::parsed_json_dir(&self.root, parse_claim_file, |left, right| {
+            left.claimed_at.cmp(&right.claimed_at)
+        })
+        .context("reading turn claim registry")
     }
 
     pub fn mark_provider_binding(
@@ -490,6 +475,19 @@ impl TurnClaimRegistry {
 
     fn claim_path(&self, run_id: &str) -> PathBuf {
         self.root.join(format!("{run_id}.json"))
+    }
+}
+
+fn parse_claim_file(path: &std::path::Path, bytes: std::io::Result<Vec<u8>>) -> Option<TurnClaim> {
+    let claim = bytes
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| serde_json::from_slice::<TurnClaim>(&bytes).map_err(anyhow::Error::from));
+    match claim {
+        Ok(claim) => Some(claim),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "Skipping unreadable turn claim");
+            None
+        }
     }
 }
 
@@ -586,6 +584,50 @@ mod tests {
         let mut legacy = spawned;
         legacy.boot_id = None;
         assert!(!legacy.process_group_is_from_this_boot());
+    }
+
+    fn age(root: &std::path::Path) {
+        for entry in fs::read_dir(root).unwrap().flatten() {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+                .unwrap();
+        }
+    }
+
+    /// A scan lists the registry once per source it examines; the claims only
+    /// need reading again when one of them changed.
+    #[test]
+    fn listing_an_unchanged_registry_again_does_not_read_it_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&id(1), &id(2), &id(3), None, None, "codex")
+            .unwrap();
+        age(temp.path());
+
+        let before = crate::dir_cache::FILES_PARSED.with(|parsed| parsed.get());
+        let first = registry.list_all_shared().unwrap();
+        for _ in 0..4 {
+            assert!(std::sync::Arc::ptr_eq(
+                &first,
+                &registry.list_all_shared().unwrap()
+            ));
+        }
+        assert_eq!(
+            crate::dir_cache::FILES_PARSED.with(|parsed| parsed.get()) - before,
+            1
+        );
+        assert_eq!(registry.list_all().unwrap().len(), 1);
+
+        // A claim that moved on is what the next listing says.
+        registry.mark_terminal(&id(1), "completed", None).unwrap();
+        age(temp.path());
+        let after = registry.list_all_shared().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].state, "terminal");
     }
 
     #[test]

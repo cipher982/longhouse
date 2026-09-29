@@ -33,7 +33,8 @@ use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, Storag
 use crate::state::cursor_store_records;
 use crate::state::cursor_store_root;
 use crate::state::file_identity::{
-    cursor_fingerprint, file_identities_match, identity_from_metadata, wal_database_stamp,
+    cursor_fingerprint, file_identities_match, identity_from_metadata, rest_stamp,
+    wal_database_stamp,
 };
 use crate::state::file_state::FileState;
 use crate::state::pending_source_envelope::{self, PendingSourceEnvelope};
@@ -194,7 +195,7 @@ fn prepare_next_envelope_with_limit(
     let opaque_source_id = opaque_source_id(&path_text);
     let mut durable_session_id = session_id_override.map(str::to_string);
     if provider.eq_ignore_ascii_case("pi") {
-        let claims = crate::turn_claims::default_registry()?.list_all()?;
+        let claims = crate::turn_claims::default_registry()?.list_all_shared()?;
         match crate::pi_session::bind_discovered_source(conn, &canonical_path, &claims)? {
             crate::pi_session::SourceOwnership::Managed(session_id) => {
                 if durable_session_id
@@ -242,7 +243,7 @@ fn prepare_next_envelope_with_limit(
         }
     }
     if provider.eq_ignore_ascii_case("omp") {
-        let claims = crate::turn_claims::default_registry()?.list_all()?;
+        let claims = crate::turn_claims::default_registry()?.list_all_shared()?;
         match crate::omp_session::bind_discovered_source(conn, &canonical_path, &claims)? {
             crate::omp_session::SourceOwnership::Managed(session_id) => {
                 if durable_session_id
@@ -382,7 +383,7 @@ fn prepare_next_envelope_with_limit(
         match crate::antigravity_print::bind_discovered_source(
             conn,
             &canonical_path,
-            &crate::turn_claims::default_registry()?.list_all()?,
+            &crate::turn_claims::default_registry()?.list_all_shared()?,
             &crate::config::get_agent_dir()?,
         )? {
             crate::antigravity_print::SourceOwnership::Managed(session_id) => {
@@ -2712,10 +2713,72 @@ fn block_source<T>(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &s
     .into())
 }
 
+/// OpenCode databases this process last found with nothing left to ship, and
+/// what it depended on then (see `opencode_rest_key`), by path. Kept in memory:
+/// after a restart the first pass reads the database once, as it always did.
+static OPENCODE_AT_REST: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// What a walk over an OpenCode database depended on outside the database's own
+/// records: the file's stamp (any change to a session, however silent, changes
+/// the file), the managed-state files that bind a session to a Longhouse one,
+/// and the build. `None` when something was written too recently to vouch for.
+fn opencode_rest_key(db_path: &Path) -> Option<String> {
+    Some(format!(
+        "{}|{}|{}",
+        wal_database_stamp(db_path)?,
+        opencode_db::managed_state_signature()?,
+        crate::build_identity::COMMIT
+    ))
+}
+
+/// Whether the walk that last found nothing left to ship saw this same database
+/// and binding evidence, and nothing has been queued since, blocked or not.
+fn opencode_database_is_settled(
+    conn: &Connection,
+    db_path: &Path,
+    rest_key: Option<&str>,
+) -> Result<bool> {
+    let Some(rest_key) = rest_key else {
+        return Ok(false);
+    };
+    let at_rest = OPENCODE_AT_REST
+        .lock()
+        .is_ok_and(|rests| rests.get(db_path).is_some_and(|known| known == rest_key));
+    Ok(at_rest && !pending_source_envelope::exists_for_provider(conn, "opencode")?)
+}
+
+/// Walking an OpenCode database reads every session's every message and part.
+/// The scan does that to learn that nothing moved, so a database that has not
+/// moved since a walk found nothing to ship is not walked again.
 pub(crate) fn prepare_next_opencode_envelope(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
+) -> Result<Option<PreparedStorageV2Envelope>> {
+    // Stamped before anything is read, so a write that lands while the walk
+    // runs is seen as a change by the next one.
+    let rest_key = opencode_rest_key(db_path);
+    if opencode_database_is_settled(conn, db_path, rest_key.as_deref())? {
+        return Ok(None);
+    }
+    let mut waited = false;
+    let prepared = walk_opencode_database(conn, capabilities, db_path, &mut waited)?;
+    // A session held back for its managed binding is waiting on the clock, not
+    // on the database, so it is not a walk that found nothing to ship.
+    if let (None, false, Some(rest_key)) = (&prepared, waited, rest_key) {
+        if let Ok(mut rests) = OPENCODE_AT_REST.lock() {
+            rests.insert(db_path.to_path_buf(), rest_key);
+        }
+    }
+    Ok(prepared)
+}
+
+fn walk_opencode_database(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    db_path: &Path,
+    waited: &mut bool,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
@@ -2784,6 +2847,7 @@ pub(crate) fn prepare_next_opencode_envelope(
                     provider_session_id = candidate.provider_session_id,
                     "Waiting for OpenCode managed-session rollover binding"
                 );
+                *waited = true;
                 continue;
             }
             let resolution = if managed_session_id.is_some()
@@ -5391,10 +5455,53 @@ fn source_stamp(path: &Path) -> Result<(u64, i128)> {
     Ok((metadata.len(), modified))
 }
 
+/// Content hashes of sources that were unchanged when hashed, by path.
+static FILE_HASHES: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, (String, String)>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+#[cfg(test)]
+thread_local! {
+    /// Whole-file reads `hash_file` made on this thread, so a test can say a
+    /// pass over an unchanged file did not make one.
+    static FILE_HASH_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The source count is small and stable; the bound only stops a machine that
+/// churns through paths from growing the map without limit.
+const MAX_CACHED_FILE_HASHES: usize = 50_000;
+
+/// The hash of a whole file, re-read only when the file changed.
+///
+/// A source whose revision is its content hash is one a provider rewrites in
+/// place, so it cannot be told apart from its last look by length alone. Every
+/// scan pass used to read each such file whole to learn it had not moved. The
+/// stat stamp says the same thing for free: it is taken before the read and
+/// never trusts a file written in the last couple of seconds, so a write that
+/// lands during or after a hash changes what the next call sees. The copy lives
+/// in this process, so the first pass after a restart reads every file once.
 fn hash_file(path: &Path) -> Result<String> {
+    let stamp = std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| rest_stamp(&metadata));
+    if let (Some(stamp), Ok(hashes)) = (stamp.as_deref(), FILE_HASHES.lock()) {
+        if let Some((known_stamp, hash)) = hashes.get(path) {
+            if known_stamp == stamp {
+                return Ok(hash.clone());
+            }
+        }
+    }
+    #[cfg(test)]
+    FILE_HASH_READS.with(|reads| reads.set(reads.get() + 1));
     let bytes = std::fs::read(path)
         .with_context(|| format!("reading source revision: {}", path.display()))?;
-    Ok(hex_hash(Sha256::digest(bytes).into()))
+    let hash = hex_hash(Sha256::digest(bytes).into());
+    if let (Some(stamp), Ok(mut hashes)) = (stamp, FILE_HASHES.lock()) {
+        if hashes.len() >= MAX_CACHED_FILE_HASHES && !hashes.contains_key(path) {
+            hashes.clear();
+        }
+        hashes.insert(path.to_path_buf(), (stamp, hash.clone()));
+    }
+    Ok(hash)
 }
 
 /// Revision signal for a Pi-lineage JSONL archive (Pi and OMP).
@@ -12141,6 +12248,237 @@ mod tests {
         .unwrap();
     }
 
+    /// An OpenCode database shipped and then left alone.
+    fn settled_opencode_database(dir: &Path, session_id: &str) -> (PathBuf, Connection) {
+        let db_path = dir.join("opencode.db");
+        opencode_db_with_session(&db_path, session_id, "/tmp/settled-workspace");
+        let mut conn = open_db(Some(&dir.join("state.db"))).unwrap();
+        rest_cursor_store(&db_path);
+        let first = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+        // The walk that finds nothing left to ship is the one that records it.
+        assert!(
+            prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .is_none()
+        );
+        (db_path, conn)
+    }
+
+    fn opencode_opens() -> usize {
+        opencode_db::DATABASE_OPENS.with(|opens| opens.get())
+    }
+
+    fn with_opencode_state_root<T>(root: &Path, body: impl FnOnce() -> T) -> T {
+        temp_env::with_vars(
+            [
+                (
+                    "LONGHOUSE_OPENCODE_STATE_ROOT",
+                    Some(root.as_os_str().to_owned()),
+                ),
+                ("LONGHOUSE_HOME", Some(root.join("home").into_os_string())),
+            ],
+            body,
+        )
+    }
+
+    #[test]
+    fn a_scan_pass_over_an_opencode_database_that_has_not_moved_does_not_open_it() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        with_opencode_state_root(&dir.path().join("state-root"), || {
+            let (db_path, mut conn) = settled_opencode_database(dir.path(), "settled-session");
+
+            let opens = opencode_opens();
+            let window = WalWindow::open(&conn);
+            for _pass in 0..3 {
+                assert!(
+                    prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            assert_eq!(
+                opencode_opens(),
+                opens,
+                "an OpenCode database that had not moved was walked again"
+            );
+            let cost = window.cost(&conn);
+            assert!(cost.is_zero(), "an unchanged OpenCode scan wrote: {cost:?}");
+        });
+    }
+
+    #[test]
+    fn an_opencode_database_that_changed_is_walked_again_and_ships() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        with_opencode_state_root(&dir.path().join("state-root"), || {
+            let (db_path, mut conn) = settled_opencode_database(dir.path(), "settled-session");
+            let db = Connection::open(&db_path).unwrap();
+            db.execute(
+                "INSERT INTO message VALUES (
+                     'message-2', 'settled-session', 1779000000030, 1779000000030, '{\"role\":\"assistant\"}'
+                 )",
+                [],
+            )
+            .unwrap();
+
+            // Written this instant: nothing may vouch for it.
+            let opens = opencode_opens();
+            let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("a database written just now must ship its new message");
+            assert!(opencode_opens() > opens);
+            acknowledge_prepared(&mut conn, &prepared);
+
+            // Written, then left alone: the stamp moved, so the last walk no
+            // longer describes it, and the walk after that settles again.
+            db.execute(
+                "INSERT INTO message VALUES (
+                     'message-3', 'settled-session', 1779000000040, 1779000000040, '{\"role\":\"user\"}'
+                 )",
+                [],
+            )
+            .unwrap();
+            rest_cursor_store(&db_path);
+            let opens = opencode_opens();
+            let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("a changed database must ship its new message");
+            assert!(opencode_opens() > opens);
+            acknowledge_prepared(&mut conn, &prepared);
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none()
+            );
+            let opens = opencode_opens();
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(opencode_opens(), opens);
+        });
+    }
+
+    #[test]
+    fn an_opencode_database_with_an_envelope_waiting_is_not_called_settled() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        with_opencode_state_root(&dir.path().join("state-root"), || {
+            let (db_path, conn) = settled_opencode_database(dir.path(), "settled-session");
+            let rest_key = opencode_rest_key(&db_path);
+            assert!(rest_key.is_some());
+            assert!(opencode_database_is_settled(&conn, &db_path, rest_key.as_deref()).unwrap());
+
+            // Something is queued for one of its sessions, blocked or not.
+            let epoch: String = conn
+                .query_row(
+                    "SELECT source_epoch FROM source_epoch_registry WHERE provider = 'opencode'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            conn.execute(
+                "INSERT INTO pending_source_envelope (
+                     source_epoch, source_path, range_start, range_end, envelope_id,
+                     request_body_zstd, media_objects_zstd, raw_bytes, event_count,
+                     has_reply_evidence, has_more, created_at
+                 ) VALUES (?1, 'opencode.db', 0, 1, 'envelope', X'00', X'00', 0, 0, 0, 0, 'now')",
+                [epoch],
+            )
+            .unwrap();
+            assert!(!opencode_database_is_settled(&conn, &db_path, rest_key.as_deref()).unwrap());
+        });
+    }
+
+    #[test]
+    fn managed_state_that_arrives_for_a_settled_opencode_database_still_rebinds_it() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let state_root = dir.path().join("state-root");
+        with_opencode_state_root(&state_root, || {
+            let (db_path, mut conn) = settled_opencode_database(dir.path(), "settled-session");
+
+            // No write to the database, but a managed launch now owns its session.
+            let managed_session_id = "018f0c3a-7b2d-7f10-8a11-123456789abd";
+            fs::create_dir_all(&state_root).unwrap();
+            fs::write(
+                state_root.join("managed.json"),
+                serde_json::json!({
+                    "provider": "opencode",
+                    "longhouse_session_id": managed_session_id,
+                    "opencode_session_id": "settled-session",
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("managed state for a settled database must rebind it");
+            assert_eq!(prepared.envelope.session_id, managed_session_id);
+        });
+    }
+
+    #[test]
+    fn an_opencode_session_held_back_for_its_binding_is_not_called_settled() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let state_root = dir.path().join("state-root");
+        with_opencode_state_root(&state_root, || {
+            let db_path = dir.path().join("opencode.db");
+            opencode_db_with_session(&db_path, "held-back-session", "/tmp/held-back-workspace");
+            // Started this instant, in a workspace where another session is
+            // live: it is held back until its managed binding could arrive.
+            let db = Connection::open(&db_path).unwrap();
+            db.execute(
+                "UPDATE session SET time_created = ?1, time_updated = ?1",
+                [Utc::now().timestamp_millis()],
+            )
+            .unwrap();
+            fs::create_dir_all(&state_root).unwrap();
+            fs::write(
+                state_root.join("live.json"),
+                serde_json::json!({
+                    "provider": "opencode",
+                    "cwd": "/tmp/held-back-workspace",
+                    "provider_session_id": "another-session",
+                    "pid": std::process::id(),
+                })
+                .to_string(),
+            )
+            .unwrap();
+            rest_cursor_store(&db_path);
+            for file in fs::read_dir(&state_root).unwrap().flatten() {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(file.path())
+                    .unwrap()
+                    .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+                    .unwrap();
+            }
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+            // The wait ends with the clock, not with a change to the database,
+            // so every pass must look again.
+            for _pass in 0..3 {
+                let opens = opencode_opens();
+                assert!(
+                    prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    opencode_opens() > opens,
+                    "a session still waiting on its binding was called settled"
+                );
+            }
+        });
+    }
+
     /// A Cursor store shipped and then left alone: the state a laptop's history
     /// is in nearly all the time.
     fn settled_cursor_store(dir: &Path) -> (PathBuf, Connection) {
@@ -12518,6 +12856,45 @@ mod tests {
             assert_ne!(prepared.source_epoch, epoch);
             assert_eq!(prepared.range_start, 0);
         });
+    }
+
+    #[test]
+    fn a_whole_file_revision_hash_is_read_again_only_when_the_file_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        let age = |path: &Path| {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+                .unwrap();
+        };
+        let reads = || FILE_HASH_READS.with(|reads| reads.get());
+        fs::write(&path, "first version\n").unwrap();
+        age(&path);
+
+        let before = reads();
+        let first = hash_file(&path).unwrap();
+        for _ in 0..3 {
+            assert_eq!(hash_file(&path).unwrap(), first);
+        }
+        assert_eq!(reads() - before, 1, "an unchanged file was hashed again");
+
+        // Rewritten in place to the same length: only the modification time
+        // and the bytes say so.
+        fs::write(&path, "other version\n").unwrap();
+        age(&path);
+        let second = hash_file(&path).unwrap();
+        assert_ne!(second, first);
+        assert_eq!(reads() - before, 2);
+
+        // Written just now: never vouched for, so never served from the copy.
+        fs::write(&path, "third version\n").unwrap();
+        let third = hash_file(&path).unwrap();
+        assert_ne!(third, second);
+        assert_eq!(hash_file(&path).unwrap(), third);
+        assert_eq!(reads() - before, 4);
     }
 
     #[test]

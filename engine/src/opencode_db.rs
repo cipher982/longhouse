@@ -247,7 +247,11 @@ pub fn list_opencode_sessions_page(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    list_opencode_sessions_inner(db_path, Some((limit, offset)), true)
+    // No fingerprints: the one caller walks the DB session by session and
+    // reads each session's records itself, so hashing every message and part
+    // of the whole page here first was a second read of the corpus whose
+    // result nothing looks at.
+    list_opencode_sessions_inner(db_path, Some((limit, offset)), false)
 }
 
 fn list_opencode_sessions_inner(
@@ -325,6 +329,17 @@ pub fn opencode_session_fingerprints(
         .collect()
 }
 
+/// A signature of every managed-state file an OpenCode source can be bound
+/// through, or `None` when one was written too recently to vouch for. The same
+/// signature later means no binding evidence appeared, changed or went away.
+pub fn managed_state_signature() -> Option<String> {
+    opencode_state_roots()
+        .iter()
+        .map(|root| crate::dir_cache::rested_signature(root))
+        .collect::<Option<Vec<_>>>()
+        .map(|signatures| signatures.join(","))
+}
+
 fn opencode_state_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(longhouse_home) = get_longhouse_home() {
@@ -375,26 +390,13 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
         return None;
     }
     for root in roots {
-        let Ok(read_dir) = fs::read_dir(root) else {
-            continue;
-        };
-        let mut paths: Vec<PathBuf> = read_dir
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| {
-                path.extension()
-                    .and_then(|value| value.to_str())
-                    .map(|value| value == "json")
-                    .unwrap_or(false)
-            })
-            .collect();
-        paths.sort();
-        for path in paths {
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(value) = serde_json::from_str::<Value>(&text) else {
-                continue;
-            };
+        // Read once per change to the directory, not once per session asked
+        // about: a scan asks about every session in the database.
+        let states = crate::dir_cache::parsed_json_dir(root, parse_state_file, |left, right| {
+            left.0.cmp(&right.0)
+        })
+        .unwrap_or_default();
+        for (_path, value) in states.iter() {
             let provider = value
                 .get("provider")
                 .and_then(Value::as_str)
@@ -438,6 +440,12 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
     }
     None
 }
+
+fn parse_state_file(path: &Path, bytes: std::io::Result<Vec<u8>>) -> Option<(PathBuf, Value)> {
+    let value = serde_json::from_str::<Value>(&String::from_utf8(bytes.ok()?).ok()?).ok()?;
+    Some((path.to_path_buf(), value))
+}
+
 const MAX_PROVIDER_FACT_PAYLOAD_CHARS: usize = 8_192;
 
 fn push_opencode_fact(
@@ -732,7 +740,15 @@ pub fn opencode_raw_snapshot(
     })
 }
 
+thread_local! {
+    /// Times an OpenCode database was opened for reading on this thread, for any
+    /// reason: a scan pass over a database that did not move must not open it.
+    pub(crate) static DATABASE_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn open_readonly(path: &Path) -> Result<Connection> {
+    #[cfg(test)]
+    DATABASE_OPENS.with(|opens| opens.set(opens.get() + 1));
     let uri = sqlite_readonly_uri(path);
     let conn = Connection::open_with_flags(
         &uri,
@@ -2382,6 +2398,22 @@ mod tests {
         assert!(sessions[0].version > 0);
     }
 
+    /// The scan walks the DB session by session and reads each session's records
+    /// itself; hashing every message and part of the whole page first was a second
+    /// read of the corpus that nothing looked at.
+    #[test]
+    fn the_session_page_a_scan_walks_does_not_hash_lifetime_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+
+        let page = list_opencode_sessions_page(&db_path, 64, 0).unwrap();
+
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].provider_session_id, "ses_test");
+        assert!(page[0].fingerprint.is_empty());
+    }
+
     #[test]
     fn session_watermarks_do_not_hash_lifetime_content() {
         let temp = tempfile::tempdir().unwrap();
@@ -2621,6 +2653,69 @@ mod tests {
         let second_offset = source_offset_for_part(&second, 1);
 
         assert!(first_result_offset < second_offset);
+    }
+
+    /// A scan asks about every session in the database, and each ask used to
+    /// read and parse every managed-state file on the machine.
+    #[test]
+    fn asking_about_many_sessions_reads_the_managed_state_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join("managed-local").join("opencode");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let state_file = state_root.join("state.json");
+        let write_state = |native_id: &str| {
+            std::fs::write(
+                &state_file,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "provider": "opencode",
+                    "longhouse_session_id": "11111111-1111-4111-8111-111111111111",
+                    "opencode_session_id": native_id,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&state_file)
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+                .unwrap();
+        };
+        write_state("ses_native");
+
+        let before = crate::dir_cache::FILES_PARSED.with(|parsed| parsed.get());
+        for index in 0..5 {
+            assert_eq!(
+                managed_longhouse_session_id_for_opencode_from_roots(
+                    &format!("ses_other_{index}"),
+                    &[state_root.clone()]
+                ),
+                None
+            );
+        }
+        assert!(managed_longhouse_session_id_for_opencode_from_roots(
+            "ses_native",
+            &[state_root.clone()]
+        )
+        .is_some());
+        assert_eq!(
+            crate::dir_cache::FILES_PARSED.with(|parsed| parsed.get()) - before,
+            1,
+            "the managed state was re-read"
+        );
+
+        // A state file that now names a different session is read again.
+        write_state("ses_renamed");
+        assert!(managed_longhouse_session_id_for_opencode_from_roots(
+            "ses_native",
+            &[state_root.clone()]
+        )
+        .is_none());
+        assert!(
+            managed_longhouse_session_id_for_opencode_from_roots("ses_renamed", &[state_root])
+                .is_some()
+        );
     }
 
     #[test]
