@@ -519,6 +519,20 @@ async fn monitor_opencode_events_once(
     if !response.status().is_success() {
         bail!("OpenCode event stream failed ({})", response.status());
     }
+    // Subscribe first, then read the current state: a transition between the two
+    // is replayed by the stream, so the snapshot can only be older than it.
+    if let Err(error) = publish_status_snapshot(
+        server_url,
+        username,
+        password,
+        expected_directory,
+        state_path,
+        longhouse_session_id,
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "OpenCode status snapshot was not published");
+    }
     let mut pending = String::new();
     while !*stop.borrow() {
         let chunk = tokio::select! {
@@ -554,6 +568,17 @@ async fn monitor_opencode_events_once(
                         provider_session_id,
                         Some(&provider_binding_path(longhouse_session_id)?),
                     )?;
+                    // A session that was just created has run nothing, and OpenCode
+                    // announces no `idle` for it. Without this the Runtime Host
+                    // never observes a turn boundary before the first prompt.
+                    if let Err(error) = publish_phase_signal(
+                        state_path,
+                        longhouse_session_id,
+                        provider_session_id,
+                        crate::managed_phase_contract::PHASE_IDLE,
+                    ) {
+                        tracing::warn!(error = %error, "OpenCode initial idle signal was not enqueued");
+                    }
                 }
                 if let Some((provider_session_id, phase)) = status_phase(&event) {
                     if let Err(error) = publish_phase_signal(
@@ -636,6 +661,73 @@ fn status_phase(event: &Value) -> Option<(&str, &'static str)> {
         _ => return None,
     };
     Some((session_id, phase))
+}
+
+/// Publish the bound session's current phase from OpenCode's own status map.
+///
+/// The event stream reports transitions only, so a session that is already idle
+/// when the bridge attaches (every fresh Helm launch) emits nothing, and the
+/// Runtime Host reads its activity as unknown. A SEND is dispatched only at an
+/// observed turn boundary and parks otherwise, so the first message sent to an
+/// OpenCode Helm session was held until a turn it could never start had ended.
+/// Reading the map once per connection also repairs a transition missed while
+/// the stream was down.
+async fn publish_status_snapshot(
+    server_url: &str,
+    username: &str,
+    password: &str,
+    expected_directory: &str,
+    state_path: &Path,
+    longhouse_session_id: &str,
+) -> Result<()> {
+    let state: Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    let Some(provider_session_id) = state
+        .get("provider_session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let statuses: Value = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?
+        .get(status_snapshot_url(server_url, expected_directory)?)
+        .basic_auth(username, Some(password))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    match snapshot_phase(&statuses, provider_session_id) {
+        Some(phase) => {
+            publish_phase_signal(state_path, longhouse_session_id, provider_session_id, phase)
+        }
+        None => Ok(()),
+    }
+}
+
+fn status_snapshot_url(server_url: &str, directory: &str) -> Result<Url> {
+    let mut url = Url::parse(server_url.trim())?;
+    url.set_path("/session/status");
+    if !directory.trim().is_empty() {
+        url.query_pairs_mut().append_pair("directory", directory);
+    }
+    Ok(url)
+}
+
+/// `GET /session/status` lists only sessions that are doing something; a session
+/// that is absent from the map is idle. An unrecognised status is not evidence
+/// of either phase, so it publishes nothing.
+fn snapshot_phase(statuses: &Value, provider_session_id: &str) -> Option<&'static str> {
+    match statuses
+        .get(provider_session_id)
+        .and_then(|status| status.get("type"))
+        .and_then(Value::as_str)
+    {
+        None | Some("idle") => Some(crate::managed_phase_contract::PHASE_IDLE),
+        Some("busy" | "retry") => Some(crate::managed_phase_contract::PHASE_RUNNING),
+        Some(_) => None,
+    }
 }
 
 const OPENCODE_BRIDGE_TRANSPORT: &str = "opencode_server_bridge";
@@ -1320,6 +1412,32 @@ mod tests {
         remover.join().unwrap();
         assert!(!status.success());
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn snapshot_reads_an_absent_session_as_idle_and_a_working_one_as_running() {
+        let statuses = json!({"ses_busy": {"type": "busy"}, "ses_retry": {"type": "retry"}});
+        assert_eq!(snapshot_phase(&statuses, "ses_absent"), Some("idle"));
+        assert_eq!(snapshot_phase(&statuses, "ses_busy"), Some("running"));
+        assert_eq!(snapshot_phase(&statuses, "ses_retry"), Some("running"));
+        assert_eq!(
+            snapshot_phase(&json!({"ses_1": {"type": "idle"}}), "ses_1"),
+            Some("idle")
+        );
+        // A status this build does not know is not evidence of either phase.
+        assert_eq!(
+            snapshot_phase(&json!({"ses_1": {"type": "paused"}}), "ses_1"),
+            None
+        );
+    }
+
+    #[test]
+    fn snapshot_url_targets_the_status_map_for_the_workspace() {
+        let url = status_snapshot_url("http://127.0.0.1:4096", "/tmp/work space").unwrap();
+        assert_eq!(url.path(), "/session/status");
+        assert_eq!(url.query(), Some("directory=%2Ftmp%2Fwork+space"));
+        let bare = status_snapshot_url("http://127.0.0.1:4096", "").unwrap();
+        assert_eq!(bare.query(), None);
     }
 
     #[test]
