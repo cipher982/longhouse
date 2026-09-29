@@ -234,6 +234,14 @@ struct LoginView: View {
             .foregroundStyle(LoginInk.muted)
             .multilineTextAlignment(.center)
 
+        Button("Explore the demo") {
+            Task { await appState.enterDemo() }
+        }
+        .font(.system(size: 15, weight: .medium))
+        .foregroundStyle(LoginInk.clay)
+        .padding(.top, 4)
+        .accessibilityIdentifier("login.exploreDemo")
+
         if let hostedAuthAttemptURL = appState.hostedAuthAttemptURL,
            UITestHooks.shouldCaptureHostedAuthAttempt {
             Text(hostedAuthAttemptURL)

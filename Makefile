@@ -45,7 +45,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-engine-projection-failure test-engine-focused
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
-.PHONY: ios-project ios-project-check ios-package-update ios-unit
+.PHONY: ios-project ios-project-check ios-package-update ios-unit ios-release-check testflight testflight-status
 
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
@@ -378,6 +378,15 @@ test-ios-helper: ## iOS simulator and native-dispatch helper script tests
 	@python3 scripts/tests/simlab.test.py
 	@python3 scripts/tests/simlab-proxy.test.py
 	@python3 scripts/tests/native-test-isolation.test.py
+
+testflight: ## Ship a main revision to TestFlight via CI (SHA=<sha>, default HEAD; WHATS_NEW="tester note")
+	@scripts/ops/testflight-ship.sh $(SHA)
+
+testflight-status: ## TestFlight builds, review state and public link (needs ASC_API_* in the environment)
+	@scripts/ops/testflight.py status
+
+ios-release-check: ## Unsigned Release archive + App Store upload preconditions (privacy manifest, export compliance)
+	@ios/scripts/release-check.sh
 
 ios-unit: ## Hermetic iOS unit tests on this machine (~35s) — iteration only, never the gate
 	@# Host development goal on purpose, like sim-deploy and phone-deploy: the
@@ -828,6 +837,7 @@ validate-qa-scripts: ## @internal Every scripts/qa check is reachable or declare
 validate-ops-scripts: ## @internal Ops script contracts (backup/restore retention)
 	@bash scripts/qa/test-zerg-ops.sh
 	@python3 scripts/tests/release.test.py
+	@cd server && uv run python ../scripts/tests/testflight.test.py
 
 validate-managed-identity: ## @internal Guard the generated managed-identity vocabulary and its launch sites
 	@cd server && uv run python ../scripts/generate/managed_identity_contract_rs.py --check

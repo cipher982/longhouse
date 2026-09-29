@@ -142,6 +142,11 @@ private struct UITestAppearanceOverrideModifier: ViewModifier {
 }
 #endif
 
+private struct OpenServerProbe: Decodable {
+    let password: Bool
+    let sso: Bool
+}
+
 @MainActor
 final class AppState: ObservableObject {
     private struct LocalCredentialSnapshot: Sendable {
@@ -301,6 +306,8 @@ final class AppState: ObservableObject {
                 serverURL: capturedServerURL,
                 expectedGeneration: expectedGeneration
             )
+        } else if SharedAuthStore.hasOpenAccess(for: trimmedServerURL) {
+            result = .authenticated
         } else {
             result = .unauthenticated
         }
@@ -329,6 +336,44 @@ final class AppState: ObservableObject {
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
         logger.info("restore session finished result=\(String(describing: result), privacy: .public) authenticated=\(self.isAuthenticated, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
+    }
+
+    /// "Explore the demo": the public demo server needs no account. Only a server
+    /// that reports no sign-in method at all qualifies, so this can never mark a
+    /// private server as signed in.
+    func enterDemo() async {
+        let demoURL = LonghouseAuthConfig.demoServerURL
+        guard let probeURL = URL(string: "\(demoURL)/api/auth/methods") else { return }
+        isValidating = true
+        authError = nil
+        do {
+            let (data, response) = try await URLSession.shared.data(from: probeURL)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let methods = try? JSONDecoder().decode(OpenServerProbe.self, from: data),
+                  !methods.sso, !methods.password
+            else {
+                authError = "The demo is unavailable right now. Try again in a moment."
+                isValidating = false
+                return
+            }
+        } catch {
+            authError = "Network error: \(error.localizedDescription)"
+            isValidating = false
+            return
+        }
+        SharedAuthStore.advanceAuthGeneration(for: demoURL)
+        SharedAuthStore.saveServerURL(demoURL)
+        SharedAuthStore.setOpenAccess(true, for: demoURL)
+        serverURL = demoURL
+        isAuthenticated = true
+        hasLocalSessionCandidate = true
+        isValidating = false
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// True while browsing the open demo rather than signed in to a server.
+    var isExploringDemo: Bool {
+        SharedAuthStore.hasOpenAccess(for: serverURL)
     }
 
     func finishLoginFromSharedCookies() async -> Bool {
@@ -646,7 +691,7 @@ final class AppState: ObservableObject {
 
     func syncStoredAPNSTokenIfPossible() async {
         let startedAt = Date()
-        guard isAuthenticated, let api = LonghouseAPI(host: serverURL) else {
+        guard isAuthenticated, !isExploringDemo, let api = LonghouseAPI(host: serverURL) else {
             return
         }
         guard let deviceToken = PushNotificationStore.storedDeviceToken() else {
@@ -1014,6 +1059,13 @@ final class AppState: ObservableObject {
         TranscriptSnapshotStore.shared.clear(serverURL: capturedServerURL)
         PushNotificationStore.clearAPNSDeviceSyncState()
         KeychainHelper.deleteAuthToken()
+        if SharedAuthStore.hasOpenAccess(for: capturedServerURL) {
+            // Leaving the demo returns to the first-run sign-in, not to a login
+            // screen for a server that has no sign-in.
+            SharedAuthStore.setOpenAccess(false, for: capturedServerURL)
+            SharedAuthStore.clearServerURL()
+            serverURL = ""
+        }
         isAuthenticated = false
         hasLocalSessionCandidate = false
     }

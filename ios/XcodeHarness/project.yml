@@ -30,6 +30,10 @@ targets:
       - path: ../Resources/Assets.xcassets
         buildPhase: resources
         createIntermediateGroups: true
+      # Required-reason API declarations (UserDefaults, file timestamps). App
+      # Store Connect rejects uploads that use those APIs without a manifest.
+      - path: ../Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
       # Required resource. If xcodegen can't find the file, fail loudly.
       # The Makefile/CI path generates it before project generation, and the
       # Xcode pre-build phase refreshes it again for direct phone builds.
@@ -85,6 +89,9 @@ targets:
           - remote-notification
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
+        # HTTPS/TLS only: exempt encryption, so App Store Connect never stops
+        # each build at the export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - ai.longhouse.ios
@@ -103,6 +110,10 @@ targets:
       - path: ../Resources/Assets.xcassets
         buildPhase: resources
         createIntermediateGroups: true
+      # Required-reason API declarations (UserDefaults, file timestamps). App
+      # Store Connect rejects uploads that use those APIs without a manifest.
+      - path: ../Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     configFiles:
       Debug: Configs/Longhouse.xcconfig
       Release: Configs/Longhouse.xcconfig

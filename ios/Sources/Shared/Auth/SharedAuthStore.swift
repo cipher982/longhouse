@@ -70,6 +70,7 @@ enum SharedAuthStore {
     private static let hostedTokenBundlePrefix = "hosted_token_bundles."
     private static let pendingNativeRevocationPrefix = "pending_native_revocations."
     private static let authGenerationPrefix = "auth_generations."
+    private static let openAccessPrefix = "open_access."
     private static let keychainService = "ai.longhouse.shared-cookies"
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: appGroupIdentifier)
@@ -116,6 +117,22 @@ enum SharedAuthStore {
 
     static func isAuthGenerationCurrent(_ generation: String, for serverURL: String) -> Bool {
         authGeneration(for: serverURL) == generation
+    }
+
+    /// Marks a server browsed without credentials. Only an explicit user choice
+    /// sets it (the demo), never inference, so a private server that merely
+    /// fails to advertise a sign-in method cannot look signed in.
+    static func setOpenAccess(_ enabled: Bool, for serverURL: String) {
+        let key = openAccessKey(for: serverURL)
+        if enabled {
+            defaults?.set(true, forKey: key)
+        } else {
+            defaults?.removeObject(forKey: key)
+        }
+    }
+
+    static func hasOpenAccess(for serverURL: String) -> Bool {
+        defaults?.bool(forKey: openAccessKey(for: serverURL)) ?? false
     }
 
     static func clearServerURL() {
@@ -469,6 +486,10 @@ enum SharedAuthStore {
 
     private static func pendingNativeRevocationStorageKey(for serverURL: String) -> String {
         pendingNativeRevocationPrefix + (normalizedHost(for: serverURL) ?? serverURL)
+    }
+
+    private static func openAccessKey(for serverURL: String) -> String {
+        openAccessPrefix + (normalizedHost(for: serverURL) ?? serverURL)
     }
 
     private static func authGenerationKey(for serverURL: String) -> String {

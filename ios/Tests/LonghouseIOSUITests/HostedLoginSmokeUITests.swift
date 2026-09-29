@@ -35,6 +35,28 @@ final class HostedLoginSmokeUITests: XCTestCase {
         XCTAssertNotNil(components?.queryItems?.first(where: { $0.name == "tenant_state" })?.value)
     }
 
+    // Needs network: the demo is the public longhouse.ai server. Runs in the
+    // disposable hosted VM, which has it.
+    func testExploreDemoOpensTheTimelineWithoutAnAccount() {
+        let app = launchApp()
+        let explore = app.buttons["login.exploreDemo"]
+
+        XCTAssertTrue(explore.waitForExistence(timeout: 5))
+        attachFrame(app, named: "login-with-demo-entry")
+        explore.tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-session-row"].firstMatch.waitForExistence(timeout: 30))
+        XCTAssertFalse(app.buttons["login.continueWithLonghouse"].exists)
+        attachFrame(app, named: "demo-timeline")
+    }
+
+    private func attachFrame(_ app: XCUIApplication, named name: String) {
+        let frame = XCTAttachment(screenshot: app.screenshot())
+        frame.name = name
+        frame.lifetime = .keepAlways
+        add(frame)
+    }
+
     private func launchApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.resetState] = "1"

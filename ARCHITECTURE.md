@@ -219,6 +219,7 @@ Features import across folders with `@/`; within a folder, relative.
 | `ios/Tests/LonghouseIOSUITests/` | UI tests |
 | `ios/Tests/LonghouseChatStressUITests/` | Transcript stress and renderer benchmark |
 | `ios/XcodeHarness/` | Xcode project spec (`project.yml`), plist, entitlements, signing configs |
+| `ios/testflight/` | Tester-facing TestFlight text and review notes (`beta.toml`); shipped by `.github/workflows/ios-testflight.yml` via `ios/scripts/testflight-build.sh` and `scripts/ops/testflight.py` |
 
 ### Server (`server/zerg/`)
 

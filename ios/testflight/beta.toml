@@ -1,0 +1,25 @@
+# Tester-facing text and Apple review details for the TestFlight public beta,
+# applied by scripts/ops/testflight.py. Personal fields (feedback address, reviewer
+# contact) come from the environment, never from this file.
+bundle_id = "ai.longhouse.ios"
+locale = "en-US"
+group_name = "Public beta"
+public_link_limit = 100
+
+[localization]
+marketing_url = "https://longhouse.ai"
+privacy_policy_url = "https://longhouse.ai/privacy"
+description = """
+Longhouse is mission control for your coding agents. Every Claude Code, Codex, Cursor, OpenCode and Pi session from every machine you own lands in one searchable timeline. Watch a live session, find work from weeks ago, and send the next instruction from your phone while the agent keeps running in its real terminal at your desk.
+
+This is an early beta. To see your own sessions you need a Longhouse server (a hosted alpha invite, or one you run yourself). To look around first, tap "Explore the demo" on the first screen: sample data, no account.
+
+What we most want to know: does it install cleanly, do your sessions show up, and is checking on and steering an agent from your phone actually useful when you are away from your desk? Use Send Beta Feedback in TestFlight, or reply to the feedback address.
+"""
+
+[review]
+notes = """
+Longhouse is a client for a user's own Longhouse server (self-hosted or hosted). No account is needed to review it: on the first screen tap "Explore the demo". That opens the public demo at https://longhouse.ai with synthetic sessions and no sign-in. Browse the timeline, open a session to read its transcript, and try search.
+
+Real accounts sign in through Longhouse's own account service (control.longhouse.ai) in a system web sign-in sheet; there is no third-party social-login button inside the app. Hosted accounts are invite-only during the private alpha. Push notifications and Live Activities are optional and only apply to a signed-in server.
+"""

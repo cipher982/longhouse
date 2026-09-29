@@ -56,7 +56,7 @@ struct SettingsView: View {
                     Button(role: .destructive) {
                         showingSignOutConfirm = true
                     } label: {
-                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                        Label(appState.isExploringDemo ? "Leave the demo" : "Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                             .foregroundStyle(Ember.ember)
                     }
                 }
@@ -82,11 +82,11 @@ struct SettingsView: View {
                 ServerConfigSheet()
             }
             .confirmationDialog(
-                "Sign out of Longhouse?",
+                appState.isExploringDemo ? "Leave the demo?" : "Sign out of Longhouse?",
                 isPresented: $showingSignOutConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Sign out", role: .destructive) { appState.signOut() }
+                Button(appState.isExploringDemo ? "Leave the demo" : "Sign out", role: .destructive) { appState.signOut() }
                 Button("Cancel", role: .cancel) { }
             }
             .task(id: appState.serverURL) {

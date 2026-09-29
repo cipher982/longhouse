@@ -1,0 +1,85 @@
+# ROLE: publish the iOS app to TestFlight. This workflow holds Apple credentials
+# (the `testflight` environment) and therefore never runs untrusted code: it takes an
+# exact revision that is already on main and nothing else. Credential-free native
+# fixtures live in native-test-isolation.yml and must never gain these secrets.
+name: iOS TestFlight
+run-name: TestFlight ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact revision to ship; must already be on main
+        required: true
+        type: string
+      whats_new:
+        description: Tester-facing change note (default is the commit subject)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    # Standard public-repository runner: no billed larger runner or self-hosted Mac.
+    runs-on: macos-15
+    timeout-minutes: 60
+    # Secrets are scoped to this environment, which is limited to the main branch.
+    environment: testflight
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          # The build number is the commit count, so history must be complete.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a revision on main
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main \
+            || { echo "$SOURCE_SHA is not on main; only main ships to TestFlight" >&2; exit 1; }
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Install XcodeGen
+        run: scripts/ci/install_xcodegen.sh
+      - name: Toolchain
+        run: xcodebuild -version
+      - name: Archive, export and upload
+        id: build
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          ASC_API_KEY_P8_B64: ${{ secrets.ASC_API_KEY_P8_B64 }}
+        run: |
+          set -euo pipefail
+          ios/scripts/testflight-build.sh --upload | tee "$RUNNER_TEMP/build.out"
+          echo "build=$(sed -n 's/^build_number=//p' "$RUNNER_TEMP/build.out")" >> "$GITHUB_OUTPUT"
+      - name: Wait for processing and publish to the public link
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          ASC_API_KEY_P8_B64: ${{ secrets.ASC_API_KEY_P8_B64 }}
+          TESTFLIGHT_FEEDBACK_EMAIL: ${{ secrets.TESTFLIGHT_FEEDBACK_EMAIL }}
+          TESTFLIGHT_REVIEW_CONTACT_FIRST: ${{ secrets.TESTFLIGHT_REVIEW_CONTACT_FIRST }}
+          TESTFLIGHT_REVIEW_CONTACT_LAST: ${{ secrets.TESTFLIGHT_REVIEW_CONTACT_LAST }}
+          TESTFLIGHT_REVIEW_CONTACT_PHONE: ${{ secrets.TESTFLIGHT_REVIEW_CONTACT_PHONE }}
+          TESTFLIGHT_REVIEW_CONTACT_EMAIL: ${{ secrets.TESTFLIGHT_REVIEW_CONTACT_EMAIL }}
+          BUILD: ${{ steps.build.outputs.build }}
+          WHATS_NEW: ${{ inputs.whats_new }}
+        run: |
+          set -euo pipefail
+          scripts/ops/testflight.py wait-build --build "$BUILD"
+          scripts/ops/testflight.py publish --build "$BUILD" ${WHATS_NEW:+--whats-new "$WHATS_NEW"} | tee "$RUNNER_TEMP/publish.json"
+          {
+            echo "### TestFlight"
+            echo '```json'
+            cat "$RUNNER_TEMP/publish.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

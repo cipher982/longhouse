@@ -150,4 +150,22 @@ struct SharedAuthStoreTests {
         SharedAuthStore.clearPendingNativeRevocationToken("family-b", for: serverURL)
         #expect(SharedAuthStore.pendingNativeRevocationTokens(for: serverURL).isEmpty)
     }
+
+    @Test
+    func openAccessIsPerHostAndOnlyWhenSet() throws {
+        guard SharedAuthStore.isAppGroupAvailable else {
+            return
+        }
+        let open = "https://open-access-test.longhouse.ai"
+        let other = "https://other-access-test.longhouse.ai"
+        SharedAuthStore.setOpenAccess(false, for: open)
+        #expect(!SharedAuthStore.hasOpenAccess(for: open))
+
+        SharedAuthStore.setOpenAccess(true, for: open)
+        #expect(SharedAuthStore.hasOpenAccess(for: open))
+        #expect(!SharedAuthStore.hasOpenAccess(for: other))
+
+        SharedAuthStore.setOpenAccess(false, for: open)
+        #expect(!SharedAuthStore.hasOpenAccess(for: open))
+    }
 }
