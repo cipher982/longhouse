@@ -15,6 +15,6 @@ def child_is_gone(process: multiprocessing.Process) -> bool:
     CPU contention the loser was the test about 1 run in 130. Ask the kernel.
     """
     try:
-        return psutil.Process(process.pid).status() == psutil.STATUS_ZOMBIE
+        return psutil.Process(process.pid).status() in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
     except psutil.NoSuchProcess:
         return True

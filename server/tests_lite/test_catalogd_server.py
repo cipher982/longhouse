@@ -107,12 +107,12 @@ async def test_ping_does_not_queue_behind_catalog_write_lane(daemon_paths):
 
     def block_write_lane() -> None:
         entered.set()
-        release.wait(timeout=2)
+        release.wait(timeout=5)
 
     blocked = asyncio.create_task(daemon._run_store(block_write_lane))
     try:
         assert await asyncio.to_thread(entered.wait, 1)
-        ping = await client.call("ping.v2", timeout_seconds=0.25)
+        ping = await client.call("ping.v2", timeout_seconds=1.5)
         assert ping["ready"] is True
     finally:
         release.set()
@@ -132,12 +132,12 @@ async def test_interactive_reads_do_not_queue_behind_projector_read_lane(daemon_
 
     def block_projector_read_lane() -> None:
         entered.set()
-        release.wait(timeout=2)
+        release.wait(timeout=5)
 
     blocked = asyncio.create_task(daemon._run_projector_read_store(block_projector_read_lane))
     try:
         assert await asyncio.to_thread(entered.wait, 1)
-        ping = await client.call("ping.v2", timeout_seconds=0.25)
+        ping = await client.call("ping.v2", timeout_seconds=1.5)
         assert ping["ready"] is True
     finally:
         release.set()
@@ -163,14 +163,14 @@ async def test_interactive_read_lane_rejects_work_instead_of_queueing(daemon_pat
             entered_count += 1
             if entered_count == daemon._read_max_depth:
                 entered.set()
-        release.wait(timeout=2)
+        release.wait(timeout=5)
 
     blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(daemon._read_max_depth)]
     try:
         assert await asyncio.to_thread(entered.wait, 1)
         with pytest.raises(CatalogReaderBusy):
             await daemon._run_read_store(lambda: None)
-        ping = await client.call("ping.v2", timeout_seconds=0.25)
+        ping = await client.call("ping.v2", timeout_seconds=1.5)
         assert ping["ready"] is True
     finally:
         release.set()

@@ -87,7 +87,10 @@ if [ "$has_xdist_arg" -eq 0 ]; then
     # the guests are sized at 1 GiB or more per CPU (2/4g, 4/13g, 8/8g).
     # A single file or node (LONGHOUSE_TEST_TARGET) stays serial: worker
     # startup costs more than it saves. PYTEST_XDIST_WORKERS overrides either
-    # way, and 0 forces serial.
+    # way, and 0 forces serial. A crashed worker (pytest-timeout kills a hung
+    # one) ends the run at once: xdist's replacement worker under loadfile
+    # went idle with three files unassigned and the run sat for the whole
+    # job timeout.
     if [ -n "${PYTEST_XDIST_WORKERS:-}" ]; then
         xdist_workers="$PYTEST_XDIST_WORKERS"
     elif [ -n "${LONGHOUSE_TEST_TARGET:-}" ]; then
@@ -99,7 +102,7 @@ if [ "$has_xdist_arg" -eq 0 ]; then
         ""|0|1|false|False|FALSE|off|Off|OFF|no|No|NO)
             ;;
         *)
-            pytest_args+=(-n "$xdist_workers" --dist=loadfile)
+            pytest_args+=(-n "$xdist_workers" --dist=loadfile --max-worker-restart=0)
             ;;
     esac
 fi

@@ -263,11 +263,24 @@ async def test_broken_pool_cleanup_terminates_surviving_owned_child(tmp_path, mo
         assert survivor.is_alive()
         os.kill(survivor.pid, signal.SIGSTOP)
         _wait_until_stopped(survivor.pid)
-        os.kill(broken.pid, signal.SIGKILL)
         monkeypatch.setattr(worker_module, "_terminate_owned_executor", lambda *_: False)
         worker_busy = RawObjectWorkerBusy if pool_type is RawObjectWorkerPool else RenderObjectWorkerBusy
+        # The read must be submitted while the pool is still whole. The moment
+        # the stdlib manager thread sees a child die it takes the executor's
+        # shutdown lock and holds it while joining the stopped survivor; a
+        # submit from this event-loop thread then blocks on that lock for good
+        # (about 1 run in 20 under CPU contention, which hung a whole xdist
+        # worker). So stop both children, queue the read behind them, and only
+        # then kill one.
+        os.kill(broken.pid, signal.SIGSTOP)
+        _wait_until_stopped(broken.pid)
+        read = asyncio.create_task(repair_read())
+        async with asyncio.timeout(10):
+            while not executor._pending_work_items:
+                await asyncio.sleep(0.005)
+        os.kill(broken.pid, signal.SIGKILL)
         with pytest.raises(worker_busy, match="unavailable"):
-            await repair_read()
+            await read
         assert survivor.is_alive()
         live_replay = await pool.seal(spec, lane="live")
         assert live_replay.object_hash == sealed.object_hash
