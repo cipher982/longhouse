@@ -20,7 +20,9 @@ from uuid import UUID
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import model_validator
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from zerg.managed_phase_contract import is_known_raw_phase
 from zerg.managed_phase_contract import phase_freshness_seconds
@@ -754,13 +756,14 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
             event,
             observation_id=f"live:{event.source}:{event.dedupe_key}",
         )
-        if preview_candidate is not None:
-            upsert_live_session_live_preview(db, preview_candidate)
+        preview_stored = preview_candidate is not None and upsert_live_session_live_preview(db, preview_candidate)
         if overlay_stream:
             # Provider print streams are transcript overlays. Their activity
             # and terminal lifecycle arrive separately; reducing their text as
-            # runtime phase evidence would fabricate provider state.
-            outcome = "stored_live_overlay"
+            # runtime phase evidence would fabricate provider state. Only an
+            # overlay the projection accepted is news: a replay is ignored, so
+            # it wakes no one.
+            outcome = "stored_live_overlay" if preview_stored else "ignored"
         else:
             outcome = _apply_runtime_event(db, event)
         if event.kind == "terminal_signal" and expire_live_interactions_for_terminal(db, event):
@@ -1082,6 +1085,37 @@ def _phase_reanchors(prev_phase: str | None, next_phase: str) -> bool:
 
 
 def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEventApplyOutcome:
+    outcome = _reduce_runtime_event(db, event)
+    if outcome != "applied":
+        _drop_equal_value_writes(db.get(LiveRuntimeState, event.runtime_key))
+    return outcome
+
+
+def _drop_equal_value_writes(state: LiveRuntimeState | None) -> None:
+    """Keep a replayed event from counting as a write to the runtime row.
+
+    SQLite hands datetimes back naive while the reducer assigns aware ones, so
+    re-assigning the instant a row already holds still reads as a change. The
+    resulting UPDATE stamps ``updated_at``, which run liveness reads
+    (``LiveRuntimeState.updated_at > lease_floor``): a machine resending a batch
+    the Runtime Host already applied would renew liveness it has no new
+    evidence for. Restore the committed value wherever the reducer wrote
+    back the same instant; a value that really changed is left alone.
+    """
+
+    if state is None:
+        return
+    for attr in sa_inspect(state).attrs:
+        history = attr.history
+        if not (history.added and history.deleted):
+            continue
+        before, after = history.deleted[0], history.added[0]
+        same = normalize_utc(before) == normalize_utc(after) if isinstance(before, datetime) else before == after
+        if same:
+            set_committed_value(state, attr.key, before)
+
+
+def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEventApplyOutcome:
     if event.kind not in KNOWN_RUNTIME_EVENT_KINDS:
         logger.warning(
             "Ignored unrecognized runtime observation kind=%s provider=%s session=%s",

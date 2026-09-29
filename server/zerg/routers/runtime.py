@@ -24,6 +24,8 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.session_live_previews import admit_preview_publication
+from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import preview_payload_from_runtime_event
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
@@ -191,6 +193,7 @@ def _is_bridge_live_transcript_event(event) -> bool:
 
 
 def _publish_live_transcript_previews(events, *, now: datetime) -> None:
+    from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import publish_session_transcript_preview_update
 
     latest_by_session: dict[str, tuple[object, dict]] = {}
@@ -205,7 +208,29 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
         latest_by_session[sid] = (event, preview)
 
     logger = logging.getLogger("longhouse.live_transcript")
+    heads = get_pubsub().preview_heads
     for sid, (event, preview) in latest_by_session.items():
+        # A batch the machine resent after a lost response, or one that lands
+        # behind a newer batch, must not repeat or rewind what subscribers saw.
+        # Identity is the projection's: the observation the machine minted plus
+        # its ordering, never the text or the timestamp alone.
+        candidate = live_preview_candidate_from_runtime_event(
+            event,
+            observation_id=f"live:{event.source}:{event.dedupe_key}",
+        )
+        if candidate is None:
+            # A payload with no candidate has no identity the projection will
+            # ever hold, so there is nothing a replay could be compared to.
+            logger.warning("live_transcript preview has no durable identity session=%s dedupe_key=%s", sid, event.dedupe_key)
+            continue
+        if not admit_preview_publication(heads, candidate):
+            logger.info(
+                "live_transcript replay suppressed session=%s seq=%s dedupe_key=%s",
+                sid,
+                _preview_seq(preview),
+                event.dedupe_key,
+            )
+            continue
         publish_session_transcript_preview_update(
             session_id=sid,
             provider=event.provider,

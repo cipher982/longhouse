@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections import OrderedDict
 from collections import defaultdict
 from collections import deque
 from dataclasses import dataclass
@@ -78,6 +79,11 @@ class SessionPubsub:
 
     def __init__(self, *, subscriber_queue_size: int = 256, buffer_size: int = 1000) -> None:
         self.stream_epoch = uuid.uuid4().hex
+        # Newest live transcript preview fanned out per session, so a resent
+        # machine batch is not shown twice. It belongs to the bus because it
+        # summarises what this bus's subscribers were shown: a new bus has new
+        # subscribers and a new stream_epoch, and starts with no head.
+        self.preview_heads: OrderedDict[str, Any] = OrderedDict()
         self._topics: dict[str, _TopicState] = defaultdict(_TopicState)
         self._subscriber_queue_size = subscriber_queue_size
         self._buffer_size = buffer_size

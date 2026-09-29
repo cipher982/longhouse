@@ -103,6 +103,7 @@ def touch_live_sessions_from_runtime_events(
         occurred_at = normalize_utc(getattr(event, "occurred_at", None)) or seen_at
         provider = _normalized(getattr(event, "provider", None)).lower() or "unknown"
         device_id = _normalized(getattr(event, "device_id", None)) or None
+        revived = False
         row = db.get(LiveSession, str(session_id))
         if row is None:
             row = LiveSession(
@@ -119,12 +120,20 @@ def touch_live_sessions_from_runtime_events(
             if state_observed_at is not None and occurred_at <= state_observed_at:
                 continue
             row.state = "observed"
+            revived = True
         if device_id is not None and not row.device_id:
             row.device_id = device_id
         last_seen = normalize_utc(row.last_seen_at)
-        if last_seen is None or occurred_at > last_seen:
+        advanced = last_seen is None or occurred_at > last_seen
+        if advanced:
             row.last_seen_at = occurred_at
-        row.updated_at = seen_at
+        # updated_at is the server-observed liveness stamp (canary freshness,
+        # the revival guard above). Only evidence newer than what the row
+        # already holds may move it: a batch the machine resent after a lost
+        # response carries occurred_at values the row has seen, and must not
+        # make the session look freshly alive.
+        if advanced or revived:
+            row.updated_at = seen_at
         touched.add(session_id)
     return touched
 

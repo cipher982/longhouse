@@ -1083,3 +1083,31 @@ def test_later_same_turn_delta_does_not_resurrect_superseded_projection(tmp_path
     assert row.superseded_at is not None
     assert row.superseded_by_event_id == 456
     assert preview_map == {}
+
+
+def test_an_event_the_reducer_ignores_is_not_a_write_to_the_runtime_row(tmp_path):
+    """SQLite returns naive datetimes; assigning the same aware instant must not count as a change.
+
+    A change would UPDATE the row and stamp ``updated_at``, which run liveness
+    reads, so a replay would renew liveness it has no new evidence for.
+    """
+    SessionLocal = _make_sessionmaker(tmp_path, "ignored_event_no_write.db")
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    run_id = str(uuid4())
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(db, [_phase_event(session_id=session.id, occurred_at=now, run_id=run_id)])
+        db.commit()
+
+        # Same phase at the same instant under a new dedupe key: the reducer has
+        # nothing to change. (Re-sending the same key is deduplicated earlier.)
+        state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == f"codex:{session.id}").one()
+        again = _phase_event(session_id=session.id, occurred_at=now, run_id=run_id)
+        again.dedupe_key = f"{again.dedupe_key}:again"
+        result = ingest_runtime_events(db, [again])
+
+        # No query between the ingest and this check: a query would autoflush
+        # the pending UPDATE and hide it.
+        assert result.ignored == 1
+        assert not db.is_modified(state)

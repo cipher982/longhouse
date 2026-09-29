@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -47,6 +48,54 @@ class LivePreviewCandidate:
     tool_output_text: str | None = None
     tool_call_id: str | None = None
     tool_call_state: str | None = None
+
+
+@dataclass(frozen=True)
+class PublishedPreviewHead:
+    """What a session's subscribers were last shown: the candidate's identity, not its text."""
+
+    turn_key: str
+    seq: int | None
+    preview_observed_at: datetime
+    last_observation_id: str
+
+
+# Heads are per session and tiny, but a Runtime Host lives for weeks. Past this
+# many sessions the least recently published head is forgotten; the cost of
+# forgetting is one extra republish for a session that resumes after a resend.
+MAX_PUBLISHED_PREVIEW_HEADS = 4096
+
+
+def admit_preview_publication(heads: OrderedDict[str, PublishedPreviewHead], candidate: LivePreviewCandidate) -> bool:
+    """Whether fanning out ``candidate`` shows subscribers something new.
+
+    The fast path publishes before catalogd applies the batch, so a batch the
+    machine resends after a lost response arrives here a second time. This is
+    the projection's own acceptance rule (``upsert_live_session_live_preview``),
+    applied to what was published instead of what was stored: the same
+    observation is never shown twice, and a preview that is not newer than the
+    head, by seq within an item or by observation time across items, is a
+    replay or a straggler and must not step the client backwards. A later
+    update to the same item carries a higher seq and passes.
+    """
+
+    key = str(candidate.session_id)
+    head = heads.get(key)
+    if head is not None:
+        if head.last_observation_id == candidate.last_observation_id:
+            return False
+        if not _candidate_should_replace(candidate, head):
+            return False
+    heads[key] = PublishedPreviewHead(
+        turn_key=candidate.turn_key,
+        seq=candidate.seq,
+        preview_observed_at=candidate.preview_observed_at,
+        last_observation_id=candidate.last_observation_id,
+    )
+    heads.move_to_end(key)
+    while len(heads) > MAX_PUBLISHED_PREVIEW_HEADS:
+        heads.popitem(last=False)
+    return True
 
 
 def live_preview_candidate_from_runtime_event(
@@ -710,7 +759,7 @@ def preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
     return previews
 
 
-def _candidate_should_replace(candidate: LivePreviewCandidate, existing: SessionLivePreview) -> bool:
+def _candidate_should_replace(candidate: LivePreviewCandidate, existing: SessionLivePreview | PublishedPreviewHead) -> bool:
     candidate_at = normalize_utc(candidate.preview_observed_at) or datetime.min.replace(tzinfo=timezone.utc)
     existing_at = normalize_utc(existing.preview_observed_at) or datetime.min.replace(tzinfo=timezone.utc)
     if candidate.turn_key != existing.turn_key:

@@ -352,7 +352,8 @@ async def test_pi_print_stream_stays_live_overlay_and_replays_without_rows(daemo
         result = await client.call("session.runtime.apply.v2", {"events": [event, older]})
         replay = await client.call("session.runtime.apply.v2", {"events": [event]})
         assert result["updated_runtime_keys"] == [f"pi:{session_id}"]
-        assert replay["updated_runtime_keys"] == [f"pi:{session_id}"]
+        # The overlay is already stored: a resend is not an update and wakes no one.
+        assert replay["updated_runtime_keys"] == []
     finally:
         await client.close()
         await daemon.close()
