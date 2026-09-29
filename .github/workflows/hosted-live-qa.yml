@@ -124,6 +124,10 @@ jobs:
               --format '{{json .Image}}' |
               jq --exit-status --raw-output '.config.Labels["org.opencontainers.image.revision"] | select(type == "string" and test("^[0-9a-f]{40}$"))')"
           fi
+          # The verdict step needs the moment this run started depending on the
+          # canary serving the commit below; any deployment overlapping the run
+          # after this instant replaced the thing under test.
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
           printf '%s\n' "$health" | jq '{source_sha,build_identity,build}'
           actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '(.source_sha // .build.source_sha // .build.commit) | select(type == "string" and test("^[0-9a-f]{40}$"))')"
@@ -132,11 +136,20 @@ jobs:
             echo "Deployed runtime source $actual_sha does not match requested image $EXPECTED_RUNTIME_TAG (build identity $actual_build_identity)" >&2
             exit 1
           fi
-          printf 'runtime_sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
-          printf 'runtime_build_identity=%s\n' "$actual_build_identity" >> "$GITHUB_OUTPUT"
+          {
+            printf 'runtime_sha=%s\n' "$actual_sha"
+            printf 'started_at=%s\n' "$started_at"
+            printf 'runtime_build_identity=%s\n' "$actual_build_identity"
+          } >> "$GITHUB_OUTPUT"
 
+      # The four canary-facing QA steps below are continue-on-error: their
+      # outcomes are judged together, against the canary's deployment receipts,
+      # by the verdict step (a failure while a newer push was redeploying the
+      # canary is a supersession, not a defect). The step that never touches
+      # the canary (cohort contracts) still fails the run directly.
       - name: Run hosted live QA
         id: qa_live
+        continue-on-error: true
         run: |
           set -euo pipefail
           credentials="$(mktemp "$RUNNER_TEMP/hosted-live-credentials.XXXXXX.json")"
@@ -179,6 +192,7 @@ jobs:
 
       - name: Run hosted mixed live/archive shipper bench
         id: hosted_shipper_bench
+        continue-on-error: true
         if: always() && steps.qa_live.outcome == 'success' && env.SMOKE_RUNTIME_TOKEN != ''
         env:
           CARGO_PROFILE: ci
@@ -214,6 +228,7 @@ jobs:
 
       - name: Run render-canary SLA check
         id: render_canary
+        continue-on-error: true
         if: always() && steps.qa_live.outcome == 'success' && env.SMOKE_RUNTIME_TOKEN != '' && env.LONGHOUSE_CANARY_TOKEN != ''
         run: |
           set -euo pipefail
@@ -252,6 +267,7 @@ jobs:
 
       - name: Run privacy-safe isolated cohort journey
         id: cohort_journey
+        continue-on-error: true
         if: always() && steps.qa_live.outcome == 'success'
         run: |
           set -euo pipefail
@@ -285,16 +301,6 @@ jobs:
             --set "PLAYWRIGHT_API_BASE_URL=https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai" \
             --set "LONGHOUSE_JOURNEY_OUTPUT=/work/artifacts/cohort-journey/cohort-journey.json"
 
-      - name: Verify deployed source after QA
-        if: always() && steps.runtime_before.outcome == 'success'
-        env:
-          EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
-        run: |
-          set -euo pipefail
-          health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
-          printf '%s\n' "$health" | jq '{build}'
-          printf '%s\n' "$health" | jq --exit-status --arg expected "$EXPECTED_RUNTIME_SHA" '.build.commit == $expected and .build.dirty == false'
-
       - name: Write summary
         if: always()
         run: |
@@ -306,6 +312,7 @@ jobs:
             echo "- Commit: \`${{ github.sha }}\`"
             echo "- QA source SHA: \`${{ inputs.source_sha || github.sha }}\`"
             echo "- Requested runtime image: \`${{ inputs.runtime_image_tag || inputs.source_sha || 'latest' }}\`"
+            echo "- Deployment receipt observed: \`${{ inputs.deployment_id || 'none (scheduled run)' }}\`"
             echo "- Observed runtime SHA: \`${{ steps.runtime_before.outputs.runtime_sha || 'unavailable' }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
@@ -314,8 +321,39 @@ jobs:
             echo "- cohort journey: \`${{ steps.cohort_journey.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The canary is shared: a newer push redeploys it while this run is still
+      # measuring. Such a run says nothing about its own commit (the newer one
+      # contains it and gets its own QA), so it stands down instead of failing.
+      # The evidence is the canary's deployment receipts; the rules and the
+      # 09-26..09-29 run data are in scripts/qa/hosted-qa-verdict.py.
+      - name: Decide verdict (passed, superseded or failed)
+        id: verdict
+        if: always() && steps.runtime_before.outcome == 'success'
+        env:
+          EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
+          QA_STARTED_AT: ${{ steps.runtime_before.outputs.started_at }}
+          OWN_DEPLOYMENT: ${{ inputs.deployment_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/hosted-qa-verdict.py \
+            --expected-sha "$EXPECTED_RUNTIME_SHA" \
+            --started-at "$QA_STARTED_AT" \
+            --subdomain "$QA_INSTANCE_SUBDOMAIN" \
+            --own-deployment "$OWN_DEPLOYMENT" \
+            --step "qa_live=${{ steps.qa_live.outcome }}" \
+            --step "hosted_shipper_bench=${{ steps.hosted_shipper_bench.outcome }}" \
+            --step "render_canary=${{ steps.render_canary.outcome }}" \
+            --step "cohort_journey=${{ steps.cohort_journey.outcome }}"
+
+      - name: Stand down, canary superseded
+        if: always() && steps.verdict.outputs.verdict == 'superseded'
+        run: echo "The canary was replaced during this run; the newer commit's own Hosted Live QA carries the verdict. See the summary."
+
       - name: Upload privacy-safe cohort journey artifact
-        if: always() && steps.cohort_journey.outcome != 'skipped'
+        # A failed journey writes no artifact; its failure is already reported
+        # (and its evidence uploaded below), so a second "no files" failure here
+        # would only bury the first.
+        if: always() && steps.cohort_journey.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cohort-journey-${{ github.run_id }}-${{ github.run_attempt }}
@@ -324,7 +362,9 @@ jobs:
           retention-days: 30
 
       - name: Upload live QA artifacts
-        if: failure()
+        # QA steps are continue-on-error so a superseded run can stand down;
+        # their failures reach here through the verdict step's output.
+        if: failure() || steps.verdict.outputs.failed_steps != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hosted-live-qa-failure-${{ github.run_id }}-${{ github.run_attempt }}

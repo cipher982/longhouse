@@ -132,6 +132,9 @@ push, so `make ship`/`ship-monitor` no longer require it to match the pushed
 SHA — a stale demo SHA there is expected, not `live_drift`; it is still
 printed in `make deploy-status`/`ship-watch` output. Broad
 `hosted-live-qa.yml` runs asynchronously and must be checked before final QA.
+The canary is shared: a run whose canary a newer push replaced mid-run ends
+green as *superseded* (step "Stand down, canary superseded", receipts in its
+summary), which is not a verdict on your SHA. Check the newest commit's run.
 Full CI remains an optional source gate (`DEPLOY_WAIT_FULL_CI=true`).
 
 Before pushing, run `make affected-check BASE=<base-sha>` to see which CI
