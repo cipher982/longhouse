@@ -333,9 +333,21 @@ jobs:
           EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
           QA_STARTED_AT: ${{ steps.runtime_before.outputs.started_at }}
           OWN_DEPLOYMENT: ${{ inputs.deployment_id }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          python3 scripts/qa/hosted-qa-verdict.py \
+          # The checkout is the commit under QA, which may predate this script
+          # (a run for an older push dispatched under today's workflow), so the
+          # verdict logic is read from the workflow's own commit, like the
+          # inline shell it replaced.
+          verdict_script="$RUNNER_TEMP/hosted-qa-verdict.py"
+          curl --fail --silent --show-error --location --max-time 30 --retry 3 --retry-all-errors \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github.raw+json" \
+            --output "$verdict_script" \
+            "https://api.github.com/repos/${{ github.repository }}/contents/scripts/qa/hosted-qa-verdict.py?ref=$WORKFLOW_SHA"
+          python3 "$verdict_script" \
             --expected-sha "$EXPECTED_RUNTIME_SHA" \
             --started-at "$QA_STARTED_AT" \
             --subdomain "$QA_INSTANCE_SUBDOMAIN" \
