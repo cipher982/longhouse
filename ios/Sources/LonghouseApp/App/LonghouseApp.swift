@@ -679,7 +679,8 @@ final class AppState: ObservableObject {
     }
 
     func ensurePushRegistrationIfPossible() async {
-        guard isAuthenticated else {
+        // The open demo has nothing to notify about; never ask for permission there.
+        guard isAuthenticated, !isExploringDemo else {
             return
         }
         let granted = await PushNotificationStore.ensureAuthorizedAndRegister()
