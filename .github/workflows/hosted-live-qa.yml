@@ -116,6 +116,7 @@ jobs:
         id: runtime_before
         env:
           EXPECTED_RUNTIME_TAG: ${{ inputs.runtime_image_tag || inputs.source_sha || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ -n "$EXPECTED_RUNTIME_TAG" && ! "$EXPECTED_RUNTIME_TAG" =~ ^[0-9a-f]{40}$ ]]; then
@@ -133,6 +134,23 @@ jobs:
           actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '(.source_sha // .build.source_sha // .build.commit) | select(type == "string" and test("^[0-9a-f]{40}$"))')"
           actual_build_identity="$(printf '%s\n' "$health" | jq --raw-output '(.build_identity // .build.build_identity // "-")')"
           if [[ -n "$EXPECTED_RUNTIME_TAG" && "$actual_sha" != "$EXPECTED_RUNTIME_TAG" ]]; then
+            # A newer push can replace the canary between dispatch and this
+            # check. That is a supersession only when the canary now serves a
+            # descendant of the requested commit; anything else is a wrong
+            # deploy and stays a failure.
+            relation="$(curl --fail --silent --show-error --max-time 30 --retry 3 --retry-all-errors \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/compare/${EXPECTED_RUNTIME_TAG}...${actual_sha}" |
+              jq --raw-output '.status' || true)"
+            if [[ "$relation" == "ahead" ]]; then
+              echo "::notice title=Hosted Live QA superseded::the canary already serves $actual_sha, which contains the requested $EXPECTED_RUNTIME_TAG; that commit's own QA carries the verdict"
+              {
+                printf 'stale=true\n'
+                printf 'runtime_sha=%s\n' "$actual_sha"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "Deployed runtime source $actual_sha does not match requested image $EXPECTED_RUNTIME_TAG (build identity $actual_build_identity)" >&2
             exit 1
           fi
@@ -150,6 +168,7 @@ jobs:
       - name: Run hosted live QA
         id: qa_live
         continue-on-error: true
+        if: steps.runtime_before.outputs.stale != 'true'
         run: |
           set -euo pipefail
           credentials="$(mktemp "$RUNNER_TEMP/hosted-live-credentials.XXXXXX.json")"
@@ -314,6 +333,7 @@ jobs:
             echo "- Requested runtime image: \`${{ inputs.runtime_image_tag || inputs.source_sha || 'latest' }}\`"
             echo "- Deployment receipt observed: \`${{ inputs.deployment_id || 'none (scheduled run)' }}\`"
             echo "- Observed runtime SHA: \`${{ steps.runtime_before.outputs.runtime_sha || 'unavailable' }}\`"
+            echo "- Canary already replaced before QA started: \`${{ steps.runtime_before.outputs.stale || 'no' }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"
@@ -328,7 +348,7 @@ jobs:
       # 09-26..09-29 run data are in scripts/qa/hosted-qa-verdict.py.
       - name: Decide verdict (passed, superseded or failed)
         id: verdict
-        if: always() && steps.runtime_before.outcome == 'success'
+        if: always() && steps.runtime_before.outcome == 'success' && steps.runtime_before.outputs.stale != 'true'
         env:
           EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
           QA_STARTED_AT: ${{ steps.runtime_before.outputs.started_at }}
@@ -359,7 +379,7 @@ jobs:
             --step "cohort_contracts=${{ steps.cohort_contracts.outcome }}"
 
       - name: Stand down, canary superseded
-        if: always() && steps.verdict.outputs.verdict == 'superseded'
+        if: always() && (steps.verdict.outputs.verdict == 'superseded' || steps.runtime_before.outputs.stale == 'true')
         run: echo "The canary was replaced during this run; the newer commit's own Hosted Live QA carries the verdict. See the summary."
 
       - name: Upload privacy-safe cohort journey artifact
