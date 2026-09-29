@@ -28,6 +28,18 @@ pub const CLAUDE_PRINT_ADAPTER: &str = "claude_print";
 #[cfg(test)]
 pub const DEFAULT_CLAUDE_BIN: &str = "claude";
 
+/// Claude can start, find no usable credential, and answer with a synthetic
+/// "Not logged in" message without ever reaching the model. The credential is
+/// fine: the CLI lost a race reading or refreshing it while other Claude
+/// processes did the same (anthropics/claude-code#37324, #37402, #43392), and
+/// the same launch a moment later succeeds. Nothing ran, so the turn is
+/// replayed rather than surfaced; one delay per retry.
+#[cfg(not(test))]
+const AUTH_PREFLIGHT_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
+#[cfg(test)]
+const AUTH_PREFLIGHT_RETRY_DELAYS: [Duration; 2] =
+    [Duration::from_millis(10), Duration::from_millis(10)];
+
 #[derive(Clone, Debug)]
 pub struct ClaudePrintRunConfig {
     pub session_id: String,
@@ -72,6 +84,101 @@ struct ClaudePrintSink {
     machine_name: String,
     local_db_path: Option<PathBuf>,
     runtime_events_outbox_dir: PathBuf,
+}
+
+/// What `monitor_claude_print` needs to launch the same turn again.
+struct RetryContext {
+    config: ClaudePrintRunConfig,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+/// The monitor's view of one run's stream, across launch attempts.
+#[derive(Default)]
+struct StreamProgress {
+    seq: u64,
+    terminal_from_stream: Option<ProviderTerminalResult>,
+    identity_confirmed: bool,
+    /// Claude's own text when this attempt reported `authentication_failed`.
+    auth_failure: Option<String>,
+    /// The attempt produced model output (an assistant or tool event other
+    /// than the auth failure), so replaying it would repeat work.
+    made_progress: bool,
+    /// The failed attempt's auth-failure and result events, withheld from the
+    /// timeline while a retry is still possible.
+    held: Vec<(u64, Value)>,
+}
+
+impl StreamProgress {
+    async fn ingest(
+        &mut self,
+        sink: &ClaudePrintSink,
+        lines: Vec<Vec<u8>>,
+        may_hold: bool,
+    ) -> Result<()> {
+        for bytes in lines {
+            self.seq += 1;
+            let seq = self.seq;
+            let event = match serde_json::from_slice::<Value>(&bytes) {
+                Ok(event) => event,
+                Err(error) => {
+                    sink.post_decode_gap(seq, &error.to_string(), &bytes).await;
+                    continue;
+                }
+            };
+            validate_stream_identity(&event, &sink.provider_thread_id)?;
+            if stream_session_identity(&event).is_some() {
+                self.identity_confirmed = true;
+            }
+            if let Some(terminal) = terminal_result_from_event(&event) {
+                self.terminal_from_stream = Some(terminal);
+            }
+            let is_auth_failure = match auth_failure_message(&event) {
+                Some(message) => {
+                    self.auth_failure = Some(message.to_string());
+                    true
+                }
+                None => false,
+            };
+            let kind = event.get("type").and_then(Value::as_str);
+            let is_result = kind == Some("result");
+            if !is_auth_failure
+                && !is_result
+                && !matches!(kind, Some("system") | Some("rate_limit_event"))
+            {
+                self.made_progress = true;
+            }
+            if may_hold
+                && self.auth_failure.is_some()
+                && !self.made_progress
+                && (is_auth_failure || is_result)
+            {
+                self.held.push((seq, event));
+            } else {
+                sink.post_stream_event(seq, event).await;
+            }
+        }
+        Ok(())
+    }
+
+    fn wants_auth_retry(&self) -> bool {
+        self.auth_failure.is_some() && !self.made_progress
+    }
+
+    async fn flush_held(&mut self, sink: &ClaudePrintSink) {
+        for (seq, event) in std::mem::take(&mut self.held) {
+            sink.post_stream_event(seq, event).await;
+        }
+    }
+
+    /// A retry is a fresh launch: forget the failed attempt. Its lines stay in
+    /// the stdout file as evidence and its sequence numbers are not reused.
+    fn begin_attempt(&mut self) {
+        self.terminal_from_stream = None;
+        self.auth_failure = None;
+        self.made_progress = false;
+        self.held.clear();
+    }
 }
 
 pub async fn start_claude_print_turn(
@@ -121,26 +228,7 @@ pub async fn start_claude_print_turn(
         .chain(recorded_args)
         .collect::<Vec<_>>();
 
-    let mut command = Command::new(&config.claude_bin);
-    command
-        .args(&args)
-        .current_dir(&config.cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file));
-    ManagedIdentity::new(ManagedProvider::Claude, &config.session_id)
-        .with_run_id(&config.run_id)
-        .apply(&mut command, &[]);
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = match command.spawn() {
+    let mut child = match spawn_claude(&config, &args, stdout_file, stderr_file) {
         Ok(child) => child,
         Err(error) => {
             return Err(error).with_context(|| format!("spawning `{}` --print", config.claude_bin))
@@ -161,22 +249,16 @@ pub async fn start_claude_print_turn(
         local_db_path: config.local_db_path.clone(),
         runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     };
-    let result = json!({
-        "session_id": config.session_id,
-        "thread_id": config.thread_id,
-        "run_id": config.run_id,
-        "provider": "claude",
-        "transport": CLAUDE_PRINT_ADAPTER,
-        "provider_thread_id": provider_thread_id,
-        "launch_id": launch_id,
-        "pid": pid,
-        "process_group_id": process_group_id,
-        "stdout_path": stdout_path,
-        "stderr_path": stderr_path,
-        "cwd": config.cwd,
-        "machine_name": config.machine_name,
-        "argv": argv,
-    });
+    let result = spawn_record(
+        &config,
+        &provider_thread_id,
+        &launch_id,
+        pid,
+        process_group_id,
+        &stdout_path,
+        &stderr_path,
+        &argv,
+    );
     if let Err(error) = crate::turn_claims::default_registry()?.mark_spawned_invocation(
         &config.run_id,
         pid,
@@ -196,8 +278,21 @@ pub async fn start_claude_print_turn(
     let monitor = crate::turn_claims::register_monitor(&config.run_id);
     let monitor_path = stdout_path.clone();
     let monitor_stderr = stderr_path.clone();
+    let retry = RetryContext {
+        config: config.clone(),
+        stdout_path: stdout_path.clone(),
+        stderr_path: stderr_path.clone(),
+    };
     tokio::spawn(async move {
-        monitor_claude_print(&mut child, &monitor_path, &monitor_stderr, sink, lock).await;
+        monitor_claude_print(
+            &mut child,
+            &monitor_path,
+            &monitor_stderr,
+            sink,
+            retry,
+            lock,
+        )
+        .await;
         drop(monitor);
     });
 
@@ -374,51 +469,35 @@ async fn monitor_claude_print(
     child: &mut Child,
     stdout_path: &Path,
     stderr_path: &Path,
-    sink: ClaudePrintSink,
+    mut sink: ClaudePrintSink,
+    retry: RetryContext,
     _lock: File,
 ) {
     sink.post_phase("thinking", None).await;
     let mut offset = 0_u64;
     let mut pending = Vec::new();
-    let mut seq = 0_u64;
-    let mut terminal_from_stream = None;
-    let mut identity_confirmed = false;
+    let mut stream = StreamProgress::default();
+    let mut retries_used = 0_usize;
     loop {
         if crate::turn_claims::monitor_cancel_requested(&sink.run_id) {
             return;
         }
+        let may_hold = retries_used < AUTH_PREFLIGHT_RETRY_DELAYS.len();
         match read_growth(stdout_path, &mut offset, &mut pending) {
             Ok(lines) => {
                 let had_lines = !lines.is_empty();
-                for bytes in lines {
-                    seq += 1;
-                    match serde_json::from_slice::<Value>(&bytes) {
-                        Ok(event) => {
-                            if let Err(error) =
-                                validate_stream_identity(&event, &sink.provider_thread_id)
-                            {
-                                cleanup_process_group(sink.process_group_id).await;
-                                sink.post_terminal("run_failed", None, Some(error.to_string()))
-                                    .await;
-                                return;
-                            }
-                            if stream_session_identity(&event).is_some() {
-                                identity_confirmed = true;
-                            }
-                            if let Some(terminal) = terminal_result_from_event(&event) {
-                                terminal_from_stream = Some(terminal);
-                            }
-                            sink.post_stream_event(seq, event).await;
-                        }
-                        Err(error) => sink.post_decode_gap(seq, &error.to_string(), &bytes).await,
-                    }
+                if let Err(error) = stream.ingest(&sink, lines, may_hold).await {
+                    cleanup_process_group(sink.process_group_id).await;
+                    sink.post_terminal("run_failed", None, Some(error.to_string()))
+                        .await;
+                    return;
                 }
                 // Do not advance the durable projection past the provider's
                 // result until the terminal claim is posted. If the agent
                 // dies in that gap, recovery must replay the result instead
                 // of classifying an already-successful provider run failed.
-                if had_lines && terminal_from_stream.is_none() {
-                    persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
+                if had_lines && stream.terminal_from_stream.is_none() {
+                    persist_projection_checkpoint(&sink.run_id, offset, pending.len(), stream.seq);
                 }
             }
             Err(error) => {
@@ -437,37 +516,19 @@ async fn monitor_claude_print(
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 if let Ok(lines) = read_growth(stdout_path, &mut offset, &mut pending) {
                     let had_lines = !lines.is_empty();
-                    for bytes in lines {
-                        seq += 1;
-                        match serde_json::from_slice::<Value>(&bytes) {
-                            Ok(event) => {
-                                if let Err(error) =
-                                    validate_stream_identity(&event, &sink.provider_thread_id)
-                                {
-                                    cleanup_process_group(sink.process_group_id).await;
-                                    sink.post_terminal(
-                                        "run_failed",
-                                        status.code(),
-                                        Some(error.to_string()),
-                                    )
-                                    .await;
-                                    return;
-                                }
-                                if stream_session_identity(&event).is_some() {
-                                    identity_confirmed = true;
-                                }
-                                if let Some(terminal) = terminal_result_from_event(&event) {
-                                    terminal_from_stream = Some(terminal);
-                                }
-                                sink.post_stream_event(seq, event).await;
-                            }
-                            Err(error) => {
-                                sink.post_decode_gap(seq, &error.to_string(), &bytes).await
-                            }
-                        }
+                    if let Err(error) = stream.ingest(&sink, lines, may_hold).await {
+                        cleanup_process_group(sink.process_group_id).await;
+                        sink.post_terminal("run_failed", status.code(), Some(error.to_string()))
+                            .await;
+                        return;
                     }
-                    if had_lines && terminal_from_stream.is_none() {
-                        persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
+                    if had_lines && stream.terminal_from_stream.is_none() {
+                        persist_projection_checkpoint(
+                            &sink.run_id,
+                            offset,
+                            pending.len(),
+                            stream.seq,
+                        );
                     }
                 }
                 let claim = crate::turn_claims::default_registry()
@@ -477,17 +538,61 @@ async fn monitor_claude_print(
                     .as_ref()
                     .and_then(|item| item.cancel_requested_at.as_ref())
                     .is_some();
+                if may_hold && !cancel_requested && stream.wants_auth_retry() {
+                    let delay = AUTH_PREFLIGHT_RETRY_DELAYS[retries_used];
+                    retries_used += 1;
+                    eprintln!(
+                        "[claude-print] session={} run={} Claude found no credential before the model ran; \
+                         relaunching with --resume (retry {retries_used}/{}) after {delay:?}",
+                        sink.session_id,
+                        sink.run_id,
+                        AUTH_PREFLIGHT_RETRY_DELAYS.len(),
+                    );
+                    cleanup_process_group(sink.process_group_id).await;
+                    tokio::time::sleep(delay).await;
+                    if crate::turn_claims::monitor_cancel_requested(&sink.run_id) {
+                        return;
+                    }
+                    match respawn_claude(&retry, &mut sink).await {
+                        Ok(next) => {
+                            *child = next;
+                            stream.begin_attempt();
+                            continue;
+                        }
+                        Err(error) => {
+                            stream.flush_held(&sink).await;
+                            sink.post_terminal(
+                                "run_failed",
+                                status.code(),
+                                Some(format!(
+                                    "relaunching Claude after an auth failure: {error:#}"
+                                )),
+                            )
+                            .await;
+                            return;
+                        }
+                    }
+                }
+                stream.flush_held(&sink).await;
                 let terminal = settle_terminal_state(
                     cancel_requested,
                     status.success(),
-                    identity_confirmed,
-                    terminal_from_stream,
+                    stream.identity_confirmed,
+                    stream.terminal_from_stream,
                 );
                 if terminal != "run_completed" {
                     cleanup_process_group(sink.process_group_id).await;
                 }
-                sink.post_terminal(&terminal, status.code(), stderr_tail(stderr_path))
-                    .await;
+                // Claude reports a missing credential on the stream, not on
+                // stderr, so stderr alone never classified it.
+                let auth_failed = terminal == "run_failed" && stream.auth_failure.is_some();
+                sink.post_terminal_with_reason(
+                    &terminal,
+                    status.code(),
+                    stderr_tail(stderr_path).or(stream.auth_failure.clone()),
+                    auth_failed.then_some("provider_auth_required"),
+                )
+                .await;
                 return;
             }
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
@@ -503,6 +608,135 @@ async fn monitor_claude_print(
             }
         }
     }
+}
+
+/// Launch the turn again after an auth-only failure. The failed attempt already
+/// created the provider session, so this is a `--resume`, appending to the same
+/// stdout/stderr so the projection offsets and sequence keep moving forward.
+async fn respawn_claude(retry: &RetryContext, sink: &mut ClaudePrintSink) -> Result<Child> {
+    let (args, recorded_args) = build_claude_args(
+        &sink.provider_thread_id,
+        true,
+        retry.config.model.as_deref(),
+        &retry.config.prompt,
+    );
+    let argv = std::iter::once(retry.config.claude_bin.clone())
+        .chain(recorded_args)
+        .collect::<Vec<_>>();
+    let mut child = spawn_claude(
+        &retry.config,
+        &args,
+        append_output_file(&retry.stdout_path)?,
+        append_output_file(&retry.stderr_path)?,
+    )
+    .with_context(|| format!("spawning `{}` --print", retry.config.claude_bin))?;
+    let pid = child.id().context("claude --print returned no pid")?;
+    let process_group_id = i32::try_from(pid).context("Claude pid exceeds process-group range")?;
+    let result = spawn_record(
+        &retry.config,
+        &sink.provider_thread_id,
+        &sink.launch_id,
+        pid,
+        process_group_id,
+        &retry.stdout_path,
+        &retry.stderr_path,
+        &argv,
+    );
+    if let Err(error) = crate::turn_claims::default_registry().and_then(|registry| {
+        registry.mark_spawned_invocation(
+            &sink.run_id,
+            pid,
+            process_group_id,
+            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+            CLAUDE_PRINT_ADAPTER,
+            &sink.launch_id,
+            Some(&sink.provider_thread_id),
+            &retry.stdout_path.to_string_lossy(),
+            &retry.stderr_path.to_string_lossy(),
+            result,
+        )
+    }) {
+        cleanup_process_group(Some(process_group_id)).await;
+        let _ = child.kill().await;
+        return Err(error).context("persisting relaunched Claude Console spawn identity");
+    }
+    sink.process_group_id = Some(process_group_id);
+    Ok(child)
+}
+
+fn spawn_claude(
+    config: &ClaudePrintRunConfig,
+    args: &[String],
+    stdout: File,
+    stderr: File,
+) -> std::io::Result<Child> {
+    let mut command = Command::new(&config.claude_bin);
+    command
+        .args(args)
+        .current_dir(&config.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    ManagedIdentity::new(ManagedProvider::Claude, &config.session_id)
+        .with_run_id(&config.run_id)
+        .apply(&mut command, &[]);
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.spawn()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_record(
+    config: &ClaudePrintRunConfig,
+    provider_thread_id: &str,
+    launch_id: &str,
+    pid: u32,
+    process_group_id: i32,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    argv: &[String],
+) -> Value {
+    json!({
+        "session_id": config.session_id,
+        "thread_id": config.thread_id,
+        "run_id": config.run_id,
+        "provider": "claude",
+        "transport": CLAUDE_PRINT_ADAPTER,
+        "provider_thread_id": provider_thread_id,
+        "launch_id": launch_id,
+        "pid": pid,
+        "process_group_id": process_group_id,
+        "stdout_path": stdout_path,
+        "stderr_path": stderr_path,
+        "cwd": config.cwd,
+        "machine_name": config.machine_name,
+        "argv": argv,
+    })
+}
+
+/// The text of Claude's "I never reached the model" message: a synthetic
+/// assistant event flagged as an API error with `error: authentication_failed`
+/// (`Not logged in · Please run /login`).
+fn auth_failure_message(event: &Value) -> Option<&str> {
+    if event.get("type").and_then(Value::as_str) != Some("assistant")
+        || event.get("error").and_then(Value::as_str) != Some("authentication_failed")
+        || event.get("is_api_error_message").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    Some(
+        event
+            .pointer("/message/content/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or("Claude authentication failed"),
+    )
 }
 
 async fn monitor_recovered_claim(
@@ -827,6 +1061,17 @@ impl ClaudePrintSink {
         exit_code: Option<i32>,
         stderr: Option<String>,
     ) {
+        self.post_terminal_with_reason(terminal_state, exit_code, stderr, None)
+            .await;
+    }
+
+    async fn post_terminal_with_reason(
+        &self,
+        terminal_state: &str,
+        exit_code: Option<i32>,
+        stderr: Option<String>,
+        reason: Option<&str>,
+    ) {
         self.persist_local_phase("finished", None, Utc::now());
         self.post_events(vec![json!({
             "runtime_key": format!("claude:{}", self.session_id),
@@ -843,7 +1088,7 @@ impl ClaudePrintSink {
                 "managed_transport": CLAUDE_PRINT_ADAPTER,
                 "execution_lifetime": "one_shot",
                 "terminal_state": terminal_state,
-                "terminal_reason": terminal_reason(terminal_state, stderr.as_deref()),
+                "terminal_reason": reason.unwrap_or_else(|| terminal_reason(terminal_state, stderr.as_deref())),
                 "terminal_source": CLAUDE_PRINT_ADAPTER,
                 "exit_code": exit_code,
                 "stderr_tail": stderr,
@@ -1034,6 +1279,14 @@ fn private_output_file(path: &Path) -> Result<File> {
         .write(true)
         .create(true)
         .truncate(true)
+        .mode(0o600)
+        .open(path)?)
+}
+
+fn append_output_file(path: &Path) -> Result<File> {
+    Ok(OpenOptions::new()
+        .append(true)
+        .create(true)
         .mode(0o600)
         .open(path)?)
 }
@@ -1319,6 +1572,231 @@ mod tests {
             Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
         }
+    }
+
+    /// The exact event Claude 2.1.284 wrote when it found no credential
+    /// (recorded from a real failed Console turn, session id elided).
+    fn recorded_auth_failure() -> Value {
+        json!({
+            "type": "assistant",
+            "message": {
+                "model": "<synthetic>",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Not logged in \u{b7} Please run /login"}]
+            },
+            "error": "authentication_failed",
+            "is_api_error_message": true
+        })
+    }
+
+    #[test]
+    fn auth_failure_is_recognised_only_from_the_flagged_synthetic_message() {
+        assert_eq!(
+            auth_failure_message(&recorded_auth_failure()),
+            Some("Not logged in \u{b7} Please run /login")
+        );
+        // Ordinary assistant text that merely says the words is not the signal.
+        let quoted = json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Not logged in \u{b7} Please run /login"}]}
+        });
+        assert_eq!(auth_failure_message(&quoted), None);
+        // Nor is another API error.
+        let mut other = recorded_auth_failure();
+        other["error"] = json!("rate_limit");
+        assert_eq!(auth_failure_message(&other), None);
+        // Nor a non-assistant event carrying the same fields.
+        let mut wrong_type = recorded_auth_failure();
+        wrong_type["type"] = json!("result");
+        assert_eq!(auth_failure_message(&wrong_type), None);
+    }
+
+    /// A tempdir holding a fake `claude` that reports an auth failure for its
+    /// first `failures` launches and completes on the next. Records each argv.
+    struct FakeClaude {
+        dir: tempfile::TempDir,
+        bin: PathBuf,
+    }
+
+    impl FakeClaude {
+        fn new(failures: usize) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("claude");
+            std::fs::write(
+                &bin,
+                format!(
+                    r#"#!/bin/sh
+D=$(dirname "$0")
+n=$(cat "$D/count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/count"
+echo "$@" >> "$D/argv.log"
+sid=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "--session-id" ] || [ "$prev" = "--resume" ]; then sid="$a"; fi
+  prev="$a"
+done
+echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$sid\"}}"
+if [ "$n" -le {failures} ]; then
+  echo "{{\"type\":\"assistant\",\"error\":\"authentication_failed\",\"is_api_error_message\":true,\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"Not logged in - Please run /login\"}}]}}}}"
+  echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"duration_api_ms\":0}}"
+  exit 1
+fi
+echo "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"fake answer\"}}]}}}}"
+echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_api_ms\":5}}"
+"#
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Self { dir, bin }
+        }
+
+        fn launches(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.path().join("argv.log"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    /// Run one Console turn through the production adapter against `fake`,
+    /// returning the terminal claim result and every runtime event it posted.
+    async fn run_fake_turn(fake: &FakeClaude) -> (Value, Vec<Value>) {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        let previous_config = std::env::var_os("CLAUDE_CONFIG_DIR");
+        let provider_home = temp.path().join("claude-home");
+        std::fs::create_dir_all(&provider_home).unwrap();
+        std::fs::write(
+            provider_home.join("settings.json"),
+            serde_json::to_vec(&json!({
+                "hooks": {"SessionStart": [{"hooks": [{"command": "/x/longhouse-hook.sh"}]}]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse"));
+            std::env::set_var("CLAUDE_CONFIG_DIR", &provider_home);
+        }
+
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
+        let registry = crate::turn_claims::default_registry().unwrap();
+        assert!(matches!(
+            registry
+                .claim(
+                    &run_id,
+                    &session_id,
+                    &thread_id,
+                    Some(&turn_id),
+                    None,
+                    "claude"
+                )
+                .unwrap(),
+            crate::turn_claims::ClaimOutcome::Acquired
+        ));
+        let summary = start_claude_print_turn(ClaudePrintRunConfig {
+            session_id,
+            thread_id,
+            turn_id: Some(turn_id),
+            run_id: run_id.clone(),
+            client_request_id: None,
+            cwd: temp.path().to_path_buf(),
+            claude_bin: fake.bin.to_string_lossy().to_string(),
+            prompt: "hello".to_string(),
+            resume_provider_thread_id: None,
+            model: None,
+            permission_mode: "bypass".to_string(),
+            machine_name: "fake-box".to_string(),
+            local_db_path: None,
+        })
+        .await
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let claim = loop {
+            let claim = registry.read(&summary.run_id).unwrap();
+            if claim.state == "terminal" {
+                break claim;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fake Claude turn never settled"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+        let events = std::fs::read_dir(&outbox)
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| std::fs::read(entry.ok()?.path()).ok())
+                    .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (key, previous) in [
+            ("LONGHOUSE_HOME", previous_home),
+            ("CLAUDE_CONFIG_DIR", previous_config),
+        ] {
+            match previous {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+        (claim.result.unwrap_or(Value::Null), events)
+    }
+
+    #[tokio::test]
+    async fn a_preflight_auth_failure_is_relaunched_and_never_reaches_the_timeline() {
+        let fake = FakeClaude::new(1);
+        let (result, events) = run_fake_turn(&fake).await;
+
+        assert_eq!(result["terminal_state"], "run_completed");
+        let launches = fake.launches();
+        assert_eq!(
+            launches.len(),
+            2,
+            "one failed launch, one retry: {launches:?}"
+        );
+        assert!(launches[0].contains("--session-id"), "{launches:?}");
+        assert!(
+            launches[1].contains("--resume") && !launches[1].contains("--session-id"),
+            "the retry must resume the session the failed launch created: {launches:?}"
+        );
+        let posted = serde_json::to_string(&events).unwrap();
+        assert!(
+            !posted.contains("authentication_failed") && !posted.contains("Not logged in"),
+            "the failed attempt leaked into the timeline: {posted}"
+        );
+        assert!(posted.contains("fake answer"), "{posted}");
+    }
+
+    #[tokio::test]
+    async fn a_persistent_auth_failure_is_surfaced_after_bounded_retries() {
+        let fake = FakeClaude::new(1000);
+        let (result, events) = run_fake_turn(&fake).await;
+
+        assert_eq!(result["terminal_state"], "run_failed");
+        assert_eq!(
+            fake.launches().len(),
+            1 + AUTH_PREFLIGHT_RETRY_DELAYS.len(),
+            "retries must be bounded"
+        );
+        let terminal = events
+            .iter()
+            .find(|event| event["kind"] == "terminal_signal")
+            .expect("terminal signal posted");
+        assert_eq!(
+            terminal["payload"]["terminal_reason"],
+            "provider_auth_required"
+        );
+        // Giving up releases the withheld failure so the user sees why.
+        let posted = serde_json::to_string(&events).unwrap();
+        assert!(posted.contains("authentication_failed"), "{posted}");
     }
 
     #[test]

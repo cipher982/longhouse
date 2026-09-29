@@ -1305,14 +1305,6 @@ pub fn rollback_to_local(version: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Serializes the tests that set process-global environment variables.
-    ///
-    /// The root override is per-process, so two of these running concurrently
-    /// would point at each other's temp directories. Relying on
-    /// `--test-threads=1` instead would work locally and fail in CI, which
-    /// runs the suite with default parallelism.
-    static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Tests that touch the filesystem run against an overridden root so they
     /// can never modify a real installation. `HOME` was used directly at first,
     /// which made the rollback test non-hermetic.
@@ -1324,9 +1316,10 @@ mod tests {
 
     impl FakeInstall {
         fn new() -> Self {
-            // A panicking test poisons the mutex; recovering keeps one failure
-            // from cascading into every other test in the module.
-            let guard = ENV_GUARD.lock().unwrap_or_else(|error| error.into_inner());
+            // The shared agent-state lock, not a private one: this points
+            // `LONGHOUSE_HOME` at its own tree, and a private lock let it do
+            // that underneath every other test holding the shared one.
+            let guard = crate::console_adapter::agent_state_guard();
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path().to_path_buf();
             std::env::set_var("LONGHOUSE_NATIVE_ROOT_OVERRIDE", &root);
@@ -1461,10 +1454,6 @@ mod tests {
 
     #[test]
     fn a_crash_before_the_status_write_still_leaves_a_complete_pair() {
-        // Spawns a subprocess or reads the process table: hold the shared
-        // agent-state lock, so a concurrent test cannot empty PATH or move a
-        // global tree under it.
-        let _guard = crate::console_adapter::agent_state_guard();
         // Boundary 2: binaries swapped, status never written. The machine runs
         // a complete new pair; only the record of the owed restart is missing,
         // and the next check re-derives that from the installed version.
@@ -1577,9 +1566,6 @@ mod tests {
 
     #[test]
     fn a_second_update_operation_is_refused_while_one_holds_the_lock() {
-        // Mutates process-global environment: hold the shared agent-state
-        // lock so a concurrent test does not spawn under this one's PATH.
-        let _guard = crate::console_adapter::agent_state_guard();
         let _install = FakeInstall::new();
         let temp = tempfile::tempdir().unwrap();
         std::env::set_var("LONGHOUSE_HOME", temp.path());
