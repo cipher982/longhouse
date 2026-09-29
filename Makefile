@@ -27,6 +27,13 @@ endif
 
 CARGO_ENGINE := python3 scripts/build/cargo.py exec --
 CARGO_ARTIFACT := python3 scripts/build/cargo.py artifact
+# Engine test lanes build with `ci-test` (engine/Cargo.toml): an unoptimized
+# engine crate over opt-3 dependencies, which is what CI has always run. A
+# release-profile test build (fat LTO, one codegen unit) took 7m20s of the
+# ~14 min `make test-ci` and needed more than the local guest's 4 GiB: rustc was
+# OOM-killed during `make release` v0.1.58 (2026-09-29). Benchmarks and perf
+# targets keep `release`; CARGO_PROFILE=<profile> still overrides.
+ENGINE_TEST_PROFILE := $(or $(CARGO_PROFILE),ci-test)
 
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
@@ -418,13 +425,13 @@ test-frontend: ## Frontend unit tests + type-check (~1min)
 
 test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE)
 	@# The projection-failure proof (test-engine-projection-failure) spends ~30s
 	@# waiting on a real daemon, nearly idle, and the test harness takes ~40s to
 	@# compile. Overlap them: compile the harness in the background while the
 	@# proof runs, then run the suite with nothing left to build.
-	@$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(or $(CARGO_PROFILE),release) --bins --tests --no-run & harness=$$!; \
-	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine )" || { status=$$?; wait $$harness; exit $$status; }; \
+	@$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) --bins --tests --no-run & harness=$$!; \
+	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine )" || { status=$$?; wait $$harness; exit $$status; }; \
 	wait $$harness
 	@# --bins is load-bearing: engine/src/longhouse.rs is a second bin
 	@# target holding launch_managed_claude/opencode/codex, and every cargo test
@@ -439,20 +446,20 @@ test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
 	@# took ~9 min on CI; engine/.config/nextest.toml bounds a hung test). A
 	@# harness that vanishes mid-run fails nextest outright, which the old
 	@# completion-summary grep existed to catch.
-	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(or $(CARGO_PROFILE),release) --bins --tests
+	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) --bins --tests
 
 test-engine-omp-helm: ## OMP Helm extension contract tests
 	@cd engine && bun test assets/longhouse-omp-helm.test.ts
 
 test-engine-projection-failure: ## Isolated real-daemon failed-observation recovery
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine
-	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine )"
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine
+	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine )"
 
 test-engine-single: ## Exact Rust engine unit tests (TEST="module::tests::name ...")
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- $(TEST) --exact --nocapture --test-threads=1
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine -- $(TEST) --exact --nocapture --test-threads=1
 
 test-engine-focused: test-engine-single test-engine-projection-failure ## Focused native checks sharing one isolated build (TEST required)
 
@@ -566,8 +573,8 @@ test-e2e-onboarding: ## @internal Onboarding browser ring
 
 test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
-	cd server && LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
+	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE)
+	cd server && CARGO_PROFILE=$(ENGINE_TEST_PROFILE) LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
 		uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
 # Deliberately not test-isolation-dispatched (not test-/qa-/provider-/ci-
