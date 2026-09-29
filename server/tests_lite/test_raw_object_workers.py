@@ -431,6 +431,11 @@ async def test_close_kills_a_sigterm_proof_child_of_a_broken_pool(tmp_path, pool
         _, _, survivor, children = await _break_repair_pool_around_a_sigterm_proof_child(pool, ready)
         await asyncio.wait_for(pool.close(), timeout=5.0)
         assert all(child_is_gone(child) for child in children[:2])
+        # The dispatcher threads end with the pool instead of outliving it.
+        owners = (pool._live_pool, pool._repair_pool, pool._user_read_pool)
+        async with asyncio.timeout(5):
+            while any(thread.is_alive() for owner in owners for thread in tuple(owner._dispatcher._threads)):
+                await asyncio.sleep(0.01)
     finally:
         for child in children:
             if child.is_alive():
@@ -452,6 +457,10 @@ async def test_submit_to_a_retired_generation_is_a_broken_pool_so_the_caller_ret
         assert isinstance(await owner.submit(owner.executor, worker_module._worker_ping), int)
     finally:
         await owner.close()
+    # A closed pool refuses work as a broken pool too, which callers turn into
+    # their typed "crashed twice" error rather than a bare RuntimeError.
+    with pytest.raises(BrokenProcessPool):
+        await owner.submit(owner.executor, worker_module._worker_ping)
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,6 @@ import multiprocessing
 import os
 from collections.abc import AsyncIterator
 from collections.abc import Callable
-from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -160,18 +159,6 @@ def _terminate_owned_executor(
     return True
 
 
-def _submit_to_executor(executor: ProcessPoolExecutor, fn: Callable[..., Any], args: tuple[Any, ...]) -> ConcurrentFuture[Any]:
-    try:
-        return executor.submit(fn, *args)
-    except BrokenProcessPool:
-        raise
-    except RuntimeError as exc:
-        # Our own retirement shut this generation down between the caller
-        # choosing it and the dispatcher thread reaching it: the same recovery
-        # as a crashed pool.
-        raise BrokenProcessPool(str(exc)) from exc
-
-
 def _future_completed_normally(future: asyncio.Future[Any]) -> bool:
     if not future.done() or future.cancelled():
         return False
@@ -221,11 +208,27 @@ class _OwnedProcessPool:
         return asyncio.ensure_future(self._submit_and_wait(executor, fn, args))
 
     async def _submit_and_wait(self, executor: ProcessPoolExecutor, fn: Callable[..., Any], args: tuple[Any, ...]) -> Any:
-        submitted = await asyncio.get_running_loop().run_in_executor(self._dispatcher, _submit_to_executor, executor, fn, args)
+        try:
+            submitted = await asyncio.get_running_loop().run_in_executor(self._dispatcher, executor.submit, fn, *args)
+        except BrokenProcessPool:
+            raise
+        except RuntimeError as exc:
+            # Either another operation's cleanup already retired this
+            # generation between the caller choosing it and the dispatcher
+            # reaching it, or the pool is closed. Both read as a broken pool:
+            # the caller retries on the current generation or fails typed.
+            raise BrokenProcessPool(str(exc)) from exc
         return await asyncio.wrap_future(submitted)
 
     def defer_slot(self, executor: ProcessPoolExecutor, slots: asyncio.Semaphore) -> None:
-        """Retain child identities and the permit before any cancellable await."""
+        """Retain child identities and the permit before any cancellable await.
+
+        A deadline that fires while the dispatcher thread is still inside the
+        submit that spawns this generation's first child can snapshot before
+        that child exists. The stdlib's own broken-pool terminate reaps it once
+        the known children are dead, so retire may report success a moment
+        before that one child is gone.
+        """
 
         if executor not in self.retired:
             self.retired[executor] = _executor_processes(executor)
@@ -293,6 +296,10 @@ class _OwnedProcessPool:
             )
         except TimeoutError as exc:
             raise RuntimeError("owned worker cleanup exceeded its deadline") from exc
+        finally:
+            # Never wait: a submit wedged on a child that could not be stopped
+            # would hold the join. The thread ends when that submit returns.
+            self._dispatcher.shutdown(wait=False)
         if not all(results):
             raise RuntimeError("owned worker processes could not be stopped")
 
