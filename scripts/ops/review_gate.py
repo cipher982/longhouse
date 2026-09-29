@@ -243,8 +243,10 @@ def check_commits(repo: str | Path, commits: list[Commit], events: list[dict]) -
     verdicts = []
     for commit in commits:
         covering = list(by_sha.get(commit.sha, []))
-        if not covering and by_patch:
-            covering = list(by_patch.get(commit.patch_id(repo) or "", []))
+        if by_patch and not any(r.get("state") == "complete" for r in covering):
+            # Not reviewed under this exact SHA: a rebased copy of the same patch counts.
+            seen = {r["id"] for r in covering}
+            covering += [r for r in by_patch.get(commit.patch_id(repo) or "", []) if r["id"] not in seen]
         reasons = []
         complete = [r for r in covering if r.get("state") == "complete"]
         if not complete:

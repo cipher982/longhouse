@@ -240,6 +240,19 @@ class PushRuleTests(unittest.TestCase):
         self.repo.git("rebase", "-q", "origin/main")
         self.assertEqual(self.push(), [])
 
+    def test_a_partial_review_of_the_old_sha_does_not_hide_a_complete_review_of_the_rebased_patch(self):
+        self.repo.git("checkout", "-q", "-b", "topic")
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        self.repo.receipt("origin/main", state="partial", reasons=["pass hit its time budget: final"])
+        self.repo.git("checkout", "-q", "main")
+        moved = self.repo.commit("someone else", {"other.txt": "1"})
+        self.repo.git("update-ref", "refs/remotes/origin/main", moved)
+        self.repo.git("checkout", "-q", "topic")
+        self.repo.git("rebase", "-q", "origin/main")
+        self.assertEqual(len(self.push()), 1)  # only the partial one so far
+        self.repo.receipt("origin/main")  # a complete review of the rebased commit
+        self.assertEqual(self.push(), [])
+
     def test_a_commit_changed_after_review_is_not_covered(self):
         self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
         self.repo.receipt("origin/main")
