@@ -18,7 +18,7 @@
 #   --env K=V      set K=V for the command (repeatable)
 #   --timeout S    kill the run after S seconds (default $CRUNCH_TIMEOUT, else 3600)
 #   --keep         leave the run's guest directory in place (debugging; the guest GC removes it after 6 h)
-# In the command, $CRUNCH_OUT is a fresh directory whose contents come back to /tmp/agents/crunch/<run>/out/.
+# The command is one shell string (`run make test`, or quote it: `run 'a && b'`). In it, $CRUNCH_OUT is a fresh directory whose contents come back to /tmp/agents/crunch/<run>/out/.
 # Every run also brings back run.log and exit there.
 #
 # What runs in the guest: it has Docker, make, git, python3 and rsync, and nothing else. `make test*`,
@@ -89,8 +89,9 @@ g() { ssh -F "$SSH_CONFIG" crunch "$@"; }
 
 guest_probe() {
   if ! g true 2>/dev/null; then
-    echo "crunch: cannot reach the guest. Checks: 'ssh $VIA true'; 'ssh $VIA sudo virsh -c qemu:///system domstate crunch' (must say running; a" >&2
-    echo "        'shut off' after a crash is restarted by crunch-breaker within seconds); the guest agent path (gexec.py) works without the network." >&2
+    echo "crunch: cannot reach the guest. Check 'ssh $VIA true', then 'ssh $VIA sudo virsh -c qemu:///system domstate crunch' (must say" >&2
+    echo "        running; after a crash the host's breaker restarts it within seconds). The guest agent path works without the network:" >&2
+    echo "        ssh $VIA sudo python3 /usr/local/lib/crunch/gexec.py 'uptime'" >&2
     g true || true
     exit 1
   fi
@@ -168,7 +169,7 @@ cmd_run() {
   local outs=() envs=() keep=0
   while (($#)); do
     case "$1" in
-      --out) [[ $# -ge 2 ]] || die "--out needs a path"; outs+=("$2"); shift 2 ;;
+      --out) [[ $# -ge 2 && "$2" != /* && "$2" != *..* ]] || die "--out needs a path inside the checkout (no absolute path, no ..)"; outs+=("$2"); shift 2 ;;
       --env) [[ $# -ge 2 && "$2" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env needs K=V"; envs+=("$2"); shift 2 ;;
       --timeout) [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die "--timeout needs seconds"; TIMEOUT="$2"; shift 2 ;;
       --keep) keep=1; shift ;;
