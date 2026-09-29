@@ -124,7 +124,7 @@ observability-down: ## Stop the god-view observability stack
 # ---------------------------------------------------------------------------
 # Testing — run the tier that matches your change
 #
-#  make test              backend (server/)          ~2min in the default 2-CPU guest, ~45s with LONGHOUSE_TEST_CPUS=8 (ARGS=--shuffle=7 for a seeded order)
+#  make test              backend (server/)          ~2min in the default 2-CPU guest, ~45s with LONGHOUSE_TEST_CPUS=8 (memory follows, 1 GiB per CPU; ARGS=--shuffle=7 for a seeded order)
 #  make test-ios          iOS (ios/)                 ~1m
 #  make test-ios-session-open iOS tap-to-paint benchmark
 #  make test-mobile-chat  mobile chat focused path

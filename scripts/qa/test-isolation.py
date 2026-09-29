@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import runpy
@@ -603,7 +604,10 @@ def load_credentials(path: Path) -> dict[str, str]:
 # The runner that owns the Docker daemon sizes the guest; cube's shared DinD
 # pods keep the historical 2 CPU / 4 GiB default.
 CONTAINER_CPUS = os.environ.get("LONGHOUSE_TEST_CPUS", "2")
-CONTAINER_MEMORY = os.environ.get("LONGHOUSE_TEST_MEMORY", "4g")
+# The backend suite runs one xdist worker per CPU at about 0.7 GiB each, so an
+# unset memory limit follows the CPU count (never below the historical 4 GiB)
+# instead of letting LONGHOUSE_TEST_CPUS=8 alone OOM a 4 GiB guest.
+CONTAINER_MEMORY = os.environ.get("LONGHOUSE_TEST_MEMORY") or f"{max(4, math.ceil(float(CONTAINER_CPUS)))}g"
 # The engine lanes are the same shape: ~1700 Rust tests plus the shipper E2E
 # open SQLite databases in tempdirs under /tmp, and on a disk-backed /tmp the
 # unit suite ran ~6x slower than the same guest locally. Their tempdirs are
