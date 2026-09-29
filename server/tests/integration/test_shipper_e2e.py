@@ -601,6 +601,25 @@ def _read_engine_logs(log_dir: Path) -> str:
     return "\n".join(path.read_text(errors="replace") for path in sorted(log_dir.glob("engine.log.*")))
 
 
+def _wait_for_logs_contain(log_dir: Path, *needles: str, timeout: float = 60.0) -> str:
+    # The server serves a session's events as soon as it accepts the envelope,
+    # which is before the engine has logged the completed ship (that line is
+    # written after the POST returns), so asserting on the engine log right
+    # after _wait_for_session_events returned raced: the release validation of
+    # v0.1.59 failed on it with the events served at 01.360 and the log line
+    # not yet written when the engine was terminated at 01.361. Wait for all
+    # the lines, and report the ones still missing.
+    deadline = time.monotonic() + timeout
+    logs = ""
+    while time.monotonic() < deadline:
+        logs = _read_engine_logs(log_dir)
+        if all(needle in logs for needle in needles):
+            return logs
+        time.sleep(0.1)
+    missing = [needle for needle in needles if needle not in logs]
+    raise AssertionError(f"Timed out waiting for engine log to contain {missing!r}\n{logs}")
+
+
 def _export_session(server: str | dict[str, str], session_id: str) -> bytes:
     r = requests.get(
         f"{_server_url(server)}/api/agents/sessions/{session_id}/export",
@@ -880,7 +899,7 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
 
         events = _wait_for_session_events(server, session_id, min_events=2)
         assert len(events) >= 2
-        assert 'lane="live"' in _read_engine_logs(log_dir)
+        _wait_for_logs_contain(log_dir, 'lane="live"')
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -1059,9 +1078,7 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         )
         assert ask_result is not None, events
 
-        logs = _read_engine_logs(log_dir)
-        assert 'lane="live"' in logs
-        assert f"bytes_shipped={final_bytes - initial_bytes}" in logs
+        _wait_for_logs_contain(log_dir, 'lane="live"', f"bytes_shipped={final_bytes - initial_bytes}")
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -1117,9 +1134,7 @@ def test_connect_daemon_phase_signals_do_not_gate_filesystem_hot_lane(server, tm
             events = _wait_for_session_events(server, session_id, min_events=index + 1)
             assert any(f"hot lane append while phase is {phase}" in (e.get("content_text") or "") for e in events), events
 
-            logs = _read_engine_logs(log_dir)
-            assert 'lane="live"' in logs
-            assert f"bytes_shipped={new_offset - offset}" in logs
+            _wait_for_logs_contain(log_dir, 'lane="live"', f"bytes_shipped={new_offset - offset}")
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -1185,9 +1200,7 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
         ]
         assert len(ask_results) == 1, events
 
-        logs = _read_engine_logs(log_dir)
-        assert 'lane="live"' in logs
-        assert f"bytes_shipped={final_bytes - initial_bytes}" in logs
+        _wait_for_logs_contain(log_dir, 'lane="live"', f"bytes_shipped={final_bytes - initial_bytes}")
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -1232,10 +1245,7 @@ def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp
         events = _wait_for_session_events(server, session_id, min_events=2)
         assert [event["role"] for event in events[:2]] == ["user", "assistant"]
 
-        logs = _read_engine_logs(log_dir)
-        assert 'provider="codex"' in logs
-        assert 'lane="live"' in logs
-        assert f"bytes_shipped={final_bytes}" in logs
+        _wait_for_logs_contain(log_dir, 'provider="codex"', 'lane="live"', f"bytes_shipped={final_bytes}")
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
