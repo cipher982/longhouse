@@ -43,6 +43,7 @@ class Fake:
         self.whats_new: dict = {}
         self.auto_notify = False
         self.calls: list[str] = []
+        self.transient_reads = 0
 
 
 FAKE = Fake()
@@ -106,7 +107,11 @@ class Handler(BaseHTTPRequestHandler):
             FAKE.whats_new.update(body["data"]["attributes"])
             return self._send(200, {"data": envelope("betaBuildLocalizations", "BL", FAKE.whats_new)})
         if path == "/v1/builds/B1/buildBetaDetail":
-            attrs = {"autoNotifyEnabled": FAKE.auto_notify, "externalBuildState": FAKE.external}
+            state = FAKE.external
+            if FAKE.transient_reads > 0:
+                FAKE.transient_reads -= 1
+                state = "PROCESSING"
+            attrs = {"autoNotifyEnabled": FAKE.auto_notify, "externalBuildState": state}
             return self._send(200, {"data": envelope("buildBetaDetails", "BD", attrs)})
         if method == "PATCH" and path == "/v1/buildBetaDetails/BD":
             FAKE.auto_notify = body["data"]["attributes"]["autoNotifyEnabled"]
@@ -214,6 +219,14 @@ def main() -> None:
         FAKE.group["attributes"]["publicLinkEnabled"] = False
         run_publish(args)
         assert FAKE.group["attributes"]["publicLinkEnabled"] is True
+
+        # 3b. Apple still moving the build between states is waited out, not fatal
+        testflight.POLL_DELAY = 0
+        FAKE.transient_reads = 3
+        FAKE.external = "READY_FOR_BETA_SUBMISSION"
+        FAKE.submissions = 0
+        transient = run_publish(args)
+        assert transient["submitted_this_run"] is True and FAKE.submissions == 1, transient
 
         # 4. a build that has not finished processing is refused, never submitted
         FAKE.processing = "PROCESSING"

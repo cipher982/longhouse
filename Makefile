@@ -838,6 +838,7 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@bash scripts/qa/test-zerg-ops.sh
 	@python3 scripts/tests/release.test.py
 	@cd server && uv run python ../scripts/tests/testflight.test.py
+	@python3 scripts/tests/ios-upload-preconditions.test.py
 
 validate-managed-identity: ## @internal Guard the generated managed-identity vocabulary and its launch sites
 	@cd server && uv run python ../scripts/generate/managed_identity_contract_rs.py --check

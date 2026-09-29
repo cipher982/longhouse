@@ -145,6 +145,10 @@ private struct UITestAppearanceOverrideModifier: ViewModifier {
 private struct OpenServerProbe: Decodable {
     let password: Bool
     let sso: Bool
+    let google: Bool?
+
+    /// Open means the server advertises no sign-in of any kind.
+    var isOpen: Bool { !password && !sso && google != true }
 }
 
 @MainActor
@@ -350,7 +354,7 @@ final class AppState: ObservableObject {
             let (data, response) = try await URLSession.shared.data(from: probeURL)
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let methods = try? JSONDecoder().decode(OpenServerProbe.self, from: data),
-                  !methods.sso, !methods.password
+                  methods.isOpen
             else {
                 authError = "The demo is unavailable right now. Try again in a moment."
                 isValidating = false
@@ -621,6 +625,7 @@ final class AppState: ObservableObject {
             SharedAuthStore.clearRuntimeToken(for: previousURL)
             SharedAuthStore.clearNativeRefreshToken(for: previousURL)
         }
+        SharedAuthStore.setOpenAccess(false, for: LonghouseAuthConfig.demoServerURL)
 
         KeychainHelper.deleteAuthToken()
         KeychainHelper.deleteServerURL()
@@ -1056,6 +1061,7 @@ final class AppState: ObservableObject {
             SharedAuthStore.savePendingNativeRevocationToken(token, for: capturedServerURL)
         }
         WidgetSessionSnapshotStore.clear()
+        WidgetCenter.shared.reloadAllTimelines()
         TimelineCacheStore.clear(serverURL: capturedServerURL)
         TranscriptSnapshotStore.shared.clear(serverURL: capturedServerURL)
         PushNotificationStore.clearAPNSDeviceSyncState()

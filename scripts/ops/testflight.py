@@ -326,6 +326,26 @@ def _ensure_public_group(app_id: str, config: dict) -> dict:
     return call("GET", f"/v1/betaGroups/{match['id']}")["data"]
 
 
+# States Apple passes through on its way to a state we can act on.
+TRANSITIONAL = {"PROCESSING", "IN_EXPORT_COMPLIANCE_REVIEW", "NOT_APPLICABLE", None}
+POLL_DELAY = 10
+POLL_ATTEMPTS = 18
+
+
+def _settled_external_state(build_id: str) -> str | None:
+    """The build's external state once it is no longer in transit (bounded wait)."""
+    state = None
+    for attempt in range(POLL_ATTEMPTS):
+        detail = call("GET", f"/v1/builds/{build_id}/buildBetaDetail")["data"]
+        state = detail["attributes"].get("externalBuildState")
+        if state not in TRANSITIONAL:
+            return state
+        if attempt < POLL_ATTEMPTS - 1:
+            time.sleep(POLL_DELAY)
+    die(f"build stayed in external state {state} for {POLL_ATTEMPTS * POLL_DELAY}s; check App Store Connect")
+    raise AssertionError
+
+
 def _default_whats_new() -> str:
     subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=ROOT, capture_output=True, text=True, check=False).stdout.strip()
     return f"Version {marketing_version()}. {subject}".strip()[:4000]
@@ -371,8 +391,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
         ok_conflict=True,
     )
 
-    beta_detail = call("GET", f"/v1/builds/{build_id}/buildBetaDetail")["data"]
-    external = beta_detail["attributes"].get("externalBuildState")
+    external = _settled_external_state(build_id)
     submitted = False
     if external == "READY_FOR_BETA_SUBMISSION":
         call(
