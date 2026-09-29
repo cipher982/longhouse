@@ -587,9 +587,7 @@ def test_a_provider_that_answers_a_steer_twice_passes_only_when_it_is_known_to(m
     ]
     monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": twice})
 
-    answers = lifecycle._wait_exact_assistant_marker(
-        "https://runtime.example", "token", "session-1", marker, may_repeat=True
-    )
+    answers = lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
     assert [event["id"] for event in answers] == ["first", "after-job"]
     assert "omp" in lifecycle._STEER_ANSWER_MAY_REPEAT
     assert "claude" not in lifecycle._STEER_ANSWER_MAY_REPEAT
