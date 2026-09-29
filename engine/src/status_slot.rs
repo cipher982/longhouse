@@ -77,6 +77,32 @@ impl StatusSlot {
     }
 }
 
+/// Which live preview a slot carries, named the way the Runtime Host names it.
+///
+/// The host keys a preview by the run, the turn and the sequence within it (the
+/// `progress_signal` dedupe key), so this is the whole statement: a slot
+/// rewritten with the same identity says nothing new about the preview, however
+/// many times its phase or observation time moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewIdentity {
+    run_id: String,
+    turn_id: String,
+    seq: u64,
+    turn_completed: bool,
+}
+
+impl StatusSlot {
+    /// The preview this slot carries, if it carries one.
+    pub fn preview_identity(&self) -> Option<PreviewIdentity> {
+        self.preview.as_ref().map(|preview| PreviewIdentity {
+            run_id: self.run_id.clone(),
+            turn_id: preview.turn_id.clone(),
+            seq: preview.seq,
+            turn_completed: preview.turn_completed,
+        })
+    }
+}
+
 /// The runtime events a slot states: the phase always, and the live preview
 /// when the session has one.
 ///
@@ -84,6 +110,18 @@ impl StatusSlot {
 /// slot is the durable copy, so a failed send simply sends the newer value on
 /// the next tick, and a daemon restart is current as soon as it reads them.
 pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
+    runtime_events_since(slot, None)
+}
+
+/// The runtime events a slot states that the host does not already hold.
+///
+/// A provider that restates its phase on a timer (the OMP extension does every
+/// 20 seconds) rewrites the slot each time: a new version, a new observation
+/// time, and the same preview it last showed. The phase is a fresh observation;
+/// the preview is not, and shipping it again made the host suppress an
+/// identical batch every keepalive. `stated` is the preview the host last
+/// accepted for this session, and a slot still carrying that one leaves it out.
+pub fn runtime_events_since(slot: &StatusSlot, stated: Option<&PreviewIdentity>) -> Vec<Value> {
     let mut events = Vec::new();
     // A producer without a run identity says so by omission rather than by
     // sending an empty string. The Codex bridge has none: its activity has
@@ -116,7 +154,11 @@ pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
         "payload": slot.payload,
         }));
     }
-    if let Some(preview) = slot.preview.as_ref() {
+    let preview_already_stated = stated.is_some_and(|stated| {
+        slot.preview_identity()
+            .is_some_and(|carried| &carried == stated)
+    });
+    if let Some(preview) = slot.preview.as_ref().filter(|_| !preview_already_stated) {
         events.push(serde_json::json!({
             "runtime_key": slot.runtime_key,
             "session_id": slot.session_id,
@@ -724,6 +766,54 @@ mod tests {
         // Cumulative text carries everything the deltas said, so no delta is
         // transported at all.
         assert!(events[1]["payload"].get("delta").is_none());
+    }
+
+    /// A rewrite of the slot is a new observation of the phase, not a new
+    /// preview. What the host already holds is left out; anything else, a new
+    /// sequence, a new turn, a new run, the turn completing, still goes.
+    #[test]
+    fn a_preview_the_host_already_holds_is_not_stated_again() {
+        let mut carrying = slot("s1", "idle", 9);
+        carrying.preview = Some(StatusPreview {
+            turn_id: "turn-9".into(),
+            seq: 58,
+            live_text: "the answer".into(),
+            turn_completed: false,
+            progress_kind: "omp_helm_stream".into(),
+            provider_session_id: None,
+        });
+        let held = carrying.preview_identity();
+        assert!(held.is_some());
+        let kinds = |slot: &StatusSlot, stated: Option<&PreviewIdentity>| {
+            runtime_events_since(slot, stated)
+                .iter()
+                .map(|event| event["kind"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(kinds(&carrying, None), ["phase_signal", "progress_signal"]);
+        // Same preview, restated phase (a newer version and observation).
+        let mut rewritten = carrying.clone();
+        rewritten.seq += 1;
+        rewritten.observed_at = "2026-09-17T15:00:20Z".into();
+        assert_eq!(kinds(&rewritten, held.as_ref()), ["phase_signal"]);
+
+        let differs = |change: &dyn Fn(&mut StatusSlot)| {
+            let mut next = rewritten.clone();
+            change(&mut next);
+            kinds(&next, held.as_ref())
+        };
+        let both = ["phase_signal", "progress_signal"];
+        assert_eq!(differs(&|s| s.preview.as_mut().unwrap().seq = 59), both);
+        assert_eq!(
+            differs(&|s| s.preview.as_mut().unwrap().turn_id = "turn-10".into()),
+            both
+        );
+        assert_eq!(differs(&|s| s.run_id = "run-2".into()), both);
+        assert_eq!(
+            differs(&|s| s.preview.as_mut().unwrap().turn_completed = true),
+            both
+        );
     }
 
     /// `finished` is local-health vocabulary, not a wire phase. The durable

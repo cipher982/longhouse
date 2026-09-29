@@ -355,6 +355,8 @@ struct StatusSlotResult {
 struct StatusPostResult {
     accepted: Vec<(String, (String, u64))>,
     rejected: Vec<StatusPostRejection>,
+    /// The preview each accepted post left the host holding.
+    previews: Vec<(String, crate::status_slot::PreviewIdentity)>,
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +371,97 @@ struct RejectedStatusSlot {
     version: (String, u64),
     changed: bool,
     retry_at: Instant,
+}
+
+/// One session's status, and what the host already holds of it.
+struct PendingStatus {
+    slot: crate::status_slot::StatusSlot,
+    changed: bool,
+    /// The preview the host last accepted for this session. A slot still
+    /// carrying it restates the phase without restating the preview.
+    stated_preview: Option<crate::status_slot::PreviewIdentity>,
+}
+
+/// What the Runtime Host has accepted of each session's status. Nothing is
+/// queued: an unsent or failed slot is simply sent again, with whatever value
+/// it holds by then.
+#[derive(Default)]
+struct StatusLedger {
+    /// The accepted version, and when the host accepted it.
+    sent: HashMap<String, ((String, u64), Instant)>,
+    /// Rejected observations remain durable slots; only their exact version
+    /// waits for the assertion interval before retrying.
+    rejected: HashMap<String, RejectedStatusSlot>,
+    /// The live preview the host last accepted. The slot version says the
+    /// status was rewritten, not that its preview changed: a provider
+    /// restating its phase on a timer rewrites the slot with the preview it
+    /// already showed.
+    previews: HashMap<String, crate::status_slot::PreviewIdentity>,
+}
+
+impl StatusLedger {
+    /// A session with no slot has no current status, so nothing here needs to
+    /// remember it. A newer slot observation replaces a rejected one, while an
+    /// unchanged rejection remains suppressed until its bounded retry time.
+    fn retain_live(&mut self, slots: &[crate::status_slot::StatusSlot]) {
+        self.sent
+            .retain(|session_id, _| slots.iter().any(|slot| &slot.session_id == session_id));
+        self.previews
+            .retain(|session_id, _| slots.iter().any(|slot| &slot.session_id == session_id));
+        self.rejected.retain(|session_id, rejected| {
+            slots
+                .iter()
+                .any(|slot| &slot.session_id == session_id && slot.version() == rejected.version)
+        });
+    }
+
+    /// A slot the host has already accepted is not resent as a change.
+    /// Everything else is sent as it stands now, not as it stood when it
+    /// changed, and a slot the host has accepted is still asserted on an
+    /// interval.
+    fn pending(
+        &self,
+        slots: Vec<crate::status_slot::StatusSlot>,
+        now: Instant,
+    ) -> Vec<PendingStatus> {
+        slots
+            .into_iter()
+            .filter_map(|slot| {
+                let changed = status_slot_pending(
+                    &slot,
+                    self.sent.get(&slot.session_id),
+                    self.rejected.get(&slot.session_id),
+                    now,
+                )?;
+                let stated_preview = self.previews.get(&slot.session_id).cloned();
+                Some(PendingStatus {
+                    slot,
+                    changed,
+                    stated_preview,
+                })
+            })
+            .collect()
+    }
+
+    fn settle(&mut self, result: StatusPostResult, now: Instant) {
+        for (session_id, version) in result.accepted {
+            self.rejected.remove(&session_id);
+            self.sent.insert(session_id, (version, now));
+        }
+        for (session_id, preview) in result.previews {
+            self.previews.insert(session_id, preview);
+        }
+        for rejection in result.rejected {
+            self.rejected.insert(
+                rejection.session_id,
+                RejectedStatusSlot {
+                    version: rejection.version,
+                    changed: rejection.changed,
+                    retry_at: now + crate::status_slot::STATUS_ASSERTION_INTERVAL,
+                },
+            );
+        }
+    }
 }
 
 /// Runtime status collection is its own lane. It shares no gate with presence,
@@ -1323,13 +1416,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
     let mut status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
     let mut status_post_tasks: JoinSet<StatusPostResult> = JoinSet::new();
-    // What the Runtime Host has already accepted, per session. Nothing is
-    // queued: an unsent or failed slot is simply sent again, with whatever
-    // value it holds by then.
-    let mut status_sent: HashMap<String, ((String, u64), Instant)> = HashMap::new();
-    // Rejected observations remain durable slots; only their exact version
-    // waits for the assertion interval before retrying.
-    let mut status_rejected: HashMap<String, RejectedStatusSlot> = HashMap::new();
+    let mut status_ledger = StatusLedger::default();
     // What the local phase ledger already holds. Recording an unchanged phase
     // every 100ms bumps its revision, and the projection debounce watches that
     // watermark: the daemon would schedule a rebuild forever.
@@ -1805,34 +1892,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         // A session with no slot has no current status, so
                         // neither map needs to remember it.
-                        status_sent.retain(|session_id, _| live.contains(session_id));
                         status_recorded.retain(|session_id, _| live.contains(session_id));
-                        // A newer slot observation replaces a rejected one,
-                        // while an unchanged rejection remains suppressed
-                        // until its bounded retry time.
-                        status_rejected.retain(|session_id, rejected| {
-                            result.slots.iter().any(|slot| {
-                                slot.session_id == *session_id && slot.version() == rejected.version
-                            })
-                        });
-                        // A slot the host has already accepted is not resent
-                        // as a change. Everything else is sent as it stands
-                        // now, not as it stood when it changed — and a slot
-                        // it has accepted is still asserted on an interval.
-                        let now = Instant::now();
-                        let pending: Vec<(crate::status_slot::StatusSlot, bool)> = result
-                            .slots
-                            .into_iter()
-                            .filter_map(|slot| {
-                                status_slot_pending(
-                                    &slot,
-                                    status_sent.get(&slot.session_id),
-                                    status_rejected.get(&slot.session_id),
-                                    now,
-                                )
-                                .map(|changed| (slot, changed))
-                            })
-                            .collect();
+                        status_ledger.retain_live(&result.slots);
+                        let pending = status_ledger.pending(result.slots, Instant::now());
                         if !pending.is_empty() && status_post_tasks.is_empty() {
                             let client = client.clone();
                             status_post_tasks.spawn(async move {
@@ -1848,23 +1910,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
             status_post_result = status_post_tasks.join_next(), if !status_post_tasks.is_empty() => {
                 match status_post_result {
-                    Some(Ok(result)) => {
-                        for (session_id, version) in result.accepted {
-                            status_rejected.remove(&session_id);
-                            status_sent.insert(session_id, (version, Instant::now()));
-                        }
-                        for rejection in result.rejected {
-                            status_rejected.insert(
-                                rejection.session_id,
-                                RejectedStatusSlot {
-                                    version: rejection.version,
-                                    changed: rejection.changed,
-                                    retry_at: Instant::now()
-                                        + crate::status_slot::STATUS_ASSERTION_INTERVAL,
-                                },
-                            );
-                        }
-                    }
+                    Some(Ok(result)) => status_ledger.settle(result, Instant::now()),
                     Some(Err(err)) => {
                         tracing::warn!("Status slot POST task failed: {}", err);
                     }
@@ -3622,15 +3668,19 @@ fn status_slot_pending(
 #[allow(unused_imports)]
 async fn post_status_slots(
     client: &crate::shipping::client::ShipperClient,
-    slots: Vec<(crate::status_slot::StatusSlot, bool)>,
+    slots: Vec<PendingStatus>,
 ) -> StatusPostResult {
     use futures_util::StreamExt;
     // Sessions are independent, so one whose send keeps failing must not hold
     // up everyone else's current status.
-    let outcomes =
-        futures_util::stream::iter(slots.into_iter().map(|(slot, changed)| async move {
+    let outcomes = futures_util::stream::iter(slots.into_iter().map(
+        |PendingStatus {
+             slot,
+             changed,
+             stated_preview,
+         }| async move {
             let events: Vec<outbox::PendingRuntimeEventPost> = if changed {
-                crate::status_slot::runtime_events(&slot)
+                crate::status_slot::runtime_events_since(&slot, stated_preview.as_ref())
             } else {
                 // Unchanged: the machine is restating, not reporting. A phase
                 // shipped again would bump the host's runtime revision and
@@ -3646,10 +3696,18 @@ async fn post_status_slots(
             .collect();
             let expected = events.len();
             let version = slot.version();
+            // What the host holds of this session's preview once the post
+            // lands: the one this slot carries, sent now or already stated. An
+            // assertion says nothing about the preview, so it leaves it be.
+            let preview = changed.then(|| slot.preview_identity()).flatten();
             let outcome =
                 outbox::post_pending_runtime_event_files_with_outcome(client, events).await;
             if outcome.sent == expected && outcome.kept == 0 {
                 StatusPostResult {
+                    previews: preview
+                        .map(|preview| (slot.session_id.clone(), preview))
+                        .into_iter()
+                        .collect(),
                     accepted: vec![(slot.session_id, version)],
                     rejected: Vec::new(),
                 }
@@ -3665,20 +3723,23 @@ async fn post_status_slots(
                         version,
                         changed,
                     }],
+                    previews: Vec::new(),
                 }
             } else {
                 StatusPostResult::default()
             }
-        }))
-        .buffer_unordered(STATUS_POST_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
+        },
+    ))
+    .buffer_unordered(STATUS_POST_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
 
     outcomes
         .into_iter()
         .fold(StatusPostResult::default(), |mut total, outcome| {
             total.accepted.extend(outcome.accepted);
             total.rejected.extend(outcome.rejected);
+            total.previews.extend(outcome.previews);
             total
         })
 }
@@ -6412,6 +6473,219 @@ mod tests {
             super::status_slot_pending(&newer, Some(&accepted), Some(&suppressed), now),
             Some(true),
             "a newer observation replaces a rejected version immediately"
+        );
+    }
+
+    /// Serves the runtime-events endpoint and records, per request, the kind
+    /// and preview sequence of every event in it.
+    async fn spawn_runtime_event_recorder(
+        status: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::Mutex<Vec<Vec<(String, Option<u64>)>>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut buffer = [0u8; 4096];
+                    let read = socket.read(&mut buffer).await.unwrap_or(0);
+                    if read == 0 {
+                        break None;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if let Some(at) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                        break Some(at + 4);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let length = String::from_utf8_lossy(&request[..header_end])
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+                    .and_then(|line| line.split(':').nth(1))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let mut buffer = [0u8; 4096];
+                    let read = socket.read(&mut buffer).await.unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let body: serde_json::Value =
+                    serde_json::from_slice(&request[header_end..]).unwrap_or_default();
+                recorded.lock().unwrap().push(
+                    body["events"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|event| {
+                            (
+                                event["kind"].as_str().unwrap_or_default().to_string(),
+                                event["payload"]["seq"].as_u64(),
+                            )
+                        })
+                        .collect(),
+                );
+                let status = status.load(std::sync::atomic::Ordering::SeqCst);
+                let response =
+                    format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (addr, requests, handle)
+    }
+
+    /// The OMP extension restates its phase every 20 seconds, and each
+    /// restatement rewrites the session's slot: a new version and a new
+    /// observation time, carrying the preview the last turn ended on. The phase
+    /// is a fresh observation; the preview is not. Sending it again made the
+    /// Runtime Host suppress an identical batch three times a minute for as long
+    /// as the session sat idle. The host is told a preview once, and told again
+    /// the moment it changes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_phase_restatement_does_not_resend_the_preview_the_host_holds() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+        use std::sync::atomic::{AtomicU16, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let status = Arc::new(AtomicU16::new(204));
+        let (addr, requests, server) = spawn_runtime_event_recorder(status.clone()).await;
+        let client = ShipperClient::with_compression(
+            &ShipperConfig::default().with_overrides(
+                Some(&format!("http://{addr}")),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            CompressionAlgo::Gzip,
+        )
+        .unwrap();
+        let slot = |seq: u64, observed_at: &str, preview_seq: u64| crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "session-1".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:session-1".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: "idle".into(),
+            tool_name: None,
+            observed_at: observed_at.into(),
+            payload: serde_json::json!({}),
+            preview: Some(crate::status_slot::StatusPreview {
+                turn_id: "turn-1".into(),
+                seq: preview_seq,
+                live_text: "the answer".into(),
+                turn_completed: false,
+                progress_kind: "omp_helm_stream".into(),
+                provider_session_id: None,
+            }),
+            producer_epoch: "epoch-1".into(),
+            seq,
+        };
+        async fn deliver(
+            ledger: &mut super::StatusLedger,
+            client: &ShipperClient,
+            slot: crate::status_slot::StatusSlot,
+            now: Instant,
+        ) {
+            let pending = ledger.pending(vec![slot], now);
+            assert_eq!(pending.len(), 1, "a new slot version is always pending");
+            let result = super::post_status_slots(client, pending).await;
+            ledger.settle(result, now);
+        }
+        let mut ledger = super::StatusLedger::default();
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+
+        // A transient failure tells the host nothing, so the preview is still
+        // owed on the next attempt.
+        status.store(503, Ordering::SeqCst);
+        deliver(
+            &mut ledger,
+            &client,
+            slot(1, "2026-09-29T18:20:32Z", 58),
+            at(0),
+        )
+        .await;
+        status.store(204, Ordering::SeqCst);
+        deliver(
+            &mut ledger,
+            &client,
+            slot(2, "2026-09-29T18:20:32Z", 58),
+            at(1),
+        )
+        .await;
+
+        // The keepalive rewrites the slot: same preview, newer observation.
+        deliver(
+            &mut ledger,
+            &client,
+            slot(3, "2026-09-29T18:20:52Z", 58),
+            at(21),
+        )
+        .await;
+        deliver(
+            &mut ledger,
+            &client,
+            slot(4, "2026-09-29T18:21:12Z", 58),
+            at(41),
+        )
+        .await;
+
+        // A real update carries a new sequence, and reaches the host at once.
+        deliver(
+            &mut ledger,
+            &client,
+            slot(5, "2026-09-29T18:21:13Z", 59),
+            at(42),
+        )
+        .await;
+        deliver(
+            &mut ledger,
+            &client,
+            slot(6, "2026-09-29T18:21:33Z", 59),
+            at(62),
+        )
+        .await;
+
+        server.abort();
+        let phase = |kind: &str| (kind.to_string(), None);
+        let progress = |seq: u64| ("progress_signal".to_string(), Some(seq));
+        let sent = requests.lock().unwrap().clone();
+        assert_eq!(
+            sent,
+            vec![
+                // The failed attempt, which the host never accepted.
+                vec![phase("phase_signal"), progress(58)],
+                // Retried with everything it still owes.
+                vec![phase("phase_signal"), progress(58)],
+                // Keepalives: the phase is a fresh observation, the preview is not.
+                vec![phase("phase_signal")],
+                vec![phase("phase_signal")],
+                // A new sequence is a new statement.
+                vec![phase("phase_signal"), progress(59)],
+                vec![phase("phase_signal")],
+            ]
         );
     }
 
