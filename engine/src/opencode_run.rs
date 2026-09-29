@@ -1759,8 +1759,8 @@ fn mint_message_id() -> String {
 ///   turn had already produced its final answer, so the text began a new turn:
 ///   `StartedNewTurn`.
 ///
-/// Anything else (no earlier reply, missing timestamps) proves neither, and the
-/// caller must not claim either.
+/// Anything else (no earlier reply, missing timestamps, both in the same
+/// millisecond) proves neither, and the caller must not claim either.
 fn classify_steer(
     messages: &[MessageView],
     steer_id: &str,
@@ -1778,8 +1778,11 @@ fn classify_steer(
     match (prior.finish.as_deref(), prior.completed_ms) {
         (None, None) | (Some("tool-calls"), _) => Some(ConsoleSteerOutcome::Steered),
         (Some(_), Some(completed)) if completed > created => Some(ConsoleSteerOutcome::Steered),
-        (Some(_), Some(_)) => Some(ConsoleSteerOutcome::StartedNewTurn),
-        (None, Some(_)) | (Some(_), None) => None,
+        (Some(_), Some(completed)) if completed < created => {
+            Some(ConsoleSteerOutcome::StartedNewTurn)
+        }
+        // The same millisecond orders nothing.
+        (None, Some(_)) | (Some(_), _) => None,
     }
 }
 
@@ -2688,10 +2691,12 @@ mod tests {
         // The final answer was complete before the steer was created.
         assert_eq!(case(Some("stop"), Some(900)), Some(StartedNewTurn));
         assert_eq!(case(Some("length"), Some(900)), Some(StartedNewTurn));
-        // Finished without a completion time, or completed without a finish:
-        // neither is proven.
+        // Finished without a completion time, completed without a finish, or
+        // completed in the very millisecond the steer was created: none of
+        // these orders the two, so neither is claimed.
         assert_eq!(case(Some("stop"), None), None);
         assert_eq!(case(None, Some(900)), None);
+        assert_eq!(case(Some("stop"), Some(1_000)), None);
     }
 
     #[test]
