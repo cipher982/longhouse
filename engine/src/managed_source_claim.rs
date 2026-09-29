@@ -593,14 +593,24 @@ fn project_claim(conn: &rusqlite::Connection, claim: &SourceClaim) -> Result<()>
     // A launch that holds a live claim on the path is running again, so a
     // binding its earlier launch retired is active. Nothing else retires these
     // providers' bindings but a released claim, and a claim cannot be both, so
-    // this cannot flap. The OMP family is left to its process observation:
-    // a claim outlives a killed launcher by up to `CLAIM_TTL`, and reviving on
-    // it would fight the observation that says the run is gone.
+    // this cannot flap. OMP and Pi are left to their process observation: a
+    // claim outlives a killed launcher by up to `CLAIM_TTL` (Pi never releases
+    // one), and reviving on it would fight the observation that says the run
+    // is gone.
+    if is_process_observed(&claim.provider) {
+        return Ok(());
+    }
     binding.set_state_for_owner(
         &stable_path,
         &claim.session_id,
         crate::state::session_binding::BINDING_STATE_ACTIVE,
     )
+}
+
+/// Providers whose runs the managed scan observes as processes, so their
+/// binding state follows that observation (`daemon::project_binding_liveness`).
+fn is_process_observed(provider: &str) -> bool {
+    is_omp_family(provider) || provider == "pi"
 }
 
 fn is_omp_family(provider: &str) -> bool {
@@ -765,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_claim_reactivates_a_retired_binding_except_for_the_omp_family() {
+    fn a_new_claim_reactivates_a_retired_binding_except_for_process_observed_providers() {
         let dir = tempfile::tempdir().unwrap();
         with_home(&dir.path().join("longhouse"), || {
             let db_path = dir.path().join("agent/longhouse-shipper.db");
@@ -778,7 +788,7 @@ mod tests {
                 )
                 .expect("the claim is projected")
             };
-            for (provider, revived) in [("codex", true), ("omp", false)] {
+            for (provider, revived) in [("codex", true), ("omp", false), ("pi", false)] {
                 let source = dir.path().join(format!("{provider}.jsonl"));
                 std::fs::write(&source, b"{}\n").unwrap();
                 let session_id = uuid::Uuid::new_v4().to_string();
