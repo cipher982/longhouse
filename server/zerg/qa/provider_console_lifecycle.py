@@ -451,9 +451,10 @@ def _wait_exact_assistant_marker(
     while time.monotonic() < deadline:
         matches = _assistant_marker_events(api_url, token, session_id, marker)
         last_count = len(matches)
-        # Several replies may each carry the marker once when the provider is
-        # known to answer twice; a marker repeated inside one reply never is.
-        if (last_count > 1 and not may_repeat) or any(event_text(event).count(marker) != 1 for event in matches):
+        # A provider known to answer twice may reply once as the steer lands and
+        # once when the job notice arrives; a marker repeated inside one reply,
+        # or a third reply, never is.
+        if last_count > (2 if may_repeat else 1) or any(event_text(event).count(marker) != 1 for event in matches):
             raise RuntimeError("assistant marker did not converge to one event with exactly one occurrence")
         if last_count >= 1:
             stable_since = stable_since or time.monotonic()

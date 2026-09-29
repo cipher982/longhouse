@@ -594,6 +594,12 @@ def test_a_provider_that_answers_a_steer_twice_passes_only_when_it_is_known_to(m
     with pytest.raises(RuntimeError, match="exactly one occurrence"):
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
 
+    # One answer as the steer lands and one at the job notice: a third is a runaway.
+    thrice = [*twice, {"id": "runaway", "role": "assistant", "content_text": marker}]
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": thrice})
+    with pytest.raises(RuntimeError, match="exactly one occurrence"):
+        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker, may_repeat=True)
+
     # A marker repeated inside one reply is never a second answer.
     monkeypatch.setattr(
         lifecycle, "_request", lambda *_args: {"events": [{"id": "x", "role": "assistant", "content_text": f"{marker}{marker}"}]}

@@ -202,7 +202,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
+              "oracle_digest": "f737d1924193c741029afe7a32f2eb5fc95f0d6e5312cb7a223d92ddfa710139"
             }
           ]
         },
@@ -230,7 +230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
+              "oracle_digest": "f737d1924193c741029afe7a32f2eb5fc95f0d6e5312cb7a223d92ddfa710139"
             }
           ]
         },
@@ -1336,7 +1336,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
+              "oracle_digest": "f737d1924193c741029afe7a32f2eb5fc95f0d6e5312cb7a223d92ddfa710139"
             }
           ]
         },
@@ -1364,7 +1364,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
+              "oracle_digest": "f737d1924193c741029afe7a32f2eb5fc95f0d6e5312cb7a223d92ddfa710139"
             },
             {
               "id": "real_print_marker_returned",
@@ -2015,7 +2015,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
+              "oracle_digest": "f737d1924193c741029afe7a32f2eb5fc95f0d6e5312cb7a223d92ddfa710139"
             }
           ]
         },
@@ -3130,7 +3130,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "2d201ae4c855d9387fab0b3379090d604e619ef89874c5639761a70ce733dea8"
+              "oracle_digest": "f737d1924193c741029afe7a32f2eb5fc95f0d6e5312cb7a223d92ddfa710139"
             }
           ]
         },
@@ -4911,7 +4911,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "cb6d408136f4e642fd999d31f967fceecbb18ddbb60a4cdd104b977cea2f3830"
+      "adapter_digest": "9ab62d5d1accff10d93cfab8f918d71960941d7fcedc9e67db7e43d54c9115f0"
     }
   ]
 }
