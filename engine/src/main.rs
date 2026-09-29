@@ -76,6 +76,7 @@ mod opencode_bridge;
 mod opencode_control;
 mod opencode_db;
 mod opencode_run;
+mod opencode_server;
 mod outbox;
 mod permission_gate;
 mod pi_helm_control;

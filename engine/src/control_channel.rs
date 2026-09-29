@@ -1330,6 +1330,7 @@ async fn execute_command(
                         &thread_id,
                         &turn_id,
                     )
+                    .await
                     .map_err(CommandError::command_failed)?;
                     OPENCODE_RUN_ADAPTER
                 }

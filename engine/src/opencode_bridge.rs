@@ -603,7 +603,7 @@ async fn monitor_opencode_events_once(
     Ok(())
 }
 
-fn sse_frame_boundary(pending: &str) -> Option<(usize, usize)> {
+pub(crate) fn sse_frame_boundary(pending: &str) -> Option<(usize, usize)> {
     let lf = pending.find("\n\n").map(|offset| (offset, 2));
     let crlf = pending.find("\r\n\r\n").map(|offset| (offset, 4));
     match (lf, crlf) {

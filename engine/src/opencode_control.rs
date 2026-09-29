@@ -545,7 +545,7 @@ async fn post_prompt_async(
 /// OpenCode's message parts: the text (omitted when blank and images are
 /// present) followed by one inline `file` part per image, the same shape
 /// its own TUI writes for a pasted image.
-fn prompt_parts(
+pub(crate) fn prompt_parts(
     text: &str,
     images: &[crate::input_attachments::StagedAttachment],
 ) -> Result<Vec<Value>> {

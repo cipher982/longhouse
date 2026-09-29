@@ -1627,6 +1627,10 @@ def _claim_uses_selected_model(claim: Mapping[str, object], *, provider: str, mo
             return False
         return _codex_native_turn_model(Path(source_path)) == expected
     result = claim.get("result")
+    if provider == "opencode":
+        # The Console adapter sends the model in the prompt body, not on argv
+        # (`opencode serve` takes no model); the claim records what it sent.
+        return isinstance(result, Mapping) and result.get("model") == expected
     argv = result.get("argv") if isinstance(result, Mapping) else None
     if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
         return False

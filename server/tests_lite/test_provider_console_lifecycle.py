@@ -1105,3 +1105,15 @@ def test_steer_tool_completion_is_read_from_the_tool_output_not_only_content_tex
     assert not lifecycle._tool_ran_to_completion(
         [{"role": "tool", "tool_output_text": f"{marker} {first}"}], tool_marker=marker, first_marker=first
     )
+
+
+def test_opencode_model_binding_reads_the_model_the_adapter_sent_not_argv() -> None:
+    claim = {"result": {"argv": ["opencode", "serve", "--port", "1"], "model": "openrouter/deepseek/x"}}
+    assert lifecycle._claim_uses_selected_model(claim, provider="opencode", model="deepseek/x")  # noqa: SLF001
+    assert not lifecycle._claim_uses_selected_model(  # noqa: SLF001
+        {"result": {"argv": ["opencode", "serve"], "model": "openrouter/other"}}, provider="opencode", model="deepseek/x"
+    )
+    # A claim that recorded no model proves nothing.
+    assert not lifecycle._claim_uses_selected_model(  # noqa: SLF001
+        {"result": {"argv": ["opencode", "serve"]}}, provider="opencode", model="deepseek/x"
+    )
