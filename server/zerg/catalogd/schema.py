@@ -40,9 +40,10 @@ from sqlalchemy.schema import CreateColumn
 from zerg.catalogd.models import CatalogBase
 from zerg.models.live_store import LiveBase
 
-CATALOG_SCHEMA_VERSION = 6
+CATALOG_SCHEMA_VERSION = 5
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 STORAGE_TELEMETRY_ACCOUNTING_GENERATION = "storage-telemetry-v1"
+SESSION_RENDER_STATE_GENERATION = "session-render-state-v1"
 
 
 class CatalogSchemaError(RuntimeError):
@@ -98,6 +99,9 @@ catalog_meta = Table(
     # Additive feature marker. Older v2 binaries ignore this column and the
     # reducer tables, so pre-cutover rollback remains possible.
     Column("fact_reducer_generation", Text, nullable=True),
+    # One-shot data reconciliation marker. Additive and ignored by older
+    # binaries, so it never moves the catalog schema contract.
+    Column("render_state_generation", Text, nullable=True),
     CheckConstraint("singleton = 1", name="ck_catalog_meta_singleton"),
     CheckConstraint("schema_version > 0", name="ck_catalog_meta_schema_version_positive"),
     CheckConstraint("commit_seq >= 0", name="ck_catalog_meta_commit_seq_nonnegative"),
@@ -432,39 +436,11 @@ def _drop_loop_mode_columns(connection: Connection) -> None:
             connection.exec_driver_sql(f'ALTER TABLE "{table_name}" DROP COLUMN loop_mode')
 
 
-def _restore_render_state_downgraded_by_raw_only_commits(connection: Connection) -> None:
-    """Re-derive ``sessions.render_state`` for sessions a raw-only commit demoted.
-
-    ``commit_raw_object`` used to write the envelope's own ``pending`` receipt
-    over the session, so any commit without a render manifest (Cursor's
-    ``agent-transcripts`` projection ships raw only, by design) turned a session
-    that already served a render into "archive pending / lagging", and nothing
-    ever promoted it back. The only other writer of ``pending`` on a session
-    (a legacy-migration render repair) clears ``current_render_generation``, and
-    a migration still publishing its render holds a ``pending`` generation, so
-    ``pending`` alongside a ``current`` generation that still has a live render
-    object is exactly the demotion. The predicate is the inverse of the
-    write path's invariant and is idempotent: a second run matches nothing.
-    """
-
-    connection.exec_driver_sql(
-        "UPDATE sessions SET render_state = 'ready' "
-        "WHERE render_state = 'pending' "
-        "AND current_render_generation IS NOT NULL "
-        "AND EXISTS (SELECT 1 FROM render_generations g "
-        "WHERE g.generation_id = sessions.current_render_generation "
-        "AND g.session_id = sessions.session_id AND g.state = 'current') "
-        "AND EXISTS (SELECT 1 FROM render_objects o "
-        "WHERE o.generation_id = sessions.current_render_generation AND o.retired_at IS NULL)"
-    )
-
-
 CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {
     1: _hide_empty_human_launch_shells,
     2: _replace_session_messages_with_directed_inputs,
     3: _enforce_provider_session_alias_routing,
     4: _drop_loop_mode_columns,
-    5: _restore_render_state_downgraded_by_raw_only_commits,
 }
 
 
@@ -725,6 +701,45 @@ def _migrate_catalog_schema(engine: Engine, *, from_version: int) -> None:
                 catalog_meta.update().where(catalog_meta.c.singleton == 1).values(schema_version=next_version, updated_at=now)
             )
             connection.exec_driver_sql(f"PRAGMA user_version={next_version}")
+
+
+def _reconcile_session_render_state(engine: Engine) -> None:
+    """Once per catalog, re-derive ``sessions.render_state`` that raw-only commits demoted.
+
+    ``commit_raw_object`` used to write the envelope's own ``pending`` receipt
+    over the session, so any commit without a render manifest (Cursor's
+    ``agent-transcripts`` projection ships raw only, by design) turned a session
+    that already served a render into "archive pending / lagging", and nothing
+    ever promoted it back. The only other writer of ``pending`` on a session
+    (a legacy-migration render repair) clears ``current_render_generation``, and
+    a migration still publishing its render holds a ``pending`` generation, so
+    ``pending`` alongside a ``current`` generation that still has a live render
+    object is exactly the demotion. The predicate is the inverse of the write
+    path's invariant (``_session_keeps_published_render``) and idempotent.
+
+    This is a data reconciliation, not a schema change: it is gated by its own
+    marker in ``catalog_meta`` rather than by ``CATALOG_SCHEMA_VERSION``, so
+    the catalog's reader contract (and the deployment pipeline that enforces
+    it) is untouched and an older binary can still read the result.
+    """
+
+    with engine.begin() as connection:
+        marker = connection.execute(select(catalog_meta.c.render_state_generation).where(catalog_meta.c.singleton == 1)).scalar_one()
+        if marker == SESSION_RENDER_STATE_GENERATION:
+            return
+        connection.exec_driver_sql(
+            "UPDATE sessions SET render_state = 'ready' "
+            "WHERE render_state = 'pending' "
+            "AND current_render_generation IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM render_generations g "
+            "WHERE g.generation_id = sessions.current_render_generation "
+            "AND g.session_id = sessions.session_id AND g.state = 'current') "
+            "AND EXISTS (SELECT 1 FROM render_objects o "
+            "WHERE o.generation_id = sessions.current_render_generation AND o.retired_at IS NULL)"
+        )
+        connection.execute(
+            catalog_meta.update().where(catalog_meta.c.singleton == 1).values(render_state_generation=SESSION_RENDER_STATE_GENERATION)
+        )
 
 
 def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
@@ -1075,6 +1090,7 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
             )
             connection.exec_driver_sql(f"PRAGMA user_version={CATALOG_SCHEMA_VERSION}")
 
+    _reconcile_session_render_state(engine)
     _initialize_storage_telemetry_accounting(engine)
 
     return read_catalog_meta(engine)

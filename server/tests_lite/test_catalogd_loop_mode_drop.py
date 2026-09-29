@@ -41,7 +41,7 @@ def test_v4_catalog_loses_loop_mode_columns(tmp_path):
     engine = create_catalog_engine(database)
     metadata = initialize_catalog_schema(engine)
 
-    assert metadata.schema_version == CATALOG_SCHEMA_VERSION
+    assert metadata.schema_version == CATALOG_SCHEMA_VERSION == 5
     for table in _TABLES:
         assert "loop_mode" not in _columns(engine, table)
     engine.dispose()

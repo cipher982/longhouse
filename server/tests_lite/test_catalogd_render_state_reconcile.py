@@ -1,11 +1,13 @@
-"""The 5->6 catalog migration re-derives render_state for demoted sessions.
+"""Startup re-derives render_state for sessions a raw-only commit demoted.
 
-Before 6, ``commit_raw_object`` wrote its own envelope receipt (``pending`` for a
-commit with no render manifest) over ``sessions.render_state``. Cursor's
+Before this, ``commit_raw_object`` wrote its own envelope receipt (``pending``
+for a commit with no render manifest) over ``sessions.render_state``. Cursor's
 raw-only transcript projection therefore left rendered sessions permanently
-"archive pending / lagging". The migration restores ``ready`` exactly where the
-session serves a current generation that still has a live render object, and
-touches nothing else.
+"archive pending / lagging". A one-shot reconciliation restores ``ready``
+exactly where the session serves a current generation that still has a live
+render object, and touches nothing else. It is a data fix gated by its own
+``catalog_meta`` marker: the catalog schema version does not move, so the
+deployment pipeline's schema contract and older readers are untouched.
 """
 
 from __future__ import annotations
@@ -16,11 +18,12 @@ from uuid import uuid4
 
 from sqlalchemy import text
 
+from zerg.catalogd import schema as catalog_schema
 from zerg.catalogd.models import RenderGeneration
 from zerg.catalogd.models import RenderObject
 from zerg.catalogd.models import StorageSession
-from zerg.catalogd.schema import CATALOG_SCHEMA_MIGRATIONS
 from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+from zerg.catalogd.schema import SESSION_RENDER_STATE_GENERATION
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 
@@ -132,21 +135,34 @@ def _states(engine, ids: dict[str, str]) -> dict[str, str]:
         }
 
 
-def test_v5_catalog_regains_render_state_only_where_a_render_is_published(tmp_path):
+def _marker(engine) -> str | None:
+    with engine.connect() as connection:
+        return connection.execute(text("SELECT render_state_generation FROM catalog_meta WHERE singleton = 1")).scalar_one()
+
+
+def _clear_marker(engine) -> None:
+    """Rewind to a catalog that predates the reconciliation."""
+
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE catalog_meta SET render_state_generation = NULL WHERE singleton = 1"))
+
+
+def test_startup_regains_render_state_only_where_a_render_is_published(tmp_path):
     database = tmp_path / "longhouse-live.db"
     engine = create_catalog_engine(database)
     initialize_catalog_schema(engine)
+    assert _marker(engine) == SESSION_RENDER_STATE_GENERATION
     ids = _seed(engine)
-    with engine.begin() as connection:
-        connection.exec_driver_sql("UPDATE catalog_meta SET schema_version = 5 WHERE singleton = 1")
-        connection.exec_driver_sql("PRAGMA user_version=5")
+    _clear_marker(engine)
     assert _states(engine, ids)["demoted"] == "pending"
     engine.dispose()
 
     engine = create_catalog_engine(database)
     metadata = initialize_catalog_schema(engine)
 
+    # A data fix, not a schema advance: the reader contract does not move.
     assert metadata.schema_version == CATALOG_SCHEMA_VERSION
+    assert _marker(engine) == SESSION_RENDER_STATE_GENERATION
     assert _states(engine, ids) == {
         "demoted": "ready",
         "never_rendered": "pending",
@@ -159,18 +175,27 @@ def test_v5_catalog_regains_render_state_only_where_a_render_is_published(tmp_pa
     engine.dispose()
 
 
-def test_render_state_migration_is_idempotent(tmp_path):
-    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+def test_reconciliation_runs_once_and_is_idempotent(tmp_path):
+    database = tmp_path / "longhouse-live.db"
+    engine = create_catalog_engine(database)
     initialize_catalog_schema(engine)
     ids = _seed(engine)
-    migration = CATALOG_SCHEMA_MIGRATIONS[5]
 
-    with engine.begin() as connection:
-        migration(connection)
+    # The marker is set, so a later start leaves even a demoted-looking row
+    # alone: the write path owns the invariant from here on.
+    engine.dispose()
+    engine = create_catalog_engine(database)
+    initialize_catalog_schema(engine)
+    assert _states(engine, ids)["demoted"] == "pending"
+
+    # Re-running the reconciliation itself (marker cleared) converges and is stable.
+    _clear_marker(engine)
+    catalog_schema._reconcile_session_render_state(engine)
     first = _states(engine, ids)
-    with engine.begin() as connection:
-        migration(connection)
+    _clear_marker(engine)
+    catalog_schema._reconcile_session_render_state(engine)
 
     assert first["demoted"] == "ready"
     assert _states(engine, ids) == first
+    assert _marker(engine) == SESSION_RENDER_STATE_GENERATION
     engine.dispose()
