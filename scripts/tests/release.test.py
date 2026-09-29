@@ -19,6 +19,10 @@ def test_full_validation_gates_candidate_push() -> None:
     assert bump < commit < validation < push
 
 
+def test_the_lock_is_kept_like_every_other_holder() -> None:
+    assert 'lockf -k "$HEAVY_BUILD_LOCK"' in SOURCE
+
+
 def test_only_the_validation_holds_the_heavy_build_lock() -> None:
     validation = SOURCE.index("run_heavy bash -c 'cd \"$1\" && make test-ci'")
     gates = SOURCE.index('echo "Waiting for pre-release exact-SHA gates')
@@ -33,17 +37,18 @@ def test_only_the_validation_holds_the_heavy_build_lock() -> None:
 def test_a_resume_skips_validation_the_exact_commit_already_passed() -> None:
     stamp = SOURCE.index('VALIDATED_STAMP="$ROOT/.build/release-validated/$BUMP_SHA"')
     validation = SOURCE.index("run_heavy bash -c 'cd \"$1\" && make test-ci'")
+    clean_check = SOURCE.index("Release validation changed tracked files")
     write = SOURCE.index('> "$VALIDATED_STAMP"')
     push = SOURCE.index('git -C "$ROOT" push')
 
-    # Keyed by commit SHA, written only after test-ci returned (set -e), and the
-    # candidate push still comes after all of it.
-    assert stamp < validation < write < push
+    # Keyed by commit SHA, written only after test-ci returned (set -e) AND the
+    # validation left the tree clean, and the candidate push comes after all of it.
+    assert stamp < validation < clean_check < write < push
     assert 'RELEASE_REVALIDATE' in SOURCE
 
 
 def test_validation_guest_is_sized_for_the_laptop_not_cubes_shared_pods() -> None:
-    assert 'LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}"' in SOURCE
+    assert "docker_cpus < 8 ? docker_cpus : 8" in SOURCE  # never more CPUs than the Docker VM has
     assert 'LONGHOUSE_TEST_MEMORY="${LONGHOUSE_TEST_MEMORY:-8g}"' in SOURCE
 
 
@@ -102,6 +107,7 @@ def test_release_fetches_remote_branch_before_building_changelog() -> None:
 
 if __name__ == "__main__":
     test_full_validation_gates_candidate_push()
+    test_the_lock_is_kept_like_every_other_holder()
     test_only_the_validation_holds_the_heavy_build_lock()
     test_a_resume_skips_validation_the_exact_commit_already_passed()
     test_validation_guest_is_sized_for_the_laptop_not_cubes_shared_pods()

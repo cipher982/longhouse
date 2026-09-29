@@ -161,34 +161,40 @@ run_heavy() {
   fi
   mkdir -p "$(dirname "$HEAVY_BUILD_LOCK")"
   echo "Waiting for the heavy-build lock ($HEAVY_BUILD_LOCK) if another build holds it..."
-  lockf "$HEAVY_BUILD_LOCK" "$@"
+  lockf -k "$HEAVY_BUILD_LOCK" "$@"
 }
 
 # The isolated guest defaults to 2 CPU / 4 GiB, sized for cube's shared pods. A
 # release holds the lock alone on a 16-core laptop; the 4 GiB ceiling is what
 # OOM-killed rustc mid-validation on 2026-09-29 (v0.1.58) after ~30 minutes of
 # swap thrash. Callers can still override either value.
-export LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}"
+docker_cpus="$(docker info --format '{{.NCPU}}' 2>/dev/null || true)"
+[[ "$docker_cpus" =~ ^[0-9]+$ ]] || docker_cpus=8
+export LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-$(( docker_cpus < 8 ? docker_cpus : 8 ))}"
 export LONGHOUSE_TEST_MEMORY="${LONGHOUSE_TEST_MEMORY:-8g}"
 
 # A resume (same version, candidate already committed) must not repeat a
 # validation the exact commit already passed: v0.1.58's gate failed after a green
 # validation and a retry would have paid it again. The stamp is keyed by commit
-# SHA under the gitignored .build/, written only after make test-ci succeeds
-# (set -e), so an edited candidate has a new SHA and revalidates.
+# SHA under the gitignored .build/, written only once make test-ci succeeded and
+# left the tree clean (below), so an edited candidate has a new SHA and
+# revalidates, and a validation that dirtied the tree is never stamped.
 VALIDATED_STAMP="$ROOT/.build/release-validated/$BUMP_SHA"
 if [[ -z "${RELEASE_REVALIDATE:-}" && -f "$VALIDATED_STAMP" ]]; then
   echo "Candidate ${BUMP_SHA:0:10} already passed make test-ci ($(cat "$VALIDATED_STAMP")); skipping. RELEASE_REVALIDATE=1 forces it."
 else
   echo "Running full release validation on the exact candidate commit..."
   run_heavy bash -c 'cd "$1" && make test-ci' _ "$ROOT"
-  mkdir -p "$(dirname "$VALIDATED_STAMP")"
-  date -u +%Y-%m-%dT%H:%M:%SZ > "$VALIDATED_STAMP"
+  NEEDS_STAMP=1
 fi
 
 if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
   echo "Release validation changed tracked files. Commit the generated updates, then rerun the same release." >&2
   exit 1
+fi
+if [[ -n "${NEEDS_STAMP:-}" ]]; then
+  mkdir -p "$(dirname "$VALIDATED_STAMP")"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$VALIDATED_STAMP"
 fi
 
 # A candidate that needed no bump commit is already on origin/main; other
