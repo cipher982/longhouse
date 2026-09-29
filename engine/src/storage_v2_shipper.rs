@@ -3755,6 +3755,9 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         .with_context(|| format!("reading Cursor store metadata {}", db_path.display()))?;
     let store_incarnation = identity_from_metadata(&metadata_before)
         .context("Cursor store has no stable file incarnation")?;
+    // Stamped before anything is read from the store, so a write that lands
+    // while this pass reads is seen as a change by the next one.
+    let store_stamp = cursor_store::cursor_store_stamp(db_path);
     // Cursor records its working directory in the sidecar beside the store, not
     // in the transcript, so recover it here and let the shared project
     // derivation do the rest. Absent or unreadable leaves the session
@@ -3960,36 +3963,49 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     } else {
         CURSOR_BLOB_PAGE_ROWS
     };
-    let blob_visit = cursor_store::visit_cursor_blob_records(
-        db_path,
-        &snapshot.conversation_uuid,
-        &snapshot.store_incarnation,
-        walk.after_blob_id.as_deref(),
-        blob_page_rows,
-        |record| {
-            let record_hash = cursor_store_records::cursor_record_hash(&record);
-            if cursor_store_records::cursor_record_exists(
-                conn,
-                resolution.source_epoch,
-                &record_hash,
-            )? {
-                return Ok(true);
-            }
-            if record.len() as u64 > capabilities.max_raw_record_bytes {
-                anyhow::bail!(
-                    "one Cursor raw record exceeds the negotiated storage-v2 object bound"
-                );
-            }
-            if !streamed_records.is_empty()
-                && streamed_bytes.saturating_add(record.len()) > MAX_RAW_BATCH_BYTES
-            {
-                return Ok(false);
-            }
-            streamed_bytes = streamed_bytes.saturating_add(record.len());
-            streamed_records.push(record);
-            Ok(true)
-        },
-    )?;
+    // Blob ids are unordered, so a walk restarts at the head to find a blob
+    // inserted below where the last one ended. That is only worth doing when the
+    // store has changed since a walk last reached its end: a store at rest can
+    // hold nothing new, and re-reading its every blob each pass is what an
+    // unchanged large store used to cost.
+    let store_is_unchanged = walk.store_is_unchanged_since_last_cycle(store_stamp.as_deref());
+    let blob_visit = if store_is_unchanged {
+        cursor_store::CursorBlobVisit {
+            last_blob_id: None,
+            has_more: false,
+        }
+    } else {
+        cursor_store::visit_cursor_blob_records(
+            db_path,
+            &snapshot.conversation_uuid,
+            &snapshot.store_incarnation,
+            walk.after_blob_id.as_deref(),
+            blob_page_rows,
+            |record| {
+                let record_hash = cursor_store_records::cursor_record_hash(&record);
+                if cursor_store_records::cursor_record_exists(
+                    conn,
+                    resolution.source_epoch,
+                    &record_hash,
+                )? {
+                    return Ok(true);
+                }
+                if record.len() as u64 > capabilities.max_raw_record_bytes {
+                    anyhow::bail!(
+                        "one Cursor raw record exceeds the negotiated storage-v2 object bound"
+                    );
+                }
+                if !streamed_records.is_empty()
+                    && streamed_bytes.saturating_add(record.len()) > MAX_RAW_BATCH_BYTES
+                {
+                    return Ok(false);
+                }
+                streamed_bytes = streamed_bytes.saturating_add(record.len());
+                streamed_records.push(record);
+                Ok(true)
+            },
+        )?
+    };
     let identity_after_blobs = identity_from_metadata(
         &db_path
             .metadata()
@@ -4008,11 +4024,19 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     )?;
     // The ID is a bounded-page continuation, not an append high-water mark:
     // Cursor blob hashes are unordered. Confirmed EOF clears the continuation
-    // so the next capture can discover newly inserted lower-sorting IDs.
+    // so the next capture can discover newly inserted lower-sorting IDs, unless
+    // the store is provably the one that walk finished against. A cycle keeps
+    // the stamp it began with; only a walk from the head takes this pass's.
+    let cycle_stamp = if walk.after_blob_id.is_some() {
+        walk.cycle_stamp.as_deref()
+    } else {
+        store_stamp.as_deref()
+    };
     cursor_store_records::store_capture_cursor(
         conn,
         resolution.source_epoch,
         blob_visit.last_blob_id.as_deref(),
+        cycle_stamp,
     )?;
     let source_capture_has_more = blob_visit.has_more;
     let captured_logical_len =
@@ -11828,5 +11852,288 @@ mod tests {
         }
         let cost = outcome.unwrap();
         assert!(cost.is_zero(), "an unchanged Cursor scan wrote: {cost:?}");
+    }
+
+    /// Runs `body` against private Cursor and Longhouse state, so a scan reads
+    /// no real machine's claims or history.
+    fn with_private_agent_state<T>(dir: &Path, body: impl FnOnce() -> T) -> T {
+        temp_env::with_vars(
+            [
+                ("CURSOR_HOME", Some(dir.join("cursor").into_os_string())),
+                ("XDG_CONFIG_HOME", Some(dir.join("config").into_os_string())),
+                (
+                    "LONGHOUSE_HOME",
+                    Some(dir.join("longhouse").into_os_string()),
+                ),
+            ],
+            body,
+        )
+    }
+
+    /// Make a store look like it has been idle: `cursor_store_stamp` does not
+    /// vouch for a store written in the last couple of seconds.
+    fn rest_cursor_store(path: &Path) {
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        for file in [
+            path.to_path_buf(),
+            PathBuf::from(format!("{}-wal", path.display())),
+        ] {
+            if let Ok(handle) = fs::OpenOptions::new().write(true).open(&file) {
+                handle.set_modified(long_ago).unwrap();
+            }
+        }
+    }
+
+    /// Ship a Cursor store until nothing is left, the way the daemon reruns a
+    /// source that reports `Continue`.
+    fn drain_cursor_store(conn: &mut Connection, path: &Path) {
+        for _ in 0..40 {
+            match prepare_next_cursor_envelope_outcome(conn, &capabilities(), path).unwrap() {
+                CursorPreparationOutcome::Envelope(prepared) => {
+                    acknowledge_prepared(conn, &prepared)
+                }
+                CursorPreparationOutcome::Current => return,
+                _ => {}
+            }
+        }
+        panic!("a Cursor store did not settle");
+    }
+
+    fn captured_blob_ids(conn: &Connection) -> Vec<String> {
+        let epoch = source_epoch::active_source_epoch(
+            conn,
+            "cursor",
+            &cursor_store::cursor_opaque_source_id(CURSOR_CONVERSATION_ID),
+        )
+        .unwrap()
+        .expect("the store has an active epoch");
+        cursor_store_records::cursor_records_from(conn, epoch, 0, 100_000, u64::MAX)
+            .unwrap()
+            .iter()
+            .filter_map(|record| {
+                let value: Value = serde_json::from_slice(&record.bytes).ok()?;
+                (value["kind"] == "blob").then(|| value["blob_id"].as_str().unwrap().to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_scan_pass_over_an_unchanged_large_cursor_store_reads_no_blobs_and_writes_nothing() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir
+            .path()
+            .join("cursor/chats/workspace")
+            .join(CURSOR_CONVERSATION_ID)
+            .join("store.db");
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        let store = make_cursor_store(&store_path);
+        // Cursor keeps its stores in WAL mode.
+        store
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
+            .unwrap();
+        // More than two pages, so the walk cannot finish in one.
+        for index in 0..(CURSOR_BLOB_PAGE_ROWS * 2 + 44) {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("{index:064x}"), vec![index as u8; 8]],
+                )
+                .unwrap();
+        }
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            drain_cursor_store(&mut conn, &store_path);
+
+            // Idle now. The first pass after that finds a store it can vouch
+            // for and walks it one last time; every pass after it rests.
+            rest_cursor_store(&store_path);
+            drain_cursor_store(&mut conn, &store_path);
+            let reads = cursor_store::BLOB_PAGE_READS.with(|reads| reads.get());
+            let window = WalWindow::open(&conn);
+            for _pass in 0..3 {
+                assert!(matches!(
+                    prepare_next_cursor_envelope_outcome(&mut conn, &capabilities(), &store_path)
+                        .unwrap(),
+                    CursorPreparationOutcome::Current
+                ));
+            }
+            let cost = window.cost(&conn);
+            assert!(
+                cost.is_zero(),
+                "an unchanged large Cursor store wrote: {cost:?}"
+            );
+            assert_eq!(
+                cursor_store::BLOB_PAGE_READS.with(|reads| reads.get()),
+                reads,
+                "an unchanged large Cursor store re-read its blobs"
+            );
+        });
+    }
+
+    #[test]
+    fn a_large_cursor_store_that_gained_a_blob_is_walked_again_and_finds_it() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir
+            .path()
+            .join("cursor/chats/workspace")
+            .join(CURSOR_CONVERSATION_ID)
+            .join("store.db");
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        let store = make_cursor_store(&store_path);
+        store
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
+            .unwrap();
+        for index in 0..(CURSOR_BLOB_PAGE_ROWS + 44) {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("{index:064x}"), vec![index as u8; 8]],
+                )
+                .unwrap();
+        }
+        // Blob ids are hashes, so a late one can sort below everything read.
+        let insert_below_the_head = |id: &str| {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![id, vec![7u8; 8]],
+                )
+                .unwrap();
+        };
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            rest_cursor_store(&store_path);
+            drain_cursor_store(&mut conn, &store_path);
+            drain_cursor_store(&mut conn, &store_path);
+            let reads = cursor_store::BLOB_PAGE_READS.with(|reads| reads.get());
+            drain_cursor_store(&mut conn, &store_path);
+            assert_eq!(
+                cursor_store::BLOB_PAGE_READS.with(|reads| reads.get()),
+                reads,
+                "the walk should have settled for this store"
+            );
+
+            // A store at rest that then changes and is idle again: the stamp
+            // moved, so the settled walk no longer vouches for it.
+            insert_below_the_head("-late-blob-after-the-walk-settled");
+            rest_cursor_store(&store_path);
+            drain_cursor_store(&mut conn, &store_path);
+            assert!(
+                captured_blob_ids(&conn)
+                    .iter()
+                    .any(|id| id == "-late-blob-after-the-walk-settled"),
+                "a blob added to a settled store must still be discovered"
+            );
+
+            // And one that is still being written: never called unchanged.
+            rest_cursor_store(&store_path);
+            drain_cursor_store(&mut conn, &store_path);
+            insert_below_the_head("-blob-written-just-now");
+            drain_cursor_store(&mut conn, &store_path);
+            assert!(
+                captured_blob_ids(&conn)
+                    .iter()
+                    .any(|id| id == "-blob-written-just-now"),
+                "a store written this instant must be walked"
+            );
+        });
+    }
+
+    #[test]
+    fn a_scan_pass_over_unchanged_managed_omp_and_pi_sources_leaves_their_bindings_alone() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let omp_path = dir.path().join("omp-session.jsonl");
+        fs::write(
+            &omp_path,
+            include_str!("../tests/fixtures/golden/omp/native.jsonl"),
+        )
+        .unwrap();
+        let pi_path = dir.path().join("pi-session.jsonl");
+        fs::write(
+            &pi_path,
+            include_str!("../tests/fixtures/golden/pi/native.jsonl"),
+        )
+        .unwrap();
+        let omp_managed = "019d2869-1111-7222-8333-aaaaaaaaaaaa";
+        let pi_managed = "019d2869-1111-7222-8333-bbbbbbbbbbbb";
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            // Launch: the managed owner is named once, ships, and is caught up.
+            for (path, provider, managed) in [
+                (&omp_path, "omp", omp_managed),
+                (&pi_path, "pi", pi_managed),
+            ] {
+                let first = prepare_next_envelope(
+                    &mut conn,
+                    &capabilities(),
+                    path,
+                    provider,
+                    Some(managed),
+                )
+                .unwrap()
+                .unwrap();
+                acknowledge_prepared(&mut conn, &first);
+                assert!(
+                    prepare_next_envelope(&mut conn, &capabilities(), path, provider, None)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            // The runs ended: their bindings say so.
+            conn.execute("UPDATE session_binding SET state = 'exited'", [])
+                .unwrap();
+            let bindings = |conn: &Connection| -> Vec<(String, String, String, Option<String>, String, String)> {
+                conn.prepare(
+                    "SELECT path, session_id, provider, provider_session_id, state, updated_at
+                     FROM session_binding ORDER BY path",
+                )
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+            };
+            let before = bindings(&conn);
+            assert_eq!(before.len(), 2);
+
+            // Rediscovery is a scan pass with no override: the sources are on
+            // disk, unchanged, owned as they were.
+            let window = WalWindow::open(&conn);
+            for _pass in 0..3 {
+                for (path, provider) in [(&omp_path, "omp"), (&pi_path, "pi")] {
+                    assert!(prepare_next_envelope(
+                        &mut conn,
+                        &capabilities(),
+                        path,
+                        provider,
+                        None
+                    )
+                    .unwrap()
+                    .is_none());
+                }
+            }
+            let cost = window.cost(&conn);
+            assert!(
+                cost.is_zero(),
+                "rediscovering managed sources wrote: {cost:?}"
+            );
+            assert_eq!(
+                bindings(&conn),
+                before,
+                "a file still on disk is not evidence that its run is alive"
+            );
+        });
     }
 }

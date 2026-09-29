@@ -315,6 +315,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             source_epoch TEXT PRIMARY KEY,
             last_blob_id TEXT,
             updated_at TEXT NOT NULL,
+            cycle_store_stamp TEXT,
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );
 
@@ -438,6 +439,19 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             "ALTER TABLE cursor_store_raw_record ADD COLUMN record_bytes_len INTEGER;
              UPDATE cursor_store_raw_record SET record_bytes_len = length(record_bytes)
              WHERE record_bytes_len IS NULL;",
+        )?;
+    }
+
+    // Which state of the Cursor store the blob walk's current cycle began
+    // against, so a walk that reached the end of an unchanged store is not
+    // repeated. Absent on existing rows: an unknown stamp walks again once.
+    let capture_cursor_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(cursor_store_capture_cursor)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !capture_cursor_columns.contains("cycle_store_stamp") {
+        conn.execute_batch(
+            "ALTER TABLE cursor_store_capture_cursor ADD COLUMN cycle_store_stamp TEXT;",
         )?;
     }
 

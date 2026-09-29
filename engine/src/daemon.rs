@@ -2626,7 +2626,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 managed_observation_generation.saturating_add(1);
                         }
                         last_managed_observations = next_managed_observations;
-                        mark_retired_bindings(&conn, &last_managed_observations);
+                        project_binding_liveness(&conn, &last_managed_observations);
                         pump_ready_local_work(
                             &mut scheduler,
                             &mut in_flight,
@@ -5794,28 +5794,55 @@ const STARVED_LIVE_TRANSCRIPT_BYTES: u64 = 256 * 1024;
 /// catches that case at the timescale a user would notice.
 const STARVED_LIVE_TRANSCRIPT_STALE_SECONDS: i64 = 120;
 
-/// Record that a launch which is no longer live stopped owning its source.
+/// Project what the managed scan observed about each run onto its binding.
 ///
-/// Ownership ending must not cancel replication debt: the binding still says
-/// which session owns the file, so it stays in the reconciler's working set
-/// until its tail ships, instead of the debt dying with the process.
-fn mark_retired_bindings(conn: &rusqlite::Connection, observations: &ManagedObservationSnapshot) {
-    let retired = observations
+/// This is the one place a running-or-not fact reaches `session_binding.state`:
+/// the provider process evidence in the helm observation (`live`), not the
+/// transcript file merely still existing. A launch that is no longer live
+/// stopped owning its source, but ownership ending must not cancel replication
+/// debt: the binding still says which session owns the file, so it stays in the
+/// reconciler's working set until its tail ships. A live one is active again.
+///
+/// The scan restates this every pass, so a binding already in the observed
+/// state is left alone. Several state files can name one transcript (a resumed
+/// run beside its retired predecessor); the file is live if any of them is.
+fn project_binding_liveness(
+    conn: &rusqlite::Connection,
+    observations: &ManagedObservationSnapshot,
+) {
+    let mut observed: std::collections::BTreeMap<(PathBuf, String), bool> = Default::default();
+    let runs = observations
         .omp
         .iter()
-        .filter(|observation| !observation.live)
-        .filter_map(|observation| observation.session_file.clone())
-        .chain(
-            observations
-                .pi
-                .iter()
-                .filter(|observation| !observation.live)
-                .filter_map(|observation| observation.session_file.clone()),
-        );
+        .map(|observation| {
+            (
+                &observation.session_file,
+                &observation.session_id,
+                observation.live,
+            )
+        })
+        .chain(observations.pi.iter().map(|observation| {
+            (
+                &observation.session_file,
+                &observation.session_id,
+                observation.live,
+            )
+        }));
+    for (session_file, session_id, live) in runs {
+        let Some(path) = session_file else { continue };
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        *observed
+            .entry((canonical, session_id.to_ascii_lowercase()))
+            .or_default() |= live;
+    }
     let bindings = crate::state::session_binding::SessionBinding::new(conn);
-    for path in retired {
-        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
-        let _ = bindings.mark_exited(&canonical.to_string_lossy());
+    for ((path, session_id), live) in observed {
+        let state = if live {
+            crate::state::session_binding::BINDING_STATE_ACTIVE
+        } else {
+            crate::state::session_binding::BINDING_STATE_EXITED
+        };
+        let _ = bindings.set_state_for_owner(&path.to_string_lossy(), &session_id, state);
     }
 }
 
@@ -9565,7 +9592,7 @@ mod tests {
             omp: vec![omp_observation(Some(transcript.clone()), false)],
             ..Default::default()
         };
-        mark_retired_bindings(&conn, &snapshot);
+        project_binding_liveness(&conn, &snapshot);
 
         let listed = crate::state::session_binding::SessionBinding::new(&conn)
             .list_bindings()
@@ -9575,5 +9602,108 @@ mod tests {
             listed[0].state,
             crate::state::session_binding::BINDING_STATE_EXITED
         );
+    }
+
+    fn binding_state(conn: &rusqlite::Connection, path: &std::path::Path) -> String {
+        conn.query_row(
+            "SELECT state FROM session_binding WHERE path = ?1",
+            [std::fs::canonicalize(path)
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_live_run_reactivates_its_binding_and_a_restated_state_writes_nothing() {
+        use crate::state::wal_window::WalWindow;
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-resumed.jsonl");
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), "session-omp", "omp")
+            .unwrap();
+        let stopped = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), false)],
+            ..Default::default()
+        };
+        let running = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), true)],
+            ..Default::default()
+        };
+
+        project_binding_liveness(&conn, &stopped);
+        assert_eq!(binding_state(&conn, &transcript), "exited");
+
+        // The process evidence, not the file, is what brings it back.
+        project_binding_liveness(&conn, &running);
+        assert_eq!(binding_state(&conn, &transcript), "active");
+        project_binding_liveness(&conn, &stopped);
+        assert_eq!(binding_state(&conn, &transcript), "exited");
+
+        let window = WalWindow::open(&conn);
+        for _pass in 0..3 {
+            project_binding_liveness(&conn, &stopped);
+        }
+        let cost = window.cost(&conn);
+        assert!(cost.is_zero(), "restating an exit wrote: {cost:?}");
+    }
+
+    #[test]
+    fn a_resumed_run_beside_its_retired_predecessor_keeps_the_transcript_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-shared.jsonl");
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), "session-omp", "omp")
+            .unwrap();
+
+        // Two state files name the transcript, in either order: one for the
+        // dead first run and one for the live resumed run of the same session.
+        for live_first in [true, false] {
+            let mut rows = vec![
+                omp_observation(Some(transcript.clone()), false),
+                omp_observation(Some(transcript.clone()), true),
+            ];
+            if !live_first {
+                rows.reverse();
+            }
+            let snapshot = ManagedObservationSnapshot {
+                omp: rows,
+                ..Default::default()
+            };
+            project_binding_liveness(&conn, &snapshot);
+            assert_eq!(binding_state(&conn, &transcript), "active");
+        }
+    }
+
+    #[test]
+    fn a_run_that_ended_does_not_retire_the_binding_of_the_session_that_took_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-reused.jsonl");
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), "later-session", "omp")
+            .unwrap();
+
+        // `omp_observation` is the run of "session-omp", which no longer owns it.
+        let snapshot = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), false)],
+            ..Default::default()
+        };
+        project_binding_liveness(&conn, &snapshot);
+
+        assert_eq!(binding_state(&conn, &transcript), "active");
     }
 }

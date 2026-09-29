@@ -513,6 +513,23 @@ pub struct CaptureWalk {
     /// reaches a missing record that sorts past it, and every retry would
     /// re-read the same page.
     pub repairing: bool,
+    /// The store's stamp when the walk cycle this position belongs to began at
+    /// the head. Blob ids are unordered, so a cycle is only complete once it has
+    /// read to the end, and it saw every blob only if nothing was written since
+    /// it began: the stamp is taken before the first page, never at the end.
+    pub cycle_stamp: Option<String>,
+}
+
+impl CaptureWalk {
+    /// The last cycle read to the end of exactly this store, so a new walk
+    /// could only find what the last one did. Never true while repairing, or
+    /// for a store whose stamp is unknown.
+    pub fn store_is_unchanged_since_last_cycle(&self, store_stamp: Option<&str>) -> bool {
+        !self.repairing
+            && self.after_blob_id.is_none()
+            && self.cycle_stamp.is_some()
+            && self.cycle_stamp.as_deref() == store_stamp
+    }
 }
 
 pub fn capture_walk(conn: &Connection, source_epoch: Uuid) -> Result<CaptureWalk> {
@@ -523,49 +540,63 @@ pub fn capture_walk(conn: &Connection, source_epoch: Uuid) -> Result<CaptureWalk
         return Ok(CaptureWalk {
             after_blob_id: None,
             repairing: true,
+            cycle_stamp: None,
         });
     }
-    let value: Option<Option<String>> = conn
+    let value: Option<(Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT last_blob_id FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
+            "SELECT last_blob_id, cycle_store_stamp FROM cursor_store_capture_cursor
+             WHERE source_epoch = ?1",
             [source_epoch.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .context("reading Cursor blob capture cursor")?;
+    let (after_blob_id, cycle_stamp) = value.unwrap_or_default();
     Ok(CaptureWalk {
-        after_blob_id: value.flatten(),
+        after_blob_id,
         repairing: false,
+        cycle_stamp,
     })
 }
+
+/// Record where the blob walk ended and which store state its cycle began at.
+///
+/// A capture that ends where the last one did leaves the row as it is:
+/// `updated_at` is when the position last moved, not when it was last checked.
 pub fn store_capture_cursor(
     conn: &Connection,
     source_epoch: Uuid,
     last_blob_id: Option<&str>,
+    cycle_stamp: Option<&str>,
 ) -> Result<()> {
-    // A capture that ends where the last one did leaves the cursor as it is:
-    // `updated_at` is when the position last moved, not when it was last checked.
-    let recorded: Option<Option<String>> = conn
+    let recorded: Option<(Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT last_blob_id FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
+            "SELECT last_blob_id, cycle_store_stamp FROM cursor_store_capture_cursor
+             WHERE source_epoch = ?1",
             [source_epoch.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .context("reading Cursor blob capture cursor")?;
-    if recorded.is_some_and(|recorded| recorded.as_deref() == last_blob_id) {
+    if recorded.is_some_and(|(blob, stamp)| {
+        blob.as_deref() == last_blob_id && stamp.as_deref() == cycle_stamp
+    }) {
         return Ok(());
     }
     conn.execute(
-        "INSERT INTO cursor_store_capture_cursor (source_epoch, last_blob_id, updated_at)
-         VALUES (?1, ?2, ?3)
+        "INSERT INTO cursor_store_capture_cursor
+             (source_epoch, last_blob_id, updated_at, cycle_store_stamp)
+         VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(source_epoch) DO UPDATE SET
              last_blob_id = excluded.last_blob_id,
-             updated_at = excluded.updated_at",
+             updated_at = excluded.updated_at,
+             cycle_store_stamp = excluded.cycle_store_stamp",
         params![
             source_epoch.to_string(),
             last_blob_id,
-            Utc::now().to_rfc3339()
+            Utc::now().to_rfc3339(),
+            cycle_stamp
         ],
     )?;
     Ok(())
@@ -889,20 +920,84 @@ mod tests {
             .unwrap()
         };
 
-        store_capture_cursor(&conn, epoch, Some("blob-a")).unwrap();
+        store_capture_cursor(&conn, epoch, Some("blob-a"), None).unwrap();
         let before = stamp(&conn);
         let changes = conn.total_changes();
-        store_capture_cursor(&conn, epoch, Some("blob-a")).unwrap();
+        store_capture_cursor(&conn, epoch, Some("blob-a"), None).unwrap();
         assert_eq!(conn.total_changes(), changes);
         assert_eq!(stamp(&conn), before);
 
         // Confirmed EOF clears the continuation once; repeating it is a no-op.
-        store_capture_cursor(&conn, epoch, None).unwrap();
+        store_capture_cursor(&conn, epoch, None, None).unwrap();
         assert_ne!(stamp(&conn), before);
         assert_eq!(capture_walk(&conn, epoch).unwrap().after_blob_id, None);
         let changes = conn.total_changes();
-        store_capture_cursor(&conn, epoch, None).unwrap();
+        store_capture_cursor(&conn, epoch, None, None).unwrap();
         assert_eq!(conn.total_changes(), changes);
+    }
+
+    #[test]
+    fn a_walk_that_reached_the_end_of_an_unchanged_store_is_not_repeated() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(temp.path())).unwrap();
+        let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
+
+        // Nothing is known about a fresh epoch, or about a store whose stamp
+        // could not be trusted: walk.
+        let walk = capture_walk(&conn, epoch).unwrap();
+        assert!(!walk.store_is_unchanged_since_last_cycle(Some("stamp-1")));
+        assert!(!walk.store_is_unchanged_since_last_cycle(None));
+
+        // A cycle that began against stamp-1 and is still mid-walk has not seen
+        // the whole store, whatever the store looks like now.
+        store_capture_cursor(&conn, epoch, Some("blob-a"), Some("stamp-1")).unwrap();
+        let walk = capture_walk(&conn, epoch).unwrap();
+        assert_eq!(walk.after_blob_id.as_deref(), Some("blob-a"));
+        assert!(!walk.store_is_unchanged_since_last_cycle(Some("stamp-1")));
+
+        // Reaching the end settles it for exactly that store, and only that one.
+        store_capture_cursor(&conn, epoch, None, Some("stamp-1")).unwrap();
+        let walk = capture_walk(&conn, epoch).unwrap();
+        assert!(walk.store_is_unchanged_since_last_cycle(Some("stamp-1")));
+        assert!(!walk.store_is_unchanged_since_last_cycle(Some("stamp-2")));
+        assert!(!walk.store_is_unchanged_since_last_cycle(None));
+
+        // Restating it is not a write; moving to a new store state is one.
+        let changes = conn.total_changes();
+        store_capture_cursor(&conn, epoch, None, Some("stamp-1")).unwrap();
+        assert_eq!(conn.total_changes(), changes);
+        store_capture_cursor(&conn, epoch, None, Some("stamp-2")).unwrap();
+        assert_eq!(conn.total_changes(), changes + 1);
+    }
+
+    #[test]
+    fn a_missing_payload_reopens_the_walk_of_a_store_that_looked_unchanged() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+        let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
+        let records = vec![b"kept".to_vec(), b"lost".to_vec()];
+        append_unseen_cursor_records(&mut conn, epoch, &records).unwrap();
+        store_capture_cursor(&conn, epoch, None, Some("stamp-1")).unwrap();
+        assert!(capture_walk(&conn, epoch)
+            .unwrap()
+            .store_is_unchanged_since_last_cycle(Some("stamp-1")));
+
+        // The store did not change; what the spool holds of it did.
+        let root = records_root(&conn).unwrap();
+        crate::state::payload_store::remove(
+            &root,
+            &crate::state::payload_store::relative_path_for(
+                &cursor_record_hash(&records[1]),
+                "rec",
+            ),
+        )
+        .unwrap();
+
+        let walk = capture_walk(&conn, epoch).unwrap();
+        assert!(walk.repairing);
+        assert!(!walk.store_is_unchanged_since_last_cycle(Some("stamp-1")));
     }
 
     #[test]
@@ -913,7 +1008,7 @@ mod tests {
         seed_epoch(&conn, epoch);
         let records = vec![b"before".to_vec(), b"missing".to_vec(), b"after".to_vec()];
         append_unseen_cursor_records(&mut conn, epoch, &records).unwrap();
-        store_capture_cursor(&conn, epoch, Some("cursor-at-head")).unwrap();
+        store_capture_cursor(&conn, epoch, Some("cursor-at-head"), None).unwrap();
 
         let hash = cursor_record_hash(&records[1]);
         let root = records_root(&conn).unwrap();
@@ -1120,12 +1215,12 @@ mod tests {
         let epoch = Uuid::new_v4();
         seed_epoch(&conn, epoch);
 
-        store_capture_cursor(&conn, epoch, Some("blob-123")).unwrap();
+        store_capture_cursor(&conn, epoch, Some("blob-123"), None).unwrap();
         assert_eq!(
             capture_walk(&conn, epoch).unwrap().after_blob_id.as_deref(),
             Some("blob-123")
         );
-        store_capture_cursor(&conn, epoch, None).unwrap();
+        store_capture_cursor(&conn, epoch, None, None).unwrap();
         assert_eq!(capture_walk(&conn, epoch).unwrap().after_blob_id, None);
     }
 

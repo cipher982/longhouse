@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Whether a binding's owning session is still running.
 ///
@@ -14,6 +14,14 @@ use rusqlite::Connection;
 /// binding outlives the owner: `exited` keeps the path in the reconciler's
 /// working set until its records are shipped, rather than dropping the debt
 /// along with the process.
+///
+/// The state is liveness evidence, and only liveness evidence writes it: the
+/// managed scan's process observation (`set_state_for_owner`), a released
+/// launch claim (`mark_exited`), or a new or changed ownership assertion, which
+/// starts `active`. Finding the transcript file again is ownership evidence at
+/// most, never liveness: a file still sitting on disk says nothing about whether
+/// the run that wrote it is alive, so rediscovery neither revives an exited
+/// binding nor rewrites an unchanged one (`bind_for_thread`).
 pub const BINDING_STATE_ACTIVE: &str = "active";
 pub const BINDING_STATE_EXITED: &str = "exited";
 
@@ -45,6 +53,11 @@ impl<'a> SessionBinding<'a> {
     /// next file that appeared. Recording the thread id makes that decidable:
     /// a binding whose `provider_session_id` equals the transcript's own id was
     /// made *for this thread*, and nothing else was.
+    ///
+    /// Every scan pass re-asserts the ownership it rediscovers, so an assertion
+    /// the row already records is not an event: it writes nothing and leaves
+    /// `state` and the timestamps alone. Only new or changed ownership writes,
+    /// and that starts `active`.
     pub fn bind_for_thread(
         &self,
         path: &str,
@@ -52,6 +65,22 @@ impl<'a> SessionBinding<'a> {
         provider: &str,
         provider_session_id: Option<&str>,
     ) -> Result<()> {
+        let recorded: Option<(String, String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT session_id, provider, provider_session_id FROM session_binding
+                 WHERE path = ?1",
+                [path],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if recorded.is_some_and(|(recorded_session, recorded_provider, recorded_thread)| {
+            recorded_session == session_id
+                && recorded_provider == provider
+                && recorded_thread.as_deref() == provider_session_id
+        }) {
+            return Ok(());
+        }
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "INSERT INTO session_binding (path, session_id, provider, provider_session_id, updated_at, state, bound_at, last_seen_at)
@@ -147,22 +176,59 @@ impl<'a> SessionBinding<'a> {
         self.set_state(path, BINDING_STATE_EXITED)
     }
 
-    /// Record that a path was observed again while its session is live.
-    pub fn mark_seen(&self, path: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE session_binding SET last_seen_at = ?2 WHERE path = ?1",
-            rusqlite::params![path, Utc::now().to_rfc3339()],
-        )?;
-        Ok(())
-    }
-
     /// Move a binding's lifecycle state.
+    ///
+    /// A binding already in that state is left alone: the managed scan restates
+    /// what it observed on every pass, and an idle machine must not turn that
+    /// into a write per binding.
     pub fn set_state(&self, path: &str, state: &str) -> Result<()> {
+        if self
+            .state_of(path, None)?
+            .as_deref()
+            .is_none_or(|current| current == state)
+        {
+            return Ok(());
+        }
         self.conn.execute(
             "UPDATE session_binding SET state = ?2 WHERE path = ?1",
             rusqlite::params![path, state],
         )?;
         Ok(())
+    }
+
+    /// Move a binding's state on evidence about one session's run.
+    ///
+    /// A run's process observation speaks for the session that ran it, not for
+    /// whoever owns the path now: a path reused by a later session keeps the
+    /// state its own owner earned.
+    pub fn set_state_for_owner(&self, path: &str, session_id: &str, state: &str) -> Result<()> {
+        if self
+            .state_of(path, Some(session_id))?
+            .as_deref()
+            .is_none_or(|current| current == state)
+        {
+            return Ok(());
+        }
+        self.conn.execute(
+            "UPDATE session_binding SET state = ?3
+             WHERE path = ?1 AND lower(session_id) = lower(?2)",
+            rusqlite::params![path, session_id, state],
+        )?;
+        Ok(())
+    }
+
+    /// The recorded state, read without taking the writer lock. `owner`, when
+    /// given, must match the binding's session or nothing is returned.
+    fn state_of(&self, path: &str, owner: Option<&str>) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT state FROM session_binding
+                 WHERE path = ?1 AND (?2 IS NULL OR lower(session_id) = lower(?2))",
+                rusqlite::params![path, owner],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 
     /// Remove binding for a transcript path.
@@ -334,7 +400,9 @@ mod tests {
     }
 
     #[test]
-    fn rebinding_a_path_reactivates_it() {
+    fn an_explicit_bind_reactivates_the_path() {
+        // `bind` is a launcher or hook saying the session is running now; that
+        // is liveness evidence. Rediscovery is `bind_for_thread`, tested below.
         let (_tmp, conn) = setup();
         let binding = SessionBinding::new(&conn);
         binding.bind("/tmp/a.jsonl", "session-a", "omp").unwrap();
@@ -365,18 +433,126 @@ mod tests {
     }
 
     #[test]
-    fn marking_seen_advances_without_changing_ownership() {
+    fn rediscovering_recorded_ownership_writes_nothing_and_leaves_state_alone() {
+        use crate::state::wal_window::WalWindow;
+        let (_tmp, conn) = setup();
+        let binding = SessionBinding::new(&conn);
+        binding
+            .bind_for_thread("/tmp/a.jsonl", "session-a", "omp", Some("native-a"))
+            .unwrap();
+        binding.mark_exited("/tmp/a.jsonl").unwrap();
+        let before = binding.list_bindings().unwrap();
+        let stamp = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT updated_at || last_seen_at FROM session_binding WHERE path = '/tmp/a.jsonl'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        let stamped = stamp(&conn);
+
+        // A scan pass re-derives the same ownership from the same evidence.
+        let window = WalWindow::open(&conn);
+        for _pass in 0..3 {
+            binding
+                .bind_for_thread("/tmp/a.jsonl", "session-a", "omp", Some("native-a"))
+                .unwrap();
+        }
+        let cost = window.cost(&conn);
+
+        assert!(cost.is_zero(), "rediscovery wrote: {cost:?}");
+        assert_eq!(
+            binding.list_bindings().unwrap(),
+            before,
+            "the file being on disk again is not evidence its run is alive"
+        );
+        assert_eq!(
+            binding.list_bindings().unwrap()[0].state,
+            BINDING_STATE_EXITED
+        );
+        assert_eq!(stamp(&conn), stamped);
+    }
+
+    #[test]
+    fn changed_ownership_is_written_and_starts_active() {
+        let (_tmp, conn) = setup();
+        let binding = SessionBinding::new(&conn);
+        binding
+            .bind_for_thread("/tmp/a.jsonl", "session-a", "omp", Some("native-a"))
+            .unwrap();
+        binding.mark_exited("/tmp/a.jsonl").unwrap();
+
+        // A later session took the path over, or the provider thread was learned.
+        binding
+            .bind_for_thread("/tmp/a.jsonl", "session-b", "omp", Some("native-a"))
+            .unwrap();
+        let listed = binding.list_bindings().unwrap();
+        assert_eq!(listed[0].session_id, "session-b");
+        assert_eq!(listed[0].state, BINDING_STATE_ACTIVE);
+
+        binding.mark_exited("/tmp/a.jsonl").unwrap();
+        binding
+            .bind_for_thread("/tmp/a.jsonl", "session-b", "omp", Some("native-b"))
+            .unwrap();
+        let listed = binding.list_bindings().unwrap();
+        assert_eq!(listed[0].provider_session_id.as_deref(), Some("native-b"));
+        assert_eq!(listed[0].state, BINDING_STATE_ACTIVE);
+    }
+
+    #[test]
+    fn a_state_the_binding_already_has_is_not_rewritten() {
+        use crate::state::wal_window::WalWindow;
         let (_tmp, conn) = setup();
         let binding = SessionBinding::new(&conn);
         binding.bind("/tmp/a.jsonl", "session-a", "omp").unwrap();
-        let before = binding.list_bindings().unwrap()[0].last_seen_at.clone();
+        binding.mark_exited("/tmp/a.jsonl").unwrap();
 
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        binding.mark_seen("/tmp/a.jsonl").unwrap();
+        let window = WalWindow::open(&conn);
+        for _pass in 0..3 {
+            binding.mark_exited("/tmp/a.jsonl").unwrap();
+            binding
+                .set_state_for_owner("/tmp/a.jsonl", "SESSION-A", BINDING_STATE_EXITED)
+                .unwrap();
+            binding
+                .set_state_for_owner("/tmp/gone.jsonl", "session-a", BINDING_STATE_ACTIVE)
+                .unwrap();
+        }
+        let cost = window.cost(&conn);
+        assert!(
+            cost.is_zero(),
+            "restating an observed state wrote: {cost:?}"
+        );
 
-        let listed = binding.list_bindings().unwrap();
-        let after = listed.first().expect("binding survives mark_seen");
-        assert_eq!(after.session_id, "session-a");
-        assert_ne!(after.last_seen_at, before);
+        // New evidence moves it, and moves it back.
+        binding
+            .set_state_for_owner("/tmp/a.jsonl", "session-a", BINDING_STATE_ACTIVE)
+            .unwrap();
+        assert_eq!(
+            binding.list_bindings().unwrap()[0].state,
+            BINDING_STATE_ACTIVE
+        );
+        binding.mark_exited("/tmp/a.jsonl").unwrap();
+        assert_eq!(
+            binding.list_bindings().unwrap()[0].state,
+            BINDING_STATE_EXITED
+        );
+    }
+
+    #[test]
+    fn a_runs_observation_does_not_move_a_binding_its_session_no_longer_owns() {
+        let (_tmp, conn) = setup();
+        let binding = SessionBinding::new(&conn);
+        binding.bind("/tmp/a.jsonl", "session-b", "omp").unwrap();
+
+        // Session A's run ended; the path now belongs to session B.
+        binding
+            .set_state_for_owner("/tmp/a.jsonl", "session-a", BINDING_STATE_EXITED)
+            .unwrap();
+
+        assert_eq!(
+            binding.list_bindings().unwrap()[0].state,
+            BINDING_STATE_ACTIVE
+        );
     }
 }
