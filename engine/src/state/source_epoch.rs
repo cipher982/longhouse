@@ -314,6 +314,22 @@ pub fn lane_position(conn: &Connection, source_epoch: Uuid, lane: SourceLane) ->
         .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))
 }
 
+/// A fingerprint of the durable lane of every active epoch of one provider: how
+/// many there are, how far the host has received each, and when any last moved.
+/// It changes when a lane is rewound, an epoch is added or rotated away, or a
+/// receipt lands, and otherwise reads the same.
+pub fn active_lane_fingerprint(conn: &Connection, provider: &str) -> Result<String> {
+    let (count, received, last_moved): (i64, i64, String) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(lane.last_position), 0), COALESCE(MAX(lane.updated_at), '')
+         FROM source_epoch_lane_state AS lane
+         JOIN source_epoch_registry AS epoch ON epoch.source_epoch = lane.source_epoch
+         WHERE epoch.provider = ?1 AND epoch.ended_at IS NULL AND lane.lane = 'durable'",
+        [provider],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    Ok(format!("{count}:{received}:{last_moved}"))
+}
+
 pub fn active_source_incarnation(
     conn: &Connection,
     provider: &str,

@@ -2722,14 +2722,21 @@ static OPENCODE_AT_REST: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, S
 /// What a walk over an OpenCode database depended on outside the database's own
 /// records: the file's stamp (any change to a session, however silent, changes
 /// the file), the managed-state files that bind a session to a Longhouse one,
-/// and the build. `None` when something was written too recently to vouch for.
-fn opencode_rest_key(db_path: &Path) -> Option<String> {
-    Some(format!(
-        "{}|{}|{}",
-        wal_database_stamp(db_path)?,
-        opencode_db::managed_state_signature()?,
+/// and the build; and, from the shipper database rather than the file, how far
+/// the host has received each session (a lane rewound with no write to the
+/// OpenCode file). `None` when something was written too recently to vouch for.
+fn opencode_rest_key(conn: &Connection, db_path: &Path) -> Result<Option<String>> {
+    let (Some(stamp), Some(managed)) = (
+        wal_database_stamp(db_path),
+        opencode_db::managed_state_signature(),
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
+        "{stamp}|{managed}|{}|{}",
+        source_epoch::active_lane_fingerprint(conn, "opencode")?,
         crate::build_identity::COMMIT
-    ))
+    )))
 }
 
 /// Whether the walk that last found nothing left to ship saw this same database
@@ -2758,7 +2765,7 @@ pub(crate) fn prepare_next_opencode_envelope(
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     // Stamped before anything is read, so a write that lands while the walk
     // runs is seen as a change by the next one.
-    let rest_key = opencode_rest_key(db_path);
+    let rest_key = opencode_rest_key(conn, db_path)?;
     if opencode_database_is_settled(conn, db_path, rest_key.as_deref())? {
         return Ok(None);
     }
@@ -3799,9 +3806,8 @@ fn cursor_store_rest_key(store_stamp: Option<&str>, launch_binding_key: &str) ->
 /// rest, because that can change with no store write: the source
 /// rotated to a new epoch or parser revision, some epoch of it has records the
 /// host has not received (a lane rewound, or a repair of a missing payload,
-/// which announces itself the same way), or the capture walk no longer says its
-/// last cycle finished. An envelope already waiting for the path was handed back
-/// before this is asked.
+/// which announces itself the same way), an envelope is waiting for its epoch
+/// (blocked or not), or the capture walk no longer says its last cycle finished.
 fn cursor_store_is_settled(
     conn: &Connection,
     path_text: &str,
@@ -3829,6 +3835,7 @@ fn cursor_store_is_settled(
             != Some(CURSOR_PARSER_REVISION)
         || cursor_store_records::oldest_undrained_epoch(conn, "cursor", &opaque_source_id)?
             .is_some()
+        || pending_source_envelope::exists_for_epoch(conn, rest.source_epoch)?
     {
         return Ok(false);
     }
@@ -12370,7 +12377,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         with_opencode_state_root(&dir.path().join("state-root"), || {
             let (db_path, conn) = settled_opencode_database(dir.path(), "settled-session");
-            let rest_key = opencode_rest_key(&db_path);
+            let rest_key = opencode_rest_key(&conn, &db_path).unwrap();
             assert!(rest_key.is_some());
             assert!(opencode_database_is_settled(&conn, &db_path, rest_key.as_deref()).unwrap());
 
@@ -12392,6 +12399,29 @@ mod tests {
             )
             .unwrap();
             assert!(!opencode_database_is_settled(&conn, &db_path, rest_key.as_deref()).unwrap());
+        });
+    }
+
+    #[test]
+    fn an_opencode_database_whose_lane_was_rewound_is_walked_again() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        with_opencode_state_root(&dir.path().join("state-root"), || {
+            let (db_path, mut conn) = settled_opencode_database(dir.path(), "settled-session");
+
+            // The OpenCode file is untouched, but the host's receipts no longer
+            // cover what it holds.
+            conn.execute(
+                "UPDATE source_epoch_lane_state SET last_position = 0 WHERE lane = 'durable'",
+                [],
+            )
+            .unwrap();
+            let opens = opencode_opens();
+            let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("a rewound lane owes the host its records again");
+            assert!(opencode_opens() > opens);
+            assert_eq!(prepared.range_start, 0);
         });
     }
 
@@ -12748,6 +12778,41 @@ mod tests {
                     .exists()),
                 "the repair walk re-sealed what was lost"
             );
+        });
+    }
+
+    #[test]
+    fn a_settled_cursor_store_with_an_envelope_waiting_is_not_called_settled() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (store_path, _store) = settled_cursor_store(dir.path());
+        with_private_agent_state(dir.path(), || {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            settle(&mut conn, &store_path);
+            let stamp = wal_database_stamp(&store_path);
+            let path_text = stable_source_path(&store_path)
+                .to_string_lossy()
+                .to_string();
+            assert!(cursor_store_is_settled(&conn, &path_text, stamp.as_deref()).unwrap());
+
+            // Something is queued for its epoch, blocked or not.
+            let epoch: String = conn
+                .query_row(
+                    "SELECT source_epoch FROM source_epoch_registry WHERE provider = 'cursor'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            conn.execute(
+                "INSERT INTO pending_source_envelope (
+                     source_epoch, source_path, range_start, range_end, envelope_id,
+                     request_body_zstd, media_objects_zstd, raw_bytes, event_count,
+                     has_reply_evidence, has_more, created_at
+                 ) VALUES (?1, 'store.db', 0, 1, 'envelope', X'00', X'00', 0, 0, 0, 0, 'now')",
+                [epoch],
+            )
+            .unwrap();
+            assert!(!cursor_store_is_settled(&conn, &path_text, stamp.as_deref()).unwrap());
         });
     }
 

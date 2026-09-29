@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
@@ -87,7 +87,7 @@ fn launch_binding_state_for_conversation_in(
 ) -> Result<CursorLaunchBindingState> {
     let mut managed = Vec::new();
     let mut pending = false;
-    for claim in binding_claims(dir).iter() {
+    for claim in binding_claims(dir)?.iter() {
         if valid_claim(claim, conversation_uuid) {
             let previous_provider_session_id = active_predecessor(claim, conversation_uuid);
             managed.push(ManagedCursorBinding {
@@ -250,7 +250,7 @@ fn launch_reservation_may_be_pending_in(state_root: &Path) -> Result<bool> {
     let listed = crate::dir_cache::parsed_json_dir(&reservations, parse_json_value, |_, _| {
         std::cmp::Ordering::Equal
     })
-    .unwrap_or_default();
+    .context("reading Cursor launch reservations")?;
     for value in listed.iter() {
         let expires_at = value
             .get("expires_at")
@@ -316,7 +316,7 @@ fn reset_binding_may_be_pending_in(dir: &Path, conversation_uuid: &str) -> Resul
         return Ok(false);
     };
     let mut candidate_sessions = Vec::new();
-    for claim in binding_claims(dir).iter() {
+    for claim in binding_claims(dir)?.iter() {
         if claim.schema_version != 2
             || claim.provider != "cursor"
             || claim.status != "observed"
@@ -385,9 +385,13 @@ fn parse_json_value(_path: &Path, bytes: std::io::Result<Vec<u8>>) -> Option<ser
 /// Every claim in the directory, read again only when a claim file changed. A
 /// scan asks about each of thousands of conversations, and every ask used to
 /// read and parse every claim.
-fn binding_claims(dir: &Path) -> Arc<Vec<LaunchBindingClaim>> {
+///
+/// A directory that cannot be read is an error, not "no claims": with no claims
+/// a managed conversation reads as unmanaged and would be archived as a session
+/// of its own. Only a directory that does not exist has no claims.
+fn binding_claims(dir: &Path) -> Result<Arc<Vec<LaunchBindingClaim>>> {
     crate::dir_cache::parsed_json_dir(dir, parse_binding_claim, |_, _| std::cmp::Ordering::Equal)
-        .unwrap_or_default()
+        .with_context(|| format!("reading Cursor launch claims in {}", dir.display()))
 }
 
 #[cfg(test)]
@@ -480,6 +484,21 @@ mod tests {
         fs::remove_file(&claim_path).unwrap();
         assert_eq!(
             launch_binding_state_for_conversation_in(dir.path(), "cursor-id").unwrap(),
+            CursorLaunchBindingState::Unclaimed
+        );
+    }
+
+    #[test]
+    fn a_claim_directory_that_cannot_be_read_is_an_error_not_no_claims() {
+        let dir = tempdir().unwrap();
+        // With no claims a managed conversation reads as unmanaged, so only a
+        // directory that does not exist may say so.
+        let not_a_directory = dir.path().join("claims");
+        fs::write(&not_a_directory, "").unwrap();
+        assert!(launch_binding_state_for_conversation_in(&not_a_directory, "cursor-id").is_err());
+        assert_eq!(
+            launch_binding_state_for_conversation_in(&dir.path().join("absent"), "cursor-id")
+                .unwrap(),
             CursorLaunchBindingState::Unclaimed
         );
     }

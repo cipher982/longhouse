@@ -42,7 +42,11 @@ thread_local! {
     pub(crate) static FILES_PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-static CACHE: LazyLock<Mutex<HashMap<(PathBuf, TypeId), Entry>>> =
+/// A copy is for one directory read one way: the same files parsed or ordered
+/// differently are a different copy.
+type CacheKey = (PathBuf, TypeId, usize, usize);
+
+static CACHE: LazyLock<Mutex<HashMap<CacheKey, Entry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Parse every `*.json` file in `dir` into `order`ed values, or reuse the last
@@ -64,7 +68,12 @@ where
         }
         Err(error) => return Err(error),
     };
-    let key = (dir.to_path_buf(), TypeId::of::<T>());
+    let key: CacheKey = (
+        dir.to_path_buf(),
+        TypeId::of::<T>(),
+        parse as usize,
+        order as usize,
+    );
     if let Some(signature) = listing.signature.as_ref() {
         if let Ok(cache) = CACHE.lock() {
             if let Some(entry) = cache.get(&key) {
@@ -288,6 +297,24 @@ mod tests {
             parsed_json_dir(&claims, parse, Ord::cmp).unwrap().to_vec(),
             ["two"]
         );
+    }
+
+    #[test]
+    fn the_same_directory_read_another_way_is_not_served_from_the_first_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.json", "b.json"] {
+            fs::write(dir.path().join(name), name).unwrap();
+            age(&dir.path().join(name), 60);
+        }
+        let ascending = |dir: &Path| parsed_json_dir(dir, parse, Ord::cmp).unwrap().to_vec();
+        let descending = |dir: &Path| {
+            parsed_json_dir(dir, parse, |left: &String, right: &String| right.cmp(left))
+                .unwrap()
+                .to_vec()
+        };
+        assert_eq!(ascending(dir.path()), ["a.json", "b.json"]);
+        assert_eq!(descending(dir.path()), ["b.json", "a.json"]);
+        assert_eq!(ascending(dir.path()), ["a.json", "b.json"]);
     }
 
     #[test]

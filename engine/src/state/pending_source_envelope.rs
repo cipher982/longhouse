@@ -292,8 +292,19 @@ pub fn load_for_path(
     Ok(hydrated)
 }
 
+/// Whether an envelope is waiting for this epoch, blocked or not, without
+/// loading it. A plain read: it takes no write lock and hydrates nothing.
+pub fn exists_for_epoch(conn: &Connection, source_epoch: Uuid) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pending_source_envelope WHERE source_epoch = ?1)",
+        [source_epoch.to_string()],
+        |row| row.get(0),
+    )
+    .context("checking for a pending storage-v2 envelope by source epoch")
+}
+
 /// Whether any envelope is waiting for a source of this provider, blocked or
-/// not. A plain read: it takes no write lock and hydrates nothing.
+/// not. A plain read, like `exists_for_epoch`.
 pub fn exists_for_provider(conn: &Connection, provider: &str) -> Result<bool> {
     conn.query_row(
         "SELECT EXISTS(
