@@ -1087,3 +1087,23 @@ def test_console_steer_negative_control_is_inconclusive_when_the_turn_itself_fai
     assert result["negative_control"]["verdict"] == "inconclusive"
     assert result["negative_control"]["preconditions_held"] is False
     assert result["status"] == "fail"
+
+
+def test_steer_tool_completion_is_read_from_the_tool_output_not_only_content_text() -> None:
+    marker = "LH_CLAUDE_STEER_TOOL_42_abc"
+    first = "LH_CLAUDE_FIRST_abc"
+    # How the parsers serve a finished command: the output is in tool_output_text
+    # and content_text is empty, so reading content alone never saw it.
+    served = {"role": "tool", "content_text": None, "tool_output_text": marker}
+    assert lifecycle._tool_ran_to_completion([served], tool_marker=marker, first_marker=first)
+    # A command that never ran serves nothing; the setup text quotes the
+    # arithmetic, never the computed marker.
+    setup = {"role": "assistant", "content_text": "sleep 15 && echo LH_CLAUDE_STEER_TOOL_$((40+2))_abc"}
+    assert not lifecycle._tool_ran_to_completion([setup], tool_marker=marker, first_marker=first)
+    # The user's own message and the first turn's marker do not count.
+    assert not lifecycle._tool_ran_to_completion(
+        [{"role": "user", "content_text": marker}], tool_marker=marker, first_marker=first
+    )
+    assert not lifecycle._tool_ran_to_completion(
+        [{"role": "tool", "tool_output_text": f"{marker} {first}"}], tool_marker=marker, first_marker=first
+    )

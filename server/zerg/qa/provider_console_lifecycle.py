@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -1907,6 +1908,9 @@ def _run_steer_step(
     receipt["steer_accepted"] = steered.get("outcome") == "sent" and steered.get("disposition") == "accepted"
     terminal = _wait_claim(claim_path, states=frozenset({"terminal", "failed"}), timeout=180)
     claims[-1] = terminal
+    # The steered run is a process of its own; the factory matches it against the
+    # owned processes it retires by this identity.
+    receipt.update({key: terminal.get(key) for key in ("pid", "process_group_id", "boot_id", "process_start_time")})
     _wait_turn_terminal(
         api_url=api_url,
         token=token,
@@ -1931,16 +1935,29 @@ def _run_steer_step(
     new_runs = sorted({path.stem for path in claim_path.parent.glob("*.json")} - claims_before)
     receipt["new_runs_after_steer"] = new_runs
     receipt["no_new_turn"] = not steered.get("turn") and not new_runs
-    events = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=200").get("events") or []
-    receipt["tool_ran_to_completion"] = any(
-        isinstance(event, dict)
-        and event.get("role") != "user"
-        and tool_marker in event_text(event)
-        and first_marker not in event_text(event)
-        for event in events
-    )
+    # The newest events: a long session's first 200 need not include the tool row.
+    events = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?anchor=tail&limit=200").get("events") or []
+    receipt["tool_ran_to_completion"] = _tool_ran_to_completion(events, tool_marker=tool_marker, first_marker=first_marker)
     receipt["status"] = "pass" if console_steer_assertion(receipt) else "fail"
     return receipt
+
+
+def _tool_ran_to_completion(events: Iterable[object], *, tool_marker: str, first_marker: str) -> bool:
+    """Did the steered turn's command finish and report its result?
+
+    The command computes its marker (`$((40+2))`), so the literal can appear only
+    in the command's output or in a reply that quotes it. Parsers keep tool output
+    in `tool_output_text` and leave `content_text` empty, so reading `event_text`
+    alone never saw it and a steer that worked failed this check.
+    """
+
+    for event in events:
+        if not isinstance(event, dict) or event.get("role") == "user":
+            continue
+        text = f"{event_text(event)}\n{event.get('tool_output_text') or ''}"
+        if tool_marker in text and first_marker not in text:
+            return True
+    return False
 
 
 def _observation_from_receipts(
