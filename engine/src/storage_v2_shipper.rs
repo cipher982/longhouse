@@ -2714,10 +2714,13 @@ fn block_source<T>(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &s
 }
 
 /// OpenCode databases this process last found with nothing left to ship, and
-/// what it depended on then (see `opencode_rest_key`), by path. Kept in memory:
-/// after a restart the first pass reads the database once, as it always did.
-static OPENCODE_AT_REST: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, String>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+/// what it depended on then (see `opencode_rest_key`), by path, plus when a row
+/// still being written will be given up on: a walk that held one back is not at
+/// rest past that moment, whatever the file did. Kept in memory: after a
+/// restart the first pass reads the database once, as it always did.
+static OPENCODE_AT_REST: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<PathBuf, (String, Option<i64>)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// What a walk over an OpenCode database depended on outside the database's own
 /// records: the file's stamp (any change to a session, however silent, changes
@@ -2749,9 +2752,12 @@ fn opencode_database_is_settled(
     let Some(rest_key) = rest_key else {
         return Ok(false);
     };
-    let at_rest = OPENCODE_AT_REST
-        .lock()
-        .is_ok_and(|rests| rests.get(db_path).is_some_and(|known| known == rest_key));
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let at_rest = OPENCODE_AT_REST.lock().is_ok_and(|rests| {
+        rests.get(db_path).is_some_and(|(known, wake_ms)| {
+            known == rest_key && wake_ms.is_none_or(|wake_ms| now_ms < wake_ms)
+        })
+    });
     Ok(at_rest && !pending_source_envelope::exists_for_provider(conn, "opencode")?)
 }
 
@@ -2770,12 +2776,13 @@ pub(crate) fn prepare_next_opencode_envelope(
         return Ok(None);
     }
     let mut waited = false;
-    let prepared = walk_opencode_database(conn, capabilities, db_path, &mut waited)?;
+    let mut wake_ms = None;
+    let prepared = walk_opencode_database(conn, capabilities, db_path, &mut waited, &mut wake_ms)?;
     // A session held back for its managed binding is waiting on the clock, not
     // on the database, so it is not a walk that found nothing to ship.
     if let (None, false, Some(rest_key)) = (&prepared, waited, rest_key) {
         if let Ok(mut rests) = OPENCODE_AT_REST.lock() {
-            rests.insert(db_path.to_path_buf(), rest_key);
+            rests.insert(db_path.to_path_buf(), (rest_key, wake_ms));
         }
     }
     Ok(prepared)
@@ -2786,6 +2793,7 @@ fn walk_opencode_database(
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
     waited: &mut bool,
+    wake_ms: &mut Option<i64>,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
@@ -2810,13 +2818,31 @@ fn walk_opencode_database(
             if let Some(pending) = load_pending_for_source(conn, "opencode", &opaque_source_id)? {
                 return Ok(Some(pending));
             }
-            let snapshot =
-                opencode_db::opencode_raw_snapshot(db_path, &candidate.provider_session_id)?;
-            let logical_len = u64::try_from(snapshot.records.len())
-                .context("OpenCode snapshot has too many records")?;
+            let stream = opencode_db::opencode_session_stream(
+                db_path,
+                &candidate.provider_session_id,
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+            if let Some(stream_wake_ms) = stream.next_wake_ms() {
+                *wake_ms = Some(wake_ms.map_or(stream_wake_ms, |known| known.min(stream_wake_ms)));
+            }
+            let logical_len = u64::try_from(stream.records.len())
+                .context("OpenCode stream has too many records")?;
             let managed_session_id = opencode_db::managed_longhouse_session_id_for_opencode(
                 &candidate.provider_session_id,
             );
+            // A session that only grew keeps its epoch: the stream's revision
+            // chain still vouches for every record already shipped. The epoch
+            // then vouches for the new tail too. Only a settled row that
+            // changed, moved or vanished ends the epoch.
+            let stored_revision =
+                source_epoch::active_source_revision(conn, "opencode", &opaque_source_id)?;
+            let revision = stream.continuing_revision(stored_revision.as_deref());
+            // An epoch that never recorded a revision cannot vouch for where
+            // its records sit, so it is replaced like one whose chain broke.
+            let unvouched = stored_revision.is_none()
+                && source_epoch::active_source_epoch(conn, "opencode", &opaque_source_id)?
+                    .is_some();
             let resolution = source_epoch::observe_source(
                 conn,
                 "opencode",
@@ -2825,23 +2851,42 @@ fn walk_opencode_database(
                 logical_len,
                 SourceLane::Durable,
                 0,
-                Some(&snapshot.source_revision),
+                Some(&revision),
                 managed_session_id.as_deref(),
-                SourceChangeHint::None,
+                if unvouched {
+                    SourceChangeHint::Rewrite
+                } else {
+                    SourceChangeHint::None
+                },
             )?;
+            let revision = {
+                let current = stream.revision();
+                if revision != current {
+                    source_epoch::set_source_revision(conn, resolution.source_epoch, &current)?;
+                }
+                current
+            };
             let range_start =
                 source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
             if range_start >= logical_len {
                 continue;
             }
             let (range_end, raw_bytes) = bounded_record_ordinal_end(
-                &snapshot.records,
+                &stream.records,
                 range_start,
                 capabilities.max_records,
                 capabilities.max_raw_record_bytes,
             )?;
-            let parse_result =
-                opencode_db::parse_opencode_session(db_path, &candidate.provider_session_id)?;
+            let opencode_db::OpenCodeParse {
+                result: parse_result,
+                line_ordinals,
+            } = opencode_db::parse_opencode_stream(db_path, &stream)?;
+            let source_ordinals: Vec<(u64, u64)> = parse_result
+                .source_lines
+                .iter()
+                .zip(&line_ordinals)
+                .map(|(line, ordinal)| (line.source_offset, *ordinal))
+                .collect();
             let managed_session_id = managed_session_id.or_else(|| {
                 opencode_db::managed_longhouse_session_id_for_opencode(
                     &candidate.provider_session_id,
@@ -2868,7 +2913,7 @@ fn walk_opencode_database(
                     logical_len,
                     SourceLane::Durable,
                     range_start,
-                    Some(&snapshot.source_revision),
+                    Some(&revision),
                     managed_session_id.as_deref(),
                     SourceChangeHint::None,
                 )?
@@ -2888,7 +2933,7 @@ fn walk_opencode_database(
             let start =
                 usize::try_from(range_start).context("OpenCode range start exceeds usize")?;
             let end = usize::try_from(range_end).context("OpenCode range end exceeds usize")?;
-            let selected = &snapshot.records[start..end];
+            let selected = &stream.records[start..end];
             let identity = EnvelopeIdentity {
                 tenant_id: capabilities.tenant_id.clone(),
                 machine_id: capabilities.machine_id.clone(),
@@ -2927,7 +2972,7 @@ fn walk_opencode_database(
             )?;
             let mut render_records = opencode_render_records_for_range(
                 &parse_result,
-                snapshot.part_record_start,
+                &source_ordinals,
                 range_start,
                 range_end,
             )?;
@@ -2955,7 +3000,7 @@ fn walk_opencode_database(
             )?;
             let media_objects = opencode_media_objects_for_range(
                 &parse_result,
-                snapshot.part_record_start,
+                &source_ordinals,
                 range_start,
                 range_end,
             )?;
@@ -2993,7 +3038,7 @@ fn walk_opencode_database(
                         .collect(),
                     facts: opencode_provider_facts_for_range(
                         &parse_result,
-                        snapshot.part_record_start,
+                        &source_ordinals,
                         range_start,
                         range_end,
                     )?,
@@ -4958,18 +5003,15 @@ fn storage_v2_media_refs(media_objects: &[ParsedMediaObject]) -> Vec<StorageV2Me
         .collect()
 }
 
+/// `source_ordinals` pairs each part's source offset with the ordinal of its
+/// raw record, in offset order.
 fn opencode_provider_facts_for_range(
     parse_result: &ParseResult,
-    part_record_start: u64,
+    source_ordinals: &[(u64, u64)],
     range_start: u64,
     range_end: u64,
 ) -> Result<Vec<StorageV2ProviderFact>> {
-    let source_ordinals: HashMap<u64, u64> = parse_result
-        .source_lines
-        .iter()
-        .enumerate()
-        .map(|(index, line)| (line.source_offset, part_record_start + index as u64))
-        .collect();
+    let source_ordinals: HashMap<u64, u64> = source_ordinals.iter().copied().collect();
     let mut facts = Vec::new();
     for fact in &parse_result.provider_facts {
         let ordinal = if fact.kind == "delegation.metadata" && fact.source_offset == 0 {
@@ -5001,16 +5043,11 @@ fn opencode_provider_facts_for_range(
 
 fn opencode_media_objects_for_range(
     parse_result: &ParseResult,
-    part_record_start: u64,
+    source_ordinals: &[(u64, u64)],
     range_start: u64,
     range_end: u64,
 ) -> Result<Vec<ParsedMediaObject>> {
-    let source_ordinals: HashMap<u64, u64> = parse_result
-        .source_lines
-        .iter()
-        .enumerate()
-        .map(|(index, line)| (line.source_offset, part_record_start + index as u64))
-        .collect();
+    let source_ordinals: HashMap<u64, u64> = source_ordinals.iter().copied().collect();
     let mut result = Vec::new();
     for media in &parse_result.media_objects {
         let ordinal = source_ordinals
@@ -5100,16 +5137,10 @@ fn render_records_for_batch(
 
 fn opencode_render_records_for_range(
     parse_result: &ParseResult,
-    part_record_start: u64,
+    source_ordinals: &[(u64, u64)],
     range_start: u64,
     range_end: u64,
 ) -> Result<Vec<StorageV2RenderRecord>> {
-    let source_ordinals: Vec<(u64, u64)> = parse_result
-        .source_lines
-        .iter()
-        .enumerate()
-        .map(|(index, line)| (line.source_offset, part_record_start + index as u64))
-        .collect();
     let mut subordinals: HashMap<u64, u32> = HashMap::new();
     let mut records = Vec::new();
     for event in &parse_result.events {
@@ -11387,8 +11418,16 @@ mod tests {
                 payload: serde_json::json!({"children": [{"provider_session_id": "child-1"}]}),
             },
         ];
-        let prefix = opencode_provider_facts_for_range(&parsed, 2, 0, 2).unwrap();
-        let suffix = opencode_provider_facts_for_range(&parsed, 2, 2, 3).unwrap();
+        // The one part's raw record sits at ordinal 2, after the session and
+        // its message.
+        let ordinals: Vec<(u64, u64)> = parsed
+            .source_lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| (line.source_offset, 2 + index as u64))
+            .collect();
+        let prefix = opencode_provider_facts_for_range(&parsed, &ordinals, 0, 2).unwrap();
+        let suffix = opencode_provider_facts_for_range(&parsed, &ordinals, 2, 3).unwrap();
         assert_eq!(
             prefix
                 .iter()
@@ -12509,6 +12548,66 @@ mod tests {
         });
     }
 
+    #[test]
+    fn an_opencode_database_with_a_row_in_flight_is_settled_only_until_it_is_given_up_on() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        with_opencode_state_root(&dir.path().join("state-root"), || {
+            let db_path = dir.path().join("opencode.db");
+            opencode_db_with_session(&db_path, "in-flight-session", "/tmp/in-flight-workspace");
+            // A tool call OpenCode wrote a minute ago and has not finished.
+            let provider = Connection::open(&db_path).unwrap();
+            provider
+                .execute(
+                    "INSERT INTO part VALUES ('prt-running', 'message-1', 'in-flight-session', ?1, ?1,
+                     '{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"c\",\"state\":{\"status\":\"running\",\"input\":{}}}')",
+                    [Utc::now().timestamp_millis() - 60_000],
+                )
+                .unwrap();
+            rest_cursor_store(&db_path);
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            let first = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .unwrap();
+            assert!(!first.envelope.records.iter().any(|record| BASE64_STANDARD
+                .decode(&record.data_b64)
+                .unwrap()
+                .windows(7)
+                .any(|w| w == b"running")));
+            acknowledge_prepared(&mut conn, &first);
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none()
+            );
+
+            // Nothing moved and nothing will until the row is given up on, so
+            // the walk that found nothing to ship still vouches for the file.
+            let opens = opencode_opens();
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(opencode_opens(), opens, "a settled database was opened");
+
+            // The wait is on the clock, not on the file: once the moment the row
+            // would be given up on has passed, the next pass looks again.
+            OPENCODE_AT_REST
+                .lock()
+                .unwrap()
+                .get_mut(&db_path)
+                .expect("the walk was recorded at rest")
+                .1 = Some(Utc::now().timestamp_millis() - 1);
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(opencode_opens() > opens, "the wake time was not honoured");
+        });
+    }
+
     /// A Cursor store shipped and then left alone: the state a laptop's history
     /// is in nearly all the time.
     fn settled_cursor_store(dir: &Path) -> (PathBuf, Connection) {
@@ -13074,5 +13173,584 @@ mod tests {
             assert!(window.cost(&conn).commits > 0);
             assert_eq!(bindings(&conn), before);
         });
+    }
+
+    // OpenCode sessions written the way OpenCode writes them: rows appear while
+    // work is in flight and are rewritten as it finishes.
+
+    /// Deterministic prose-like filler: words from a fixed vocabulary in a
+    /// pseudo-random order, which zstd shrinks about the way real transcripts shrink.
+    fn oc_filler(seed: u64, bytes: usize) -> String {
+        let vocabulary: Vec<String> = (0..512u32)
+            .map(|i| {
+                format!(
+                    "w{:x}{}",
+                    i.wrapping_mul(2654435761) >> 20,
+                    "aeiou".chars().nth((i % 5) as usize).unwrap()
+                )
+            })
+            .collect();
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let mut out = String::with_capacity(bytes + 16);
+        while out.len() < bytes {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            out.push_str(&vocabulary[((state >> 33) % 512) as usize]);
+            out.push(' ');
+        }
+        out.truncate(bytes);
+        out
+    }
+
+    fn oc_now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+
+    fn oc_create_schema(conn: &Connection) {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL, name text);
+            CREATE TABLE session (
+                id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
+                directory text, path text, title text, version text,
+                time_created integer NOT NULL, time_updated integer NOT NULL
+            );
+            CREATE TABLE message (
+                id text PRIMARY KEY, session_id text NOT NULL,
+                time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
+            );
+            CREATE TABLE part (
+                id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
+                time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
+            );
+            INSERT INTO project VALUES ('global', '/', NULL);
+            "#,
+        )
+        .unwrap();
+    }
+
+    fn oc_add_session(conn: &Connection, session: &str, t: i64) {
+        conn.execute(
+            "INSERT INTO session VALUES (?1, 'global', NULL, '/tmp/work', '/tmp/work', 'Work', '1.16', ?2, ?2)",
+            params![session, t],
+        )
+        .unwrap();
+    }
+
+    /// One agent turn, the way OpenCode writes it: rows appear in flight and
+    /// are rewritten as they complete. `midpoint` runs while the tool call is
+    /// still running (a live ship point); the caller ships again at the end.
+    fn oc_turn(
+        conn: &Connection,
+        session: &str,
+        turn: usize,
+        t: i64,
+        tool_output_bytes: usize,
+        midpoint: &mut dyn FnMut(),
+    ) {
+        let user_m = format!("{session}-um{turn:04}");
+        let asst_m = format!("{session}-am{turn:04}");
+        let insert_msg = |id: &str, t: i64, data: &str| {
+            conn.execute(
+                "INSERT INTO message VALUES (?1, ?2, ?3, ?3, ?4)",
+                params![id, session, t, data],
+            )
+            .unwrap();
+        };
+        let insert_part = |id: &str, msg: &str, t: i64, data: &str| {
+            conn.execute(
+                "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+                params![id, msg, session, t, data],
+            )
+            .unwrap();
+        };
+        insert_msg(
+            &user_m,
+            t,
+            &format!(
+                r#"{{"role":"user","time":{{"created":{t}}},"agent":"build","summary":{{"diffs":[]}}}}"#
+            ),
+        );
+        insert_part(
+            &format!("{session}-up{turn:04}"),
+            &user_m,
+            t + 1,
+            &format!(r#"{{"type":"text","text":"question number {turn}"}}"#),
+        );
+        insert_msg(
+            &asst_m,
+            t + 2,
+            &format!(
+                r#"{{"role":"assistant","time":{{"created":{}}},"mode":"build","cost":0,"tokens":{{"input":0,"output":0}}}}"#,
+                t + 2
+            ),
+        );
+        insert_part(
+            &format!("{session}-sp{turn:04}"),
+            &asst_m,
+            t + 3,
+            r#"{"type":"step-start","snapshot":"abc"}"#,
+        );
+        let tool_id = format!("{session}-tp{turn:04}");
+        insert_part(
+            &tool_id,
+            &asst_m,
+            t + 4,
+            &format!(
+                r#"{{"type":"tool","tool":"bash","callID":"c{turn}","state":{{"status":"running","input":{{"command":"ls"}}}}}}"#
+            ),
+        );
+        midpoint();
+        let output = oc_filler((t as u64) ^ (turn as u64), tool_output_bytes);
+        conn.execute(
+            "UPDATE part SET data = ?1, time_updated = ?2 WHERE id = ?3",
+            params![
+                format!(r#"{{"type":"tool","tool":"bash","callID":"c{turn}","state":{{"status":"completed","input":{{"command":"ls"}},"output":"{output}"}}}}"#),
+                t + 50,
+                tool_id
+            ],
+        )
+        .unwrap();
+        insert_part(
+            &format!("{session}-xp{turn:04}"),
+            &asst_m,
+            t + 51,
+            &format!(
+                r#"{{"type":"text","text":"{}","time":{{"start":{},"end":{}}}}}"#,
+                oc_filler(turn as u64 + 7, 800),
+                t + 51,
+                t + 52
+            ),
+        );
+        conn.execute(
+            "UPDATE part SET time_updated = ?1 WHERE id = ?2",
+            params![t + 52, format!("{session}-xp{turn:04}")],
+        )
+        .unwrap();
+        insert_part(
+            &format!("{session}-fp{turn:04}"),
+            &asst_m,
+            t + 53,
+            r#"{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":5}}"#,
+        );
+        conn.execute(
+            "UPDATE message SET data = ?1, time_updated = ?2 WHERE id = ?3",
+            params![
+                format!(r#"{{"role":"assistant","time":{{"created":{},"completed":{}}},"mode":"build","cost":0.01,"tokens":{{"input":10,"output":5}},"finish":"stop"}}"#, t + 2, t + 54),
+                t + 54,
+                asst_m
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE message SET data = ?1, time_updated = ?2 WHERE id = ?3",
+            params![
+                format!(r#"{{"role":"user","time":{{"created":{t}}},"agent":"build","summary":{{"diffs":[{{"file":"a","patch":"{}"}}]}}}}"#, oc_filler(turn as u64 + 13, 300)),
+                t + 55,
+                user_m
+            ],
+        )
+        .unwrap();
+    }
+
+    /// One envelope of an OpenCode drain: which epoch, which records, and what
+    /// it rendered.
+    struct OcShipped {
+        epoch: Uuid,
+        predecessor: Option<String>,
+        start: u64,
+        end: u64,
+        raw_bytes: u64,
+        records: Vec<String>,
+        event_ids: Vec<String>,
+    }
+
+    fn oc_drain_shipped(conn: &mut Connection, db_path: &Path) -> Vec<OcShipped> {
+        oc_drain_shipped_with(conn, db_path, &capabilities())
+    }
+
+    fn oc_drain_shipped_with(
+        conn: &mut Connection,
+        db_path: &Path,
+        capabilities: &StorageV2Capabilities,
+    ) -> Vec<OcShipped> {
+        let mut shipped = Vec::new();
+        while let Some(prepared) =
+            prepare_next_opencode_envelope(conn, capabilities, db_path).unwrap()
+        {
+            shipped.push(OcShipped {
+                epoch: prepared.source_epoch,
+                predecessor: prepared.envelope.predecessor_source_epoch.clone(),
+                start: prepared.range_start,
+                end: prepared.range_end,
+                raw_bytes: prepared.raw_bytes,
+                records: prepared
+                    .envelope
+                    .records
+                    .iter()
+                    .map(|record| {
+                        String::from_utf8(BASE64_STANDARD.decode(&record.data_b64).unwrap())
+                            .unwrap()
+                    })
+                    .collect(),
+                event_ids: prepared
+                    .envelope
+                    .render
+                    .as_ref()
+                    .map(|render| {
+                        render
+                            .records
+                            .iter()
+                            .map(|record| record.event_id.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            });
+            acknowledge_prepared(conn, &prepared);
+        }
+        shipped
+    }
+
+    struct OcFixture {
+        _dir: tempfile::TempDir,
+        db_path: PathBuf,
+        provider: Connection,
+        state: Connection,
+    }
+
+    fn oc_fixture(session: &str) -> OcFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        let provider = Connection::open(&db_path).unwrap();
+        oc_create_schema(&provider);
+        oc_add_session(&provider, session, oc_now_ms() - 3_600_000);
+        let state = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        OcFixture {
+            _dir: dir,
+            db_path,
+            provider,
+            state,
+        }
+    }
+
+    #[test]
+    fn opencode_growth_ships_each_row_once_in_one_epoch() {
+        let mut fixture = oc_fixture("ses_grow");
+        let base = oc_now_ms() - 60_000;
+        let mut shipped: Vec<OcShipped> = Vec::new();
+        let turns = 30;
+        for turn in 0..turns {
+            let t = base + (turn as i64) * 100;
+            // A live ship point while the tool call is still running, then one
+            // when the turn is done.
+            let (provider, state, db_path) =
+                (&fixture.provider, &mut fixture.state, &fixture.db_path);
+            let mut mid = Vec::new();
+            oc_turn(provider, "ses_grow", turn, t, 2000, &mut || {
+                mid.extend(oc_drain_shipped(state, db_path));
+            });
+            shipped.extend(mid);
+            shipped.extend(oc_drain_shipped(state, db_path));
+        }
+
+        // One epoch, and every envelope picks up exactly where the last ended.
+        let epochs: std::collections::HashSet<Uuid> =
+            shipped.iter().map(|envelope| envelope.epoch).collect();
+        assert_eq!(epochs.len(), 1, "growth must not rotate the epoch");
+        assert!(shipped[0].predecessor.is_none());
+        let mut next = 0;
+        for envelope in &shipped {
+            assert_eq!(envelope.start, next);
+            next = envelope.end;
+        }
+
+        // Each turn adds one small envelope, not the session so far. A turn is
+        // a user message and part, an assistant message and its three settled
+        // parts (the tool call, the answer, the step end) and the step start.
+        for envelope in &shipped[1..] {
+            assert!(
+                envelope.records.len() <= 8,
+                "an append carried {} records",
+                envelope.records.len()
+            );
+        }
+        assert!(shipped.len() <= 2 * turns);
+
+        // Every settled row went out exactly once: the bytes shipped are the
+        // bytes of the stream, not a multiple of them. (Not equal: a user
+        // message ships when it is written, and the diff summary OpenCode adds
+        // once the turn is over is not shipped after the fact.)
+        let stream =
+            opencode_db::opencode_session_stream(&fixture.db_path, "ses_grow", oc_now_ms())
+                .unwrap();
+        let stream_bytes: u64 = stream
+            .records
+            .iter()
+            .map(|record| record.len() as u64)
+            .sum();
+        let shipped_bytes: u64 = shipped.iter().map(|envelope| envelope.raw_bytes).sum();
+        assert!(shipped_bytes <= stream_bytes);
+        assert!(
+            shipped_bytes * 100 >= stream_bytes * 90,
+            "shipped {shipped_bytes} of {stream_bytes} bytes"
+        );
+        assert_eq!(next, stream.records.len() as u64);
+
+        // Nothing rendered twice.
+        let mut event_ids: Vec<&String> = shipped
+            .iter()
+            .flat_map(|envelope| envelope.event_ids.iter())
+            .collect();
+        let rendered = event_ids.len();
+        event_ids.sort();
+        event_ids.dedup();
+        assert_eq!(event_ids.len(), rendered);
+        assert!(rendered >= turns * 3);
+    }
+
+    #[test]
+    fn opencode_appends_continue_a_session_that_shipped_in_several_batches() {
+        let mut fixture = oc_fixture("ses_batches");
+        let base = oc_now_ms() - 60_000;
+        let mut small = capabilities();
+        small.max_records = 3;
+        oc_turn(&fixture.provider, "ses_batches", 0, base, 200, &mut || {});
+        let first = oc_drain_shipped_with(&mut fixture.state, &fixture.db_path, &small);
+        assert!(first.len() >= 3, "{} envelopes", first.len());
+        oc_turn(
+            &fixture.provider,
+            "ses_batches",
+            1,
+            base + 100,
+            200,
+            &mut || {},
+        );
+        let second = oc_drain_shipped_with(&mut fixture.state, &fixture.db_path, &small);
+        assert!(!second.is_empty());
+
+        // One epoch, contiguous ranges across the batch boundaries, and every
+        // event rendered once with its raw record in the same envelope.
+        let all: Vec<&OcShipped> = first.iter().chain(&second).collect();
+        assert!(all.iter().all(|envelope| envelope.epoch == all[0].epoch));
+        let mut next = 0;
+        for envelope in &all {
+            assert_eq!(envelope.start, next);
+            assert!(envelope.records.len() <= 3);
+            next = envelope.end;
+        }
+        let mut event_ids: Vec<&String> = all.iter().flat_map(|e| e.event_ids.iter()).collect();
+        let rendered = event_ids.len();
+        event_ids.sort();
+        event_ids.dedup();
+        assert_eq!(event_ids.len(), rendered);
+        assert_eq!(rendered, 8);
+    }
+
+    #[test]
+    fn opencode_rows_still_being_written_wait_and_then_join_the_same_epoch() {
+        let mut fixture = oc_fixture("ses_wait");
+        let base = oc_now_ms() - 60_000;
+        let (provider, state, db_path) = (&fixture.provider, &mut fixture.state, &fixture.db_path);
+        let mut at_midpoint = Vec::new();
+        oc_turn(provider, "ses_wait", 0, base, 500, &mut || {
+            at_midpoint = oc_drain_shipped(state, db_path);
+        });
+        let at_end = oc_drain_shipped(state, db_path);
+
+        // While the tool call was running neither it nor the assistant message
+        // (which has no completion time yet) were shipped; the user's message
+        // and its text were.
+        let midpoint_records: Vec<&String> = at_midpoint
+            .iter()
+            .flat_map(|envelope| envelope.records.iter())
+            .collect();
+        assert!(midpoint_records
+            .iter()
+            .any(|record| record.contains("question number 0")));
+        assert!(!midpoint_records
+            .iter()
+            .any(|record| record.contains("running") || record.contains("callID")));
+        assert!(!midpoint_records
+            .iter()
+            .any(|record| record.contains("\"kind\":\"message\"") && record.contains("assistant")));
+
+        // Once finished they ship, in the same epoch, each with its events.
+        assert!(!at_end.is_empty());
+        assert!(at_end
+            .iter()
+            .all(|envelope| envelope.epoch == at_midpoint[0].epoch));
+        assert_eq!(at_end[0].start, at_midpoint.last().unwrap().end);
+        let end_records: Vec<&String> = at_end
+            .iter()
+            .flat_map(|envelope| envelope.records.iter())
+            .collect();
+        assert!(end_records.iter().any(|record| record.contains("callID")));
+        assert!(end_records
+            .iter()
+            .any(|record| record.contains("\"kind\":\"message\"") && record.contains("completed")));
+        let midpoint_events: usize = at_midpoint.iter().map(|e| e.event_ids.len()).sum();
+        let end_events: usize = at_end.iter().map(|e| e.event_ids.len()).sum();
+        // user text at the midpoint; tool call, tool result and answer after.
+        assert_eq!(midpoint_events, 1);
+        assert_eq!(end_events, 3);
+    }
+
+    #[test]
+    fn opencode_rewriting_a_shipped_row_rotates_the_epoch() {
+        let mut fixture = oc_fixture("ses_rewrite");
+        let base = oc_now_ms() - 60_000;
+        oc_turn(&fixture.provider, "ses_rewrite", 0, base, 500, &mut || {});
+        let first = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert!(!first.is_empty());
+        let stream_len = first.last().unwrap().end;
+
+        // A settled tool part is rewritten, as compaction does to old output.
+        fixture
+            .provider
+            .execute(
+                "UPDATE part SET data = replace(data, 'completed', 'completed '), time_updated = time_updated + 5000
+                 WHERE id = 'ses_rewrite-tp0000'",
+                [],
+            )
+            .unwrap();
+        let second = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert!(!second.is_empty());
+        assert_ne!(second[0].epoch, first[0].epoch);
+        assert_eq!(
+            second[0].predecessor.as_deref(),
+            Some(first[0].epoch.to_string().as_str())
+        );
+        assert_eq!(second[0].start, 0);
+        assert_eq!(second.last().unwrap().end, stream_len);
+
+        // And the new epoch is stable again.
+        assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
+    }
+
+    #[test]
+    fn opencode_a_row_that_settles_before_the_tail_rotates_the_epoch() {
+        let mut fixture = oc_fixture("ses_late");
+        let base = oc_now_ms() - 60_000;
+        oc_turn(&fixture.provider, "ses_late", 0, base, 500, &mut || {});
+        let first = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        // A row appears whose settling time is earlier than rows already sent.
+        fixture
+            .provider
+            .execute(
+                "INSERT INTO part VALUES ('ses_late-early', 'ses_late-um0000', 'ses_late', ?1, ?1, '{\"type\":\"step-start\"}')",
+                params![base + 10],
+            )
+            .unwrap();
+        let second = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert!(!second.is_empty());
+        assert_ne!(second[0].epoch, first[0].epoch);
+        assert_eq!(second[0].start, 0);
+    }
+
+    #[test]
+    fn opencode_changes_nobody_owns_do_not_rotate_the_epoch() {
+        let mut fixture = oc_fixture("ses_quiet");
+        let base = oc_now_ms() - 60_000;
+        oc_turn(&fixture.provider, "ses_quiet", 0, base, 500, &mut || {});
+        let first = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert!(!first.is_empty());
+
+        // The shared "global" project's worktree is rewritten by whichever
+        // OpenCode process last ran outside a repository.
+        for worktree in ["/private/tmp/agents/oc-research/ws", "/"] {
+            fixture
+                .provider
+                .execute(
+                    "UPDATE project SET worktree = ?1 WHERE id = 'global'",
+                    params![worktree],
+                )
+                .unwrap();
+            assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
+        }
+        // OpenCode recomputes a user message's diff summary after the turn and
+        // touches rows without changing them.
+        fixture
+            .provider
+            .execute(
+                "UPDATE message SET data = replace(data, '\"diffs\":[', '\"diffs\":[{\"file\":\"a\",\"patch\":\"p\"},'),
+                        time_updated = time_updated + 9000
+                 WHERE id = 'ses_quiet-um0000'",
+                [],
+            )
+            .unwrap();
+        fixture
+            .provider
+            .execute(
+                "UPDATE message SET time_updated = time_updated + 9000 WHERE id = 'ses_quiet-am0000'",
+                [],
+            )
+            .unwrap();
+        fixture
+            .provider
+            .execute(
+                "UPDATE session SET title = 'Renamed', time_updated = time_updated + 9000",
+                [],
+            )
+            .unwrap();
+        assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
+    }
+
+    #[test]
+    fn opencode_gives_up_on_a_row_still_in_flight_after_half_an_hour() {
+        let mut fixture = oc_fixture("ses_orphan");
+        let now = oc_now_ms();
+        let insert = |id: &str, message: &str, t: i64| {
+            fixture
+                .provider
+                .execute(
+                    "INSERT INTO part VALUES (?1, ?2, 'ses_orphan', ?3, ?3, '{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"c\",\"state\":{\"status\":\"running\",\"input\":{}}}')",
+                    params![id, message, t],
+                )
+                .unwrap();
+        };
+        fixture
+            .provider
+            .execute(
+                "INSERT INTO message VALUES ('ses_orphan-um', 'ses_orphan', ?1, ?1, '{\"role\":\"user\"}')",
+                params![now - 4 * 3_600_000],
+            )
+            .unwrap();
+        insert("ses_orphan-crashed", "ses_orphan-um", now - 2 * 3_600_000);
+        insert("ses_orphan-running", "ses_orphan-um", now - 1_000);
+        let shipped = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        let records: Vec<&String> = shipped.iter().flat_map(|e| e.records.iter()).collect();
+        assert!(records
+            .iter()
+            .any(|record| record.contains("ses_orphan-crashed")));
+        assert!(!records
+            .iter()
+            .any(|record| record.contains("ses_orphan-running")));
+    }
+
+    #[test]
+    fn opencode_epochs_from_before_the_stream_revision_are_replaced_once() {
+        let mut fixture = oc_fixture("ses_legacy");
+        let base = oc_now_ms() - 60_000;
+        oc_turn(&fixture.provider, "ses_legacy", 0, base, 500, &mut || {});
+        let first = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        // What every epoch shipped before this one holds: a bare hash of the
+        // whole session.
+        fixture
+            .state
+            .execute(
+                "UPDATE source_epoch_registry SET source_revision = ?1 WHERE provider = 'opencode'",
+                params!["a".repeat(64)],
+            )
+            .unwrap();
+        let second = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert_ne!(second[0].epoch, first[0].epoch);
+        assert_eq!(second[0].start, 0);
+        assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
     }
 }

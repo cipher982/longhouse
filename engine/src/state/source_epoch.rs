@@ -365,6 +365,18 @@ pub fn active_source_revision(
     )
 }
 
+/// Record what an epoch now vouches for, without ending it. Only a source that
+/// keeps its own revision chain does this (the OpenCode stream); every other
+/// source hands `observe_source` a revision it computed fresh.
+pub fn set_source_revision(conn: &Connection, source_epoch: Uuid, revision: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE source_epoch_registry SET source_revision = ?1, updated_at = ?2
+         WHERE source_epoch = ?3 AND ended_at IS NULL",
+        params![revision, Utc::now().to_rfc3339(), source_epoch.to_string()],
+    )?;
+    Ok(())
+}
+
 /// Attach the upstream conversation identity observed in this source epoch.
 pub fn record_provider_session_id(
     conn: &Connection,
