@@ -32,9 +32,11 @@ lh_hosted_prepare_control_plane_auth() {
 }
 lh_hosted_reprovision_production() {
   printf '%s\\t%s\\t%s\\t%s\\n' "$1" "$2" "$LH_DEPLOYMENT_IDEMPOTENCY_KEY" "$LH_DEPLOYMENT_REASON" >> "$FIXTURE_ROOT/promotions"
-  LH_DEPLOYMENT_ID="d-production-fixture"
-  export LH_DEPLOYMENT_ID
-  [[ "${FIXTURE_REPROVISION_FAIL:-0}" != "1" ]]
+  if [[ "${FIXTURE_SUBMIT_REFUSED:-0}" != "1" ]]; then
+    LH_DEPLOYMENT_ID="d-production-fixture"
+    export LH_DEPLOYMENT_ID
+  fi
+  [[ "${FIXTURE_REPROVISION_FAIL:-0}" != "1" && "${FIXTURE_SUBMIT_REFUSED:-0}" != "1" ]]
 }
 """
 
@@ -203,9 +205,10 @@ class PromoteProductionTests(unittest.TestCase):
         for args in ((), ("--check",)):
             world = w.green_world()
             world["publish_runs"] = []
-            result, promotions, ssh_calls, _saved = self.run_promotion(world, *args)
+            result, promotions, ssh_calls, saved = self.run_promotion(world, *args)
             self.assertNotEqual(result.returncode, 0, args)
             self.assertIn("no successful Publish Runtime Image run", result.stderr)
+            self.assertEqual(len(saved), 1, "this refusal keeps its receipt too")
             self.assertEqual((promotions, ssh_calls), ([], []))
 
     def test_a_halted_wave_leaves_the_demo_alone_and_says_how_to_recover(self) -> None:
@@ -218,6 +221,14 @@ class PromoteProductionTests(unittest.TestCase):
         self.assertIn("stopped before the public demo was touched", result.stderr)
         self.assertIn("/rollback", result.stderr)
         self.assertIn("PROMOTION_ATTEMPT=2 make promote-production", result.stderr)
+
+    def test_a_promotion_the_control_plane_refuses_says_nothing_was_recorded(self) -> None:
+        # For example its own soak check answering 409: no deployment exists to roll back.
+        result, promotions, ssh_calls, _saved = self.run_promotion(env={"FIXTURE_SUBMIT_REFUSED": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(ssh_calls, [])
+        self.assertIn("did not record the promotion", result.stderr)
+        self.assertNotIn("/rollback", result.stderr)
 
     def test_a_new_attempt_uses_a_new_idempotency_key(self) -> None:
         result, promotions, _ssh, _saved = self.run_promotion(env={"PROMOTION_ATTEMPT": "2"})

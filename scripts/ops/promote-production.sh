@@ -118,6 +118,7 @@ publish_run_number="$(jq -r --arg sha "$SHA" '[.[] | select(.headSha == $sha)][0
 publish_run_attempt="$(jq -r --arg sha "$SHA" '[.[] | select(.headSha == $sha)][0].attempt // empty' <<<"$publish_run_json")"
 if [[ -z "$publish_run_id" || -z "$publish_run_number" || -z "$publish_run_attempt" ]]; then
   echo "Refusing $SHA: no successful $PUBLISH_WORKFLOW run found to source deployment provenance. Nothing was changed." >&2
+  save_receipt
   exit 1
 fi
 jq --argjson id "$publish_run_id" --argjson number "$publish_run_number" --argjson attempt "$publish_run_attempt" \
@@ -141,14 +142,19 @@ export LH_DEPLOYMENT_IDEMPOTENCY_KEY="promote-production-${SHA}${KEY_SUFFIX}"
 
 # --- Tenants and the new-tenant default: one deployment, one tenant at a time,
 # halting on the first failure. The default moves only if every tenant succeeded.
+LH_DEPLOYMENT_ID=""
 if ! lh_hosted_reprovision_production "$PROD_IMAGE" "$TARGET_IDS_JSON"; then
+  if [[ -z "${LH_DEPLOYMENT_ID:-}" ]]; then
+    echo "The control plane did not record the promotion (see its answer above), so nothing was changed." >&2
+    exit 1
+  fi
   cat >&2 <<EOF
 
-Production rollout stopped before the public demo was touched (deployment ${LH_DEPLOYMENT_ID:-unknown}).
+Production rollout stopped before the public demo was touched (deployment ${LH_DEPLOYMENT_ID}).
 The wave halts on the first failed tenant. The new-tenant default moves only when every tenant
 succeeded, so it is unchanged; tenants ahead of the failure are already on $PROD_IMAGE.
-  inspect:   GET ${CONTROL_PLANE_URL%/}/api/deployments/${LH_DEPLOYMENT_ID:-<id>}  (failed_instances)
-  roll back: POST ${CONTROL_PLANE_URL%/}/api/deployments/${LH_DEPLOYMENT_ID:-<id>}/rollback  {"scope":"all"}
+  inspect:   GET ${CONTROL_PLANE_URL%/}/api/deployments/${LH_DEPLOYMENT_ID}  (failed_instances)
+  roll back: POST ${CONTROL_PLANE_URL%/}/api/deployments/${LH_DEPLOYMENT_ID}/rollback  {"scope":"all"}
   roll forward after fixing the cause: PROMOTION_ATTEMPT=$((ATTEMPT + 1)) make promote-production SHA=$SHA
 EOF
   exit 1

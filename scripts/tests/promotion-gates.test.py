@@ -274,6 +274,19 @@ class SoakGateTests(unittest.TestCase):
             world["soak"] = bad
             self.assertIn("malformed", refused(evaluate(world))["soak"], bad)
 
+    def test_an_answer_about_another_image_is_not_this_images_soak(self) -> None:
+        world = w.green_world()
+        world["soak"] = {**world["soak"], "image": w.OTHER_DIGEST}
+        # The fixture control plane echoes the asked image, so break the echo itself.
+        sources = w.InProcessSources(world)
+        honest = sources.control
+        sources.control = lambda path, params=None: (  # type: ignore[method-assign]
+            world["soak"] if path.endswith("production-soak") else honest(path, params)
+        )
+        receipt = gates.evaluate(CFG, sources, w.SHA)
+        self.assertIn("is about", refused(receipt)["soak"])
+        self.assertFalse(receipt["promotable"])
+
     def test_the_answer_is_the_control_planes_not_a_local_override(self) -> None:
         # Nothing here reads SOAK_HOURS or any environment variable: satisfied is the control plane's word.
         world = w.green_world()
@@ -300,6 +313,13 @@ class WholeReceiptTests(unittest.TestCase):
         self.assertFalse(receipt["promotable"])
         self.assertIn("cannot list control-plane instances", receipt["plan"]["refusal"])
         self.assertTrue(all(gate["ok"] for gate in receipt["gates"].values()))
+
+    def test_a_malformed_instance_list_is_a_refusal_not_a_crash(self) -> None:
+        world = w.green_world()
+        world["instances"] = [{"subdomain": "acme", "status": "active"}]  # no id
+        receipt = evaluate(world)
+        self.assertFalse(receipt["promotable"])
+        self.assertIn("malformed instance list", receipt["plan"]["refusal"])
 
     def test_an_unresolvable_dogfood_commit_is_a_refusal(self) -> None:
         world = w.green_world()

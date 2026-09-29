@@ -305,6 +305,8 @@ def gate_soak(sources: Sources, digest: str | None) -> dict[str, Any]:
     tenants = state.get("real_tenants")
     if not isinstance(hours, int) or isinstance(hours, bool) or not isinstance(tenants, list) or not isinstance(state.get("satisfied"), bool):
         raise Refusal(f"the control plane's production-soak answer is malformed: {json.dumps(state)[:300]}")
+    if state.get("image") != digest:
+        raise Refusal(f"the control plane's production-soak answer is about {state.get('image')!r}, not the promoted {digest}")
     who = [str(t.get("subdomain")) for t in tenants if isinstance(t, dict)]
     if state["satisfied"] is not True:
         when = f"; the earliest dogfood run of this image is ready {state['earliest_ready_at']}" if state.get("earliest_ready_at") else ""
@@ -313,6 +315,7 @@ def gate_soak(sources: Sources, digest: str | None) -> dict[str, Any]:
             f"{state.get('pending_paid_intents')}) and this image has not run on dogfood that long{when}"
         )
     return {
+        "image": digest,
         "required_hours": hours,
         "enforced": bool(state.get("enforced")),
         "real_tenants": who,
@@ -382,6 +385,8 @@ def evaluate(cfg: Config, sources: Sources, sha: str | None = None, *, now: date
         plan = plan_targets(cfg, sources)
     except Refusal as refusal:
         plan = {"ok": False, "refusal": str(refusal)}
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        plan = {"ok": False, "refusal": f"malformed instance list ({type(exc).__name__}: {exc})"}
     return _receipt(cfg, sha, digest, gates, plan, now)
 
 

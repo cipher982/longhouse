@@ -184,7 +184,7 @@ class InProcessSources(gates.Sources):
         if path == "/api/deployments/production-soak":
             if self.world["soak"] is None:
                 raise gates.SourceError(f"{path} answered HTTP 404")
-            return self.world["soak"]
+            return {**self.world["soak"], **({"image": params["image"]} if "image" in params and self.world["soak"].get("image") else {})}
         if path.startswith("/api/deployments/"):
             detail = self.world["deployment_detail"].get(path.rsplit("/", 1)[1])
             if detail is None:
