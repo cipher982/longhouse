@@ -125,6 +125,17 @@ class GlobTests(unittest.TestCase):
         self.assertFalse(m("a.b", "axb"))  # `.` is literal
 
 
+class RepoNameTests(unittest.TestCase):
+    def test_policy_table_comes_from_the_origin_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Repo(directory)
+            for url, name in (("git@github.com:cipher982/longhouse.git", "longhouse"),
+                              ("https://github.com/cipher982/longhouse-control-plane.git", "longhouse-control-plane"),
+                              ("https://github.com/cipher982/longhouse/", "longhouse")):
+                repo.git("remote", "set-url", "origin", url)
+                self.assertEqual(gate.repo_name(directory), name)
+
+
 class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
