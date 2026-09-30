@@ -12,6 +12,7 @@ tag or GitHub release is involved.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -302,6 +303,42 @@ class PromoteProductionTests(unittest.TestCase):
         result, promotions, ssh_calls, _saved = self.run_promotion(env={"SUBDOMAIN": "demo"})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((promotions, ssh_calls), ([], []))
+
+
+class MakeTargetTests(unittest.TestCase):
+    """`make promote-production` used to take VERSION=vX.Y.Z; it now takes SHA= and must not swallow the old form.
+
+    Uses `make -n` so nothing runs: the recipe text is what decides whether the script is reached.
+    """
+
+    def recipe(self, *args: str, env: dict | None = None) -> str:
+        environment = {k: v for k, v in os.environ.items() if k != "VERSION"}
+        environment.update(env or {})
+        result = subprocess.run(
+            ["make", "-n", "promote-production", *args],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+
+    def test_a_stale_version_argument_is_refused_instead_of_ignored(self) -> None:
+        recipe = self.recipe("VERSION=v0.1.61")
+        self.assertIn("exit 2", recipe)
+        self.assertIn("SHA=", recipe)
+        self.assertNotIn("promote-production.sh", recipe.split("exit 2", 1)[0])
+
+    def test_sha_and_check_reach_the_script(self) -> None:
+        recipe = self.recipe(f"SHA={w.SHA}", "CHECK=1")
+        self.assertNotIn("exit 2", recipe)
+        self.assertIn(f"./scripts/ops/promote-production.sh --check {w.SHA}", recipe)
+
+    def test_a_version_in_the_environment_is_not_a_stale_argument(self) -> None:
+        recipe = self.recipe(env={"VERSION": "1.2.3"})
+        self.assertNotIn("exit 2", recipe)
+        self.assertIn("./scripts/ops/promote-production.sh", recipe)
 
 
 if __name__ == "__main__":

@@ -1238,8 +1238,10 @@ reprovision: ## Reprovision an explicit immutable image (SUBDOMAIN=..., IMAGE=..
 promote-dogfood: ## Promote a canary-verified runtime image to the dogfood instance (SHA=newest verified main)
 	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(SHA)
 
+# The old interface was VERSION=vX.Y.Z. Make would swallow it and promote whatever dogfood serves, so refuse it.
 .PHONY: promote-production
 promote-production: ## Promote the image dogfood serves to production tenants, demo, and the new-tenant pointer (SHA=<full sha> optional; CHECK=1 prints the gate receipt and moves nothing)
+	@$(if $(filter command line,$(origin VERSION)),echo "promote-production no longer takes VERSION=; it promotes the image dogfood serves (pass SHA=<full sha> to name the commit; CHECK=1 moves nothing)" >&2; exit 2,:)
 	@./scripts/ops/promote-production.sh $(if $(CHECK),--check,) $(SHA)
 
 deploy-status: ## Show deployed SHA + health for all surfaces
