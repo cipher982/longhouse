@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
 """Decide a Hosted Live QA verdict: passed, superseded, or failed.
 
-Every push to main redeploys the one shared hosted canary, and a QA run takes
-about six minutes, so a run for commit X often finishes after a newer commit Y
-has replaced X on the canary. That run did not find a defect in X. It measured
-a moving target: its steps hit the ~40 s drain and restart (HTTP 502/503 on the
-shipper bench and the cohort journey), and the final source check saw Y. From
-09-26 to 09-29 every one of the 19 failed runs (of 100) overlapped a newer
-canary deployment, and no green run overlapped one that targeted the canary.
+QA runs against a dedicated hosted instance (`HOSTED_QA_SUBDOMAIN`) that only
+the Hosted Live QA workflow deploys to, one run at a time (a `queue: max`
+concurrency group), and each run deploys the exact commit under test there
+itself. So this verdict judges a target nothing else moves. It used to judge the
+one canary every push redeploys: a QA run takes 6 to 8 minutes, a canary deploy
+takes 47 s, and 18% of deploys land within 8 minutes of another, so 19 of 100 runs
+(09-26..09-29) finished after a newer commit replaced the canary. Every one of
+those failed steps hit the ~40 s drain and restart (HTTP 502/503 on the shipper
+bench and the cohort journey) or the final source check saw the newer commit,
+and no green run overlapped a deployment that targeted the canary. The evidence
+is the control plane's own deployment receipts (`GET /api/deployments`), not
+timing luck.
 
-A run that did not verify X is not a failure of X. Y contains X and its own
-Deploy and Verify dispatches its own QA, so a QA run whose canary was replaced
-mid-run stands down as `superseded`, the same way main CI drops a queued run
-for a commit that is no longer main's head. The evidence is the canary's own
-deployment receipts (control plane `GET /api/deployments`), not timing luck: a
-newer deployment that targeted this canary and overlapped the run, or a canary
-that now serves a different commit than the one QA verified before it started.
+The same evidence still guards the exclusive instance: a deployment that targeted
+it and overlapped the run (an operator, or a second workflow pointed at it) or an
+instance now serving another commit means the run measured a moving target, and
+it says nothing about the commit. Such a run stands down as `superseded`; a
+re-run gets a decisive verdict.
 
-    passed      every QA step succeeded and the canary still serves the
+    passed      every QA step succeeded and the instance still serves the
                 verified commit, clean.
-    superseded  the canary was replaced during the run (whatever QA steps
+    superseded  the instance was replaced during the run (whatever QA steps
                 reported after that are not a verdict on the verified commit).
-    failed      a QA step failed, or the canary is dirty or unreadable, and no
-                deployment replaced the canary during the run. Missing evidence
-                is never read as a supersession.
+    failed      a QA step failed, or the instance is dirty or unreadable, and no
+                deployment replaced it during the run. Missing evidence is never
+                read as a supersession.
 
 Exit 0 for passed and superseded, 1 for failed. Stdlib only.
 
@@ -32,7 +35,8 @@ which the workflow uploads as the artifact `hosted-live-qa-verdict-<sha>`. It is
 the only Hosted Live QA evidence `make promote-production` accepts: a green run
 is not enough (a superseded run also exits 0 and concludes success), so the
 promotion reads the verdict itself and treats anything but `passed` as no
-evidence (scripts/ops/promotion_gates.py).
+evidence (scripts/ops/promotion_gates.py). The receipt's `canary_*` fields keep
+their names from when QA ran on the canary; they name the QA instance.
 """
 
 from __future__ import annotations

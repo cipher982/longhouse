@@ -141,7 +141,7 @@ class HostedQaGateTests(unittest.TestCase):
         world["artifacts"] = [a for a in world["artifacts"] if a["name"] != self.name]
         message = refused(evaluate(world))["hosted_qa"]
         self.assertIn("no Hosted Live QA verdict receipt", message)
-        self.assertIn("gh workflow run deploy-and-verify.yml", message)
+        self.assertIn(f"gh workflow run hosted-live-qa.yml --ref main -f source_sha={w.SHA}", message)
 
     def test_a_superseded_run_is_never_qa_evidence(self) -> None:
         # It exits 0 and the run concludes success, which is why the verdict is read, not the conclusion.

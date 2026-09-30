@@ -866,6 +866,7 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@python3 scripts/tests/release.test.py
 	@python3 scripts/tests/test-isolation-image-key.test.py
 	@python3 scripts/tests/hosted-qa-verdict.test.py
+	@python3 scripts/tests/hosted-live-qa-isolation.test.py
 	@python3 scripts/tests/engine-compat-receipt.test.py
 	@cd server && uv run python ../scripts/tests/testflight.test.py
 	@python3 scripts/tests/ios-upload-preconditions.test.py

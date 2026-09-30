@@ -732,9 +732,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
           RUNTIME_IMAGE_TAG: ${{ needs.gate.outputs.runtime_image_tag }}
-          # The durable receipt this observer follows is the canary's: the demo
-          # is served by its own host-local stack and records a disposition
-          # rather than a control-plane deployment.
+          # Passed for the record only: hosted-live-qa.yml deploys this same
+          # image to its own dedicated instance and holds it for the run, so QA
+          # does not depend on the canary this workflow just deployed (and a
+          # later push replacing the canary cannot disturb it). The receipt is
+          # the canary's; the demo is served by its own host-local stack and
+          # records a disposition rather than a control-plane deployment.
           DEPLOYMENT_ID: ${{ needs.reprovision_canary.outputs.deployment_id }}
         run: |
           set -euo pipefail

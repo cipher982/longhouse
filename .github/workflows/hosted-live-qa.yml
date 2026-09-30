@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       deployment_id:
-        description: "Durable deployment receipt to observe before QA"
+        description: "The canary deployment receipt of the same commit (informational: QA deploys the image to its own instance)"
         required: false
         type: string
   workflow_dispatch:
@@ -28,15 +28,23 @@ on:
         required: false
         type: string
       deployment_id:
-        description: "Durable deployment receipt to observe before QA"
+        description: "The canary deployment receipt of the same commit (informational: QA deploys the image to its own instance)"
         required: false
         type: string
 permissions:
   contents: read
   packages: read
 concurrency:
-  group: hosted-live-qa-${{ github.repository }}-${{ inputs.source_sha || github.sha }}-${{ github.run_id }}
-  cancel-in-progress: false
+  # QA owns one dedicated hosted instance (HOSTED_QA_SUBDOMAIN) for the whole
+  # run: it deploys the exact commit under test there itself, so a push
+  # redeploying the deploy canary (release-canary-a) cannot replace QA's target
+  # (that was 19 of 100 runs failing on 09-26..09-29). The instance is a
+  # mutex: one run holds it, the rest wait in arrival order and none is dropped
+  # (`queue: max`, up to 100), so every commit that reaches QA gets its own
+  # verdict. Measured on the 107 canary deploys since 09-26 with a 7 to 9.5 min
+  # run, 17 to 29% of runs wait and the wait is p90 3 to 7 min, max 6 to 11 min.
+  group: hosted-live-qa-${{ github.repository }}-${{ vars.HOSTED_QA_SUBDOMAIN }}
+  queue: max
 
 jobs:
   hosted-live-qa:
@@ -47,39 +55,58 @@ jobs:
     env:
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
-      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
-      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
-      LONGHOUSE_CANARY_TOKEN: ${{ secrets.HOSTED_CANARY_TELEMETRY_TOKEN }}
+      # The QA instance's own device token (a tenant of the canary control plane
+      # that only this workflow deploys to), not the deploy canary's.
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_QA_RUNTIME_TOKEN }}
+      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_QA_RUNTIME_TOKEN }}
+      LONGHOUSE_CANARY_TOKEN: ${{ secrets.HOSTED_QA_TELEMETRY_TOKEN }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
-      QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+      QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_QA_SUBDOMAIN }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.source_sha || github.sha }}
 
-      - name: Validate isolated canary configuration
+      # The checkout above is the commit under QA, which can predate the deploy
+      # and verdict tooling (a run dispatched today for an older commit), so the
+      # tooling comes from the workflow's own commit, like the tests come from
+      # the commit under test.
+      - name: Check out the QA tooling at the workflow's commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: .qa-tools
+          sparse-checkout: |
+            scripts/lib/hosted-instance.sh
+            scripts/ops/release-artifacts.py
+            scripts/ops/runtime-deploy.sh
+            scripts/qa/hosted-qa-verdict.py
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Validate the dedicated QA instance
+        env:
+          DEPLOY_CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
         run: |
           set -euo pipefail
           case "${QA_INSTANCE_SUBDOMAIN,,}" in
             ""|david010|demo|dogfood|personal)
-              echo "::error::Configure a dedicated HOSTED_CANARY_SUBDOMAIN; refusing personal dogfood or demo." >&2
+              echo "::error::Configure a dedicated HOSTED_QA_SUBDOMAIN; refusing personal dogfood or demo." >&2
               exit 1
               ;;
           esac
+          if [[ "${QA_INSTANCE_SUBDOMAIN,,}" == "${DEPLOY_CANARY_SUBDOMAIN,,}" ]]; then
+            echo "::error::HOSTED_QA_SUBDOMAIN is the deploy canary ($DEPLOY_CANARY_SUBDOMAIN); QA needs an instance no push redeploys." >&2
+            exit 1
+          fi
           for name in CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN LONGHOUSE_MACHINE_TOKEN; do
             if [[ -z "${!name}" ]]; then
-              echo "::error::Missing required canary configuration: $name" >&2
+              echo "::error::Missing required QA configuration: $name" >&2
               exit 1
             fi
           done
-
-      - name: Observe durable deployment receipt
-        if: ${{ inputs.deployment_id != '' }}
-        run: |
-          set -euo pipefail
-          . scripts/lib/hosted-instance.sh
-          lh_hosted_wait_for_deployment "${{ inputs.deployment_id }}" 60
 
       - name: Authenticate to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -112,46 +139,65 @@ jobs:
           set -euo pipefail
           echo "image=$(python3 scripts/qa/test-isolation.py --prepare)" >> "$GITHUB_OUTPUT"
 
-      - name: Verify deployed source before QA
-        id: runtime_before
+      # Deploy the exact image under test to the QA instance, then hold it for
+      # the run. The queue guarantees no other run deploys here meanwhile and
+      # nothing else targets this instance. A scheduled run has no commit to
+      # deploy: it re-measures whatever the instance last served.
+      - name: Deploy the image under test to the QA instance
+        id: deploy_qa
+        if: ${{ inputs.runtime_image_tag != '' || inputs.source_sha != '' }}
         env:
-          EXPECTED_RUNTIME_TAG: ${{ inputs.runtime_image_tag || inputs.source_sha || '' }}
-          GH_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ inputs.runtime_image_tag || inputs.source_sha }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_QA_SUBDOMAIN }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+          RUNTIME_SOURCE_WORKFLOW: Hosted Live QA
+          RUNTIME_QUALIFICATION_ID: hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
+          RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY: hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
+          RUNTIME_DEPLOY_TIMEOUT: "600"
         run: |
           set -euo pipefail
-          if [[ -n "$EXPECTED_RUNTIME_TAG" && ! "$EXPECTED_RUNTIME_TAG" =~ ^[0-9a-f]{40}$ ]]; then
-            EXPECTED_RUNTIME_TAG="$(docker buildx imagetools inspect \
-              "ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$EXPECTED_RUNTIME_TAG" \
-              --format '{{json .Image}}' |
+          image="ghcr.io/${{ github.repository_owner }}/longhouse-runtime"
+          if [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            expected="$IMAGE_TAG"
+          else
+            expected="$(docker buildx imagetools inspect "$image:$IMAGE_TAG" --format '{{json .Image}}' |
               jq --exit-status --raw-output '.config.Labels["org.opencontainers.image.revision"] | select(type == "string" and test("^[0-9a-f]{40}$"))')"
           fi
+          if [[ -n "$SOURCE_SHA" && "$expected" != "$SOURCE_SHA" ]]; then
+            echo "::error::image $IMAGE_TAG holds $expected, not the commit under test $SOURCE_SHA" >&2
+            exit 1
+          fi
+          # The control plane fences a deployment whose source order is below a
+          # successful one already on the instance. QA order is the order runs
+          # deploy, not commit order: a re-run of an older commit after a newer
+          # one is a legitimate deployment here, not a late candidate.
+          RUNTIME_SOURCE_ORDER="$(date +%s)"
+          export RUNTIME_SOURCE_ORDER
+          # The image's own revision label must equal this (the helper refuses a mismatch).
+          export RUNTIME_SOURCE_SHA="$expected"
+          export RUNTIME_DEPLOYMENT_REASON="hosted live QA of $expected"
+          .qa-tools/scripts/ops/runtime-deploy.sh "$INSTANCE_SUBDOMAIN" --docker-image "$image" --docker-tag "$IMAGE_TAG"
+          echo "expected_sha=$expected" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the QA instance serves the commit under test
+        id: runtime_before
+        env:
+          EXPECTED_SHA: ${{ steps.deploy_qa.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
           # The verdict step needs the moment this run started depending on the
-          # canary serving the commit below; any deployment overlapping the run
-          # after this instant replaced the thing under test.
+          # instance serving the commit below; any deployment overlapping the
+          # run after this instant replaced the thing under test.
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
+          health="$(curl --fail --silent --show-error --max-time 15 --retry 3 --retry-all-errors --retry-delay 3 \
+            "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
           printf '%s\n' "$health" | jq '{source_sha,build_identity,build}'
           actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '(.source_sha // .build.source_sha // .build.commit) | select(type == "string" and test("^[0-9a-f]{40}$"))')"
           actual_build_identity="$(printf '%s\n' "$health" | jq --raw-output '(.build_identity // .build.build_identity // "-")')"
-          if [[ -n "$EXPECTED_RUNTIME_TAG" && "$actual_sha" != "$EXPECTED_RUNTIME_TAG" ]]; then
-            # A newer push can replace the canary between dispatch and this
-            # check. That is a supersession only when the canary now serves a
-            # descendant of the requested commit; anything else is a wrong
-            # deploy and stays a failure.
-            relation="$(curl --fail --silent --show-error --max-time 30 --retry 3 --retry-all-errors \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/compare/${EXPECTED_RUNTIME_TAG}...${actual_sha}" |
-              jq --raw-output '.status' || true)"
-            if [[ "$relation" == "ahead" ]]; then
-              echo "::notice title=Hosted Live QA superseded::the canary already serves $actual_sha, which contains the requested $EXPECTED_RUNTIME_TAG; that commit's own QA carries the verdict"
-              {
-                printf 'stale=true\n'
-                printf 'runtime_sha=%s\n' "$actual_sha"
-              } >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Deployed runtime source $actual_sha does not match requested image $EXPECTED_RUNTIME_TAG (build identity $actual_build_identity)" >&2
+          if [[ -n "$EXPECTED_SHA" && "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "The QA instance serves $actual_sha, not the deployed $EXPECTED_SHA (build identity $actual_build_identity)" >&2
             exit 1
           fi
           {
@@ -160,15 +206,16 @@ jobs:
             printf 'runtime_build_identity=%s\n' "$actual_build_identity"
           } >> "$GITHUB_OUTPUT"
 
-      # The four canary-facing QA steps below are continue-on-error: their
-      # outcomes are judged together, against the canary's deployment receipts,
-      # by the verdict step (a failure while a newer push was redeploying the
-      # canary is a supersession, not a defect). The step that never touches
-      # the canary (cohort contracts) still fails the run directly.
+      # The four QA steps below that touch the instance are continue-on-error:
+      # their outcomes are judged together, against the instance's deployment
+      # receipts, by the verdict step. Nothing but this workflow deploys to the
+      # instance, so a failure there is the commit's; if something did (an
+      # operator), the run stands down as superseded instead of failing. The
+      # step that never touches the instance (cohort contracts) still fails the
+      # run directly.
       - name: Run hosted live QA
         id: qa_live
         continue-on-error: true
-        if: steps.runtime_before.outputs.stale != 'true'
         run: |
           set -euo pipefail
           credentials="$(mktemp "$RUNNER_TEMP/hosted-live-credentials.XXXXXX.json")"
@@ -281,9 +328,8 @@ jobs:
 
       - name: Validate cohort journey contracts
         id: cohort_contracts
-        # Never touches the canary, so it also runs when QA stood down before
-        # starting (the canary was already replaced).
-        if: always() && (steps.qa_live.outcome == 'success' || steps.runtime_before.outputs.stale == 'true')
+        # Never touches the QA instance.
+        if: always() && steps.qa_live.outcome == 'success'
         run: python3 scripts/qa/test-isolation.py --target validate-cohort-journey
 
       - name: Run privacy-safe isolated cohort journey
@@ -332,10 +378,10 @@ jobs:
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Commit: \`${{ github.sha }}\`"
             echo "- QA source SHA: \`${{ inputs.source_sha || github.sha }}\`"
-            echo "- Requested runtime image: \`${{ inputs.runtime_image_tag || inputs.source_sha || 'latest' }}\`"
-            echo "- Deployment receipt observed: \`${{ inputs.deployment_id || 'none (scheduled run)' }}\`"
+            echo "- Requested runtime image: \`${{ inputs.runtime_image_tag || inputs.source_sha || 'none (scheduled run: re-measures what the instance last served)' }}\`"
+            echo "- QA deployment (this run's own): \`${{ steps.deploy_qa.outputs.deployment_id || 'none' }}\`"
+            echo "- Canary deployment of the same commit (informational): \`${{ inputs.deployment_id || 'none' }}\`"
             echo "- Observed runtime SHA: \`${{ steps.runtime_before.outputs.runtime_sha || 'unavailable' }}\`"
-            echo "- Canary already replaced before QA started: \`${{ steps.runtime_before.outputs.stale || 'no' }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"
@@ -343,33 +389,22 @@ jobs:
             echo "- cohort journey: \`${{ steps.cohort_journey.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # The canary is shared: a newer push redeploys it while this run is still
-      # measuring. Such a run says nothing about its own commit (the newer one
-      # contains it and gets its own QA), so it stands down instead of failing.
-      # The evidence is the canary's deployment receipts; the rules and the
-      # 09-26..09-29 run data are in scripts/qa/hosted-qa-verdict.py.
+      # The verdict is judged against the QA instance's deployment receipts. The
+      # instance is deployed only by this workflow, one run at a time, so a
+      # deployment overlapping the run is someone else's (an operator); such a
+      # run says nothing about its commit and stands down as superseded instead
+      # of failing. The rules and the 09-26..09-29 run data that shaped them are
+      # in scripts/qa/hosted-qa-verdict.py.
       - name: Decide verdict (passed, superseded or failed)
         id: verdict
-        if: always() && steps.runtime_before.outcome == 'success' && steps.runtime_before.outputs.stale != 'true'
+        if: always() && steps.runtime_before.outcome == 'success'
         env:
           EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
           QA_STARTED_AT: ${{ steps.runtime_before.outputs.started_at }}
-          OWN_DEPLOYMENT: ${{ inputs.deployment_id }}
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW_SHA: ${{ github.sha }}
+          OWN_DEPLOYMENT: ${{ steps.deploy_qa.outputs.deployment_id }}
         run: |
           set -euo pipefail
-          # The checkout is the commit under QA, which may predate this script
-          # (a run for an older push dispatched under today's workflow), so the
-          # verdict logic is read from the workflow's own commit, like the
-          # inline shell it replaced.
-          verdict_script="$RUNNER_TEMP/hosted-qa-verdict.py"
-          curl --fail --silent --show-error --location --max-time 30 --retry 3 --retry-all-errors \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github.raw+json" \
-            --output "$verdict_script" \
-            "https://api.github.com/repos/${{ github.repository }}/contents/scripts/qa/hosted-qa-verdict.py?ref=$WORKFLOW_SHA"
-          python3 "$verdict_script" \
+          python3 .qa-tools/scripts/qa/hosted-qa-verdict.py \
             --expected-sha "$EXPECTED_RUNTIME_SHA" \
             --started-at "$QA_STARTED_AT" \
             --subdomain "$QA_INSTANCE_SUBDOMAIN" \
@@ -395,9 +430,9 @@ jobs:
           overwrite: true
           retention-days: 90
 
-      - name: Stand down, canary superseded
-        if: always() && (steps.verdict.outputs.verdict == 'superseded' || steps.runtime_before.outputs.stale == 'true')
-        run: echo "The canary was replaced before or during this run; the newer commit's own Hosted Live QA carries the verdict. See the summary."
+      - name: Stand down, QA instance redeployed by someone else
+        if: always() && steps.verdict.outputs.verdict == 'superseded'
+        run: echo "Something other than this run deployed to the QA instance while it ran, so QA says nothing about this commit. Re-run it; see the summary."
 
       - name: Upload privacy-safe cohort journey artifact
         # A failed journey writes no artifact; its failure is already reported

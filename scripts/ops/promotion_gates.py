@@ -204,8 +204,9 @@ def gate_hosted_qa(cfg: Config, sources: Sources, sha: str, digest: str | None) 
         raise Refusal(
             f"no Hosted Live QA verdict receipt for {_short(sha)} (artifact {name}"
             f"{f', {unreadable} unreadable' if unreadable else ''}); QA has not run on this commit since receipts began, "
-            f"or its artifact expired. QA runs against the canary, so redeploy it to this commit, which dispatches QA: "
-            f"gh workflow run deploy-and-verify.yml --ref main -f runtime_image_tag={sha}"
+            f"or its artifact expired. QA deploys the commit's image to its own instance and queues behind other runs "
+            f"(no push can replace it), so dispatch it and watch it finish: "
+            f"gh workflow run hosted-live-qa.yml --ref main -f source_sha={sha}"
         )
     decisive: list[tuple[dict[str, Any], dict[str, Any]]] = []
     superseded = 0
@@ -219,7 +220,8 @@ def gate_hosted_qa(cfg: Config, sources: Sources, sha: str, digest: str | None) 
     if not decisive:
         raise Refusal(
             f"Hosted Live QA has no decisive run for {_short(sha)}: {superseded} superseded "
-            f"(the canary was replaced mid-run; a superseded run is not qualification). Re-run it on this commit."
+            f"(something other than the QA workflow deployed to the QA instance mid-run; a superseded run is not qualification). "
+            f"Re-run it: gh workflow run hosted-live-qa.yml --ref main -f source_sha={sha}"
         )
     artifact, receipt = decisive[0]
     if receipt.get("verdict") != "passed":
