@@ -64,7 +64,8 @@ while IFS= read -r deploy_run_id; do
   # succeeded on attempt N was often uploaded by an earlier attempt (the canary jobs passed
   # there; a later job such as the demo deploy failed and was rerun). The run's final
   # conclusion is what counts; the receipt may come from any attempt up to it, newest first.
-  # Every receipt is still bound to the exact SHA and the publishing run by verify-publication.
+  # Whichever attempt it comes from, the receipt must match the exact SHA (verify-publication
+  # below) and the publishing run it names must be the same successful publication (gh run view).
   artifact_json="$(gh api "repos/$REPO/actions/runs/$deploy_run_id/artifacts?per_page=100")"
   artifact_id="$(jq -r --arg prefix "runtime-verification-${deploy_run_id}-" --argjson final "$deploy_attempt" \
     '[.artifacts[] | select(.expired == false and (.name | startswith($prefix)))
