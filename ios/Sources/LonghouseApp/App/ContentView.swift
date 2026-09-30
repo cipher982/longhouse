@@ -83,6 +83,9 @@ struct ServerConfigSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var urlText = ""
     @State private var allowInsecureHTTP = false
+    /// The address the switch was turned on for. The opt-in covers that address
+    /// only, so editing the URL to another one turns the switch off again.
+    @State private var optInAddress: String?
     @State private var widgetProbeResult: WidgetLoadResult?
     @State private var isRunningWidgetProbe = false
 
@@ -141,6 +144,14 @@ struct ServerConfigSheet: View {
             .onAppear {
                 urlText = appState.serverURL
                 allowInsecureHTTP = appState.allowsInsecureHTTP
+            }
+            .onChange(of: allowInsecureHTTP) { _, isOn in
+                optInAddress = isOn ? urlText : nil
+            }
+            .onChange(of: urlText) { _, newValue in
+                if allowInsecureHTTP, let optInAddress, !SharedAuthStore.isSameServerAddress(newValue, optInAddress) {
+                    allowInsecureHTTP = false
+                }
             }
         }
         .presentationDetents([.medium, .large])

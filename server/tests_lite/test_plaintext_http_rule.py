@@ -339,3 +339,31 @@ def test_mcp_server_and_recall_refuse_a_cleartext_address_before_sending_the_tok
         OPT_IN_FLAG,
     )
     assert sent == []
+
+
+def test_moving_the_runtime_url_does_not_carry_the_opt_in_to_the_new_address(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv(OPT_IN_ENV, raising=False)
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
+
+    # onboard / repair / the installer write the address without mentioning the opt-in.
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.99:8080")
+
+    state = load_machine_state(tmp_path)
+    assert state is not None
+    assert state.runtime_url == "http://192.168.1.99:8080"
+    assert state.allow_insecure_http is None
+    assert get_allow_insecure_http(tmp_path, "http://192.168.1.99:8080") is False
+
+    # Rewriting the same address keeps the opt-in it already has.
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.99:8080", allow_insecure_http=True)
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.99:8080", machine_name="laptop")
+    state = load_machine_state(tmp_path)
+    assert state is not None
+    assert state.allow_insecure_http is True
+
+
+def test_the_stored_opt_in_matches_its_address_without_regard_to_case(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv(OPT_IN_ENV, raising=False)
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
+
+    assert get_allow_insecure_http(tmp_path, "HTTP://192.168.1.20:8080/") is True

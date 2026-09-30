@@ -164,6 +164,11 @@ def normalize_zerg_url(url: object | None, *, allow_insecure_http: bool = False)
     return normalized
 
 
+def _address_key(url: str) -> str:
+    """An address compared the way the engine compares it: scheme and host are case-insensitive."""
+    return url.strip().rstrip("/").lower()
+
+
 def get_allow_insecure_http(config_dir: Path | None = None, url: object | None = None) -> bool:
     """Whether plain http to the LAN address ``url`` is opted into.
 
@@ -176,7 +181,7 @@ def get_allow_insecure_http(config_dir: Path | None = None, url: object | None =
     state = load_machine_state(config_dir)
     if not (state and state.allow_insecure_http and state.runtime_url and isinstance(url, str)):
         return False
-    return state.runtime_url.strip().rstrip("/") == url.strip().rstrip("/")
+    return _address_key(state.runtime_url) == _address_key(url)
 
 
 def save_zerg_url(url: str, config_dir: Path | None = None, *, allow_insecure_http: bool = False) -> None:

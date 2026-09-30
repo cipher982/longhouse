@@ -220,6 +220,12 @@ pub fn env_opt_in() -> bool {
         .unwrap_or(false)
 }
 
+/// An address compared the way every client compares it: scheme and host are
+/// case-insensitive.
+fn address_key(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
 /// The opt-in stored in `<machine_dir>/state.json` beside the runtime URL,
 /// for exactly that address: a different address is a new decision.
 pub fn stored_opt_in_for(machine_dir: &Path, url: &str) -> bool {
@@ -232,9 +238,7 @@ pub fn stored_opt_in_for(machine_dir: &Path, url: &str) -> bool {
     let same_address = state
         .get("runtime_url")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|stored| {
-            stored.trim().trim_end_matches('/') == url.trim().trim_end_matches('/')
-        });
+        .is_some_and(|stored| address_key(stored) == address_key(url));
     same_address
         && state
             .get(STATE_FIELD)
@@ -371,6 +375,7 @@ mod tests {
         .unwrap();
         assert!(stored_opt_in_for(dir.path(), lan));
         assert!(stored_opt_in_for(dir.path(), " http://192.168.1.20:8080/ "));
+        assert!(stored_opt_in_for(dir.path(), "HTTP://192.168.1.20:8080"));
         // A different host, or the same host on another port, is a new decision.
         assert!(!stored_opt_in_for(dir.path(), "http://192.168.1.99:8080"));
         assert!(!stored_opt_in_for(dir.path(), "http://192.168.1.20:9090"));

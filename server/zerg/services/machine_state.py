@@ -135,10 +135,15 @@ def write_machine_state(
         raise RuntimeError(f"Failed to read existing machine state at {state_path}: {error}")
 
     written_at = _to_rfc3339(datetime.now(timezone.utc))
+    next_runtime_url = _resolve_runtime_url(runtime_url, current_state)
+    # A LAN opt-in belongs to one address. A write that moves to another address
+    # and does not say otherwise does not carry it along.
+    if allow_insecure_http is _MISSING and current_state and next_runtime_url != current_state.runtime_url:
+        allow_insecure_http = None
     draft_state = MachineState(
         schema_version=SCHEMA_VERSION,
         config_generation=current_state.config_generation if current_state else None,
-        runtime_url=_resolve_runtime_url(runtime_url, current_state),
+        runtime_url=next_runtime_url,
         machine_name=_resolve_machine_name(machine_name, current_state),
         topology_intent=_resolve_text(topology_intent, current_state.topology_intent if current_state else None),
         desktop_app_enabled=_resolve_bool(desktop_app_enabled, current_state.desktop_app_enabled if current_state else None),

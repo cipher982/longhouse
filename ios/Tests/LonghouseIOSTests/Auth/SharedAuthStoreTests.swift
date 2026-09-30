@@ -4,6 +4,36 @@ import Testing
 
 struct SharedAuthStoreTests {
     @Test
+    func insecureHTTPOptInCoversOnlyTheAddressItWasGivenFor() throws {
+        guard SharedAuthStore.isAppGroupAvailable else {
+            return
+        }
+        let previousServer = SharedAuthStore.loadServerURL()
+        defer {
+            SharedAuthStore.saveInsecureHTTPOptIn(for: nil)
+            if let previousServer { SharedAuthStore.saveServerURL(previousServer) } else { SharedAuthStore.clearServerURL() }
+        }
+
+        SharedAuthStore.saveInsecureHTTPOptIn(for: "http://192.168.1.20:8080/")
+        #expect(SharedAuthStore.hasInsecureHTTPOptIn(for: "http://192.168.1.20:8080"))
+        #expect(SharedAuthStore.hasInsecureHTTPOptIn(for: "HTTP://192.168.1.20:8080/"))
+        #expect(!SharedAuthStore.hasInsecureHTTPOptIn(for: "http://192.168.1.99:8080"))
+        #expect(SharedAuthStore.isSameServerAddress(" http://192.168.1.20:8080/ ", "HTTP://192.168.1.20:8080"))
+        #expect(!SharedAuthStore.isSameServerAddress("http://192.168.1.20:8080", "http://192.168.1.20:9090"))
+
+        // Saving the same server keeps it; saving a different one drops it.
+        SharedAuthStore.saveServerURL("http://192.168.1.20:8080")
+        #expect(SharedAuthStore.hasInsecureHTTPOptIn(for: "http://192.168.1.20:8080"))
+        SharedAuthStore.saveServerURL("http://192.168.1.99:8080")
+        #expect(!SharedAuthStore.hasInsecureHTTPOptIn(for: "http://192.168.1.20:8080"))
+        #expect(!SharedAuthStore.hasInsecureHTTPOptIn(for: "http://192.168.1.99:8080"))
+
+        SharedAuthStore.saveInsecureHTTPOptIn(for: "http://192.168.1.99:8080")
+        SharedAuthStore.clearServerURL()
+        #expect(!SharedAuthStore.hasInsecureHTTPOptIn(for: "http://192.168.1.99:8080"))
+    }
+
+    @Test
     func runtimeTokenExpiryRoundTripsThroughDefaults() throws {
         guard SharedAuthStore.isAppGroupAvailable else {
             return

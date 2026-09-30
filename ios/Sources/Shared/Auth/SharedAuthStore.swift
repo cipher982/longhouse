@@ -116,10 +116,15 @@ enum SharedAuthStore {
         return stored == normalizedOptInURL(serverURL)
     }
 
+    /// Whether two server addresses are the same one, as the opt-in compares them.
+    static func isSameServerAddress(_ lhs: String, _ rhs: String) -> Bool {
+        normalizedOptInURL(lhs) == normalizedOptInURL(rhs)
+    }
+
     private static func normalizedOptInURL(_ url: String) -> String {
         var value = url.trimmingCharacters(in: .whitespacesAndNewlines)
         while value.hasSuffix("/") { value.removeLast() }
-        return value
+        return value.lowercased()
     }
 
     static func loadServerURL() -> String? {

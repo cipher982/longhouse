@@ -168,6 +168,7 @@ mod tests {
 
     #[test]
     fn enforce_transport_honours_the_stored_lan_opt_in_only_for_its_own_address() {
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("machine")).unwrap();
         fs::write(
