@@ -19,6 +19,7 @@ const IMPORT_SOURCES: Record<string, { binary: string; paths: string[] }> = {
   },
   opencode: { binary: "opencode", paths: ["~/.local/share/opencode/"] },
   pi: { binary: "pi", paths: [] },
+  omp: { binary: "omp", paths: ["~/.omp/agent/sessions/"] },
   antigravity: {
     binary: "agy",
     paths: ["~/.gemini/antigravity-cli/brain/", "~/.gemini/antigravity/brain/", "~/.gemini/tmp/"],

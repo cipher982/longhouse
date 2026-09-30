@@ -12,5 +12,7 @@ Disallow: /sessions
 Disallow: /settings
 Disallow: /timeline
 Disallow: /landing
+# Build output the Runtime Host serves at the real routes (each names its canonical).
+Disallow: /_prerender
 
 Sitemap: https://longhouse.ai/sitemap.xml

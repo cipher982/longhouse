@@ -1,16 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router";
-import { Toaster } from "react-hot-toast";
-import { AuthProvider } from "@/features/auth/auth";
-import { ConfirmProvider } from "@/shared/ui/confirm";
 import config from "@/shared/lib/config";
 import { shouldRetryQuery } from "./queryRetry";
 
 // Global stylesheet entrypoint
 import "./styles/app.css";
-import App from "./App";
+import { AppContent, AppProviders } from "./AppRoot";
 
 // Umami analytics is driven by runtime config.js.
 // Vite env fallback remains only for older standalone frontend deployments.
@@ -150,44 +147,25 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: shouldRetryQuery } },
 });
 
-ReactDOM.createRoot(container).render(
+const app = (
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ConfirmProvider>
-          <BrowserRouter>
-            <App />
-            <Toaster
-            position="top-right"
-            toastOptions={{
-              duration: 4000,
-              style: {
-                background: '#1A1410',
-                color: '#F3EAD9',
-                border: '1px solid #3d3428',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-              },
-              success: {
-                duration: 3000,
-                iconTheme: {
-                  primary: '#5D9B4A',
-                  secondary: '#F3EAD9',
-                },
-              },
-              error: {
-                duration: 6000,
-                iconTheme: {
-                  primary: '#C45040',
-                  secondary: '#F3EAD9',
-                },
-              },
-            }}
-          />
-          </BrowserRouter>
-        </ConfirmProvider>
-      </AuthProvider>
-    </QueryClientProvider>
+    <AppProviders queryClient={queryClient}>
+      <BrowserRouter>
+        <AppContent />
+      </BrowserRouter>
+    </AppProviders>
   </React.StrictMode>
 );
+
+// Marketing routes ship as prerendered HTML (web/scripts/prerender.mjs): adopt
+// that DOM instead of rebuilding it. Everywhere else the root is empty.
+if (container.hasChildNodes()) {
+  ReactDOM.hydrateRoot(container, app, {
+    // A hydration mismatch is a prerender bug that tests/prerender catches, not
+    // a user-facing fault: keep it out of window.onerror, which beacons every
+    // uncaught error to /api/ops/beacon.
+    onRecoverableError: (error) => console.warn("[hydrate]", error),
+  });
+} else {
+  ReactDOM.createRoot(container).render(app);
+}

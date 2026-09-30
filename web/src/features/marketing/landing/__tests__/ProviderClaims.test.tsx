@@ -68,10 +68,24 @@ afterEach(() => {
 });
 
 describe("landing provider claims", () => {
+  it("makes no claim about any provider before the Runtime Host answers", async () => {
+    // This is the state web/scripts/prerender.mjs writes into the static HTML.
+    resetProviderCertificationCache();
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const railFor = renderRails();
+    for (const id of IDS) {
+      const rail = railFor(id);
+      expect(rail.querySelector(".landing-provider-summary")).toBeNull();
+      expect(rail.querySelector(".landing-provider-capability")).toBeNull();
+    }
+    expect(screen.queryByText(/unavailable/i)).toBeNull();
+    expect(screen.queryByText("Sync, timeline, and full-text search")).toBeNull();
+  });
+
   it("reports unavailable rather than unproven when certification cannot be read", async () => {
     serve(null);
     const railFor = renderRails();
-    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByText("Certification status is unavailable right now.")).toHaveLength(IDS.length));
     expect(screen.queryByText("Sync, timeline, and full-text search")).toBeNull();
     for (const id of IDS) {
       const covered = GENERATED_PROVIDER_CAPABILITIES[id].proven;
@@ -89,7 +103,7 @@ describe("landing provider claims", () => {
   it("does not expose internal control bookkeeping in public claims", async () => {
     serve(payload(() => "unverified"));
     const railFor = renderRails();
-    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    await waitFor(() => expect(railFor(IDS[0]).querySelector(".landing-provider-capability")).not.toBeNull());
     for (const id of IDS) {
       const covered = GENERATED_PROVIDER_CAPABILITIES[id].proven;
       expect(chipsOf(railFor(id), "data-certification")).toEqual(

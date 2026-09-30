@@ -1,7 +1,8 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "@/shared/ui";
 import config from "@/shared/lib/config";
+import { AfterHydration } from "../AfterHydration";
 import { trackAcquisitionEvent } from "../analytics";
 import { HeroDemoFallback } from "../hero-demo/HeroDemoFallback";
 import { IOS_TESTFLIGHT_URL } from "./links";
@@ -175,9 +176,9 @@ export function HeroSection() {
 
       <div className="landing-hero-stage">
         <div className="landing-hero-glow" aria-hidden="true" />
-        <Suspense fallback={<HeroDemoFallback />}>
+        <AfterHydration fallback={<HeroDemoFallback />}>
           <HeroDemo aria-label={DEMO_ARIA_LABEL} />
-        </Suspense>
+        </AfterHydration>
         <p className="landing-hero-video-note">
           Real provider CLIs replayed from recordings, with scripted model
           responses. No live model runs in this hero demo.

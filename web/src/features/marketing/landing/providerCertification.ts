@@ -90,8 +90,14 @@ export function certifiedChips(
   ) as ProvenChips;
 }
 
-export function useProviderCertification(): ProviderCertificationPayload | null {
-  const [payload, setPayload] = useState<ProviderCertificationPayload | null>(null);
+/**
+ * The served certification, `undefined` until the Runtime Host has answered and
+ * `null` when it answered with nothing usable. Callers must not treat the two
+ * alike: the first is prerendered into the static landing HTML, where "status
+ * unavailable" would be a false claim about a request nobody has made yet.
+ */
+export function useProviderCertification(): ProviderCertificationPayload | null | undefined {
+  const [payload, setPayload] = useState<ProviderCertificationPayload | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
     void fetchProviderCertification().then((result) => {

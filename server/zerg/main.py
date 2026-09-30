@@ -41,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 
 # Logging configuration
 from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
+from zerg.frontend_pages import prerendered_page
 from zerg.logging_config import configure_logging
 from zerg.services.avatar_storage import avatar_storage_dir
 
@@ -395,12 +396,16 @@ async def serve_config_js():
     )
 
 
-@app.get("/", include_in_schema=False)
+# HEAD too: link checkers and crawlers probe with it, and a 405 on the landing
+# page reads as a broken site.
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 async def read_root():
     if FRONTEND_DIST_DIR is not None:
         from fastapi.responses import FileResponse
 
-        index_path = FRONTEND_DIST_DIR / "index.html"
+        index_path = prerendered_page(FRONTEND_DIST_DIR, "/", app_mode=_settings.app_mode)
+        if index_path is None:
+            index_path = FRONTEND_DIST_DIR / "index.html"
         if index_path.is_file():
             return FileResponse(
                 index_path,
@@ -514,7 +519,7 @@ if FRONTEND_DIST_DIR is not None:
 
     _frontend_dist_resolved = FRONTEND_DIST_DIR.resolve()
 
-    @app.get("/{path:path}", include_in_schema=False)
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def serve_spa(path: str):
         from fastapi.responses import FileResponse
         from fastapi.responses import RedirectResponse
@@ -541,6 +546,14 @@ if FRONTEND_DIST_DIR is not None:
                 )
         except (ValueError, OSError):
             pass
+
+        page = prerendered_page(_frontend_dist_resolved, path, app_mode=_settings.app_mode)
+        if page is not None:
+            return FileResponse(
+                page,
+                media_type="text/html",
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+            )
 
         return _serve_index()
 

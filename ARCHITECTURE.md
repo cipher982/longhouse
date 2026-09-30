@@ -178,6 +178,7 @@ Features import across folders with `@/`; within a folder, relative.
 | `web/src/features/admin/` | Admin pages (provider capabilities) |
 | `web/src/features/auth/` | Login, profile, settings, auth and token refresh |
 | `web/src/features/marketing/` | Landing, hero demo, remote scene, blog, docs, legal, share |
+| `web/scripts/prerender.mjs` | Build step after `vite build`: renders every sitemap route (`web/src/app/prerender.tsx`) to static HTML under `_prerender` in the build output, each with its own title, description, canonical and OpenGraph tags, so crawlers and link unfurlers get content; the browser hydrates it (`web/src/app/main.tsx`). `server/zerg/frontend_pages.py` serves those pages on the public (demo) site only |
 | `web/src/shared/api/` | HTTP client and typed endpoints (`agents.ts`, `useAgentSessions.ts`) |
 | `web/src/shared/session/` | Session facts used by several features: status (`sessionStatus.ts`), activity freshness, labels; `web/src/shared/session/model/` is the transcript model |
 | `web/src/shared/instruments/` | Status lamp, sparkline, Nixie, Hearth |

@@ -185,8 +185,10 @@ function loadConfig(): AppConfig {
 
   apiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
 
-  // Validate required config in production
-  if (isProduction && appMode === 'production') {
+  // Validate required config in production. Prerender (web/scripts/prerender.mjs)
+  // runs this module in Node with no window and no config.js; there is no
+  // runtime config to be missing there.
+  if (typeof window !== 'undefined' && isProduction && appMode === 'production') {
     if (!apiBaseUrl) {
       throw new Error('FATAL: API_BASE_URL not configured! Add window.API_BASE_URL in config.js');
     }

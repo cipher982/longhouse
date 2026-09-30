@@ -1,8 +1,9 @@
-import { lazy, Suspense } from "react";
+import { lazy } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router";
 import { useAuth } from "@/features/auth/auth";
 import config from "@/shared/lib/config";
 import { SwarmLogo } from "@/shared/ui/SwarmLogo";
+import { AfterHydration } from "../AfterHydration";
 import { usePublicPageScroll } from "../usePublicPageScroll";
 import { useRootUiEffects } from "../useRootUiEffects";
 import { usePageMeta } from "@/shared/hooks/usePageMeta";
@@ -90,12 +91,12 @@ export default function LandingPage() {
 
       <main className="landing-main">
         <HeroSection />
-        <Suspense fallback={<section className="steer-playground" aria-hidden="true" />}>
+        <AfterHydration fallback={<section className="steer-playground" aria-hidden="true" />}>
           <SteerPlayground />
-        </Suspense>
-        <Suspense fallback={<section className="landing-remote-scene landing-remote-scene-fallback" aria-hidden="true" />}>
+        </AfterHydration>
+        <AfterHydration fallback={<section className="landing-remote-scene landing-remote-scene-fallback" aria-hidden="true" />}>
           <RemoteWorkSceneSection />
-        </Suspense>
+        </AfterHydration>
         <DemoSection />
         <IntegrationsSection />
         <MachineSurfaceSection />

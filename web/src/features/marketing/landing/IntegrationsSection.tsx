@@ -104,8 +104,12 @@ function CapabilityChip({
 
 export function IntegrationsSection() {
   const providers = getLaunchProviderSupportList();
-  const certification = useProviderCertification();
-  const unavailable = certification === null;
+  const answer = useProviderCertification();
+  // Until the Runtime Host answers there is nothing to say about any provider:
+  // the rows show names only, which is also what the prerendered HTML carries.
+  const loading = answer === undefined;
+  const certification = answer ?? null;
+  const unavailable = certification === null && !loading;
   const certified = new Map(providers.map((provider) => [provider.id, certifiedChips(provider.id, provider.proven, certification)]));
   const searchable = providers.filter((provider) => certified.get(provider.id)?.search);
 
@@ -146,12 +150,16 @@ export function IntegrationsSection() {
                 </span>
                 <strong className="landing-provider-row-name">{provider.marketingName}</strong>
               </div>
-              <p className="landing-provider-summary">{providerSummary(certified.get(provider.id)!, unavailable)}</p>
-              <div className="landing-provider-capabilities" aria-label={`${provider.marketingName} capabilities`}>
-                {CAPABILITIES.map((capability) => (
-                  <CapabilityChip capability={capability} provider={provider} certification={certification} key={capability.key} />
-                ))}
-              </div>
+              {loading ? null : (
+                <>
+                  <p className="landing-provider-summary">{providerSummary(certified.get(provider.id)!, unavailable)}</p>
+                  <div className="landing-provider-capabilities" aria-label={`${provider.marketingName} capabilities`}>
+                    {CAPABILITIES.map((capability) => (
+                      <CapabilityChip capability={capability} provider={provider} certification={certification} key={capability.key} />
+                    ))}
+                  </div>
+                </>
+              )}
             </li>
           ))}
         </ul>

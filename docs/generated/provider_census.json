@@ -2483,6 +2483,7 @@
       "providers": [
         "claude",
         "codex",
+        "omp",
         "opencode",
         "pi"
       ]
