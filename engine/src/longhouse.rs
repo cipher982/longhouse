@@ -5239,6 +5239,131 @@ mod tests {
         )
     }
 
+    /// A stand-in Runtime Host that answers one request with `status_line` and
+    /// reports the request line and the device-token header it received.
+    fn one_shot_host(
+        status_line: &'static str,
+    ) -> (String, std::thread::JoinHandle<(String, Option<String>)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let request_line = request.lines().next().unwrap_or_default().to_string();
+            let token = request.lines().find_map(|line| {
+                line.to_ascii_lowercase()
+                    .starts_with("x-agents-token:")
+                    .then(|| line.split_once(':').unwrap().1.trim().to_string())
+            });
+            write!(
+                stream,
+                "HTTP/1.1 {status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            (request_line, token)
+        });
+        (url, handle)
+    }
+
+    fn stored_machine(home: &Path, runtime_url: &str) {
+        let machine = home.join("machine");
+        std::fs::create_dir_all(&machine).unwrap();
+        std::fs::write(
+            machine.join("state.json"),
+            json!({"runtime_url": runtime_url, "machine_name": "laptop"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(machine.join("device-token"), "zdt_stranger_token").unwrap();
+    }
+
+    fn clear_credentials(home: &Path, local_only: bool) -> anyhow::Result<()> {
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(home.display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None),
+                ("NO_PROXY", Some("127.0.0.1".to_string())),
+            ],
+            || {
+                native_auth(AuthArgs {
+                    url: None,
+                    token_env: "LONGHOUSE_F5_TEST_TOKEN".to_string(),
+                    browser: false,
+                    clear: true,
+                    local_only,
+                    device: None,
+                })
+            },
+        )
+    }
+
+    #[test]
+    fn auth_clear_revokes_the_token_on_the_host_before_deleting_it() {
+        let home = tempfile::tempdir().unwrap();
+        let (url, host) = one_shot_host("204 No Content");
+        stored_machine(home.path(), &url);
+        clear_credentials(home.path(), false).unwrap();
+        let (request_line, token) = host.join().unwrap();
+        assert_eq!(request_line, "DELETE /api/agents/device-token HTTP/1.1");
+        assert_eq!(token.as_deref(), Some("zdt_stranger_token"));
+        assert!(!home.path().join("machine/device-token").exists());
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(home.path().join("machine/state.json")).unwrap())
+                .unwrap();
+        assert!(state["runtime_url"].is_null());
+    }
+
+    #[test]
+    fn auth_clear_treats_a_token_the_host_already_rejects_as_done() {
+        let home = tempfile::tempdir().unwrap();
+        let (url, host) = one_shot_host("401 Unauthorized");
+        stored_machine(home.path(), &url);
+        clear_credentials(home.path(), false).unwrap();
+        host.join().unwrap();
+        assert!(!home.path().join("machine/device-token").exists());
+    }
+
+    #[test]
+    fn auth_clear_keeps_the_credentials_when_the_host_cannot_revoke() {
+        // Unreachable, an older host without the route, and a refusal all leave
+        // a live credential somewhere; deleting the only local copy would make
+        // that permanent.
+        for status in [None, Some("404 Not Found"), Some("500 Internal Server Error")] {
+            let home = tempfile::tempdir().unwrap();
+            let host = status.map(one_shot_host);
+            let url = host
+                .as_ref()
+                .map_or("http://127.0.0.1:1".to_string(), |(url, _)| url.clone());
+            stored_machine(home.path(), &url);
+            let error = clear_credentials(home.path(), false).unwrap_err().to_string();
+            assert!(error.contains("credentials were kept"), "{status:?}: {error}");
+            assert!(error.contains("--local-only"), "{error}");
+            assert_eq!(
+                std::fs::read_to_string(home.path().join("machine/device-token")).unwrap(),
+                "zdt_stranger_token"
+            );
+            if let Some((_, handle)) = host {
+                handle.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn auth_clear_local_only_deletes_without_asking_the_host() {
+        let home = tempfile::tempdir().unwrap();
+        // Nothing listens here: any attempt to revoke would fail the call.
+        stored_machine(home.path(), "http://127.0.0.1:1");
+        clear_credentials(home.path(), true).unwrap();
+        assert!(!home.path().join("machine/device-token").exists());
+    }
+
+    #[test]
+    fn auth_clear_with_nothing_stored_just_clears() {
+        let home = tempfile::tempdir().unwrap();
+        clear_credentials(home.path(), false).unwrap();
+    }
+
     #[test]
     fn auth_adopts_the_device_name_the_token_belongs_to() {
         // The stranger run: a token named on the Devices page, stored on a
