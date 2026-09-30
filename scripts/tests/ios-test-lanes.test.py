@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import tempfile
@@ -37,6 +38,24 @@ def ci_lanes() -> list[tuple[list[str], list[tuple[str, str, str]]]]:
     return lanes
 
 
+def plan_skipped(scheme: str) -> list[str]:
+    """Full test ids that the scheme's test plan skips (`Target/Class/method`)."""
+    project = (ROOT / "ios/XcodeHarness/project.yml").read_text()
+    match = re.search(rf"^  {scheme}:\n(?:    .*\n|\n)*?      testPlans:\n        - path: (\S+)", project, re.M)
+    if not match:
+        return []
+    plan = json.loads((ROOT / "ios/XcodeHarness" / match.group(1)).read_text())
+    return [
+        f"{target['target']['name']}/{skipped}"
+        for target in plan["testTargets"]
+        for skipped in target.get("skippedTests", [])
+    ]
+
+
+def excludes(skips: list[str], test_id: str) -> bool:
+    return any(test_id == skip or test_id.startswith(skip + "/") for skip in skips)
+
+
 class CiCoversTheMergeGateTests(unittest.TestCase):
     def test_every_merge_scheme_runs_whole_or_as_a_complementary_pair(self):
         lanes = ci_lanes()
@@ -52,18 +71,47 @@ class CiCoversTheMergeGateTests(unittest.TestCase):
                 if scheme in names
             ]
             if len(runs) == 1:
-                self.assertEqual(runs[0], [], f"{scheme}: its only lane filters tests out")
+                # Whole means nothing but the plan's own skips, repeated here.
+                self.assertTrue(
+                    all(mode == "skip" for mode, _ in runs[0]),
+                    f"{scheme}: its only lane selects a subset: {runs[0]}",
+                )
                 continue
             self.assertEqual(len(runs), 2, f"{scheme}: run by {len(runs)} lanes")
-            only = [r for r in runs if r and all(mode == "only" for mode, _ in r)]
-            skip = [r for r in runs if r and all(mode == "skip" for mode, _ in r)]
+            # A class (or target) is a split point; a method-level skip is not.
+            def split_points(run, mode):
+                return sorted(i for m, i in run if m == mode and i.count("/") <= 1)
+
+            only = [r for r in runs if split_points(r, "only")]
+            skip = [r for r in runs if split_points(r, "skip")]
             self.assertEqual(len(only), 1, f"{scheme}: needs exactly one `only` lane: {runs}")
             self.assertEqual(len(skip), 1, f"{scheme}: needs exactly one `skip` lane: {runs}")
             self.assertEqual(
-                sorted(identifier for _, identifier in only[0]),
-                sorted(identifier for _, identifier in skip[0]),
-                f"{scheme}: the `only` and `skip` lanes must name the same tests, or tests drop out",
+                split_points(only[0], "only"),
+                split_points(skip[0], "skip"),
+                f"{scheme}: the `only` and `skip` lanes must name the same classes, or tests drop out",
             )
+
+    def test_command_line_filters_replace_the_test_plans_skips_so_every_lane_repeats_them(self):
+        """xcodebuild ignores a plan's skippedTests once -only/-skip-testing is given.
+
+        The lane that skips a class ran the plan-skipped InboxCapture tests, and the lane
+        that selected a class ran the plan-skipped SessionChat capture tests (run
+        36653276780), until each lane named them itself.
+        """
+        for names, filters in ci_lanes():
+            for scheme in names:
+                skips = [i for name, mode, i in filters if name == scheme and mode == "skip"]
+                onlys = [i for name, mode, i in filters if name == scheme and mode == "only"]
+                if not any(name == scheme for name, _, _ in filters):
+                    continue  # unfiltered: xcodebuild applies the plan
+                for test_id in plan_skipped(scheme):
+                    if onlys and not excludes(onlys, test_id):
+                        continue  # never selected by this lane
+                    self.assertTrue(
+                        excludes(skips, test_id),
+                        f"{scheme}: the plan skips {test_id} but this lane's filter would run it",
+                    )
 
 
 class RunnerFiltersTests(unittest.TestCase):

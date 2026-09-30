@@ -593,7 +593,9 @@ jobs:
     # 24.8). Two lanes: the unit scheme plus the small UI test classes, and
     # SessionChatUITests (28 of the 35 UI tests, about 75% of their time) by itself.
     # `skip` and `only` name the same class, so a test added anywhere else runs in
-    # the first lane. Splitting a scheme's tests one by one (an enumeration and a
+    # the first lane. Any command-line filter replaces the test plan's own skippedTests
+    # (run 36653276780 ran the four screenshot-capture tests the plan skips), so each
+    # lane repeats them; the lanes test reads the plan and fails if one is missed. Splitting a scheme's tests one by one (an enumeration and a
     # stride) cost each lane 3.5 minutes to enumerate them; three lanes needed a
     # third macOS runner, and this account's 5 macOS jobs at once were often taken
     # by other CI runs and agents' dispatches: lanes waited 5 to 15 minutes to
@@ -611,10 +613,10 @@ jobs:
         include:
           - lane: unit + ui
             schemes: "Longhouse LonghouseSmoke"
-            filter: "LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests"
+            filter: "LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests LonghouseSmoke:skip:LonghouseIOSUITests/InboxCaptureUITests/testCaptureInboxGalleryLight LonghouseSmoke:skip:LonghouseIOSUITests/InboxCaptureUITests/testCaptureInboxGalleryDark"
           - lane: ui chat
             schemes: LonghouseSmoke
-            filter: "LonghouseSmoke:only:LonghouseIOSUITests/SessionChatUITests"
+            filter: "LonghouseSmoke:only:LonghouseIOSUITests/SessionChatUITests LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptLightScreenshot LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptDarkScreenshot"
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
