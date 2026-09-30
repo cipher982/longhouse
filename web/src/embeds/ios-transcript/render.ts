@@ -2,7 +2,8 @@ import { escapeHtml } from "./escape";
 import { markdownToHtml } from "./markdown";
 import { attachSubmittedInputHandlers, renderItem } from "./rows";
 import { isStickingToBottom, scrollToBottom, setStickToBottom } from "./scroll";
-import { attachSubagentHandlers, captureOpenSubagentKeys, restoreOpenSubagentKeys } from "./subagents";
+import { captureOpenKeys, restoreOpenKeys } from "./openState";
+import { attachSubagentHandlers } from "./subagents";
 import type { FrameMetrics, RenderMetrics, TranscriptItem, TranscriptPayload } from "./types";
 
 let currentItems: TranscriptItem[] = [];
@@ -149,7 +150,7 @@ export function renderTranscript(
   const prepended =
     previousFirstId && newFirstId && previousFirstId !== newFirstId && currentItems.some((item) => item.id === previousFirstId);
   const root = document.getElementById("root")!;
-  const openSubagentKeys = captureOpenSubagentKeys(root);
+  const openKeys = captureOpenKeys(root);
   let htmlMs: number;
   let domMs: number;
   if (renderMode === "retained") {
@@ -174,7 +175,7 @@ export function renderTranscript(
     attachExpandHandlers(root);
     domMs = performance.now() - domStartedAt;
   }
-  restoreOpenSubagentKeys(root, openSubagentKeys);
+  restoreOpenKeys(root, openKeys);
   if (wasAtBottom) scrollToBottom();
   else if (prepended) {
     const delta = document.documentElement.scrollHeight - previousScrollHeight;

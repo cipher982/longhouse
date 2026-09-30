@@ -25,7 +25,7 @@ export function subagentNode(item: TranscriptItem): string {
     )
     .join("");
   return (
-    '<details class="subagents" data-subagent-key="' +
+    '<details class="subagents" data-open-key="' +
     escapeHtml(item.id) +
     '"><summary>' +
     escapeHtml(item.subagentSummary || "") +
@@ -33,22 +33,6 @@ export function subagentNode(item: TranscriptItem): string {
     rows +
     "</ul></details>"
   );
-}
-
-/// A re-render rebuilds the disclosure, so remember which ones the user opened.
-export function captureOpenSubagentKeys(root: ParentNode): Set<string> {
-  return new Set(
-    Array.from(root.querySelectorAll("details.subagents[data-subagent-key][open]"))
-      .map((node) => node.getAttribute("data-subagent-key"))
-      .filter((key): key is string => Boolean(key)),
-  );
-}
-
-export function restoreOpenSubagentKeys(root: ParentNode, keys: Set<string>): void {
-  if (!keys.size) return;
-  root.querySelectorAll<HTMLDetailsElement>("details.subagents[data-subagent-key]").forEach((node) => {
-    if (keys.has(node.getAttribute("data-subagent-key") ?? "")) node.open = true;
-  });
 }
 
 export function attachSubagentHandlers(scope: ParentNode = document): void {

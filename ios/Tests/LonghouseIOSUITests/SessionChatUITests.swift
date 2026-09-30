@@ -59,6 +59,8 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
+    /// Background-job results arrive as provider notifications with up to 2000
+    /// characters of output. Each is one collapsed row until tapped.
     func testProviderNotificationRendersAsCompactRow() {
         let app = launchChatFixture(name: "provider-notification", eventCount: 0)
 
@@ -70,10 +72,24 @@ final class SessionChatUITests: XCTestCase {
             renderStatus.label
         )
 
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "provider-notification"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
+        // WebKit exposes a <summary> as a button and a <pre> as static text.
+        let title = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Background job bg_96 has completed")).firstMatch
+        let output = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "artifact://335")).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertFalse(output.exists, "the job's output stays behind the row until it is tapped")
+
+        let collapsed = XCTAttachment(screenshot: app.screenshot())
+        collapsed.name = "provider-notification-collapsed"
+        collapsed.lifetime = .keepAlways
+        add(collapsed)
+
+        title.tap()
+        XCTAssertTrue(output.waitForExistence(timeout: Self.webTranscriptTimeout))
+
+        let expanded = XCTAttachment(screenshot: app.screenshot())
+        expanded.name = "provider-notification-expanded"
+        expanded.lifetime = .keepAlways
+        add(expanded)
     }
 
     func testComposeActionsExplainWhyImagesAreUnavailable() {

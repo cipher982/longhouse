@@ -143,6 +143,34 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertNil(rows.first?.role)
     }
 
+    /// The transcript document collapses a notice from its text alone, so the
+    /// payload must carry a long multi-line job result whole, not preview it.
+    func testPayloadCarriesLongProviderNotificationInFull() {
+        let text = "Background job bg_96 has completed.\n…\nered job: zerg-tenant-data-reserve\n"
+            + String(repeating: "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job\n", count: 25)
+            + "[Output truncated. Showing first 4,000 characters.]\nFull output: artifact://335"
+        let event = SessionEvent(
+            id: 43,
+            role: "system",
+            contentText: text,
+            interactionKind: "provider_notification",
+            toolName: nil,
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: nil,
+            toolCallState: nil,
+            timestamp: "2026-09-30T15:24:22Z",
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil
+        )
+        let rows = WebTranscriptView.payloadItems(timelineItems: TimelineBuilder.build(events: [event]), submittedInputs: [])
+
+        XCTAssertEqual(rows.map(\.kind), ["providerNotification"])
+        XCTAssertEqual(rows.first?.body, text)
+        XCTAssertFalse(rows.first?.collapsed ?? true)
+    }
+
     func testPayloadSuppressesSubmittedInputWhenDurableLonghouseEventHasSameSessionInputId() {
         let rows = WebTranscriptView.payloadItems(
             timelineItems: [

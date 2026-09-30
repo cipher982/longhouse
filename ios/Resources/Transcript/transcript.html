@@ -181,29 +181,6 @@ body {
   font-weight: 650;
 }
 
-.provider-notification {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  color: var(--secondary);
-  font-size: 12px;
-  line-height: 1.4;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.provider-notification-mark {
-  color: var(--accent);
-  flex: 0 0 auto;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.provider-notification-body {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .turn-end {
   margin-top: 8px;
   color: var(--secondary);
@@ -389,7 +366,7 @@ a {
 /* Tool rows demoted to footnotes: no box, no purple. A faint left rule
    groups them under the turn; they read as quiet metadata, not cards.
    Still fully expandable (preserve, never erase). */
-details.tool, details.passive {
+details.tool, details.passive, div.tool {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -399,7 +376,7 @@ details.tool, details.passive {
   overflow: hidden;
 }
 
-summary {
+summary, .tool-head {
   min-height: 28px;
   display: flex;
   gap: 8px;
@@ -423,6 +400,23 @@ summary::-webkit-details-marker {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A background job's notice with no output to open: the header is the whole
+   message, so it wraps instead of trailing off where a tap cannot reach. */
+.notice.static .tool-title {
+  overflow: visible;
+  white-space: normal;
+}
+
+/* A job's output is log text: wrap it at the failure preview's size rather
+   than scroll a wide block sideways. */
+.notice .details-body pre,
+.notice .details-body pre code {
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .tool-subtitle {
@@ -804,6 +798,57 @@ summary::-webkit-details-marker {
 		return items ? `<div class="media-strip">${items}</div>` : "";
 	}
 	//#endregion
+	//#region src/shared/session/model/providerNotice.ts
+	/**
+	* A provider notification is a system row the provider itself displays: a
+	* background job finishing (OMP/Pi `custom_message`, Claude task notification).
+	* Its served text is a header line followed by the job's own output, which
+	* can run to 2000 characters. The transcript shows it as one collapsed row,
+	* same shape as the Thinking row: the header as the label, the first line of
+	* output as the hint, the full text behind a tap.
+	*
+	* The web timeline and the iOS transcript document both call this, so the two
+	* clients cannot disagree about what a notice says.
+	*/
+	var TITLE_MAX_CHARS = 120;
+	var HINT_MAX_CHARS = 90;
+	/** The server's elision marker between a long output's header and its tail. */
+	var ELISION_LINE = "…";
+	function ellipsize(text, maxChars) {
+		return text.length <= maxChars ? text : `${text.slice(0, maxChars).trimEnd()}…`;
+	}
+	function summarizeProviderNotice(text) {
+		const lines = (text ?? "").replace(/\r\n?/g, "\n").trimEnd().split("\n");
+		const headerIndex = lines.findIndex((line) => line.trim().length > 0);
+		if (headerIndex === -1) return {
+			title: "Provider update",
+			hint: null,
+			body: null
+		};
+		const header = lines[headerIndex].trim().replace(/\.$/, "");
+		if (header.length > TITLE_MAX_CHARS) return {
+			title: ellipsize(header, TITLE_MAX_CHARS),
+			hint: null,
+			body: lines.slice(headerIndex).join("\n").trimEnd()
+		};
+		const rest = lines.slice(headerIndex + 1);
+		const output = rest.filter((line) => line.trim().length > 0);
+		if (output.every((line) => line.trim() === ELISION_LINE)) return {
+			title: header,
+			hint: null,
+			body: null
+		};
+		const elided = output[0].trim() === ELISION_LINE;
+		const preview = output.filter((line) => line.trim() !== ELISION_LINE).slice(elided ? 1 : 0);
+		const more = preview.length - 1;
+		const first = preview.length > 0 ? ellipsize(preview[0].trim(), HINT_MAX_CHARS) : null;
+		return {
+			title: header,
+			hint: first !== null && more > 0 ? `${first} … ${more} more line${more === 1 ? "" : "s"}` : first,
+			body: rest.join("\n").replace(/^(?:[ \t]*\n)+/, "").trimEnd()
+		};
+	}
+	//#endregion
 	//#region src/embeds/ios-transcript/diffs.ts
 	function renderDiff(lines) {
 		if (!lines || !lines.length) return "";
@@ -818,16 +863,7 @@ summary::-webkit-details-marker {
 		const children = item.subagents || [];
 		if (!children.length) return "";
 		const rows = children.map((child) => "<li><button type=\"button\" class=\"subagent-link\" data-subagent-session=\"" + escapeHtml(child.sessionId) + "\"><span class=\"subagent-label\">" + escapeHtml(child.label) + "</span><span class=\"subagent-meta\">" + String(child.toolCalls) + (child.toolCalls === 1 ? " call" : " calls") + "</span></button></li>").join("");
-		return "<details class=\"subagents\" data-subagent-key=\"" + escapeHtml(item.id) + "\"><summary>" + escapeHtml(item.subagentSummary || "") + "</summary><ul class=\"subagent-list\">" + rows + "</ul></details>";
-	}
-	function captureOpenSubagentKeys(root) {
-		return new Set(Array.from(root.querySelectorAll("details.subagents[data-subagent-key][open]")).map((node) => node.getAttribute("data-subagent-key")).filter((key) => Boolean(key)));
-	}
-	function restoreOpenSubagentKeys(root, keys) {
-		if (!keys.size) return;
-		root.querySelectorAll("details.subagents[data-subagent-key]").forEach((node) => {
-			if (keys.has(node.getAttribute("data-subagent-key") ?? "")) node.open = true;
-		});
+		return "<details class=\"subagents\" data-open-key=\"" + escapeHtml(item.id) + "\"><summary>" + escapeHtml(item.subagentSummary || "") + "</summary><ul class=\"subagent-list\">" + rows + "</ul></details>";
 	}
 	function attachSubagentHandlers(scope = document) {
 		for (const button of scope.querySelectorAll("[data-subagent-session]")) button.addEventListener("click", () => {
@@ -989,11 +1025,20 @@ summary::-webkit-details-marker {
       `;
 	}
 	function providerNotification(item) {
-		return `
-        <div class="row provider-notification" data-testid="session-provider-notification">
-          <span class="provider-notification-mark" aria-hidden="true">•</span>
-          <span class="provider-notification-body">${escapeHtml(item.body || "Provider update")}</span>
+		const { title, hint, body } = summarizeProviderNotice(item.body);
+		if (body === null) return `
+        <div class="tool row notice static" data-testid="session-provider-notification">
+          <div class="tool-head"><span class="tool-title">${escapeHtml(title)}</span></div>
         </div>
+      `;
+		return `
+        <details class="tool row notice" data-testid="session-provider-notification" data-open-key="${escapeHtml(item.id)}">
+          <summary>
+            <span class="tool-title">${escapeHtml(title)}</span>
+            <span class="tool-subtitle">${escapeHtml(hint || "")}</span>
+          </summary>
+          <div class="details-body"><pre><code>${escapeHtml(body)}</code></pre></div>
+        </details>
       `;
 	}
 	function renderItemBody(item, index) {
@@ -1039,6 +1084,17 @@ summary::-webkit-details-marker {
 		window.addEventListener("resize", repinIfSticky);
 		if (window.visualViewport) window.visualViewport.addEventListener("resize", repinIfSticky);
 		if (typeof ResizeObserver !== "undefined") new ResizeObserver(repinIfSticky).observe(root);
+	}
+	//#endregion
+	//#region src/embeds/ios-transcript/openState.ts
+	function captureOpenKeys(root) {
+		return new Set(Array.from(root.querySelectorAll("details[data-open-key][open]")).map((node) => node.getAttribute("data-open-key")).filter((key) => Boolean(key)));
+	}
+	function restoreOpenKeys(root, keys) {
+		if (!keys.size) return;
+		root.querySelectorAll("details[data-open-key]").forEach((node) => {
+			if (keys.has(node.getAttribute("data-open-key") ?? "")) node.open = true;
+		});
 	}
 	//#endregion
 	//#region src/embeds/ios-transcript/render.ts
@@ -1159,7 +1215,7 @@ summary::-webkit-details-marker {
 		const newFirstId = currentItems.length > 0 ? currentItems[0].id : null;
 		const prepended = previousFirstId && newFirstId && previousFirstId !== newFirstId && currentItems.some((item) => item.id === previousFirstId);
 		const root = document.getElementById("root");
-		const openSubagentKeys = captureOpenSubagentKeys(root);
+		const openKeys = captureOpenKeys(root);
 		let htmlMs;
 		let domMs;
 		if (renderMode === "retained") {
@@ -1179,7 +1235,7 @@ summary::-webkit-details-marker {
 			attachExpandHandlers(root);
 			domMs = performance.now() - domStartedAt;
 		}
-		restoreOpenSubagentKeys(root, openSubagentKeys);
+		restoreOpenKeys(root, openKeys);
 		if (wasAtBottom) scrollToBottom();
 		else if (prepended) {
 			const delta = document.documentElement.scrollHeight - previousScrollHeight;

@@ -1385,3 +1385,125 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
     }
   }
 }
+
+/**
+ * Served `provider_notification` text, as the server ships it (see
+ * `provider_display_message_text` in server/zerg/services/provider_interaction_semantics.py):
+ * the envelope and the instruction to the model are gone, a header line leads,
+ * and an output over 2000 characters keeps its header, an "…" line, and its
+ * tail. `OMP_LONG` is the session 352dfbc4 notice that filled the viewport:
+ * OMP's own 4,000-character cap shows at its end.
+ */
+export const PROVIDER_NOTICE_TEXT = {
+  OMP_LONG: [
+    "Background job bg_96 has completed.",
+    "…",
+    "ered job: zerg-tenant-data-reserve (cron=*/5 * * * *, enabled=True)",
+    "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job: llm-bench-opencode-dry-run (cron=0 9 * * *, enabled=False)",
+    "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job: llm-bench-discovery (cron=0 7 * * *, enabled=False)",
+    "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job: llm-bench-provider-discovery (cron=0 7 * * *, enabled=True)",
+    "2026-09-30 15:24:21,975 [INFO] sauron.jobs.registry: Registered job: llm-bench-health (cron=0 8 * * *, enabled=False)",
+    "2026-09-30 15:24:21,975 [INFO] sauron.jobs.registry: Registered job: llm-bench-invariant-watch (cron=0 */6 * * *, enabled=True)",
+    "2026-09-30 15:24:21,975 [INFO] sauron.jobs.registry: Registered job: llm-bench-publication-check (cron=*/30 * * * *, enabled=True)",
+    "2026-09-30 15:24:21,976 [INFO] sauron.jobs.registry: Registered job: llm-bench-umami-weekly (cron=0 15 * * 1, enabled=True)",
+    "2026-09-30 15:24:21,976 [INFO] sauron.jobs.registry: Registered job: longhouse-hosted-storage-ops-alerts (cron=*/5 * * * *, enabled=True)",
+    "2026-09-30 15:24:21,976 [INFO] sauron.jobs.registry: Registered job: longhouse-deploy-gate-health (cron=*/30 * * * *, enabled=True)",
+    "2026-09-30 15:24:21,977 [INFO] sauron.jobs.registry: Registered job: traccar-watchdog (cron=0 */6 * * *, enabled=True)",
+    "2026-09-30 15:24:22,038 [INFO] sauron.jobs.registry: Registered job: gmail-watchdog (cron=0 */2 * * *, enabled=True)",
+    "2026-09-30 15:24:22,038 [INFO] sauron.jobs.registry: Registered job: life-hub-agent-archive-sync (cron=*/15 * * * *, enabled=True)",
+    "2026-09-30 15:24:22,038 [INFO] sauron.jo",
+    "[Output truncated. Showing first 4,000 characters.]",
+    "Full output: artifact://335",
+  ].join("\n"),
+  OMP_CI: [
+    "Background job bg_97 has completed.",
+    "* main Deploy Factory · 36736390872",
+    "Triggered via push about 1 minute ago",
+    "",
+    "JOBS",
+    "✓ Deploy or roll back in 1m46s (ID 109959098753)",
+    "  ✓ Set up job",
+    "  ✓ Run actions/checkout@v4",
+    "  ✓ Resolve desired state or rollback target",
+    "  ✓ Require a green CI run for the promoted commit (deploy only)",
+    "  ✓ Verify image exists on GHCR (deploy only)",
+    "  ✓ Post Run actions/checkout@v4",
+    "",
+    "ANNOTATIONS",
+    "! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4.",
+  ].join("\n"),
+  OMP_SHORT: "Background job bg_1 has completed.\nSMOKE-STEP-1\nSMOKE-STEP-2\nSMOKE-STEP-3\nWall time: 180.02 seconds",
+  CLAUDE_TASK: 'Background command "Run the checks" completed (exit code 0)',
+} as const;
+
+/**
+ * A busy OMP session: background-job results between tool rows, the way
+ * session 352dfbc4 looked once results were served as notification rows. The
+ * long notices are what made each one fill the viewport; the header-only
+ * Claude notice has nothing to open.
+ */
+export function buildSessionBackgroundNoticesFixture(): SessionDetailFixture {
+  const fixture = buildSessionDetailStressFixture();
+  const sessionId = SESSION_DETAIL_STRESS_SESSION_ID;
+  const notice = (id: number, timestamp: string, text: string) =>
+    makeEvent(id, "system", timestamp, { interaction_kind: "provider_notification", content_text: text });
+  const events: AgentEvent[] = [
+    makeEvent(3001, "user", "2026-04-15T16:00:00Z", {
+      content_text: "Triage the Sauron alert emails and tell me which jobs are actually broken.",
+    }),
+    makeEvent(3002, "assistant", "2026-04-15T16:00:05Z", {
+      tool_name: "Bash",
+      tool_input_json: { command: "ssh clifford 'sauron jobs list'" },
+      tool_call_id: "bn-list",
+    }),
+    makeEvent(3003, "tool", "2026-04-15T16:00:06Z", {
+      tool_name: "Bash",
+      tool_output_text: "Backgrounded early: the command keeps running as bg_96.",
+      tool_call_id: "bn-list",
+    }),
+    notice(3004, "2026-04-15T16:01:10Z", PROVIDER_NOTICE_TEXT.OMP_LONG),
+    makeEvent(3005, "system", "2026-04-15T16:01:20Z", {
+      interaction_kind: "provider_reasoning",
+      content_text: "Thinking:\nEvaluating factory rollout\nThe registry lists every job enabled; the alerts name three of them.",
+    }),
+    makeEvent(3006, "assistant", "2026-04-15T16:01:25Z", {
+      tool_name: "Read",
+      tool_input_json: { file_path: "sauron/jobs/registry.py" },
+      tool_call_id: "bn-read-1",
+    }),
+    makeEvent(3007, "tool", "2026-04-15T16:01:26Z", {
+      tool_name: "Read",
+      tool_output_text: "def register(job): ...",
+      tool_call_id: "bn-read-1",
+    }),
+    makeEvent(3008, "assistant", "2026-04-15T16:01:30Z", {
+      tool_name: "Read",
+      tool_input_json: { file_path: "sauron/jobs/alerts.py" },
+      tool_call_id: "bn-read-2",
+    }),
+    makeEvent(3009, "tool", "2026-04-15T16:01:31Z", {
+      tool_name: "Read",
+      tool_output_text: "def alert(job): ...",
+      tool_call_id: "bn-read-2",
+    }),
+    notice(3010, "2026-04-15T16:03:00Z", PROVIDER_NOTICE_TEXT.OMP_CI),
+    makeEvent(3011, "assistant", "2026-04-15T16:03:10Z", {
+      tool_name: "Bash",
+      tool_input_json: { command: "gh run view 36736390872 --log-failed" },
+      tool_call_id: "bn-gh",
+    }),
+    makeEvent(3012, "tool", "2026-04-15T16:03:12Z", {
+      tool_name: "Bash",
+      tool_output_text: "no failed steps",
+      tool_call_id: "bn-gh",
+    }),
+    notice(3013, "2026-04-15T16:04:00Z", PROVIDER_NOTICE_TEXT.CLAUDE_TASK),
+    notice(3014, "2026-04-15T16:04:10Z", PROVIDER_NOTICE_TEXT.OMP_SHORT),
+    makeEvent(3015, "assistant", "2026-04-15T16:05:00Z", {
+      content_text: "None of the three alerting jobs is broken: the registry is healthy and the factory deploy finished green.",
+      turn_end: { duration_ms: 300_000, ended_at: "2026-04-15T16:05:01Z", message_count: 14 },
+    }),
+  ];
+  fixture.projection.items = events.map((event) => projectionEvent(event, sessionId));
+  return fixture;
+}

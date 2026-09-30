@@ -159,6 +159,50 @@ describe("rows", () => {
     expect(root().querySelector(".bubble")?.textContent).toBe("<the whole thing>");
   });
 
+  describe("provider notifications", () => {
+    const notice = (id: string, body: string): TranscriptItem => ({ id, kind: "providerNotification", body });
+    const jobResult = notice(
+      "provider-notification:3",
+      "Background job bg_96 has completed.\nSMOKE-STEP-1\nSMOKE-STEP-2\n[Output truncated.]\nFull output: artifact://335",
+    );
+
+    it("renders a job result as a collapsed tool-shaped row with a hint and its output behind the tap", () => {
+      render({ items: [jobResult] });
+
+      const row = root().querySelector("details.tool.notice") as HTMLDetailsElement;
+      expect(row.getAttribute("data-testid")).toBe("session-provider-notification");
+      expect(row.open).toBe(false);
+      expect(row.querySelector(".tool-title")?.textContent).toBe("Background job bg_96 has completed");
+      expect(row.querySelector(".tool-subtitle")?.textContent).toBe("SMOKE-STEP-1 … 3 more lines");
+      expect(row.querySelector(".details-body pre code")?.textContent).toBe(
+        "SMOKE-STEP-1\nSMOKE-STEP-2\n[Output truncated.]\nFull output: artifact://335",
+      );
+    });
+
+    it("renders a header-only notice as a plain row with no disclosure", () => {
+      render({ items: [notice("provider-notification:4", 'Background command "Run the checks" completed (exit code 0)')] });
+
+      expect(root().querySelector("details")).toBeNull();
+      const row = root().querySelector("div.tool.notice.static")!;
+      expect(row.querySelector(".tool-title")?.textContent).toBe('Background command "Run the checks" completed (exit code 0)');
+    });
+
+    it("escapes the notice text", () => {
+      render({ items: [notice("provider-notification:5", "Job <b>done</b>.\n<script>alert(1)</script>")] });
+
+      expect(root().querySelector("script")).toBeNull();
+      expect(root().querySelector(".tool-title")?.textContent).toBe("Job <b>done</b>");
+    });
+
+    it("keeps an opened notice open when a later render rebuilds the transcript", () => {
+      render({ items: [jobResult] });
+      (root().querySelector("details.notice") as HTMLDetailsElement).open = true;
+
+      render({ items: [jobResult, { id: "a", kind: "message", role: "assistant", body: "next" }] });
+      expect((root().querySelector("details.notice") as HTMLDetailsElement).open).toBe(true);
+    });
+  });
+
   it("marks a Longhouse-sent message", () => {
     render({ items: [{ id: "u", kind: "message", role: "user", body: "hi", origin: "longhouse" }] });
     expect(root().querySelector("#session-chat-input-origin-longhouse")?.getAttribute("aria-label")).toBe("Sent via Longhouse");

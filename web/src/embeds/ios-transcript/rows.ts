@@ -2,6 +2,7 @@ import { postToNative } from "./bridge";
 import { escapeHtml } from "./escape";
 import { markdownToHtml } from "./markdown";
 import { mediaStrip } from "./media";
+import { summarizeProviderNotice } from "../../shared/session/model/providerNotice";
 import { activityGroup, question, toolDetails } from "./toolCards";
 import type { TranscriptItem } from "./types";
 
@@ -95,12 +96,26 @@ export function action(item: TranscriptItem): string {
       `;
 }
 
+/// A background job's notice, as a tool-shaped row: the header is the title,
+/// the first line of output the hint, the full text behind a tap. A notice
+/// that is only its header has nothing to open, so it is a plain row.
 export function providerNotification(item: TranscriptItem): string {
-  return `
-        <div class="row provider-notification" data-testid="session-provider-notification">
-          <span class="provider-notification-mark" aria-hidden="true">•</span>
-          <span class="provider-notification-body">${escapeHtml(item.body || "Provider update")}</span>
+  const { title, hint, body } = summarizeProviderNotice(item.body);
+  if (body === null) {
+    return `
+        <div class="tool row notice static" data-testid="session-provider-notification">
+          <div class="tool-head"><span class="tool-title">${escapeHtml(title)}</span></div>
         </div>
+      `;
+  }
+  return `
+        <details class="tool row notice" data-testid="session-provider-notification" data-open-key="${escapeHtml(item.id)}">
+          <summary>
+            <span class="tool-title">${escapeHtml(title)}</span>
+            <span class="tool-subtitle">${escapeHtml(hint || "")}</span>
+          </summary>
+          <div class="details-body"><pre><code>${escapeHtml(body)}</code></pre></div>
+        </details>
       `;
 }
 

@@ -175,29 +175,6 @@ body {
   font-weight: 650;
 }
 
-.provider-notification {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  color: var(--secondary);
-  font-size: 12px;
-  line-height: 1.4;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.provider-notification-mark {
-  color: var(--accent);
-  flex: 0 0 auto;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.provider-notification-body {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .turn-end {
   margin-top: 8px;
   color: var(--secondary);
@@ -383,7 +360,7 @@ a {
 /* Tool rows demoted to footnotes: no box, no purple. A faint left rule
    groups them under the turn; they read as quiet metadata, not cards.
    Still fully expandable (preserve, never erase). */
-details.tool, details.passive {
+details.tool, details.passive, div.tool {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -393,7 +370,7 @@ details.tool, details.passive {
   overflow: hidden;
 }
 
-summary {
+summary, .tool-head {
   min-height: 28px;
   display: flex;
   gap: 8px;
@@ -417,6 +394,23 @@ summary::-webkit-details-marker {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A background job's notice with no output to open: the header is the whole
+   message, so it wraps instead of trailing off where a tap cannot reach. */
+.notice.static .tool-title {
+  overflow: visible;
+  white-space: normal;
+}
+
+/* A job's output is log text: wrap it at the failure preview's size rather
+   than scroll a wide block sideways. */
+.notice .details-body pre,
+.notice .details-body pre code {
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .tool-subtitle {

@@ -772,36 +772,87 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         return events
     }
 
+    /// The served shape of OMP background-job results and a Claude task
+    /// notice: `system` rows with `interaction_kind=provider_notification`,
+    /// text bounded by the server (header, an elision line, the output's tail),
+    /// between tool rows. Session 352dfbc4 filled the viewport with these.
     private static func providerNotificationFixtureEvents() -> [SessionEvent] {
-        [
-            makeEvent(
-                id: 1,
-                role: "user",
-                content: "Run the checks in the background.",
-                timestamp: fixedTimestamp(offset: 1)
-            ),
-            makeEvent(
-                id: 2,
-                role: "assistant",
-                content: "I started the checks; the provider will report back when they finish.",
-                timestamp: fixedTimestamp(offset: 2)
-            ),
+        var id = 0
+        func next() -> Int { id += 1; return id }
+        func ts() -> String { fixedTimestamp(offset: id) }
+        func notice(_ text: String) -> SessionEvent {
             SessionEvent(
-                id: 3,
+                id: next(),
                 role: "system",
-                contentText: "Background command \"Run the checks\" completed (exit code 0)",
+                contentText: text,
                 interactionKind: "provider_notification",
                 toolName: nil,
                 toolInputJSON: nil,
                 toolOutputText: nil,
                 toolCallId: nil,
                 toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 3),
+                timestamp: ts(),
                 inActiveContext: true,
                 isHeadBranch: true,
                 inputOrigin: nil
-            ),
-        ]
+            )
+        }
+        func tool(_ name: String, output: String, callId: String) -> [SessionEvent] {
+            [
+                SessionEvent(
+                    id: next(), role: "assistant", contentText: nil,
+                    toolName: name, toolInputJSON: nil, toolOutputText: nil, toolCallId: callId,
+                    toolCallState: .completed, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+                ),
+                SessionEvent(
+                    id: next(), role: "tool", contentText: nil,
+                    toolName: name, toolInputJSON: nil, toolOutputText: output, toolCallId: callId,
+                    toolCallState: .completed, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+                ),
+            ]
+        }
+
+        let ompLong = [
+            "Background job bg_96 has completed.",
+            "…",
+            "ered job: zerg-tenant-data-reserve (cron=*/5 * * * *, enabled=True)",
+            "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job: llm-bench-opencode-dry-run (cron=0 9 * * *, enabled=False)",
+            "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job: llm-bench-discovery (cron=0 7 * * *, enabled=False)",
+            "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job: llm-bench-provider-discovery (cron=0 7 * * *, enabled=True)",
+            "2026-09-30 15:24:21,975 [INFO] sauron.jobs.registry: Registered job: llm-bench-health (cron=0 8 * * *, enabled=False)",
+            "2026-09-30 15:24:21,975 [INFO] sauron.jobs.registry: Registered job: llm-bench-invariant-watch (cron=0 */6 * * *, enabled=True)",
+            "2026-09-30 15:24:21,976 [INFO] sauron.jobs.registry: Registered job: longhouse-hosted-storage-ops-alerts (cron=*/5 * * * *, enabled=True)",
+            "2026-09-30 15:24:22,038 [INFO] sauron.jobs.registry: Registered job: gmail-watchdog (cron=0 */2 * * *, enabled=True)",
+            "2026-09-30 15:24:22,038 [INFO] sauron.jo",
+            "[Output truncated. Showing first 4,000 characters.]",
+            "Full output: artifact://335",
+        ].joined(separator: "\n")
+        let ompCI = [
+            "Background job bg_97 has completed.",
+            "* main Deploy Factory · 36736390872",
+            "Triggered via push about 1 minute ago",
+            "",
+            "JOBS",
+            "✓ Deploy or roll back in 1m46s (ID 109959098753)",
+            "  ✓ Set up job",
+            "  ✓ Run actions/checkout@v4",
+            "  ✓ Verify image exists on GHCR (deploy only)",
+            "",
+            "ANNOTATIONS",
+            "! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4.",
+        ].joined(separator: "\n")
+
+        var events: [SessionEvent] = []
+        events.append(makeEvent(id: next(), role: "user", content: "Triage the Sauron alert emails and tell me which jobs are actually broken.", timestamp: ts()))
+        events.append(makeEvent(id: next(), role: "assistant", content: "I started the registry listing in the background; the provider will report back when it finishes.", timestamp: ts()))
+        events += tool("Bash", output: "Backgrounded early: the command keeps running as bg_96.", callId: "call-bg-1")
+        events.append(notice(ompLong))
+        events += tool("Read", output: "def register(job): ...", callId: "call-read-1")
+        events.append(notice(ompCI))
+        events += tool("Bash", output: "no failed steps", callId: "call-gh-1")
+        events.append(notice("Background command \"Run the checks\" completed (exit code 0)"))
+        events.append(makeEvent(id: next(), role: "assistant", content: "None of the alerting jobs is broken: the registry is healthy and the factory deploy finished green.", timestamp: ts()))
+        return events
     }
 
     /// A realistic CODING session for marketing captures: a real-feeling task

@@ -29,6 +29,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-background-notices   # collapsed and expanded PNGs
  *   bunx tsx scripts/ui/ui-capture.ts devices --scene=devices-revoke
  *   bunx tsx scripts/ui/ui-capture.ts landing --scene=provider-certification --viewport=desktop-tall
  *   bunx tsx scripts/ui/ui-capture.ts machines
@@ -41,6 +42,7 @@ import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
+  buildSessionBackgroundNoticesFixture,
   buildSessionDetailStressFixture,
   buildSessionQuestionFixture,
   buildSessionAttentionFixture,
@@ -96,6 +98,7 @@ const SCENES = [
   "session-resume",
   "session-stale-observation",
   "session-tones",
+  "session-background-notices",
   "landing",
   "landing-search",
   "landing-session",
@@ -129,6 +132,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-resume",
   "session-stale-observation",
   "session-tones",
+  "session-background-notices",
 ];
 
 const VIEWPORT_PRESETS = {
@@ -286,6 +290,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-resume" ||
     scene === "session-stale-observation" ||
     scene === "session-tones" ||
+    scene === "session-background-notices" ||
     scene === FIRST_RUN_SCENE ||
     scene === DEVICES_REVOKE_SCENE
   );
@@ -423,7 +428,9 @@ async function installSceneMocks(
           ? buildSessionStaleObservationFixture()
           : scene === "session-tones"
             ? buildSessionToneFixture(tone)
-            : buildSessionDetailStressFixture();
+            : scene === "session-background-notices"
+              ? buildSessionBackgroundNoticesFixture()
+              : buildSessionDetailStressFixture();
     const sessionBasePath = `/api/timeline/sessions/${fixture.session.id}`;
 
     await context.route(`${appOrigin}/api/**`, async (route) => {
@@ -1122,6 +1129,16 @@ async function captureBundle(
     await page.waitForTimeout(Number(process.env.HEARTH_WAIT_MS ?? 5000));
   }
 
+  // The second frame of the notices scene: every expandable notice open but
+  // the first, so the frame shows an open and a collapsed long one together.
+  if (scene === "session-background-notices" && frameName.endsWith("-expanded")) {
+    const heads = page.locator("[data-testid='session-provider-notification'] button");
+    for (let index = (await heads.count()) - 1; index >= 1; index -= 1) {
+      await heads.nth(index).click();
+    }
+    await page.waitForSelector("[data-testid='session-provider-notification-body']", { timeout: 5000 });
+  }
+
   if (scene === "session-resume" && pageName === "session-detail") {
     await page.getByRole("button", { name: /Resume on/ }).click();
     await page.getByRole("dialog").waitFor();
@@ -1363,7 +1380,13 @@ async function main() {
     const frames: Array<{ pageName: PageName; frameName: string; tone: SessionTone }> =
       opts.scene === "session-tones"
         ? SESSION_TONES.map((tone) => ({ pageName: "session-detail" as const, frameName: `session-detail-${tone}`, tone }))
-        : pagesToCapture.map((pageName) => ({ pageName, frameName: pageName, tone: "running" as const }));
+        : opts.scene === "session-background-notices"
+          ? ["collapsed", "expanded"].map((state) => ({
+              pageName: "session-detail" as const,
+              frameName: `session-detail-${state}`,
+              tone: "running" as const,
+            }))
+          : pagesToCapture.map((pageName) => ({ pageName, frameName: pageName, tone: "running" as const }));
     for (const { pageName, frameName, tone } of frames) {
       console.log(`\n${frameName}:`);
       try {

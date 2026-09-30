@@ -481,6 +481,46 @@ describe("TimelinePane", () => {
     expect(row).not.toHaveTextContent("<task-notification>");
   });
 
+  it("collapses a long background-job notice to a row and opens its output on demand", () => {
+    const jobResult: TimelineItem = {
+      kind: "provider_notification",
+      event: {
+        ...providerNotificationItem.event,
+        id: 7,
+        content_text: "Background job bg_96 has completed.\nSMOKE-STEP-1\nSMOKE-STEP-2\n[Output truncated.]\nFull output: artifact://335",
+      },
+    };
+    renderPane([jobResult]);
+
+    const row = screen.getByTestId("session-provider-notification");
+    expect(row).toHaveTextContent("Background job bg_96 has completed");
+    expect(row).toHaveTextContent("SMOKE-STEP-1 … 3 more lines");
+    expect(row).not.toHaveTextContent("artifact://335");
+    expect(screen.queryByTestId("session-provider-notification-body")).not.toBeInTheDocument();
+
+    const head = screen.getByRole("button", { name: "Expand Background job bg_96 has completed" });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(head);
+
+    const body = screen.getByTestId("session-provider-notification-body");
+    expect(body.tagName).toBe("PRE");
+    expect(body.textContent).toBe("SMOKE-STEP-1\nSMOKE-STEP-2\n[Output truncated.]\nFull output: artifact://335");
+    expect(screen.getByRole("button", { name: "Collapse Background job bg_96 has completed" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Background job bg_96 has completed" }));
+    expect(screen.queryByTestId("session-provider-notification-body")).not.toBeInTheDocument();
+  });
+
+  it("gives a header-only notice no expander", () => {
+    renderPane([providerNotificationItem]);
+
+    expect(screen.getByTestId("session-provider-notification")).toHaveTextContent("completed (exit code 0)");
+    expect(screen.queryByRole("button", { name: /Expand/ })).not.toBeInTheDocument();
+  });
+
   it("renders reasoning without its wire prefix and keeps the body collapsed", () => {
     renderPane([reasoningItem]);
 

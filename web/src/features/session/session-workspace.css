@@ -1278,36 +1278,6 @@
   white-space: nowrap;
 }
 
-.tl-provider-notification {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  max-width: var(--tl-tool-max);
-  width: 100%;
-  margin-inline: auto;
-  padding: 2px 0;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-.tl-provider-notification.is-selected {
-  color: var(--color-text-secondary);
-}
-.tl-provider-notification__mark {
-  color: rgba(212, 184, 122, 0.72);
-  flex-shrink: 0;
-}
-.tl-provider-notification__label {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.tl-provider-notification__time {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-family: var(--font-family-mono);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
 /* --- Provider reasoning: a quiet text line, same row vocabulary as a tool
    row (trace node, 30px, hairline below) while collapsed — the etched-glass
    panel (frosted parchment, never bordered like a tool block) appears only
@@ -1391,6 +1361,52 @@
   line-height: 1.5;
   color: var(--color-text-muted);
   text-wrap: unset;
+}
+
+/* --- Provider notice (a background job finished): the Thinking row's
+   vocabulary — collapsed head with trace node, label, hint, time — with the
+   job's output as a monospace block once expanded. The label is the notice's
+   own header line, so unlike "Thinking" it may be long: the hint gives way
+   first, then the label, and the time never does. A header-only notice has
+   nothing to open, so its head is a plain div whose label wraps rather than
+   trailing off where a tap cannot reach. --- */
+.tl-reasoning--notice .tl-reasoning__label {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-reasoning--notice div.tl-reasoning__head {
+  height: auto;
+  min-height: 30px;
+  padding-block: 4px;
+  cursor: default;
+}
+.tl-reasoning--notice div.tl-reasoning__head:hover {
+  background: transparent;
+}
+.tl-reasoning--notice div.tl-reasoning__head .tl-reasoning__label {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.tl-reasoning--notice .tl-reasoning__time {
+  margin-left: auto;
+}
+@media (max-width: 640px) {
+  /* The header takes the row; a hint squeezed to "20…" is noise. */
+  .tl-reasoning--notice .tl-reasoning__summary {
+    display: none;
+  }
+}
+.tl-reasoning--notice .tl-reasoning__output {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* --- Shared ---
