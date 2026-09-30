@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -65,33 +66,70 @@ class CiCoversTheMergeGateTests(unittest.TestCase):
             )
 
 
-class RunnerRefusesBadFiltersTests(unittest.TestCase):
-    """run_ios_tests.sh validates IOS_TEST_FILTER before it touches xcodebuild."""
+class RunnerFiltersTests(unittest.TestCase):
+    """run_ios_tests.sh turns IOS_TEST_FILTER into xcodebuild arguments, checked against a stub."""
 
-    def refusal(self, schemes: str, filter_: str) -> subprocess.CompletedProcess:
+    def run_script(self, schemes: str, filter_: str) -> subprocess.CompletedProcess:
         # The hosted-VM boundary check comes first; this exercises what follows it.
         script = SCRIPT.read_text()
         body = re.sub(r"if ! python3 .*test_boundary\.py\"; then.*?\nfi\n", "", script, flags=re.S)
-        return subprocess.run(
-            ["bash", "-c", body, "run_ios_tests.sh", "platform=iOS Simulator,id=X"],
-            env={
-                "PATH": "/usr/bin:/bin",
-                "HOME": "/tmp",
-                "IOS_DERIVED_DATA_PATH": "/tmp/ios-test-lanes-nonexistent-derived-data",
-                "IOS_TEST_SCHEMES": schemes,
-                "IOS_TEST_FILTER": filter_,
-            },
-            capture_output=True,
-            text=True,
-        )
+        with tempfile.TemporaryDirectory() as scratch:
+            stub = Path(scratch) / "xcodebuild"
+            stub.write_text('#!/bin/bash\necho "XCODEBUILD $*"\n')
+            stub.chmod(0o755)
+            return subprocess.run(
+                ["bash", "-c", body, "run_ios_tests.sh", "platform=iOS Simulator,id=X"],
+                env={
+                    "PATH": f"{scratch}:/usr/bin:/bin",
+                    "HOME": scratch,
+                    "IOS_DERIVED_DATA_PATH": f"{scratch}/derived-data",
+                    "IOS_TEST_SCHEMES": schemes,
+                    "IOS_TEST_FILTER": filter_,
+                },
+                capture_output=True,
+                text=True,
+            )
+
+    def invocations(self, result: subprocess.CompletedProcess) -> dict[tuple[str, str], str]:
+        """{(scheme, action): the stub's argument line} for the two xcodebuild actions."""
+        found = {}
+        for line in result.stdout.splitlines():
+            if not line.startswith("XCODEBUILD "):
+                continue
+            scheme = re.search(r"-scheme (\S+)", line).group(1)
+            action = "build" if line.endswith("build-for-testing") else "test"
+            found[(scheme, action)] = line
+        return found
+
+    def test_only_and_skip_become_the_matching_xcodebuild_flags(self):
+        klass = "LonghouseIOSUITests/SessionChatUITests"
+        skip = self.invocations(self.run_script("Longhouse LonghouseSmoke", f"LonghouseSmoke:skip:{klass}"))
+        self.assertIn(f"-skip-testing:{klass}", skip[("LonghouseSmoke", "test")])
+        self.assertNotIn("-only-testing", skip[("LonghouseSmoke", "test")])
+        only = self.invocations(self.run_script("LonghouseSmoke", f"LonghouseSmoke:only:{klass}"))
+        self.assertIn(f"-only-testing:{klass}", only[("LonghouseSmoke", "test")])
+        self.assertNotIn("-skip-testing", only[("LonghouseSmoke", "test")])
+
+    def test_a_filter_reaches_only_its_own_scheme_and_only_the_test_action(self):
+        klass = "LonghouseIOSUITests/SessionChatUITests"
+        runs = self.invocations(self.run_script("Longhouse LonghouseSmoke", f"LonghouseSmoke:skip:{klass}"))
+        self.assertEqual(len(runs), 4)
+        for key, line in runs.items():
+            if key != ("LonghouseSmoke", "test"):
+                self.assertNotIn("-testing:", line, key)
+
+    def test_no_filter_runs_every_scheme_whole(self):
+        runs = self.invocations(self.run_script("Longhouse LonghouseSmoke", ""))
+        self.assertEqual(len(runs), 4)
+        self.assertFalse(any("-testing:" in line for line in runs.values()))
 
     def test_a_filter_for_a_scheme_the_run_does_not_build_is_refused(self):
-        result = self.refusal("Longhouse", "LonghouseSmoke:only:X")
+        result = self.run_script("Longhouse", "LonghouseSmoke:only:X")
         self.assertEqual(result.returncode, 2)
         self.assertIn("does not run", result.stderr)
 
     def test_a_malformed_filter_is_refused(self):
-        result = self.refusal("LonghouseSmoke", "LonghouseSmoke:bogus:X")
+        result = self.run_script("LonghouseSmoke", "LonghouseSmoke:bogus:X")
         self.assertEqual(result.returncode, 2)
         self.assertIn("must look like", result.stderr)
 
