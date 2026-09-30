@@ -613,6 +613,55 @@ def test_live_named_subagent_task_enriches_exact_child_timing_and_denies_ambigui
     assert ambiguous_task["tool_calls"] is None
 
 
+def test_raw_only_child_keeps_counters_unknown_until_archive_projection(live_catalog, live_catalog_client):
+    email = "raw-child@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    parent, thread, run = _seed_running_session(live_catalog, owner_id=owner, provider_session_id="raw-parent-native")
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=parent,
+            thread_id=thread,
+            run_id=run,
+            occurred_at=datetime.now(UTC),
+            dedupe_key="raw-child-registry",
+            items=[_task("raw-agent", "subagent", "running", "Waiting for archive projection", parent_tool_call_id="raw-parent-tool")],
+        ),
+    )
+    child = uuid4()
+    body = live_catalog.envelope_body(
+        session_id=child,
+        device_id=DEVICE_ID,
+        provider=PROVIDER,
+        texts=("Native child history",),
+        project="raw-child",
+    )
+    body["render"] = None
+    body["session"].update(
+        {
+            "provider_session_id": "raw-child-native",
+            "is_subagent": True,
+            "parent_provider_session_id": "raw-parent-native",
+            "parent_tool_call_id": "raw-parent-tool",
+        }
+    )
+    response = live_catalog_client.post(
+        "/agents/storage/v2/envelopes",
+        json=body,
+        headers={"X-Agents-Token": token, "X-Longhouse-Storage-Lane": "live"},
+    )
+    assert response.status_code == 200, response.text
+    task = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=parent)["delegation"]["items"][
+        0
+    ]
+    assert task["session_id"] == str(child)
+    assert task["tool_calls"] is None
+    assert task["assistant_messages"] is None
+    assert task["user_messages"] is None
+
+
 def test_ordinary_fork_archive_does_not_wake_background_parent(live_catalog, live_catalog_client):
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import topic_session

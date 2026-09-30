@@ -333,11 +333,11 @@ struct SessionModelsTests {
             state: "pending", count: 1, kinds: ["subagent": 1], source: "claude_hook",
             observedAt: "2026-09-25T16:00:00Z", validUntil: "2026-09-25T16:30:00Z", items: nil
         )
-        func summary(_ facts: SessionStateFacts) -> SessionSummary {
+        func summary(_ facts: SessionStateFacts, userState: String? = nil) -> SessionSummary {
             SessionSummary(
                 id: base.id, title: base.title, presenceState: base.presenceState,
                 provider: base.provider, project: base.project, lastActivityAt: base.lastActivityAt,
-                runtimeDisplay: base.runtimeDisplay, stateFacts: facts
+                userState: userState, runtimeDisplay: base.runtimeDisplay, stateFacts: facts
             )
         }
         #expect(TimelineSignal.resolve(for: summary(facts), asOf: now) == .working)
@@ -358,6 +358,11 @@ struct SessionModelsTests {
         )
         interaction.delegation = facts.delegation
         #expect(TimelineSignal.resolve(for: summary(interaction), asOf: expired) == .attention)
+        #expect(TimelineSignal.resolve(for: summary(interaction, userState: "parked"), asOf: now) == .quiet)
+        let unknownInteraction = makeSessionStateFacts(activity: "unknown", pendingInteractionKind: "question")
+        #expect(TimelineSignal.resolve(for: summary(unknownInteraction, userState: "parked"), asOf: now) == .unknown)
+        let workingInteraction = makeSessionStateFacts(activity: "executing", pendingInteractionKind: "question")
+        #expect(TimelineSignal.resolve(for: summary(workingInteraction, userState: "parked"), asOf: now) == .quiet)
     }
 
     /// VoiceOver says the server's label verbatim while the work claim is

@@ -14,3 +14,5 @@ Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
 
 Test: `make test-ios`. Previews: `make ios-previews`. Renderer benchmark:
 `make benchmark-ios-transcript`.
+For a focused bench run, `make ios-unit TEST=LonghouseIOSTests/SessionModelsTests`
+selects a suite; append `/testName` to select one case.

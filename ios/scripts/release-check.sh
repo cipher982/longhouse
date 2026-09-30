@@ -3,6 +3,7 @@
 # (check-archive.sh). Needs Xcode and no credentials, so it runs on the bench or a
 # hosted runner.
 #
+#   IOS_RELEASE_APP_OUTPUT=/tmp/agents/Longhouse.zip make ios-release-check
 #   ios/scripts/release-check.sh
 set -euo pipefail
 
@@ -23,3 +24,7 @@ xcodebuild archive \
   || { tail -40 "$out/archive.log" >&2; echo "release-check: Release archive failed" >&2; exit 1; }
 
 ios/scripts/check-archive.sh "$out/Longhouse.xcarchive"
+if [[ -n "${IOS_RELEASE_APP_OUTPUT:-}" ]]; then
+  ditto -c -k --sequesterRsrc --keepParent \
+    "$out/Longhouse.xcarchive/Products/Applications/Longhouse.app" "$IOS_RELEASE_APP_OUTPUT"
+fi

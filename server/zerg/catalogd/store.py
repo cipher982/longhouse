@@ -16624,6 +16624,7 @@ def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], head
         return
     child = StorageSession.__table__
     parent = child.alias("delegation_parent")
+    rendered = (child.c.render_state == "ready") & child.c.current_render_generation.is_not(None)
     tool_ids = {tool_id for values in requested.values() for tool_id in values}
     rows = connection.execute(
         select(
@@ -16632,9 +16633,9 @@ def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], head
             child.c.session_id,
             child.c.started_at,
             child.c.last_activity_at,
-            child.c.user_messages,
-            child.c.assistant_messages,
-            child.c.tool_calls,
+            case((rendered, child.c.user_messages), else_=None).label("user_messages"),
+            case((rendered, child.c.assistant_messages), else_=None).label("assistant_messages"),
+            case((rendered, child.c.tool_calls), else_=None).label("tool_calls"),
         )
         .select_from(child.join(parent, parent.c.session_id == child.c.subagent_parent_session_id))
         .where(

@@ -402,7 +402,7 @@ testflight-status: ## TestFlight builds, review state and public link (needs ASC
 ios-release-check: ## Unsigned Release archive + App Store upload preconditions (privacy manifest, export compliance)
 	@ios/scripts/release-check.sh
 
-ios-unit: ## Hermetic iOS unit tests on this machine (~35s) — iteration only, never the gate
+ios-unit: ## Hermetic iOS unit tests on this machine (TEST=LonghouseIOSTests/Suite[/test] selects a case)
 	@# Host development goal on purpose, like sim-deploy and phone-deploy: the
 	@# `test-` prefix is reserved for goals that run inside the disposable
 	@# boundary or dispatch to a hosted VM (Makefile:ISOLATED_GOALS), and this
@@ -420,7 +420,7 @@ ios-unit: ## Hermetic iOS unit tests on this machine (~35s) — iteration only, 
 		-configuration Debug \
 		-destination "$$DESTINATION" \
 		-derivedDataPath "$$DERIVED_DATA_PATH" \
-		-only-testing:LonghouseIOSTests \
+		-only-testing:$(or $(TEST),LonghouseIOSTests) \
 		test
 
 test-frontend: ## Frontend unit tests + type-check (~1min)
