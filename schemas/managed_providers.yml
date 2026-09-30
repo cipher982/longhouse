@@ -2959,6 +2959,26 @@ providers:
         minimum_scenario_revision: 7
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+    session.delegation.background:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.omp.delegation_background
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - &omp_background_assertion
+        id: omp_background_registry_owner_scoped
+        scenario_id: omp_background_jobs
+        oracle_source: server/zerg/qa/omp_background_producer.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - <<: *omp_background_assertion
+        id: omp_background_partial_progress_child_scoped
+      - <<: *omp_background_assertion
+        id: omp_background_terminal_status_preserved
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -2967,11 +2987,11 @@ providers:
       trigger: spawn_subagent
       owner_action: "parentSession is already read into child-session lineage; the served delegation signal still has to consume it"
     delegation.background:
-      disposition: upstream_absent
-      raw_source: none
+      disposition: not_implemented
+      raw_source: message/toolResult.details.async + custom_message/async-result
       canary: omp_orchestration_signals
-      trigger: census
-      owner_action: "no background or async work surface observed beyond parallel tool calls within one turn"
+      trigger: background_work
+      owner_action: "Native 18.4.4 task/command jobs and completion notices exist; archive records alone do not establish a complete live registry. The managed manager observation is separately declared under session.delegation.background."
     delegation.workflow:
       disposition: upstream_absent
       raw_source: none

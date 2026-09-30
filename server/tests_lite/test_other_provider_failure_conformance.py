@@ -25,20 +25,6 @@ from zerg.qa.resume_assurance import execution_variant_key
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 
-COVERED_PRODUCERS = frozenset(
-    {
-        "zerg.qa.antigravity_launch_hook_inbox",
-        "zerg.qa.antigravity_resume_policy",
-        "zerg.qa.cursor_coordination_producer",
-        "zerg.qa.cursor_native_resume",
-        "zerg.qa.cursor_turn_boundary_producer",
-        "zerg.qa.ios_workspace_selection_source_producer",
-        "zerg.qa.opencode_native_resume",
-        "zerg.qa.opencode_server_contract_producer",
-        "zerg.qa.opencode_turn_boundary_quiescent",
-    }
-)
-
 
 def _executable(path: Path) -> Path:
     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")

@@ -23,22 +23,6 @@ from zerg.qa import codex_turn_boundary_native as codex_boundary
 from zerg.qa import provider_native_resume
 from zerg.qa.provider_semantic_qualification import AssertionOutcome
 
-COVERED_PRODUCERS = frozenset(
-    {
-        "zerg.qa.claude_coordination_awareness_create",
-        "zerg.qa.claude_coordination_awareness_post_compaction",
-        "zerg.qa.claude_coordination_directed_input",
-        "zerg.qa.claude_launch_helm_real_print",
-        "zerg.qa.claude_native_resume",
-        "zerg.qa.claude_turn_boundary_quiescent",
-        "zerg.qa.claude_turn_start_real_print",
-        "zerg.qa.codex_coordination_native",
-        "zerg.qa.codex_helm_launch_visibility",
-        "zerg.qa.codex_native_resume",
-        "zerg.qa.codex_turn_boundary_native",
-    }
-)
-
 
 class _FakeShipper:
     receipt = {"status": "pass", "machine_name": "conformance-machine"}

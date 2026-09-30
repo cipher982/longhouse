@@ -4382,6 +4382,74 @@ async def test_late_parent_adopts_its_orphan_subagents(daemon_paths):
 
 @pytest.mark.parametrize("child_first", [True, False])
 @pytest.mark.asyncio
+async def test_cold_shadow_native_parent_binding_without_live_aliases(daemon_paths, child_first):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    parent_id, child_id = uuid4(), uuid4()
+    native_parent, native_child = "codex-shadow-parent", "codex-shadow-child"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        parent = _raw_params(
+            epoch=uuid4(),
+            session_id=parent_id,
+            start=0,
+            end=10,
+            records=(b"parent",),
+            sealed_at=now,
+            opaque_source_id="path-sha256:cold-parent",
+            provider_session_id=native_parent,
+        )
+        child = _raw_params(
+            epoch=uuid4(),
+            session_id=child_id,
+            start=0,
+            end=10,
+            records=(b"child",),
+            sealed_at=now,
+            opaque_source_id="path-sha256:cold-child",
+            provider_session_id=native_child,
+            subagent={"is_subagent": True, "parent_provider_session_id": native_parent},
+        )
+        # The same native handle outside this owner/machine/provider scope
+        # cannot make the authoritative same-scope source ambiguous.
+        for field, value in (("owner_id", "other-owner"), ("machine_id", "other-machine"), ("provider", "omp")):
+            foreign = _raw_params(
+                epoch=uuid4(),
+                session_id=uuid4(),
+                start=0,
+                end=10,
+                records=(b"foreign-parent",),
+                sealed_at=now,
+                opaque_source_id=f"path-sha256:foreign-{field}",
+                provider_session_id=native_parent,
+                **({field: value} if field != "owner_id" else {}),
+            )
+            if field == "owner_id":
+                foreign["owner_id"] = value
+            await client.call("storage.raw_object.commit.v2", foreign)
+        for raw in (child, parent) if child_first else (parent, child):
+            await client.call("storage.raw_object.commit.v2", raw)
+        graph = await client.call("session.subagents.list.v2", {"session_id": str(parent_id), "owner_id": "42"})
+        assert [(row["session_id"], row["provider_session_id"]) for row in graph["children"]] == [(str(child_id), native_child)]
+        resolved = await client.call("session.alias.resolve.v2", {"provider_session_id": native_child, "owner_id": 42})
+        assert resolved["session_id"] == str(child_id)
+    finally:
+        await client.close()
+        await daemon.close()
+    engine = create_catalog_engine(database_path)
+    try:
+        with Session(engine) as db:
+            row = db.get(StorageSession, str(child_id))
+            assert row.subagent_parent_session_id == str(parent_id)
+            assert row.provider_session_id == native_child
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("child_first", [True, False])
+@pytest.mark.asyncio
 async def test_omp_absolute_parent_session_commits_in_both_arrival_orders(daemon_paths, child_first):
     """The real commit API resolves OMP parentSession in either arrival order."""
 

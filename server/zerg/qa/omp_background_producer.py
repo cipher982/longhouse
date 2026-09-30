@@ -299,26 +299,38 @@ def omp_background_assertions(root: Path, result: Mapping[str, Any] | None = Non
 
 def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
     # Reuse the existing Helm PTY, extension channel, shipper and retirement
-    # mechanics. The prompt asks the real OMP task facility for one bounded job;
-    # absent native async evidence remains a semantic failure, never green.
+    # mechanics. Ask for bounded native child-task and command jobs; missing
+    # async evidence remains a semantic failure, never green.
     args.background_prompt = (
-        "Use the native background task/job facility exactly once. Start one bounded "
-        "task that reports progress, then wait for its terminal completed or failed "
-        "status. Reply with the requested marker only after the job terminal event."
+        "Use task once to start a named background worker that performs one read-only "
+        "inspection of the current workspace, reports progress, waits two seconds "
+        "and returns OMP_BACKGROUND_CHILD_DONE. Also use bash with async true once "
+        "for `sleep 2; printf OMP_BACKGROUND_COMMAND_DONE`. Do not fork, branch, "
+        "edit files, or spawn further workers. Wait for both native terminal events. "
+        "Reply with the requested marker only after both jobs complete or fail."
     )
     requested_assertion = _requested_assertion_id(getattr(args, "variant", None))
     fault = getattr(args, "negative_control", None)
-    if fault:
-        os.environ["LONGHOUSE_QA_FAULT"] = fault
-        os.environ["LONGHOUSE_QA_FAULT_RECEIPT"] = str(args.evidence_root.resolve() / "qa-fault-receipt.jsonl")
-        args.negative_control = None
-    result = helm.run_omp_helm(args)
-    args.negative_control = fault
+    fault_environment = {name: os.environ.get(name) for name in ("LONGHOUSE_QA_FAULT", "LONGHOUSE_QA_FAULT_RECEIPT")}
+    try:
+        if fault:
+            os.environ["LONGHOUSE_QA_FAULT"] = fault
+            os.environ["LONGHOUSE_QA_FAULT_RECEIPT"] = str(args.evidence_root.resolve() / "qa-fault-receipt.jsonl")
+            args.negative_control = None
+        result = helm.run_omp_helm(args)
+    finally:
+        args.negative_control = fault
+        for name, value in fault_environment.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     root = args.evidence_root.resolve()
     raw_artifacts = _retain_native_extension_artifacts(root)
     managed_identity = _managed_omp_identity(root, result)
     assertions = omp_background_assertions(root, result)
-    if not raw_artifacts:
+    native_run_healthy = result.get("status") == "pass"
+    if not raw_artifacts or not native_run_healthy:
         assertions = {name: False for name in assertions}
     receipt = {
         "schema_version": 1,
@@ -367,17 +379,23 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
             "target_rejected": target_rejected,
             "observed_code": ("background_registry_missing" if target_rejected else "background_registry_present"),
             "expected_code": "background_registry_missing",
-            "healthy_preconditions_failed": [],
+            "healthy_preconditions_failed": [] if native_run_healthy else ["omp_helm_lifecycle"],
             "managed_identity": managed_identity,
             "status": (
                 "pass"
-                if (fault_receipts and managed_identity and raw_artifacts and target_rejected and healthy_control_assertions)
+                if (
+                    native_run_healthy
+                    and fault_receipts
+                    and managed_identity
+                    and raw_artifacts
+                    and target_rejected
+                    and healthy_control_assertions
+                )
                 else "inconclusive"
             ),
         }
-        result["status"] = "pass" if all(assertions.values()) else "fail"
-    else:
-        result["status"] = "pass" if all(assertions.values()) else "fail"
+    result["status"] = "pass" if native_run_healthy and all(assertions.values()) else "fail"
+    helm.lifecycle.write_json(root / "result.json", result)
     return result
 
 
@@ -443,6 +461,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_factory_provider_arguments(parser, variants=_VARIANTS)
+    parser.add_argument("--model", required=False)
+    parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
+    parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
     parser.add_argument("--negative-control", choices=(FAULT,))
     return parser
 
@@ -453,9 +474,27 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(REGISTRATION.to_dict(), indent=2, sort_keys=True))
         return 0
     args = _parser().parse_args(arguments)
-    if args.negative_control:
-        os.environ["LONGHOUSE_QA_FAULT"] = FAULT
-    result = run_omp_background(args)
+    try:
+        result = run_omp_background(args)
+    except Exception as exc:  # noqa: BLE001 - retain a typed failed attempt, never a proof
+        partial = helm._read_state(args.evidence_root / "partial-observation.json") or {}
+        observation = dict(partial.get("observation") or {})
+        cleanup = helm._read_state(args.evidence_root / "cleanup-receipt.json")
+        if cleanup is not None:
+            observation["cleanup"] = cleanup
+        result = {
+            "schema_version": 1,
+            "producer": REGISTRATION.to_dict(),
+            "provider": "omp",
+            "scenario_id": SCENARIO_ID,
+            "status": "fail",
+            "observation": observation,
+            "assertions": {name: False for name in ASSERTIONS},
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        if args.negative_control:
+            result["negative_control"] = {"fault": args.negative_control, "status": "inconclusive"}
+        helm.lifecycle.write_json(args.evidence_root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 

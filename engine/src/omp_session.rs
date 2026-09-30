@@ -442,8 +442,7 @@ fn native_filename_id(path: &Path) -> Option<&str> {
 pub fn is_session_path(root: &Path, path: &Path) -> bool {
     let parent = path.parent();
     let direct_source = parent == Some(root);
-    let bucket_source =
-        parent.and_then(Path::parent) == Some(root) && native_filename_id(path).is_some();
+    let bucket_source = parent.and_then(Path::parent) == Some(root);
     if path.extension().and_then(|value| value.to_str()) != Some("jsonl") || !path.starts_with(root)
     {
         return false;

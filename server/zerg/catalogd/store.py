@@ -1513,7 +1513,7 @@ def _delegation_parent_id(*, provider_facts: tuple[dict[str, Any], ...], session
 def _provider_alias_values_for_session(connection: Connection, *, session_id: str, provider: str) -> list[str]:
     alias = LiveSessionThreadAlias.__table__
     thread = LiveSessionThread.__table__
-    return [
+    values = [
         str(row[0])
         for row in connection.execute(
             select(alias.c.alias_value)
@@ -1526,6 +1526,12 @@ def _provider_alias_values_for_session(connection: Connection, *, session_id: st
             .order_by(alias.c.id.asc())
         ).all()
     ]
+    native_id = connection.execute(
+        select(StorageSession.provider_session_id).where(StorageSession.session_id == session_id, StorageSession.provider == provider)
+    ).scalar_one_or_none()
+    if native_id and native_id not in values:
+        values.append(str(native_id))
+    return values
 
 
 def _spawn_child_payloads(provider_facts: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
@@ -8360,6 +8366,7 @@ class CatalogStore:
                     select(
                         session_table.c.session_id,
                         session_table.c.provider,
+                        session_table.c.provider_session_id,
                         session_table.c.started_at,
                         session_table.c.last_activity_at,
                         session_table.c.ended_at,
@@ -8386,7 +8393,9 @@ class CatalogStore:
                 .all()
             )
             child_ids = [str(row["session_id"]) for row in rows]
-            alias_map: dict[str, str] = {}
+            alias_map: dict[str, str] = {
+                str(row["session_id"]): str(row["provider_session_id"]) for row in rows if row["provider_session_id"]
+            }
             if child_ids:
                 alias = LiveSessionThreadAlias.__table__
                 thread = LiveSessionThread.__table__
@@ -8502,6 +8511,17 @@ class CatalogStore:
                 .mappings()
                 .first()
             )
+            if row is None:
+                candidates = (
+                    connection.execute(
+                        select(storage.c.session_id)
+                        .where(storage.c.provider_session_id == provider_session_id, storage.c.owner_id == str(owner_id))
+                        .limit(2)
+                    )
+                    .mappings()
+                    .all()
+                )
+                row = candidates[0] if len(candidates) == 1 else None
             return {
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
@@ -9615,6 +9635,8 @@ class CatalogStore:
                 )
             session_values = {
                 "owner_id": effective_owner_id,
+                "provider_session_id": session_facts.get("provider_session_id")
+                or (existing_session.get("provider_session_id") if existing_session is not None else None),
                 "environment": session_facts["environment"],
                 "project": session_facts["project"],
                 "cwd": session_facts["cwd"],
@@ -16395,6 +16417,17 @@ def _resolve_session_id_by_provider_session_id(
         .distinct()
     ).all()
     session_ids = {str(row[0]) for row in rows}
+    session_ids.update(
+        str(row[0])
+        for row in connection.execute(
+            select(storage_table.c.session_id).where(
+                storage_table.c.provider_session_id == provider_session_id,
+                storage_table.c.owner_id == str(owner_id),
+                storage_table.c.machine_id == machine_id,
+                storage_table.c.provider == provider,
+            )
+        ).all()
+    )
     # Storage-v2 sessions do not necessarily have a live thread (and therefore
     # cannot have a LiveSessionThreadAlias). OpenCode preserves the parent's
     # native id in the parent's delegation.spawn fact metadata instead. Resolve

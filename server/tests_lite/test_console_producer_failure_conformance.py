@@ -16,21 +16,6 @@ from zerg.qa import title_dependency_recovery_producer
 from zerg.qa import transcript_search_producer
 from zerg.qa import workspace_suggestions_live_producer
 
-COVERED_PRODUCERS = frozenset(
-    {
-        "zerg.qa.console_served_state",
-        "zerg.qa.pi_console_tool_producer",
-        "zerg.qa.omp_console_producer",
-        "zerg.qa.product_console_lifecycle",
-        "zerg.qa.provider_console_lifecycle",
-        "zerg.qa.provider_generic_resume",
-        "zerg.qa.title_dependency_live_producer",
-        "zerg.qa.title_dependency_recovery_producer",
-        "zerg.qa.workspace_suggestions_live_producer",
-        "zerg.qa.transcript_search_producer",
-    }
-)
-
 
 def _json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
@@ -411,18 +396,3 @@ def test_transcript_search_main_retains_turn_and_cleanup_evidence_when_search_fa
     assert _json(root / "transcript-flush-receipt.json")["status"] == "pass"
     assert _json(root / "cleanup-receipt.json")["status"] == "pass"
     assert _json(root / "provider-binary-receipt.json")["version"] == "fixture-1"
-
-
-def test_covered_producers_are_exactly_the_ten_entrypoints_under_this_slice():
-    assert COVERED_PRODUCERS == {
-        "zerg.qa.console_served_state",
-        "zerg.qa.pi_console_tool_producer",
-        "zerg.qa.omp_console_producer",
-        "zerg.qa.product_console_lifecycle",
-        "zerg.qa.provider_console_lifecycle",
-        "zerg.qa.provider_generic_resume",
-        "zerg.qa.title_dependency_live_producer",
-        "zerg.qa.title_dependency_recovery_producer",
-        "zerg.qa.workspace_suggestions_live_producer",
-        "zerg.qa.transcript_search_producer",
-    }

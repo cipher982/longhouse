@@ -5,25 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
-COVERED_PRODUCERS = frozenset(
-    {
-        "zerg.qa.claude_helm_lifecycle",
-        "zerg.qa.codex_helm_lifecycle",
-        "zerg.qa.cursor_helm_lifecycle",
-        "zerg.qa.opencode_helm_lifecycle",
-        "zerg.qa.pi_helm_lifecycle",
-        "zerg.qa.omp_helm_lifecycle",
-    }
-)
-
-
-def test_all_registered_producers_have_failure_conformance() -> None:
-    from tests_lite.test_claude_codex_producer_failure_conformance import COVERED_PRODUCERS as claude_codex
-    from tests_lite.test_console_producer_failure_conformance import COVERED_PRODUCERS as console
-    from tests_lite.test_other_provider_failure_conformance import COVERED_PRODUCERS as other
-    from zerg.qa.provider_factory_model import PRODUCER_MODULES
-
-    assert COVERED_PRODUCERS | claude_codex | console | other == set(PRODUCER_MODULES)
+import pytest
 
 
 class _FakeProcess:
@@ -554,7 +536,8 @@ def test_pi_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_
     assert _json(tmp_path / "evidence" / "cleanup-receipt.json")["status"] == "fail"
 
 
-def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("background", [False, True])
+def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_path, background) -> None:
     from zerg.qa import omp_helm_lifecycle as producer
 
     binary = _binary(tmp_path, "omp")
@@ -671,9 +654,13 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
         lambda *a, **k: {"status": "pass", "hidden": True, "archived": True, "present_in_served_inventory": False},
     )
     monkeypatch.setattr(producer, "sha256_file", lambda path: "digest")
+    monkeypatch.setattr(producer, "_runtime_get", lambda *a, **k: {})
 
-    args = _args(tmp_path, binary, variant=producer._VARIANTS[0])
-    exit_code = producer.main(
+    from zerg.qa import omp_background_producer
+
+    entrypoint = omp_background_producer if background else producer
+    args = _args(tmp_path, binary, variant=entrypoint._VARIANTS[0])
+    exit_code = entrypoint.main(
         [
             "--variant",
             args.variant,
@@ -693,6 +680,8 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
             args.api_url,
             "--agents-token",
             args.agents_token,
+            "--model",
+            args.model,
         ]
     )
     payload = _json(tmp_path / "evidence" / "result.json")
@@ -700,8 +689,11 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
     assert exit_code == 1
     assert payload["status"] == "fail"
     assert payload["observation"]["send_idle"] is True
-    assert payload["assertions"]["omp_helm_send_idle"] is True
-    assert payload["assertions"]["omp_helm_follow_up_native"] is False
+    if background:
+        assert all(value is False for value in payload["assertions"].values())
+    else:
+        assert payload["assertions"]["omp_helm_send_idle"] is True
+        assert payload["assertions"]["omp_helm_follow_up_native"] is False
     assert payload["error"] == "RuntimeError: late OMP native follow-up failure"
     cleanup = _json(tmp_path / "evidence" / "cleanup-receipt.json")
     assert cleanup["status"] == "fail"

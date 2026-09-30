@@ -162,6 +162,9 @@ class StorageSession(CatalogBase):
     tenant_id = Column(String(255), nullable=False, index=True)
     owner_id = Column(String(64), nullable=True, index=True)
     provider = Column(String(32), nullable=False, index=True)
+    # Native identity from the source descriptor also exists for cold Shadow
+    # archives, which have no managed thread or live thread alias.
+    provider_session_id = Column(String(255), nullable=True)
     environment = Column(String(32), nullable=False, server_default=text("'local'"), index=True)
     machine_id = Column(String(255), nullable=False, index=True)
     project = Column(String(255), nullable=True, index=True)

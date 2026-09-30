@@ -23,6 +23,15 @@ acceptance, retaining attested metadata rather than copying evidence bytes.
 Existing inline proofs remain immutable and readable. Evidence downloads require
 owner-capable authentication; managed-session credentials cannot read them.
 
+## Archived child identity
+
+Storage-v2 retains the source descriptor's native session ID even when a Shadow
+archive has no live thread. Parent/child resolution is scoped to owner, machine
+and provider and refuses ambiguous bindings. Child archives stay separate;
+their lineage does not assert an active background registry. Older rows with no
+retained native identity remain unknown until authoritative source re-ingress.
+
+
 ## Repairing held interactions
 
 The live catalog owns provider-wait lifecycle. Execution end revokes held

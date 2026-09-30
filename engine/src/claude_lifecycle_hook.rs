@@ -951,7 +951,7 @@ mod tests {
     fn retained_native_lifecycle_rows() -> Vec<Value> {
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/golden/claude/lifecycle_native.stdin.jsonl"
+            "/tests/fixtures/claude_hooks/lifecycle_native.stdin.jsonl"
         ))
         .lines()
         .map(|line| serde_json::from_str(line).expect("native lifecycle fixture JSON"))
@@ -1503,7 +1503,7 @@ mod tests {
         std::fs::create_dir_all(&subagents).unwrap();
         let sidecar: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/golden/claude/lifecycle_native.sidecar.meta.json"
+            "/tests/fixtures/claude_hooks/lifecycle_native.sidecar.meta.json"
         )))
         .unwrap();
         std::fs::write(
