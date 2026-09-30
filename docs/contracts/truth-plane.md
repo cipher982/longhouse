@@ -70,15 +70,30 @@ An over-budget observation is omitted without discarding parent activity or
 renewing previous registry evidence; no partial count is presented as complete.
 
 Task status and description come from the provider; raw command strings are not
-included. `first_observed_at` is not a task start time. Start and last-activity
-timestamps, and a navigable child session ID, are supplied only through exact,
-unambiguous child lineage. Historical child end times do not decide whether a
+included. `first_observed_at` is not a task start or activity time. Start and
+last-activity timestamps, a navigable child session ID, and nullable
+`tool_calls`, `assistant_messages`, and `user_messages` archive counters are
+supplied only through exact, unambiguous child lineage. Missing counters are
+unknown, not zero. Historical child end times do not decide whether a
 background task is still active.
 
 For Claude, a parent Stop registry's task ID selects only that parent's exact
 `subagents/agent-<id>.meta.json` sidecar. Its provider-authored `toolUseId` joins
 the existing child lineage; missing, malformed, or ambiguous evidence leaves
 the task visible without a transcript link.
+
+Child archive commits notify the parent's existing workspace stream, so child
+timing and counters update without a parent turn. This does not alter the
+parent's transcript counters, activity clock, or registry observation/expiry.
+
+Web delegated-work claims use the registry's own expiry, not the parent's
+short-lived activity expiry. The named registry is inspectable in the session
+evidence disclosure; expired observations show unknown, never an active count
+of zero. The single timeline fire includes linked child tool/reply deltas.
+Only subagents add agent flame roots; commands and monitors are separate
+populations. Joining or removing a child establishes a new counter baseline,
+not a burst of historical work. Fire intensity is qualitative, not token
+throughput or billing.
 
 ## Non-goals
 

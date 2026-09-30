@@ -619,6 +619,7 @@ class LiveCatalog:
         device_id: str,
         texts: tuple[str, ...],
         project: str = "longhouse",
+        provider: str = "codex",
         now: datetime | None = None,
     ) -> dict[str, Any]:
         """Build the protocol-v2 wire envelope the Machine Agent ships.
@@ -634,7 +635,7 @@ class LiveCatalog:
         identity = EnvelopeIdentity(
             tenant_id=self.tenant,
             machine_id=device_id,
-            provider="codex",
+            provider=provider,
             opaque_source_id=opaque_source_id,
             source_epoch=source_epoch,
             range_kind="record_ordinal",
@@ -648,7 +649,7 @@ class LiveCatalog:
             "tenant_id": self.tenant,
             "machine_id": device_id,
             "session_id": str(session_id),
-            "provider": "codex",
+            "provider": provider,
             "opaque_source_id": opaque_source_id,
             "source_epoch": str(source_epoch),
             "predecessor_source_epoch": None,

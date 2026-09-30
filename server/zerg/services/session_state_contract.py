@@ -176,6 +176,9 @@ class SessionDelegationTaskResponse(_FrozenModel):
     started_at: datetime | None = None
     last_activity_at: datetime | None = None
     session_id: str | None = None
+    user_messages: int | None = None
+    assistant_messages: int | None = None
+    tool_calls: int | None = None
 
 
 class SessionDelegationFacts(_FrozenModel):

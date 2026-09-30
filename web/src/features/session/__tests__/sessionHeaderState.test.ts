@@ -14,6 +14,7 @@ function session(overrides: {
   tool?: string | null;
   observedAt?: string | null;
   validUntil?: string | null;
+  delegation?: unknown;
   primaryTone?: string | null;
   primaryLabel?: string | null;
   primaryKey?: string | null;
@@ -29,6 +30,7 @@ function session(overrides: {
         observed_at: overrides.observedAt ?? null,
         valid_until: overrides.validUntil ?? null,
       },
+      delegation: overrides.delegation,
       presentation: {
         primary:
           overrides.primaryTone != null
@@ -108,6 +110,13 @@ describe("getSessionHeaderState", () => {
         activityState: "quiescent",
         tool: "Bash",
         observedAt: "2026-04-15T16:29:00Z",
+        validUntil: "2026-04-15T16:25:00Z",
+        delegation: {
+          state: "pending",
+          count: 1,
+          kinds: { subagent: 1 },
+          valid_until: "2026-04-15T16:35:00Z",
+        },
         primaryTone: "active",
         primaryKey: "delegated_work",
         primaryLabel: "Waiting on 1 background agent",

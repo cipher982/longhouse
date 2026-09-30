@@ -13,11 +13,12 @@
  *   - tool_calls / assistant_messages deltas    -> flares, sparks, work
  *   - lifetime tool density                     -> a busy session starts busy
  *   - user_messages delta                       -> a stoke
- *   - delegation.count                          -> extra flame roots
+ *   - fresh delegation.kinds.subagent            -> extra flame roots
  *   - last_activity_at                          -> Newton cooling of the bed
  */
 
-import type { AgentSession } from "@/shared/api/agents";
+import type { AgentSession, SessionStateFacts } from "@/shared/api/agents";
+import { activityEvidenceIsLive } from "@/shared/session/activityEvidence";
 import { executingToolName } from "@/shared/session/sessionStatus";
 
 export type HearthMode = "working" | "waiting" | "idle" | "ended";
@@ -30,6 +31,12 @@ export interface HearthSnapshot {
   assistantMessages: number;
   userMessages: number;
   subagents: number;
+  /** Archive counts for exactly linked child sessions, kept off parent totals. */
+  childToolCalls?: number;
+  childAssistantMessages?: number;
+  childUserMessages?: number;
+  /** Stable linked-child population; changes reset its archive delta baseline. */
+  childMembership?: string;
   /** Tool running now, when the activity observation names one. */
   tool: string | null;
   /** Wall-clock ms of the session's last activity (server fact). */
@@ -39,7 +46,20 @@ export interface HearthSnapshot {
 }
 
 export function snapshotSignature(s: HearthSnapshot): string {
-  return [s.mode, s.toolCalls, s.assistantMessages, s.userMessages, s.subagents, s.tool ?? "", s.lastActivityMs ?? "", s.startedMs ?? ""].join("|");
+  return [
+    s.mode,
+    s.toolCalls,
+    s.assistantMessages,
+    s.userMessages,
+    s.subagents,
+    s.childToolCalls ?? "",
+    s.childAssistantMessages ?? "",
+    s.childUserMessages ?? "",
+    s.childMembership ?? "",
+    s.tool ?? "",
+    s.lastActivityMs ?? "",
+    s.startedMs ?? "",
+  ].join("|");
 }
 
 // ---- constants (seconds unless noted) ----
@@ -120,10 +140,23 @@ export interface CardDelta {
 export function diffSnapshots(prev: HearthSnapshot | null, next: HearthSnapshot): CardDelta {
   if (!prev) return { tools: 0, messages: 0, prompts: 0 };
   const d = (a: number, b: number) => (b > a ? b - a : 0);
+  // A child disappearing or reconnecting with a different population is a
+  // new archive baseline, never a burst of work. Parent counts remain
+  // independent and continue to produce their own deltas.
+  const childPopulationChanged = prev.childMembership !== next.childMembership;
+  const childTools = childPopulationChanged
+    ? 0
+    : d(prev.childToolCalls ?? 0, next.childToolCalls ?? 0);
+  const childMessages = childPopulationChanged
+    ? 0
+    : d(prev.childAssistantMessages ?? 0, next.childAssistantMessages ?? 0);
+  const childPrompts = childPopulationChanged
+    ? 0
+    : d(prev.childUserMessages ?? 0, next.childUserMessages ?? 0);
   return {
-    tools: d(prev.toolCalls, next.toolCalls),
-    messages: d(prev.assistantMessages, next.assistantMessages),
-    prompts: d(prev.userMessages, next.userMessages),
+    tools: d(prev.toolCalls, next.toolCalls) + childTools,
+    messages: d(prev.assistantMessages, next.assistantMessages) + childMessages,
+    prompts: d(prev.userMessages, next.userMessages) + childPrompts,
   };
 }
 
@@ -332,18 +365,80 @@ function parseMs(value: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+
+function linkedChildArchiveCounts(
+  delegation: NonNullable<SessionStateFacts["delegation"]>,
+  parentId: string,
+): {
+  toolCalls: number;
+  assistantMessages: number;
+  userMessages: number;
+  membership: string;
+} {
+  let toolCalls = 0;
+  let assistantMessages = 0;
+  let userMessages = 0;
+  const linkedIds: string[] = [];
+  for (const task of delegation.items ?? []) {
+    const childId = task.session_id?.trim();
+    if (!childId || childId === parentId || task.kind !== "subagent") continue;
+    linkedIds.push(childId);
+    if (typeof task.tool_calls === "number" && Number.isFinite(task.tool_calls) && task.tool_calls >= 0) {
+      toolCalls += task.tool_calls;
+    }
+    if (
+      typeof task.assistant_messages === "number" &&
+      Number.isFinite(task.assistant_messages) &&
+      task.assistant_messages >= 0
+    ) {
+      assistantMessages += task.assistant_messages;
+    }
+    if (typeof task.user_messages === "number" && Number.isFinite(task.user_messages) && task.user_messages >= 0) {
+      userMessages += task.user_messages;
+    }
+  }
+  linkedIds.sort();
+  return { toolCalls, assistantMessages, userMessages, membership: linkedIds.join("\u001f") };
+}
+
 /** The fire's inputs from a timeline session, given the row's lamp mode. */
 export function hearthSnapshotFromSession(
-  session: Pick<AgentSession, "tool_calls" | "assistant_messages" | "user_messages" | "session_state" | "last_activity_at" | "started_at">,
+  session: Pick<
+    AgentSession,
+    "id" | "tool_calls" | "assistant_messages" | "user_messages" | "session_state" | "last_activity_at" | "started_at"
+  >,
   mode: HearthMode,
+  nowMs: number = Date.now(),
 ): HearthSnapshot {
   const activity = session.session_state.activity;
+  const delegation = session.session_state.delegation;
+  const delegationLive = Boolean(
+    delegation &&
+      delegation.state === "pending" &&
+      delegation.count > 0 &&
+      activityEvidenceIsLive(delegation, nowMs),
+  );
+  const subagentCount = delegation?.kinds?.subagent;
+  const freshSubagentCount =
+    delegationLive &&
+    typeof subagentCount === "number" &&
+    Number.isFinite(subagentCount) &&
+    subagentCount > 0
+      ? subagentCount
+      : 0;
+  const child = delegationLive && delegation
+    ? linkedChildArchiveCounts(delegation, session.id)
+    : { toolCalls: 0, assistantMessages: 0, userMessages: 0, membership: "" };
   return {
     mode,
     toolCalls: session.tool_calls ?? 0,
     assistantMessages: session.assistant_messages ?? 0,
     userMessages: session.user_messages ?? 0,
-    subagents: session.session_state.delegation?.count ?? 0,
+    subagents: freshSubagentCount,
+    childToolCalls: child.toolCalls,
+    childAssistantMessages: child.assistantMessages,
+    childUserMessages: child.userMessages,
+    childMembership: child.membership,
     tool: executingToolName(activity),
     lastActivityMs: parseMs(session.last_activity_at),
     startedMs: parseMs(session.started_at),

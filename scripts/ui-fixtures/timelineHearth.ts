@@ -3,7 +3,7 @@
  * (working, very busy with subagents, waiting on you, idle a few minutes,
  * idle for hours, ended). The capture's stream mock replays
  * `buildTimelineHearthStreamBatch(n)` on every EventSource reconnect, so the
- * busy rows see real tool/reply/prompt count deltas and throw sparks.
+ * busy row keeps parent totals fixed while linked child archive counts advance;
  *
  * Clock: the capture freezes Date.now at 2026-04-15T16:12:00Z.
  */
@@ -14,6 +14,7 @@ type Card = ReturnType<typeof makeTimelineCard>;
 
 const NOW = "2026-04-15T16:12:00Z";
 const minutesBefore = (m: number) => new Date(Date.parse(NOW) - m * 60_000).toISOString();
+const minutesAfter = (m: number) => new Date(Date.parse(NOW) + m * 60_000).toISOString();
 
 function live(tool: string | null) {
   return {
@@ -37,8 +38,16 @@ function withState(card: Card, patch: Record<string, unknown>): Card {
 /** Counts that grow with each stream batch, so the fires see deltas. */
 function counts(n: number) {
   return {
-    working: { tool_calls: 38 + Math.floor(n / 2), assistant_messages: 20 + Math.floor(n / 3), user_messages: 4 + (n > 0 && n % 5 === 0 ? 1 : 0) },
-    busy: { tool_calls: 1480 + n * 4, assistant_messages: 610 + n, user_messages: 9 + Math.floor(n / 4) },
+    working: {
+      tool_calls: 38 + Math.floor(n / 2),
+      assistant_messages: 20 + Math.floor(n / 3),
+      user_messages: 4 + (n > 0 && n % 5 === 0 ? 1 : 0),
+    },
+    busyParent: { tool_calls: 1480, assistant_messages: 610, user_messages: 9 },
+    busyChild: {
+      alpha: { tool_calls: 34 + n * 3, assistant_messages: 12 + n, user_messages: 2 },
+      beta: { tool_calls: 19 + n * 2, assistant_messages: 8 + n, user_messages: 1 },
+    },
   };
 }
 
@@ -75,7 +84,7 @@ function buildCards(n: number): Card[] {
       started_at: minutesBefore(62),
       last_activity_at: minutesBefore(0.02),
       timeline_anchor_at: minutesBefore(0.02),
-      ...c.busy,
+      ...c.busyParent,
       summary_title: "Catalog backfill: replay 40k transcripts",
       anchor_title: "Catalog backfill: replay 40k transcripts",
       timeline_title: "Catalog backfill: replay 40k transcripts",
@@ -84,7 +93,73 @@ function buildCards(n: number): Card[] {
       origin_label: "cube",
       ...live("Bash"),
     } as never),
-    { working_set: "open", delegation: { state: "pending", count: 2 } },
+    {
+      working_set: "open",
+      activity: {
+        state: "quiescent",
+        tool: null,
+        observed_at: minutesBefore(3),
+        valid_until: minutesBefore(1),
+      },
+      delegation: {
+        state: "pending",
+        count: 4,
+        kinds: { subagent: 2, shell: 1, monitor: 1 },
+        source: "claude_hook",
+        observed_at: minutesBefore(0.02),
+        valid_until: minutesAfter(2),
+        items: [
+          {
+            id: "task-alpha",
+            kind: "subagent",
+            status: "running",
+            description: "Replay shard alpha",
+            first_observed_at: minutesBefore(8),
+            started_at: minutesBefore(7),
+            last_activity_at: minutesBefore(0.04),
+            session_id: "hearth-child-alpha",
+            ...c.busyChild.alpha,
+          },
+          {
+            id: "task-beta",
+            kind: "subagent",
+            status: "running",
+            description: "Replay shard beta",
+            first_observed_at: minutesBefore(7),
+            started_at: minutesBefore(6),
+            last_activity_at: minutesBefore(0.06),
+            session_id: "hearth-child-beta",
+            ...c.busyChild.beta,
+          },
+          {
+            id: "task-command",
+            kind: "shell",
+            status: "running",
+            description: "Check replay logs",
+            last_activity_at: minutesBefore(0.5),
+            session_id: null,
+            tool_calls: null,
+          },
+          {
+            id: "task-monitor",
+            kind: "monitor",
+            status: "running",
+            description: "Watch replay health",
+            last_activity_at: minutesBefore(0.5),
+            session_id: null,
+            tool_calls: null,
+          },
+        ],
+      },
+      presentation: {
+        primary: {
+          key: "delegated_work",
+          label: "Background · 2 agents · 1 command · 1 monitor",
+          tone: "active",
+          observed_at: minutesBefore(0.02),
+        },
+      },
+    },
   );
   const waitingBase = makeTimelineCard({
     id: "hearth-waiting",

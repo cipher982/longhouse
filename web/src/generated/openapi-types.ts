@@ -8170,6 +8170,12 @@ export interface components {
             last_activity_at?: string | null;
             /** Session Id */
             session_id?: string | null;
+            /** User Messages */
+            user_messages?: number | null;
+            /** Assistant Messages */
+            assistant_messages?: number | null;
+            /** Tool Calls */
+            tool_calls?: number | null;
         };
         /** SessionDeletionResponse */
         SessionDeletionResponse: {

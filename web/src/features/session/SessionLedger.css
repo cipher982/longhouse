@@ -160,7 +160,91 @@
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
 }
+.session-ledger__background {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+}
 
+.session-ledger__background-heading,
+.session-ledger__background-task-head,
+.session-ledger__background-task-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.session-ledger__background-heading {
+  justify-content: space-between;
+  color: var(--color-text-secondary);
+}
+
+.session-ledger__background-heading span,
+.session-ledger__background-task-meta {
+  color: var(--color-text-muted);
+}
+
+.session-ledger__background-snapshot {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.session-ledger__background-snapshot > div {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.session-ledger__background-snapshot dt {
+  color: var(--color-text-muted);
+}
+
+.session-ledger__background-snapshot dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-ledger__background-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-ledger__background-task {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-ledger__background-task-head {
+  justify-content: space-between;
+}
+
+.session-ledger__background-task-head a {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-ledger__background-task-meta {
+  flex-wrap: wrap;
+  font-family: var(--font-family-mono);
+  font-size: 0.92em;
+}
+
+.session-ledger__background-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+}
 .session-ledger__full-detail {
   font-family: var(--font-family-mono);
 }
@@ -255,10 +339,10 @@
 }
 .session-ledger[data-surface="composer"] .session-ledger__evidence {
   position: absolute;
-  top: calc(100% + 8px);
+  bottom: calc(100% + 8px);
   right: 0;
   z-index: 30;
-  width: min(300px, 80vw);
+  width: min(440px, 80vw);
   max-height: min(50dvh, 340px);
   border-radius: 2px;
   background: var(--color-surface-elevated);

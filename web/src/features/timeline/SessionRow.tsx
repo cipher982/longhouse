@@ -112,9 +112,9 @@ export function SessionRow({
     : isClosed ? "Closed" : claimExpired ? ACTIVITY_UNCERTAIN_LABEL : (timelineStatus?.label ?? "");
   // Attention signal shared with iOS (waiting / working / quiet / unknown /
   // closed). Drives the row's one status instrument.
-  const signal: TimelineSignal = claimExpired ? "unknown" : resolveTimelineSignal(session);
+  const signal: TimelineSignal = claimExpired ? "unknown" : resolveTimelineSignal(session, { nowMs: relativeNowMs });
   const lampState = getRowLampState({ signal, isClosed, unread, unreadOutcome });
-  const hearthSnapshot = hearthSnapshotFromSession(session, hearthModeForLamp(lampState));
+  const hearthSnapshot = hearthSnapshotFromSession(session, hearthModeForLamp(lampState), relativeNowMs);
 
   // When the user is searching and the backend returned a match snippet,
   // show that as the row's secondary line with the query highlighted.

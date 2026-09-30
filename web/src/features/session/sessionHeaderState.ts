@@ -84,7 +84,7 @@ export function getSessionHeaderState(
 
   if (sessionIsWorking(facts, nowMs)) {
     // Delegated work names the work, not the elapsed turn.
-    const delegated = delegatedWorkLabel(facts);
+    const delegated = delegatedWorkLabel(facts, nowMs);
     if (delegated) return { tone: "live", text: delegated };
     const fallbackAnchorMs = Date.parse(facts.activity.observed_at ?? "");
     const anchorMs = turnStartMs ?? (Number.isFinite(fallbackAnchorMs) ? fallbackAnchorMs : null);

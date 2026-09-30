@@ -4,7 +4,7 @@ import type {
   SessionRuntimeDisplay,
   SessionStateFacts,
 } from "@/shared/api/agents";
-
+import { workClaimExpired, sessionIsWorking } from "./sessionStatus";
 export type KnownPresenceState =
   | "thinking"
   | "running"
@@ -63,15 +63,17 @@ export type TimelineSignal = "attention" | "working" | "quiet" | "unknown" | "cl
 
 export function resolveTimelineSignal(
   session: Pick<AgentSession, "session_state" | "user_state">,
-  options: { connectivityHealthy?: boolean } = {},
+  options: { connectivityHealthy?: boolean; nowMs?: number } = {},
 ): TimelineSignal {
   if (isSessionClosed(session)) return "closed";
   // A global connectivity banner owns severity; suppress per-row attention.
   if (options.connectivityHealthy === false) return "quiet";
 
   const facts = session.session_state;
+  const nowMs = options.nowMs ?? Date.now();
+  if (workClaimExpired(facts, nowMs)) return "unknown";
   if (needsSessionAttention(session)) return "attention";
-  if (facts.activity.state === "thinking" || facts.activity.state === "executing") return "working";
+  if (sessionIsWorking(facts, nowMs)) return "working";
   if (facts.activity.state === "blocked" || facts.activity.state === "stalled") return "attention";
   // A managed Helm session's idle/needs_user activity observation can expire
   // while its control lease or attached terminal stays fresh; the server

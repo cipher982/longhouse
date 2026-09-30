@@ -320,6 +320,9 @@ struct APISessionDelegationTaskResponse: Codable, Hashable, Sendable {
     let startedAt: String?
     let lastActivityAt: String?
     let sessionId: String?
+    let userMessages: Int?
+    let assistantMessages: Int?
+    let toolCalls: Int?
 }
 
 struct APISessionDelegationFacts: Codable, Hashable, Sendable {

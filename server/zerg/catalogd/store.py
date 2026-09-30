@@ -10198,6 +10198,20 @@ class CatalogStore:
                 commit_time=commit_time,
                 session_facts=session_facts,
             )
+            delegation_parent_session_id = None
+            if effective_owner_id is not None:
+                parent_session_id = connection.execute(
+                    select(storage_session.c.subagent_parent_session_id).where(storage_session.c.session_id == session_key)
+                ).scalar_one_or_none()
+                if parent_session_id is not None:
+                    delegation_parent_session_id = connection.execute(
+                        select(storage_session.c.session_id).where(
+                            storage_session.c.session_id == parent_session_id,
+                            storage_session.c.owner_id == str(effective_owner_id),
+                            storage_session.c.provider == provider,
+                            storage_session.c.machine_id == machine_id,
+                        )
+                    ).scalar_one_or_none()
             timer.mark("projector_state")
             row = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().one()
             title_generation_required = bool(
@@ -10215,6 +10229,7 @@ class CatalogStore:
                 "exact_replay": False,
                 "receipt": _raw_object_receipt(row),
                 "title_generation_required": title_generation_required,
+                "delegation_parent_session_id": (str(delegation_parent_session_id) if delegation_parent_session_id is not None else None),
             }
 
     def read_source_epoch_manifest(
@@ -16614,6 +16629,9 @@ def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], head
             child.c.session_id,
             child.c.started_at,
             child.c.last_activity_at,
+            child.c.user_messages,
+            child.c.assistant_messages,
+            child.c.tool_calls,
         )
         .select_from(child.join(parent, parent.c.session_id == child.c.subagent_parent_session_id))
         .where(
@@ -16641,6 +16659,9 @@ def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], head
             "session_id": str(row["session_id"]),
             "started_at": _encode_datetime(row["started_at"]),
             "last_activity_at": _encode_datetime(row["last_activity_at"]),
+            "user_messages": int(row["user_messages"]) if row["user_messages"] is not None else None,
+            "assistant_messages": int(row["assistant_messages"]) if row["assistant_messages"] is not None else None,
+            "tool_calls": int(row["tool_calls"]) if row["tool_calls"] is not None else None,
         }
 
 

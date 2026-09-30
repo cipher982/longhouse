@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Link } from "react-router";
 import type { SessionActivityFeed } from "./sessionActivityFeed";
 import { ActivityStrip } from "./ActivityStrip";
 
@@ -24,6 +25,25 @@ export interface LedgerReceiptMark {
   replay: boolean;
 }
 
+export interface SessionBackgroundTask {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  sessionId: string | null;
+  latestActivityAt: string | null;
+  toolCalls: number | null;
+}
+
+export interface SessionBackgroundInspector {
+  count: number | null;
+  subagentCount: number | null;
+  source: string | null;
+  observedAt: string | null;
+  validUntil: string | null;
+  tasks: SessionBackgroundTask[];
+}
+
 export interface SessionLedgerState {
   tone: LedgerTone;
   headline: string;
@@ -37,6 +57,7 @@ export interface SessionLedgerState {
   heartbeatAgeMs: number | null;
   receiptMarks: LedgerReceiptMark[];
   facts: Array<{ label: string; value: string }>;
+  backgroundInspector?: SessionBackgroundInspector | null;
 }
 
 export interface SessionLedgerProps {
@@ -90,6 +111,30 @@ function ageText(seconds: number): string {
   if (age < 86_400)
     return `${Math.floor(age / 3_600)}h ${Math.floor((age % 3_600) / 60)}m ago`;
   return `${Math.floor(age / 86_400)}d ${Math.floor((age % 86_400) / 3_600)}h ago`;
+}
+
+function durationLabel(seconds: number): string {
+  const value = Math.max(0, Math.floor(seconds));
+  if (value < 60) return `${value}s`;
+  if (value < 3_600) return `${Math.floor(value / 60)}m`;
+  if (value < 86_400) return `${Math.floor(value / 3_600)}h`;
+  return `${Math.floor(value / 86_400)}d`;
+}
+
+function observedAgeLabel(value: string | null, nowMs: number): string {
+  if (!value) return "not recorded";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "unparseable";
+  const delta = nowMs - timestamp;
+  return delta >= 0 ? `${durationLabel(delta / 1_000)} ago` : "in the future";
+}
+
+function expiryLabel(value: string | null, nowMs: number): string {
+  if (!value) return "not bounded";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "unparseable";
+  const delta = timestamp - nowMs;
+  return delta >= 0 ? `in ${durationLabel(delta / 1_000)}` : `expired ${durationLabel(-delta / 1_000)} ago`;
 }
 
 function elapsedText(seconds: number): string {
@@ -249,6 +294,7 @@ export function SessionLedger({
       ? "Viewer heartbeat is scoped to updates, not provider work"
       : `Last update heartbeat ${ageText(state.heartbeatAgeMs / 1_000)}`;
   const showElapsed = state.elapsedSeconds != null && state.tone !== "unknown";
+  const inspectorNowMs = Date.now();
 
   return (
     <div
@@ -383,6 +429,75 @@ export function SessionLedger({
               </span>
             </summary>
             <div className="session-ledger__evidence">
+            {state.backgroundInspector ? (
+              <section
+                className="session-ledger__background"
+                data-testid="background-task-inspector"
+              >
+                <div className="session-ledger__background-heading">
+                  <strong>Background work</strong>
+                  <span>
+                    {state.backgroundInspector.count == null ? "Registry status unknown" : (
+                      <>
+                        {state.backgroundInspector.count} task
+                        {state.backgroundInspector.count === 1 ? "" : "s"} ·{" "}
+                        {state.backgroundInspector.subagentCount} agent
+                        {state.backgroundInspector.subagentCount === 1 ? "" : "s"}
+                      </>
+                    )}
+                  </span>
+                </div>
+                <dl className="session-ledger__background-snapshot">
+                  <div>
+                    <dt>Snapshot</dt>
+                    <dd>{state.backgroundInspector.source ?? "unknown source"}</dd>
+                  </div>
+                  <div>
+                    <dt>Observed</dt>
+                    <dd title={state.backgroundInspector.observedAt ?? undefined}>
+                      {observedAgeLabel(state.backgroundInspector.observedAt, inspectorNowMs)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Expires</dt>
+                    <dd title={state.backgroundInspector.validUntil ?? undefined}>
+                      {expiryLabel(state.backgroundInspector.validUntil, inspectorNowMs)}
+                    </dd>
+                  </div>
+                </dl>
+                {state.backgroundInspector.tasks.length > 0 ? (
+                  <ul className="session-ledger__background-list">
+                    {state.backgroundInspector.tasks.map((task) => (
+                      <li key={task.id} className="session-ledger__background-task">
+                        <div className="session-ledger__background-task-head">
+                          {task.sessionId ? (
+                            <Link to={`/timeline/${task.sessionId}`}>{task.name}</Link>
+                          ) : (
+                            <span>{task.name}</span>
+                          )}
+                          <span>{task.status}</span>
+                        </div>
+                        <div className="session-ledger__background-task-meta">
+                          <span>{task.type}</span>
+                          <span>
+                            latest {observedAgeLabel(task.latestActivityAt, inspectorNowMs)}
+                          </span>
+                          <span title={task.toolCalls == null ? "No exact child archive join" : undefined}>
+                            archive tools {task.toolCalls == null ? "—" : task.toolCalls}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="session-ledger__background-empty">
+                    {state.backgroundInspector.count == null
+                      ? "No current registry observation. Unknown does not mean completed."
+                      : "Task names are not present in this snapshot."}
+                  </p>
+                )}
+              </section>
+            ) : null}
               <dl className="session-ledger__facts">
                 <div>
                   <dt>Updates</dt>

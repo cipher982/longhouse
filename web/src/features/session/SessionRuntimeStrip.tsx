@@ -16,7 +16,12 @@ import {
   sessionIsWorking,
   workClaimExpired,
 } from "@/shared/session/sessionStatus";
-import { SessionLedger, type SessionLedgerState } from "./SessionLedger";
+import {
+  SessionLedger,
+  type SessionBackgroundInspector,
+  type SessionBackgroundTask,
+  type SessionLedgerState,
+} from "./SessionLedger";
 import "./SessionLedger.css";
 
 interface SessionRuntimeStripProps {
@@ -40,6 +45,44 @@ interface SessionRuntimeStripProps {
 }
 
 const INITIAL_CONNECTION_GRACE_MS = 2_000;
+
+function buildBackgroundInspector(
+  facts: AgentSession["session_state"],
+  nowMs: number,
+): SessionBackgroundInspector | null {
+  const delegation = facts.delegation;
+  if (!delegation || !delegation.observed_at) return null;
+  const state = activityEvidenceIsLive(delegation, nowMs) ? delegation.state : "unknown";
+  const tasks: SessionBackgroundTask[] = (state === "unknown" ? [] : delegation.items ?? []).map((task) => {
+    const sessionId = task.session_id?.trim() || null;
+    const toolCalls =
+      sessionId &&
+      typeof task.tool_calls === "number" &&
+      Number.isFinite(task.tool_calls) &&
+      task.tool_calls >= 0
+        ? task.tool_calls
+        : null;
+    return {
+      id: task.id,
+      name: task.description?.trim() || task.id,
+      type: task.kind?.trim() || "unknown",
+      status: task.status?.trim() || "unknown",
+      sessionId,
+      latestActivityAt: task.last_activity_at ?? null,
+      toolCalls,
+    };
+  });
+  const subagentCount = delegation.kinds?.subagent;
+  return {
+    count: state === "unknown" ? null : delegation.count,
+    subagentCount: state === "unknown" ? null : (subagentCount ?? 0),
+    source: delegation.source ?? null,
+    observedAt: delegation.observed_at ?? null,
+    validUntil: delegation.valid_until ?? null,
+    tasks,
+  };
+}
+
 
 type ProviderEvidence = Pick<SessionLedgerState, "tone"> & {
   sessionId: string;
@@ -204,6 +247,7 @@ export function buildSessionLedgerState(
   const runtime = resolveSessionRuntimeState(session);
   const facts = runtime.stateFacts;
   const display = getRuntimeDisplayCopy(runtime);
+  const backgroundInspector = buildBackgroundInspector(facts, nowMs);
   const closedSession = facts.disposition.state === "closed";
   const rawProviderWorking =
     facts.activity.state === "thinking" || facts.activity.state === "executing";
@@ -328,6 +372,7 @@ export function buildSessionLedgerState(
       ? (activityFeed?.heartbeatAgeMs() ?? null)
       : null,
 
+    backgroundInspector,
     receiptMarks: [],
     facts: [
       {

@@ -198,9 +198,10 @@ describe("mapping from the timeline row", () => {
     expect(hearthModeForLamp("unknown")).toBe("idle");
   });
 
-  it("reads counts, the running tool and subagents off the card", () => {
+  it("reads parent counts and fresh subagent roots without counting command or monitor kinds", () => {
     const facts = makeSessionStateFacts({});
     const session = {
+      id: "parent",
       tool_calls: 42,
       assistant_messages: 7,
       user_messages: 3,
@@ -209,18 +210,72 @@ describe("mapping from the timeline row", () => {
       session_state: {
         ...facts,
         activity: { ...facts.activity, state: "executing" as const, tool: "Bash" },
-        delegation: { state: "pending" as const, count: 2 },
+        delegation: {
+          state: "pending" as const,
+          count: 14,
+          kinds: { subagent: 2, commands: 7, monitors: 5 },
+          valid_until: "2026-09-27T16:05:00Z",
+          items: [
+            {
+              id: "child",
+              kind: "subagent",
+              status: "running",
+              session_id: "child",
+              tool_calls: 11,
+              assistant_messages: 4,
+              user_messages: 1,
+            },
+            {
+              id: "monitor",
+              kind: "monitor",
+              status: "running",
+              session_id: null,
+              tool_calls: 99,
+            },
+          ],
+        },
       },
     };
-    expect(hearthSnapshotFromSession(session, "working")).toEqual({
+    expect(hearthSnapshotFromSession(session, "working", NOW)).toEqual({
       mode: "working",
       toolCalls: 42,
       assistantMessages: 7,
       userMessages: 3,
       subagents: 2,
+      childToolCalls: 11,
+      childAssistantMessages: 4,
+      childUserMessages: 1,
+      childMembership: "child",
       tool: "Bash",
       lastActivityMs: Date.parse("2026-09-27T15:59:00Z"),
       startedMs: Date.parse("2026-09-27T15:00:00Z"),
     });
+  });
+
+  it("treats child archive population changes as baselines, not reconnect spikes", () => {
+    const first = snap({
+      childToolCalls: 11,
+      childAssistantMessages: 4,
+      childUserMessages: 1,
+      childMembership: "alpha|beta",
+    });
+    const advanced = snap({
+      childToolCalls: 15,
+      childAssistantMessages: 6,
+      childUserMessages: 2,
+      childMembership: "alpha|beta",
+    });
+    expect(diffSnapshots(first, advanced)).toEqual({ tools: 4, messages: 2, prompts: 1 });
+
+    const removed = snap({ childMembership: "alpha", childToolCalls: 15, childAssistantMessages: 6, childUserMessages: 2 });
+    expect(diffSnapshots(advanced, removed)).toEqual({ tools: 0, messages: 0, prompts: 0 });
+
+    const reconnected = snap({
+      childToolCalls: 15,
+      childAssistantMessages: 6,
+      childUserMessages: 2,
+      childMembership: "alpha|beta",
+    });
+    expect(diffSnapshots(removed, reconnected)).toEqual({ tools: 0, messages: 0, prompts: 0 });
   });
 });

@@ -1628,6 +1628,19 @@ async def _commit_admitted_envelope(
             # otherwise a detail page attached to an empty shell never
             # refetches the render events that just became durable.
             bus.publish(topic_session(str(spec.session_id)), payload)
+            parent_session_id = committed.get("delegation_parent_session_id")
+            if isinstance(parent_session_id, str) and parent_session_id and parent_session_id != str(spec.session_id):
+                # A child archive commit changes the parent's exact task
+                # enrichment without changing the parent's own activity clock.
+                bus.publish(
+                    topic_session(parent_session_id),
+                    {
+                        **payload,
+                        "session_id": parent_session_id,
+                        "kind": "ingest_dependency",
+                        "dependency_session_id": str(spec.session_id),
+                    },
+                )
             bus.publish(TOPIC_TIMELINE, payload)
         return committed_receipt
     except CatalogRemoteError as exc:

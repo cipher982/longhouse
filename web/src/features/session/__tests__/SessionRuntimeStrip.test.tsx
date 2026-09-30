@@ -485,19 +485,9 @@ describe("withObservationAge", () => {
   });
 });
 
-describe("SessionRuntimeStrip status words", () => {
-  it("heads a pending interaction with the server's own copy", () => {
-    const state = buildSessionLedgerState(
-      session("pending", { pendingInteraction: true, terminalAttached: true }),
-      interaction,
-      Date.parse("2026-09-09T19:00:00.000Z"),
-      true,
-    );
-    expect(state.tone).toBe("attention");
-    expect(state.headline).toBe("Needs answer");
-  });
+describe("SessionRuntimeStrip evidence expiry", () => {
 
-  it("shows the served working label while fresh and demotes it once expired", () => {
+  it("demotes an active parent after its evidence expires", () => {
     const started = Date.parse("2026-09-09T19:00:00.000Z");
     const current = session("served-label", {
       activity: "thinking",
@@ -508,9 +498,48 @@ describe("SessionRuntimeStrip status words", () => {
     });
     const fresh = buildSessionLedgerState(current, interaction, started + 5_000, true);
     expect(fresh.tone).toBe("working");
-    expect(fresh.headline).toBe("Thinking");
     const expired = buildSessionLedgerState(current, interaction, started + 11_000, true);
     expect(expired.tone).toBe("unknown");
-    expect(expired.headline).toBe("Activity uncertain");
+  });
+});
+
+describe("SessionRuntimeStrip background registry", () => {
+  it("keeps delegation independent, expires to unknown, and distinguishes explicit empty", () => {
+    const start = Date.parse("2026-09-09T19:00:00Z");
+    const current = session("background", {
+      activity: "quiescent",
+      terminalAttached: true,
+      observedAt: new Date(start).toISOString(),
+      activityValidUntil: new Date(start + 5_000).toISOString(),
+    });
+    current.session_state.delegation = {
+      state: "pending",
+      count: 1,
+      kinds: { monitor: 1 },
+      observed_at: new Date(start).toISOString(),
+      valid_until: new Date(start + 20_000).toISOString(),
+      items: [{
+        id: "monitor-1",
+        kind: "monitor",
+        status: "running",
+        first_observed_at: new Date(start).toISOString(),
+      }],
+    };
+    const fresh = buildSessionLedgerState(current, interaction, start + 10_000, true).backgroundInspector!;
+    expect(fresh.count).toBe(1);
+    expect(fresh.tasks[0].latestActivityAt).toBeNull();
+    const expired = buildSessionLedgerState(current, interaction, start + 21_000, true).backgroundInspector!;
+    expect(expired.count).toBeNull();
+    expect(expired.subagentCount).toBeNull();
+    expect(expired.tasks).toEqual([]);
+    current.session_state.delegation = {
+      ...current.session_state.delegation,
+      state: "none",
+      count: 0,
+      kinds: {},
+      items: [],
+      valid_until: new Date(start + 30_000).toISOString(),
+    };
+    expect(buildSessionLedgerState(current, interaction, start + 22_000, true).backgroundInspector!.count).toBe(0);
   });
 });

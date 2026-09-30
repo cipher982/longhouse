@@ -887,6 +887,9 @@ def _project_delegation(
                     started_at=_optional_wire_datetime(child.get("started_at"), "started_at"),
                     last_activity_at=_optional_wire_datetime(child.get("last_activity_at"), "last_activity_at"),
                     session_id=_text(child.get("session_id")),
+                    user_messages=(int(child["user_messages"]) if child.get("user_messages") is not None else None),
+                    assistant_messages=(int(child["assistant_messages"]) if child.get("assistant_messages") is not None else None),
+                    tool_calls=int(child["tool_calls"]) if child.get("tool_calls") is not None else None,
                 )
             )
     return SessionDelegationFacts(

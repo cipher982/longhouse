@@ -214,6 +214,12 @@ def test_live_named_delegation_lifecycle_preserves_identity_and_observation_cloc
     assert by_id["agent-1"]["status"] == "running"
     assert by_id["shell-1"]["status"] == "pending"
     assert by_id["agent-1"]["description"] == "Implement the backend"
+    assert by_id["agent-1"]["user_messages"] is None
+    assert by_id["agent-1"]["assistant_messages"] is None
+    assert by_id["agent-1"]["tool_calls"] is None
+    assert by_id["shell-1"]["user_messages"] is None
+    assert by_id["shell-1"]["assistant_messages"] is None
+    assert by_id["shell-1"]["tool_calls"] is None
     assert by_id["agent-1"]["first_observed_at"] == pending["observed_at"]
     assert by_id["shell-1"]["first_observed_at"] == pending["observed_at"]
     pending_observed = pending["observed_at"]
@@ -486,22 +492,7 @@ def test_live_named_subagent_task_enriches_exact_child_timing_and_denies_ambigui
         provider_session_id="parent-native-link",
     )
     child_started = datetime.now(UTC).replace(microsecond=0)
-    child = live_catalog.commit_session(
-        owner_id=owner_id,
-        session_id=uuid4(),
-        device_id=DEVICE_ID,
-        provider=PROVIDER,
-        project="delegation-child",
-        texts=("Complete the named worker task",),
-        session_facts_overrides={
-            "provider_session_id": "child-native-link",
-            "is_subagent": True,
-            "parent_provider_session_id": "parent-native-link",
-            "parent_tool_call_id": "call-agent-1",
-            "workflow_run_id": run_id,
-        },
-        now=child_started,
-    )
+    child_session_id = uuid4()
     observed_at = child_started + timedelta(seconds=1)
     _post_event(
         live_catalog_client,
@@ -524,12 +515,69 @@ def test_live_named_subagent_task_enriches_exact_child_timing_and_denies_ambigui
             ],
         ),
     )
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import topic_session
+
+    child_body = live_catalog.envelope_body(
+        session_id=child_session_id,
+        device_id=DEVICE_ID,
+        provider=PROVIDER,
+        project="delegation-child",
+        texts=("Complete the named worker task",),
+        now=child_started,
+    )
+    child_body["session"].update(
+        {
+            "provider_session_id": "child-native-link",
+            "is_subagent": True,
+            "parent_provider_session_id": "parent-native-link",
+            "parent_tool_call_id": "call-agent-1",
+            "workflow_run_id": run_id,
+        }
+    )
+    render_record = child_body["render"]["records"][0]
+    child_body["render"]["records"] = [
+        {**render_record, "event_subordinal": 0, "role": "user"},
+        {
+            **render_record,
+            "event_id": f"{render_record['event_id']}-assistant",
+            "event_subordinal": 1,
+            "role": "assistant",
+            "content_text": "The worker completed a step",
+        },
+        {
+            **render_record,
+            "event_id": f"{render_record['event_id']}-tool",
+            "event_subordinal": 2,
+            "role": "assistant",
+            "content_text": None,
+            "tool_name": "Bash",
+            "tool_call_id": "child-tool-call",
+        },
+    ]
+    parent_topic = topic_session(str(parent_id))
+    bus = get_pubsub()
+    with bus.subscribe(parent_topic, since_seq=bus.peek_latest_seq(parent_topic)) as subscription:
+        response = live_catalog_client.post(
+            "/agents/storage/v2/envelopes",
+            json=child_body,
+            headers={"X-Agents-Token": token, "X-Longhouse-Storage-Lane": "live"},
+        )
+        assert response.status_code == 200, response.text
+        parent_message = live_catalog.loop.run(subscription.next_message(timeout=2.0))
+    assert parent_message is not None
+    assert parent_message.payload["session_id"] == str(parent_id)
+    assert parent_message.payload["kind"] == "ingest_dependency"
+    assert parent_message.payload["dependency_session_id"] == str(child_session_id)
     state = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner_id, email=owner_email, session_id=parent_id)[
         "delegation"
     ]
     task = state["items"][0]
     assert task["id"] == "agent-1"
-    assert task["session_id"] == str(child.session_id)
+    assert task["session_id"] == str(child_session_id)
+    assert task["user_messages"] == 1
+    assert task["assistant_messages"] == 1
+    assert task["tool_calls"] == 1
     assert datetime.fromisoformat(task["started_at"].replace("Z", "+00:00")) == child_started
     assert datetime.fromisoformat(task["last_activity_at"].replace("Z", "+00:00")) == child_started
     assert task["first_observed_at"] == state["observed_at"]
@@ -560,6 +608,9 @@ def test_live_named_subagent_task_enriches_exact_child_timing_and_denies_ambigui
     assert ambiguous_task["session_id"] is None
     assert ambiguous_task["started_at"] is None
     assert ambiguous_task["last_activity_at"] is None
+    assert ambiguous_task["user_messages"] is None
+    assert ambiguous_task["assistant_messages"] is None
+    assert ambiguous_task["tool_calls"] is None
 
 
 def test_hook_presence_serves_named_registry_without_overwriting_parent_activity(live_catalog, live_catalog_client):
