@@ -5,8 +5,10 @@
         -test-enumeration-format json -test-enumeration-output-path tests.json \
         test-without-building
     ios_test_slice.py tests.json 2/3
+    ios_test_slice.py --applies LonghouseSmoke LonghouseSmoke:2/3     ->  2/3
 
-Slice i of n takes every n-th enabled test, in sorted order, starting at the i-th.
+IOS_TEST_SLICE is `i/n` (every scheme in the run) or `Scheme:i/n` (that scheme only;
+the others run whole). Slice i of n takes every n-th enabled test, in sorted order, starting at the i-th.
 Sorting puts a class's tests next to each other and the stride spreads them over
 the slices, which balances the slow SessionChatUITests class (28 of the 35 UI
 tests) to within 7% on n=2. Any set of n slices covers every test exactly once.
@@ -21,11 +23,26 @@ import sys
 def parse_slice(spec: str) -> tuple[int, int]:
     index, slash, count = spec.partition("/")
     if not (slash and index.isdigit() and count.isdigit()):
-        raise ValueError(f"IOS_TEST_SLICE must look like 1/2, got {spec!r}")
+        raise ValueError(f"IOS_TEST_SLICE must look like 1/2 or Scheme:1/2, got {spec!r}")
     i, n = int(index), int(count)
     if not 1 <= i <= n:
         raise ValueError(f"IOS_TEST_SLICE {spec!r}: need 1 <= i <= n")
     return i, n
+
+
+def split_scheme(spec: str) -> tuple[str | None, str]:
+    """`Scheme:i/n` -> (Scheme, i/n); `i/n` -> (None, i/n)."""
+    scheme, colon, rest = spec.partition(":")
+    return (scheme, rest) if colon else (None, spec)
+
+
+def slice_for(spec: str, scheme: str) -> str:
+    """The `i/n` of `spec` that applies to `scheme`, or "" when it runs whole."""
+    if not spec:
+        return ""
+    named, rest = split_scheme(spec)
+    parse_slice(rest)
+    return rest if named in (None, scheme) else ""
 
 
 def enabled_tests(enumeration: dict) -> list[str]:
@@ -53,6 +70,13 @@ def slice_arguments(enumeration: dict, spec: str) -> list[str]:
 
 
 def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == "--applies":
+        try:
+            print(slice_for(sys.argv[3], sys.argv[2]))
+        except ValueError as error:
+            print(f"ios_test_slice: {error}", file=sys.stderr)
+            return 1
+        return 0
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2

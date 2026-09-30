@@ -27,13 +27,15 @@ ENUMERATION = {
 }
 
 
-def ci_lanes() -> list[tuple[str, str]]:
-    """(scheme, slice) for every entry of the ios-tests matrix; slice may be empty."""
+def ci_lanes() -> list[tuple[list[str], str]]:
+    """(schemes, slice spec) for every entry of the ios-tests matrix."""
     workflow = (ROOT / ".github/workflows/contract-first-ci.yml").read_text()
     job = workflow.split("\n  ios-tests:\n", 1)[1].split("\n  wheel-package:", 1)[0]
-    entries = re.findall(r"^\s*- lane: .*\n\s+schemes: (\S+)\n\s+slice: \"([^\"]*)\"", job, re.M)
+    entries = re.findall(
+        r"^\s*- lane: .*\n\s+schemes: \"?([^\"\n]+?)\"?\n\s+slice: \"([^\"]*)\"", job, re.M
+    )
     assert entries, "the ios-tests job must fan out over `matrix.include` lanes"
-    return entries
+    return [(schemes.split(), slice_) for schemes, slice_ in entries]
 
 
 def merge_schemes() -> set[str]:
@@ -70,21 +72,52 @@ class SliceTests(unittest.TestCase):
                 ios_slice.parse_slice(bad)
 
 
+class SchemeQualifiedSliceTests(unittest.TestCase):
+    def test_an_unqualified_slice_applies_to_every_scheme(self):
+        self.assertEqual(ios_slice.slice_for("1/2", "Any"), "1/2")
+
+    def test_a_qualified_slice_applies_to_its_scheme_only(self):
+        self.assertEqual(ios_slice.slice_for("UI:2/3", "UI"), "2/3")
+        self.assertEqual(ios_slice.slice_for("UI:2/3", "Unit"), "")
+
+    def test_no_slice_runs_everything_whole(self):
+        self.assertEqual(ios_slice.slice_for("", "UI"), "")
+
+
 class CiCoversTheMergeGateTests(unittest.TestCase):
-    def test_the_workflow_lanes_run_every_merge_scheme_completely(self):
+    def test_the_workflow_lanes_run_every_merge_scheme_completely_once(self):
         lanes = ci_lanes()
-        self.assertEqual({scheme for scheme, _ in lanes}, merge_schemes())
-        for scheme in merge_schemes():
-            slices = sorted(slice_ for name, slice_ in lanes if name == scheme)
-            if slices == [""]:
+        schemes = merge_schemes()
+        self.assertEqual({name for names, _ in lanes for name in names}, schemes)
+        for names, spec in lanes:
+            if spec:
+                named, _ = ios_slice.split_scheme(spec)
+                self.assertTrue(
+                    named is None or named in names,
+                    f"slice {spec!r} names a scheme its lane does not run",
+                )
+        for scheme in schemes:
+            whole = 0
+            slices = []
+            for names, spec in lanes:
+                if scheme not in names:
+                    continue
+                applied = ios_slice.slice_for(spec, scheme)
+                if applied:
+                    slices.append(applied)
+                else:
+                    whole += 1
+            if not slices:
+                self.assertEqual(whole, 1, f"{scheme}: run whole by {whole} lanes")
                 continue
-            counts = {slice_.split("/")[1] for slice_ in slices if slice_}
+            self.assertEqual(whole, 0, f"{scheme}: run both whole and sliced")
+            counts = {slice_.split("/")[1] for slice_ in slices}
             self.assertEqual(len(counts), 1, f"{scheme}: slices disagree on n: {slices}")
             n = int(counts.pop())
             self.assertEqual(
-                slices,
+                sorted(slices),
                 sorted(f"{i}/{n}" for i in range(1, n + 1)),
-                f"{scheme}: an unsliced lane or a missing slice would drop or repeat tests",
+                f"{scheme}: a missing or repeated slice would drop or duplicate tests",
             )
 
 

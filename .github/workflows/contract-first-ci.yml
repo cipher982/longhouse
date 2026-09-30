@@ -567,12 +567,13 @@ jobs:
     # One VM ran both merge schemes back to back: 10 to 25 minutes depending on
     # the hosted VM (measured 2026-09-20..29: 106 successes, median 17.7 min, max
     # 24.8), 60% of it the UI scheme, whose 35 tests take about 8 minutes serially.
-    # The lanes below run the unit scheme and two halves of the UI scheme side by
-    # side. A VM cannot overlap its own steps (booting the simulator during the
-    # compile made both slower on a 3-core VM), so each lane pays the compile, the
-    # simulator boot and the test runner start (about 6 minutes) once and runs a
-    # third of the tests. scripts/tests/ios-test-slice.test.py fails if these lanes
-    # stop covering IOS_MERGE_TEST_SCHEMES in the Makefile.
+    # Two lanes run the UI scheme's tests in halves side by side, the unit scheme
+    # riding in the first. A VM cannot overlap its own steps (booting the simulator
+    # during the compile made both slower on a 3-core VM), and the account's macOS
+    # concurrency is 5 jobs: three lanes plus a Launch Gate plus one more CI run
+    # queued lanes for 10 minutes, so this stays at two. `Scheme:i/n` slices that
+    # scheme only; scripts/tests/ios-test-slice.test.py fails if these lanes stop
+    # covering IOS_MERGE_TEST_SCHEMES in the Makefile.
     # The timeout was 25 and cancelled healthy runs (the v0.1.56 and v0.1.58
     # release gates); 40 leaves headroom over the slowest success.
     timeout-minutes: 40
@@ -581,15 +582,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - lane: unit
-            schemes: Longhouse
-            slice: ""
-          - lane: ui 1/2
-            schemes: LonghouseSmoke
-            slice: "1/2"
+          - lane: unit + ui 1/2
+            schemes: "Longhouse LonghouseSmoke"
+            slice: "LonghouseSmoke:1/2"
           - lane: ui 2/2
             schemes: LonghouseSmoke
-            slice: "2/2"
+            slice: "LonghouseSmoke:2/2"
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
