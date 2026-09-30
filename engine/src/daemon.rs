@@ -3130,16 +3130,26 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 let current = crate::import_scope::fingerprint(&scope_dir);
                 if current != last_scope_fingerprint {
                     last_scope_fingerprint = current;
-                    tracing::info!(
-                        "Import scope: {}",
-                        crate::config::import_scope().describe()
-                    );
-                    start_discovery_task(
-                        &mut discovery_tasks,
-                        &providers,
-                        WorkPriority::Scan,
-                        "import scope changed",
-                    );
+                    if current.is_none() {
+                        // The file was deleted under a running daemon. What it
+                        // enforces did not change (it keeps the scope it last
+                        // knew), so put the file back rather than rescan.
+                        if crate::config::restore_lost_scope_file(&scope_dir) {
+                            tracing::warn!(
+                                "The import scope file was deleted; restored it from the running scope"
+                            );
+                        }
+                    } else {
+                        let scope = crate::config::import_scope();
+                        crate::config::record_import_scope(&conn, &scope);
+                        tracing::info!("Import scope: {}", scope.describe());
+                        start_discovery_task(
+                            &mut discovery_tasks,
+                            &providers,
+                            WorkPriority::Scan,
+                            "import scope changed",
+                        );
+                    }
                 }
             }
 

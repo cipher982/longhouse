@@ -171,27 +171,21 @@ fn show(home: &Path, machine_dir: &Path, json: bool) -> anyhow::Result<()> {
             None => bail!("the paired longhouse-engine could not report the import scope"),
         };
     }
-    match ImportScope::load(machine_dir)? {
-        Some(scope) => println!(
-            "Import scope: {} (set by {})",
-            scope.describe(),
-            scope.chosen_via
-        ),
-        None => println!("Import scope: not chosen yet; the Machine Agent will start from now on."),
-    }
-    if let Some(summary) = engine_summary(home) {
-        for provider in summary["providers"].as_array().into_iter().flatten() {
-            println!(
-                "  {:<12} {} in scope, {} not imported",
-                provider["provider"].as_str().unwrap_or("?"),
-                provider["in_scope"],
-                provider["outside_scope"]
-            );
-        }
-        println!(
-            "  {:<12} {} in scope, {} not imported",
-            "total", summary["total_in_scope"], summary["total_outside_scope"]
-        );
+    // The paired engine states the scope in force, or the one it will settle
+    // on when nothing was chosen, and what it covers here. Without it, say what
+    // the file alone says.
+    match run_engine_summary(home, false) {
+        Some(text) => print!("{text}"),
+        None => match ImportScope::load(machine_dir)? {
+            Some(scope) => println!(
+                "Import scope: {} (set by {})",
+                scope.describe(),
+                scope.chosen_via
+            ),
+            None => println!(
+                "Import scope: not chosen yet; the Machine Agent decides when it first starts."
+            ),
+        },
     }
     println!("Change it: longhouse machine scope --since now|all|DATE [--project PATH ...]");
     Ok(())

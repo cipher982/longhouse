@@ -257,7 +257,10 @@ pub fn discover_files_in_scope(
                     continue;
                 }
                 if !source_in_import_scope(scope, provider.name, path) {
-                    *excluded_by_scope.entry(provider.name).or_default() += 1;
+                    // Counted as sessions: a subagent transcript belongs to its parent.
+                    if !is_subagent_transcript(path) {
+                        *excluded_by_scope.entry(provider.name).or_default() += 1;
+                    }
                     continue;
                 }
                 let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -373,7 +376,9 @@ pub fn discover_files_in_scope(
 
 /// How much of this machine's local history the import scope covers, per
 /// provider. Read-only: `longhouse machine scope` shows it and the installers'
-/// prompt quotes it, so a choice is made knowing what it hides.
+/// prompt quotes it, so a choice is made knowing what it hides. Counts are
+/// sessions: a provider's subagent transcripts belong to their parent and are
+/// not counted again.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ScopeSummaryProvider {
     pub provider: String,
@@ -383,25 +388,33 @@ pub struct ScopeSummaryProvider {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ScopeSummary {
-    /// The stored scope; `None` when nobody has chosen yet.
-    pub scope: Option<crate::import_scope::ImportScope>,
+    /// The scope in force, or the one the agent will settle on when it first
+    /// starts if nobody has chosen.
+    pub scope: crate::import_scope::ImportScope,
+    /// Whether `scope` is stored on this machine (a file exists).
+    pub stored: bool,
     pub described: String,
     pub providers: Vec<ScopeSummaryProvider>,
     pub total_in_scope: u64,
     pub total_outside_scope: u64,
 }
 
+fn is_subagent_transcript(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "subagents")
+}
+
 pub fn scope_summary(
     providers: &[ProviderConfig],
-    stored: Option<crate::import_scope::ImportScope>,
+    scope: crate::import_scope::ImportScope,
+    stored: bool,
 ) -> ScopeSummary {
-    let effective = stored
-        .clone()
-        .unwrap_or_else(|| crate::import_scope::ImportScope::all("unset"));
-    let scan = discover_files_in_scope(providers, &effective);
+    let scan = discover_files_in_scope(providers, &scope);
     let mut counts: BTreeMap<String, (u64, u64)> = BTreeMap::new();
-    for item in &scan.inventory.providers {
-        counts.entry(item.provider.clone()).or_default().0 += item.source_count;
+    for file in &scan.files {
+        if file.provider != "opencode" && !is_subagent_transcript(&file.path) {
+            counts.entry(file.provider.to_string()).or_default().0 += 1;
+        }
     }
     for (provider, excluded) in &scan.excluded_by_scope {
         counts.entry((*provider).to_string()).or_default().1 += excluded;
@@ -419,7 +432,7 @@ pub fn scope_summary(
                 crate::opencode_db::list_opencode_sessions_page(&file.path, usize::MAX >> 1, 0)
                     .unwrap_or_default();
             for session in &sessions {
-                if session.in_import_scope(&effective) {
+                if session.in_import_scope(&scope) {
                     inside += 1;
                 } else {
                     outside += 1;
@@ -439,30 +452,35 @@ pub fn scope_summary(
         )
         .collect();
     ScopeSummary {
-        described: effective.describe(),
+        described: scope.describe(),
         total_in_scope: providers.iter().map(|item| item.in_scope).sum(),
         total_outside_scope: providers.iter().map(|item| item.outside_scope).sum(),
-        scope: stored,
+        scope,
+        stored,
         providers,
     }
 }
 
-/// `longhouse-engine device import-scope`: print the stored scope and what it
-/// covers on this machine.
+/// `longhouse-engine device import-scope`: print the scope in force (or the one
+/// the agent will settle on) and what it covers on this machine.
 pub fn cmd_import_scope(json: bool) -> anyhow::Result<()> {
     let machine_dir = crate::config::get_machine_dir()?;
-    let stored = crate::import_scope::ImportScope::load(&machine_dir)?;
-    let summary = scope_summary(&get_providers(), stored);
+    let (scope, stored) = crate::config::preview_import_scope(&machine_dir)?;
+    let summary = scope_summary(&get_providers(), scope, stored);
     if json {
         println!("{}", serde_json::to_string_pretty(&summary)?);
         return Ok(());
     }
-    match &summary.scope {
-        Some(scope) => println!(
+    if summary.stored {
+        println!(
             "Import scope: {} (set by {})",
-            summary.described, scope.chosen_via
-        ),
-        None => println!("Import scope: not chosen yet; the Machine Agent will start from now on"),
+            summary.described, summary.scope.chosen_via
+        );
+    } else {
+        println!(
+            "Import scope: not chosen yet; the Machine Agent will use: {}",
+            summary.described
+        );
     }
     for item in &summary.providers {
         println!(
@@ -471,8 +489,8 @@ pub fn cmd_import_scope(json: bool) -> anyhow::Result<()> {
         );
     }
     println!(
-        "  total        {} in scope, {} not imported",
-        summary.total_in_scope, summary.total_outside_scope
+        "  {:<12} {} in scope, {} not imported",
+        "total", summary.total_in_scope, summary.total_outside_scope
     );
     Ok(())
 }
@@ -855,6 +873,47 @@ mod tests {
             "sessions inside are gated where they are read"
         );
         assert!(scan.excluded_by_scope.is_empty());
+    }
+
+    #[test]
+    fn the_summary_counts_sessions_not_subagent_files_and_uses_the_scope_it_is_given() {
+        let root = tempfile::tempdir().unwrap();
+        let session = "11111111-2222-3333-4444-555555555555";
+        let project = root.path().join("-work-a");
+        fs::create_dir_all(project.join(session).join("subagents")).unwrap();
+        fs::write(project.join(format!("{session}.jsonl")), "{}\n").unwrap();
+        fs::write(
+            project
+                .join(session)
+                .join("subagents")
+                .join("agent-1.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("22222222-2222-3333-4444-555555555555.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let providers = claude_root(root.path());
+
+        // Nothing chosen and the agent would import everything: all in scope.
+        let all = scope_summary(&providers, ImportScope::all("unset"), false);
+        assert_eq!((all.total_in_scope, all.total_outside_scope), (2, 0));
+        assert!(!all.stored);
+
+        // From now on: every existing session is outside, subagents not counted twice.
+        let from_now = scope_summary(
+            &providers,
+            ImportScope::starting(chrono::Utc::now(), "default"),
+            true,
+        );
+        assert_eq!(
+            (from_now.total_in_scope, from_now.total_outside_scope),
+            (0, 2)
+        );
+        assert_eq!(from_now.providers.len(), 1);
     }
 
     #[test]

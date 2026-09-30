@@ -3,6 +3,7 @@
 //! Reads canonical machine state from `~/.longhouse/machine/state.json` and the
 //! device token from `~/.longhouse/machine/device-token`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -380,30 +381,50 @@ fn provider_home_to_longhouse_home(path: PathBuf) -> PathBuf {
 // Import scope (what local history this engine may ship)
 // ---------------------------------------------------------------------------
 
+use crate::import_scope::ImportScope;
+
 /// The import scope this process enforces right now (see `import_scope`).
-pub fn import_scope() -> crate::import_scope::ImportScope {
+pub fn import_scope() -> ImportScope {
     match get_machine_dir() {
         Ok(machine_dir) => import_scope_in(&machine_dir),
-        Err(_) => crate::import_scope::ImportScope::all("unresolved"),
+        Err(_) => ImportScope::all("unresolved"),
     }
+}
+
+/// The scope each machine directory last resolved to in this process. A daemon
+/// that loses its scope file keeps enforcing what it last knew instead of
+/// reading an absent file as "no scope, import everything".
+static LAST_KNOWN_SCOPE: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, ImportScope>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn remember_scope(machine_dir: &Path, scope: &ImportScope) {
+    if let Ok(mut known) = LAST_KNOWN_SCOPE.lock() {
+        known.insert(machine_dir.to_path_buf(), scope.clone());
+    }
+}
+
+fn last_known_scope(machine_dir: &Path) -> Option<ImportScope> {
+    LAST_KNOWN_SCOPE.lock().ok()?.get(machine_dir).cloned()
 }
 
 /// `import_scope` for an explicit machine directory.
 ///
-/// No stored scope means nobody ever chose, which is what every install did
-/// before scopes existed: unrestricted. `resolve_import_scope` writes the
-/// first-run answer when the daemon starts, so a running daemon always finds
-/// one. A stored scope that cannot be read is not guessed at: history stays
-/// closed from the moment this process first noticed, and the error is logged.
-/// A corrupt file can hide history that should ship; it can never leak history
-/// that should not.
-pub fn import_scope_in(machine_dir: &Path) -> crate::import_scope::ImportScope {
-    use crate::import_scope::ImportScope;
+/// No stored scope and nothing resolved yet means nobody ever chose, which is
+/// what every install did before scopes existed: unrestricted.
+/// `resolve_import_scope` writes the first-run answer when the daemon starts, so
+/// a running daemon always has one. A stored scope that cannot be read is not
+/// guessed at: history stays closed from the moment this process first noticed,
+/// and the error is logged. A corrupt file can hide history that should ship; it
+/// can never leak history that should not.
+pub fn import_scope_in(machine_dir: &Path) -> ImportScope {
     static UNREADABLE_SINCE: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> =
         std::sync::OnceLock::new();
     match ImportScope::load(machine_dir) {
-        Ok(Some(scope)) => scope,
-        Ok(None) => ImportScope::all("unset"),
+        Ok(Some(scope)) => {
+            remember_scope(machine_dir, &scope);
+            scope
+        }
+        Ok(None) => last_known_scope(machine_dir).unwrap_or_else(|| ImportScope::all("unset")),
         Err(error) => {
             let since = *UNREADABLE_SINCE.get_or_init(|| {
                 tracing::error!(
@@ -417,35 +438,165 @@ pub fn import_scope_in(machine_dir: &Path) -> crate::import_scope::ImportScope {
     }
 }
 
+/// Write the scope this process last knew back to disk if its file is gone.
+/// Returns whether a file was restored.
+pub fn restore_lost_scope_file(machine_dir: &Path) -> bool {
+    match (
+        ImportScope::load(machine_dir),
+        last_known_scope(machine_dir),
+    ) {
+        (Ok(None), Some(scope)) => scope.save_if_absent(machine_dir).unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Keep a second copy of the machine's choice in the shipper state database. The
+/// file is what people and installers edit; the copy is what survives the file
+/// being deleted, so "no file, but this machine has shipped" can be told apart
+/// from a machine that shipped everything before scopes existed.
+pub fn record_import_scope(conn: &rusqlite::Connection, scope: &ImportScope) {
+    let result = serde_json::to_string(scope)
+        .map_err(anyhow::Error::from)
+        .and_then(|json| {
+            conn.execute(
+                "INSERT INTO import_scope_state (singleton_id, scope_json, recorded_at)
+                 VALUES (1, ?1, ?2)
+                 ON CONFLICT(singleton_id) DO UPDATE SET
+                     scope_json = excluded.scope_json,
+                     recorded_at = excluded.recorded_at",
+                rusqlite::params![json, chrono::Utc::now().to_rfc3339()],
+            )
+            .map_err(anyhow::Error::from)
+        });
+    if let Err(error) = result {
+        tracing::warn!(error = %format!("{error:#}"), "Could not record the import scope in the state database");
+    }
+}
+
+fn recorded_import_scope(conn: &rusqlite::Connection) -> Result<Option<ImportScope>> {
+    // A database written by an engine that predates scopes has no such table.
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'import_scope_state')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        return Ok(None);
+    }
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT scope_json FROM import_scope_state WHERE singleton_id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?;
+    json.map(|json| serde_json::from_str(&json).context("the recorded import scope is unreadable"))
+        .transpose()
+}
+
+/// What this machine's state databases say about it.
+struct MachineHistory {
+    /// The scope recorded beside the shipper state, if a scope-era engine ran.
+    recorded: Option<ImportScope>,
+    /// Whether the shipper state has ever tracked a source.
+    has_history: bool,
+}
+
+/// Ask the given connection and the machine's own database. An engine started
+/// with a different `--db` (a scratch database beside a real machine directory)
+/// must not make a machine that has shipped for months look new.
+fn machine_history(
+    machine_dir: &Path,
+    conn: Option<&rusqlite::Connection>,
+) -> Result<MachineHistory> {
+    let mut history = MachineHistory {
+        recorded: None,
+        has_history: false,
+    };
+    if let Some(conn) = conn {
+        history.recorded = recorded_import_scope(conn)?;
+        history.has_history = state_has_shipped_history(conn)?;
+    }
+    if let Some(canonical) = open_canonical_state(machine_dir)? {
+        if history.recorded.is_none() {
+            history.recorded = recorded_import_scope(&canonical)?;
+        }
+        history.has_history = history.has_history || state_has_shipped_history(&canonical)?;
+    }
+    Ok(history)
+}
+
 /// Settle this machine's import scope at daemon start (and for one-shot
-/// `ship`): honour a stored one, otherwise write the first-run answer.
+/// `ship`): honour a stored one, otherwise restore or write the first answer.
 ///
-/// - A machine that already shipped history keeps all of it. Silently narrowing
-///   it would strand history half-shipped.
-/// - A machine connected to a Runtime Host that never chose starts from now on,
-///   so a stranger's old transcripts are imported only once they say so.
-/// - An engine run by hand with no machine state (explicit `--url`/`--token`,
-///   as tests and benchmarks do) has no machine to protect and is unrestricted;
+/// - A stored file wins, and is copied into the state database.
+/// - No file but a recorded choice: the file was lost, not the choice. Restore it.
+/// - No record and the machine already shipped history: it predates scopes and
+///   keeps all of it (`legacy`). Silently narrowing it would strand history
+///   half-shipped.
+/// - No record, no history, connected to a Runtime Host: start from now on, so a
+///   stranger's old transcripts are imported only once they say so.
+/// - An engine run by hand with no machine state (explicit `--url`/`--token`, as
+///   tests and benchmarks do) has no machine to protect and is unrestricted;
 ///   nothing is written.
-pub fn resolve_import_scope(
-    conn: &rusqlite::Connection,
-) -> Result<crate::import_scope::ImportScope> {
+pub fn resolve_import_scope(conn: &rusqlite::Connection) -> Result<ImportScope> {
     resolve_import_scope_in(&get_machine_dir()?, conn)
 }
 
 pub fn resolve_import_scope_in(
     machine_dir: &Path,
     conn: &rusqlite::Connection,
-) -> Result<crate::import_scope::ImportScope> {
-    use crate::import_scope::{resolve_at_startup, ImportScope};
+) -> Result<ImportScope> {
+    let adopt = |scope: ImportScope| {
+        record_import_scope(conn, &scope);
+        remember_scope(machine_dir, &scope);
+        scope
+    };
     if let Some(scope) = ImportScope::load(machine_dir)? {
-        return Ok(scope);
+        return Ok(adopt(scope));
     }
-    let has_history = state_has_shipped_history(conn)? || canonical_state_has_history(machine_dir)?;
-    if !has_history && !machine_is_connected(machine_dir) {
+    let history = machine_history(machine_dir, Some(conn))?;
+    if let Some(recorded) = history.recorded {
+        tracing::warn!(
+            "The import scope file was missing; restored this machine's recorded choice: {}",
+            recorded.describe()
+        );
+        recorded.save_if_absent(machine_dir)?;
+        let scope = ImportScope::load(machine_dir)?.unwrap_or(recorded);
+        return Ok(adopt(scope));
+    }
+    if !history.has_history && !machine_is_connected(machine_dir) {
         return Ok(ImportScope::all("unset"));
     }
-    resolve_at_startup(machine_dir, has_history)
+    Ok(adopt(crate::import_scope::resolve_at_startup(
+        machine_dir,
+        history.has_history,
+    )?))
+}
+
+/// What the engine would enforce for this machine, without changing anything:
+/// `longhouse machine scope` shows it before anything has been chosen. The bool
+/// says whether the scope is stored (a file exists) or would be decided on the
+/// agent's first start.
+pub fn preview_import_scope(machine_dir: &Path) -> Result<(ImportScope, bool)> {
+    if let Some(scope) = ImportScope::load(machine_dir)? {
+        return Ok((scope, true));
+    }
+    let history = machine_history(machine_dir, None)?;
+    if let Some(recorded) = history.recorded {
+        return Ok((recorded, false));
+    }
+    Ok(if history.has_history {
+        (ImportScope::all("legacy"), false)
+    } else if machine_is_connected(machine_dir) {
+        (ImportScope::starting(chrono::Utc::now(), "default"), false)
+    } else {
+        (ImportScope::all("unset"), false)
+    })
 }
 
 /// Whether this machine has been connected to a Runtime Host: the installer,
@@ -468,20 +619,18 @@ fn state_has_shipped_history(conn: &rusqlite::Connection) -> Result<bool> {
     )?)
 }
 
-/// The same question about the database this machine's own service uses, for
-/// an engine started with a different `--db`. A scratch database must not make
-/// a machine that has shipped for months look new. A database that exists but
-/// cannot be read is an error, not an answer: guessing "history" would import a
-/// stranger's whole archive and guessing "none" would narrow a machine that
-/// already shipped. The daemon refuses to start on an unreadable state database
-/// anyway, so this only stops sooner and says why.
-fn canonical_state_has_history(machine_dir: &Path) -> Result<bool> {
+/// The database this machine's own service uses, read-only, if it exists. One
+/// that exists but cannot be read is an error, not an answer: guessing
+/// "history" would import a stranger's whole archive and guessing "none" would
+/// narrow a machine that already shipped. The daemon refuses to start on an
+/// unreadable state database anyway, so this only stops sooner and says why.
+fn open_canonical_state(machine_dir: &Path) -> Result<Option<rusqlite::Connection>> {
     let Some(home) = machine_dir.parent() else {
-        return Ok(false);
+        return Ok(None);
     };
     let path = home.join("agent").join("longhouse-shipper.db");
     if !path.is_file() {
-        return Ok(false);
+        return Ok(None);
     }
     let conn =
         rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -492,12 +641,7 @@ fn canonical_state_has_history(machine_dir: &Path) -> Result<bool> {
                 )
             })?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    state_has_shipped_history(&conn).with_context(|| {
-        format!(
-            "read {} to see whether this machine has shipped before",
-            path.display()
-        )
-    })
+    Ok(Some(conn))
 }
 
 #[cfg(test)]
@@ -609,6 +753,108 @@ mod import_scope_tests {
         let scope = resolve_import_scope_in(&machine, &conn).unwrap();
         assert!(scope.is_unrestricted());
         assert!(!machine.join("import-scope.json").exists());
+    }
+
+    /// A from-now machine that has shipped its new sessions has history in its
+    /// database. If its scope file is then lost, that history must not be read
+    /// as "shipped everything before scopes existed".
+    #[test]
+    fn a_lost_scope_file_is_restored_from_the_state_database_not_read_as_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        let first = resolve_import_scope_in(&machine, &conn).unwrap();
+        assert_eq!(first.chosen_via, "default");
+        track_a_source(&conn); // a session the machine shipped after it started
+        std::fs::remove_file(machine.join("import-scope.json")).unwrap();
+
+        let again = resolve_import_scope_in(&machine, &conn).unwrap();
+        assert_eq!(again, first, "the choice comes back, not `legacy`");
+        assert!(again.since.is_some());
+        assert!(machine.join("import-scope.json").exists());
+    }
+
+    /// The machine's own database answers even when the engine runs on another.
+    #[test]
+    fn the_recorded_choice_is_found_through_the_machines_own_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        std::fs::create_dir_all(dir.path().join("agent")).unwrap();
+        let real = crate::state::db::open_db(Some(&dir.path().join("agent/longhouse-shipper.db")))
+            .unwrap();
+        let recorded = crate::import_scope::ImportScope::starting(chrono::Utc::now(), "prompt");
+        record_import_scope(&real, &recorded);
+        track_a_source(&real);
+        drop(real);
+        let scratch = crate::state::db::open_db(Some(&dir.path().join("scratch.db"))).unwrap();
+        assert_eq!(
+            resolve_import_scope_in(&machine, &scratch).unwrap(),
+            recorded
+        );
+    }
+
+    #[test]
+    fn a_daemon_that_loses_its_scope_file_keeps_enforcing_the_last_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        let scope = resolve_import_scope_in(&machine, &conn).unwrap();
+        std::fs::remove_file(machine.join("import-scope.json")).unwrap();
+        // Not "no scope, import everything".
+        assert_eq!(import_scope_in(&machine), scope);
+        assert!(restore_lost_scope_file(&machine));
+        assert!(machine.join("import-scope.json").exists());
+        assert!(
+            !restore_lost_scope_file(&machine),
+            "nothing to restore twice"
+        );
+    }
+
+    #[test]
+    fn a_database_from_an_engine_that_predates_scopes_records_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("old.db")).unwrap();
+        conn.execute_batch("CREATE TABLE file_state (path TEXT)")
+            .unwrap();
+        assert!(recorded_import_scope(&conn).unwrap().is_none());
+        let fresh = crate::state::db::open_db(Some(&dir.path().join("new.db"))).unwrap();
+        assert!(recorded_import_scope(&fresh).unwrap().is_none());
+        record_import_scope(&fresh, &crate::import_scope::ImportScope::all("cli"));
+        assert!(recorded_import_scope(&fresh)
+            .unwrap()
+            .unwrap()
+            .is_unrestricted());
+    }
+
+    #[test]
+    fn preview_says_what_the_agent_would_settle_on_without_changing_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        // Nothing connected: a hand-run engine is unrestricted.
+        let (scope, stored) = preview_import_scope(&machine).unwrap();
+        assert!(scope.is_unrestricted() && !stored);
+        // Connected and never shipped: from now on.
+        connect_machine(&machine);
+        let (scope, stored) = preview_import_scope(&machine).unwrap();
+        assert!(!scope.is_unrestricted() && !stored);
+        // Already shipped before scopes: all of it.
+        std::fs::create_dir_all(dir.path().join("agent")).unwrap();
+        let real = crate::state::db::open_db(Some(&dir.path().join("agent/longhouse-shipper.db")))
+            .unwrap();
+        track_a_source(&real);
+        let (scope, stored) = preview_import_scope(&machine).unwrap();
+        assert!(scope.is_unrestricted() && !stored);
+        assert_eq!(scope.chosen_via, "legacy");
+        // A stored file is what is in force.
+        crate::import_scope::ImportScope::starting(chrono::Utc::now(), "cli")
+            .save(&machine)
+            .unwrap();
+        let (scope, stored) = preview_import_scope(&machine).unwrap();
+        assert!(!scope.is_unrestricted() && stored);
+        assert!(!machine.join("agent").exists(), "preview writes nothing");
     }
 
     #[test]

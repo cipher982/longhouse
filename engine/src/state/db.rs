@@ -357,6 +357,16 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             sealed_inventory_generation INTEGER,
             sealed_content_sha256 TEXT,
             sealed_at TEXT
+        );
+
+        -- A second copy of the machine's import scope (the file in the machine
+        -- directory is the one people edit). It survives that file being
+        -- deleted, which is what tells such a machine apart from one that
+        -- shipped everything before scopes existed.
+        CREATE TABLE IF NOT EXISTS import_scope_state (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            scope_json TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
         );",
     )?;
 

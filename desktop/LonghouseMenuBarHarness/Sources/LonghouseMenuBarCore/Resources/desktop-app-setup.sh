@@ -66,18 +66,20 @@ choose_import_scope() {
     return
   fi
   if [[ -n "${LONGHOUSE_IMPORT_SCOPE:-}" ]]; then
-    longhouse machine scope --since "$LONGHOUSE_IMPORT_SCOPE"
+    longhouse machine scope --since "$LONGHOUSE_IMPORT_SCOPE" \
+      || fail "LONGHOUSE_IMPORT_SCOPE must be now, all, or a date like 2026-09-01"
     return
   fi
   if [[ -f "$state_home/machine/import-scope.json" || -f "$state_home/agent/longhouse-shipper.db" ]]; then
     log "Keeping this Mac's existing import choice (longhouse machine scope shows it)."
     return
   fi
-  if [[ -t 0 ]]; then
-    longhouse machine scope --prompt
-  else
-    longhouse machine scope --since now
+  if [[ -t 0 ]] && longhouse machine scope --prompt; then
+    return
   fi
+  # No terminal, or the question was abandoned: import only what starts from now.
+  longhouse machine scope --since now \
+    || log "WARNING: could not record the import choice; the Machine Agent still defaults to sessions that start from now on."
 }
 
 configure_machine() {
