@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -38,6 +39,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from uuid import NAMESPACE_URL
 from uuid import uuid4
@@ -911,6 +914,18 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         shutil.rmtree(longhouse_home, ignore_errors=True)
 
 
+def _stamped_now(text: str) -> str:
+    """A fixture transcript as a session that is happening now.
+
+    The fixtures record January 2026; a scope that starts "from now on" (rightly)
+    reads that as an old session, whenever the file was written.
+    """
+    # Millisecond precision like the providers': a whole-second stamp can fall
+    # before a scope that started earlier in the same second.
+    now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return re.sub(r'"timestamp":"[^"]+"', f'"timestamp":"{now}"', text)
+
+
 def _facade_bin() -> Path | None:
     """The native ``longhouse`` CLI built beside the engine, when there is one."""
     facade = ENGINE_BIN.parent / "longhouse"
@@ -943,11 +958,12 @@ def test_connected_machine_imports_only_new_sessions_until_the_scope_is_widened(
     claude_root = home / ".claude"
     fixture_text = (FIXTURES_DIR / CLAUDE_FIXTURE).read_text()
 
-    def write_session(project: str) -> tuple[str, Path]:
+    def write_session(project: str, *, happening_now: bool = False) -> tuple[str, Path]:
         session_id = str(uuid4())
         transcript = claude_root / "projects" / project / f"{session_id}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(fixture_text.replace(CLAUDE_SESSION_ID, session_id))
+        text = fixture_text.replace(CLAUDE_SESSION_ID, session_id)
+        transcript.write_text(_stamped_now(text) if happening_now else text)
         return session_id, transcript
 
     # Two sessions that predate the machine's connection, in different folders.
@@ -1001,7 +1017,7 @@ def test_connected_machine_imports_only_new_sessions_until_the_scope_is_widened(
         _wait_for_log_contains(log_dir, "Import scope kept local sources out of this scan")
 
         # A session started after the scope ships live.
-        new_id, _ = write_session("new-project")
+        new_id, _ = write_session("new-project", happening_now=True)
         assert len(_wait_for_session_events(server, new_id, min_events=2)) >= 2
         # By now the old one has had every chance to ship; it did not.
         assert _get_session(server, old_id) is None

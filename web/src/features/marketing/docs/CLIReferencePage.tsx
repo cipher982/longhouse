@@ -147,10 +147,12 @@ longhouse machine scope --prompt             # ask (needs a terminal)`}
         A session belongs to a folder when the working directory it recorded is
         that folder or below it (Claude, Codex, OpenCode, Pi and OMP record
         one; Cursor and Antigravity history is covered by the date rule only).
-        A session&apos;s start is its file&apos;s creation time, or last
-        modification where the file system keeps no creation time. Narrowing the
-        scope stops further imports; sessions already uploaded stay on your
-        Runtime Host.
+        A session&apos;s start is its file&apos;s creation time (last
+        modification where the file system keeps none), or the session&apos;s
+        own first timestamp when that is earlier. Narrowing the scope stops
+        further imports; sessions already uploaded stay on your Runtime Host.
+        Naming a file yourself with <code>longhouse-server ship --file</code> is
+        not filtered.
       </p>
 
       <h3>longhouse uninstall</h3>

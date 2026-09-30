@@ -441,7 +441,7 @@ pub fn resolve_import_scope_in(
     if let Some(scope) = ImportScope::load(machine_dir)? {
         return Ok(scope);
     }
-    let has_history = state_has_shipped_history(conn)? || canonical_state_has_history(machine_dir);
+    let has_history = state_has_shipped_history(conn)? || canonical_state_has_history(machine_dir)?;
     if !has_history && !machine_is_connected(machine_dir) {
         return Ok(ImportScope::all("unset"));
     }
@@ -471,20 +471,33 @@ fn state_has_shipped_history(conn: &rusqlite::Connection) -> Result<bool> {
 /// The same question about the database this machine's own service uses, for
 /// an engine started with a different `--db`. A scratch database must not make
 /// a machine that has shipped for months look new. A database that exists but
-/// cannot be read counts as history: the failure that matters is narrowing a
-/// machine that already shipped, not keeping a new one open a moment longer.
-fn canonical_state_has_history(machine_dir: &Path) -> bool {
+/// cannot be read is an error, not an answer: guessing "history" would import a
+/// stranger's whole archive and guessing "none" would narrow a machine that
+/// already shipped. The daemon refuses to start on an unreadable state database
+/// anyway, so this only stops sooner and says why.
+fn canonical_state_has_history(machine_dir: &Path) -> Result<bool> {
     let Some(home) = machine_dir.parent() else {
-        return false;
+        return Ok(false);
     };
     let path = home.join("agent").join("longhouse-shipper.db");
     if !path.is_file() {
-        return false;
+        return Ok(false);
     }
-    rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .ok()
-        .and_then(|conn| state_has_shipped_history(&conn).ok())
-        .unwrap_or(true)
+    let conn =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| {
+                format!(
+                    "open {} to see whether this machine has shipped before",
+                    path.display()
+                )
+            })?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    state_has_shipped_history(&conn).with_context(|| {
+        format!(
+            "read {} to see whether this machine has shipped before",
+            path.display()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -551,6 +564,25 @@ mod import_scope_tests {
         let scope = resolve_import_scope_in(&machine, &scratch).unwrap();
         assert_eq!(scope.chosen_via, "legacy");
         assert!(scope.is_unrestricted());
+    }
+
+    /// Neither guess is safe, so the machine's own unreadable database stops the
+    /// resolution instead of importing a stranger's archive or narrowing a
+    /// machine that already shipped.
+    #[test]
+    fn an_unreadable_machine_database_is_an_error_not_a_guess() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        std::fs::create_dir_all(dir.path().join("agent")).unwrap();
+        std::fs::write(
+            dir.path().join("agent/longhouse-shipper.db"),
+            "not a database at all",
+        )
+        .unwrap();
+        let scratch = crate::state::db::open_db(Some(&dir.path().join("scratch.db"))).unwrap();
+        assert!(resolve_import_scope_in(&machine, &scratch).is_err());
+        assert!(!machine.join("import-scope.json").exists());
     }
 
     #[test]

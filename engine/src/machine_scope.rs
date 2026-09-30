@@ -146,6 +146,8 @@ fn canonical_projects(paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
 /// Whether `next` imports less than `old` would.
 fn narrows(old: &ImportScope, next: &ImportScope) -> bool {
     match (old.since, next.since) {
+        // Everything is the widest scope there is, whatever projects were listed.
+        (_, None) => false,
         (None, Some(_)) => true,
         (Some(old_since), Some(next_since)) if next_since > old_since => true,
         _ => old
@@ -399,6 +401,12 @@ mod tests {
         assert!(narrows(&earlier, &from_now));
         assert!(!narrows(&from_now, &earlier));
         assert!(!narrows(&from_now, &all));
+        // Widening to everything drops the project list; that is not narrowing.
+        let with_project_only = ImportScope {
+            projects: vec![PathBuf::from("/work/a")],
+            ..from_now.clone()
+        };
+        assert!(!narrows(&with_project_only, &all));
         let with_project = ImportScope {
             projects: vec![PathBuf::from("/work/a")],
             ..from_now.clone()

@@ -7,7 +7,9 @@
 //! `<longhouse home>/machine/import-scope.json`.
 //!
 //! - `since`: a session is in scope when it *started* at or after this
-//!   instant. `None` means no lower bound: all local history.
+//!   instant. `None` means no lower bound: all local history. A session's start
+//!   is its file's creation time (last modification where the file system keeps
+//!   no creation time), or its own first timestamp when that is earlier.
 //! - `projects`: folders whose sessions are in scope whatever their age. A
 //!   session belongs to a folder when its recorded working directory is that
 //!   folder or below it.
@@ -150,13 +152,33 @@ impl ImportScope {
         cwd().is_some_and(|cwd| self.project_contains(&cwd))
     }
 
-    /// Whether a transcript file is in scope. A file that cannot be read for
-    /// its start time does not exist yet and counts as new.
+    /// Whether a transcript file is in scope.
+    ///
+    /// The file system decides first: a file created (or, with no creation time
+    /// recorded, modified) before `since` is old. A file that looks new is then
+    /// checked against the session's own first timestamp, because the file
+    /// system can be wrong in the direction that leaks: a copy made without its
+    /// creation time, a file a provider replaced, or a file system that records
+    /// no creation time all make an old session look new. A file that does not
+    /// exist yet is new.
     pub fn admits_file(&self, path: &Path) -> bool {
-        if self.is_unrestricted() {
+        let Some(since) = self.since else {
             return true;
+        };
+        let anchor = session_anchor(path);
+        let Some(file_time) = file_time(&anchor).or_else(|| file_time(path)) else {
+            return true;
+        };
+        if file_time >= since {
+            match file_first_record_at(&anchor) {
+                Some(first) if first < since => {}
+                _ => return true,
+            }
         }
-        self.admits(file_started_at(path), || file_cwd(path))
+        if self.projects.is_empty() {
+            return false;
+        }
+        file_cwd(&anchor).is_some_and(|cwd| self.project_contains(&cwd))
     }
 
     fn project_contains(&self, cwd: &str) -> bool {
@@ -308,19 +330,27 @@ pub fn parse_since(value: &str, now: DateTime<Utc>) -> Result<Option<DateTime<Ut
 // Facts about a source file
 // ---------------------------------------------------------------------------
 
-/// When the session behind a transcript file started.
-///
-/// The file's creation time where the file system records one, otherwise its
-/// last modification. A Claude subagent transcript belongs to its parent
-/// session and takes the parent's start, so resuming an old session never
-/// makes its subagents look new. `None` when the file does not exist.
-pub fn file_started_at(path: &Path) -> Option<DateTime<Utc>> {
-    let anchor = session_anchor(path);
-    let meta = std::fs::metadata(&anchor)
-        .or_else(|_| std::fs::metadata(path))
-        .ok()?;
+/// When the file system says the transcript file began: its creation time, or
+/// its last modification where the file system records no creation time.
+/// `None` when the file does not exist.
+fn file_time(path: &Path) -> Option<DateTime<Utc>> {
+    let meta = std::fs::metadata(path).ok()?;
     let stamp = meta.created().or_else(|_| meta.modified()).ok()?;
     Some(DateTime::<Utc>::from(stamp))
+}
+
+/// When the session behind a transcript file started, as far as the file system
+/// and the session's own first timestamp together can tell: the earlier of the
+/// two. A Claude subagent transcript belongs to its parent session and takes the
+/// parent's, so resuming an old session never makes its subagents look new.
+/// `None` when the file does not exist.
+pub fn file_started_at(path: &Path) -> Option<DateTime<Utc>> {
+    let anchor = session_anchor(path);
+    let file = file_time(&anchor).or_else(|| file_time(path))?;
+    Some(match file_first_record_at(&anchor) {
+        Some(first) if first < file => first,
+        _ => file,
+    })
 }
 
 /// `<projects>/<dir>/<session>/subagents/**/x.jsonl` -> `<projects>/<dir>/<session>.jsonl`.
@@ -341,46 +371,85 @@ fn session_anchor(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-type CwdCache = Mutex<HashMap<PathBuf, (u64, Option<String>)>>;
-static CWD_CACHE: LazyLock<CwdCache> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// What a transcript's first records say about its session.
+#[derive(Clone, Default)]
+struct HeadFacts {
+    cwd: Option<String>,
+    first_record_at: Option<DateTime<Utc>>,
+}
 
-/// The working directory a transcript records, read from its first records.
-/// Cached by path and size: a session's folder never changes, but a file that
-/// had no records yet is looked at again once it grows.
-pub fn file_cwd(path: &Path) -> Option<String> {
-    let len = std::fs::metadata(path).ok()?.len();
-    if let Ok(cache) = CWD_CACHE.lock() {
-        if let Some((seen_len, cwd)) = cache.get(path) {
-            if cwd.is_some() || *seen_len == len {
-                return cwd.clone();
+/// Cached by path. An entry is final once both facts are known or the whole
+/// peek window has been read (a session's folder and start never change); a
+/// small file with facts still missing is looked at again once it grows.
+type HeadCache = Mutex<HashMap<PathBuf, (u64, HeadFacts)>>;
+static HEAD_CACHE: LazyLock<HeadCache> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// One entry per transcript ever scanned; a long-lived daemon on a machine with
+/// a very large archive drops the cache rather than let it grow without end.
+const HEAD_CACHE_MAX_ENTRIES: usize = 50_000;
+
+fn head_facts(path: &Path) -> HeadFacts {
+    let Ok(len) = std::fs::metadata(path).map(|meta| meta.len()) else {
+        return HeadFacts::default();
+    };
+    if let Ok(cache) = HEAD_CACHE.lock() {
+        if let Some((seen_len, facts)) = cache.get(path) {
+            let complete = facts.cwd.is_some() && facts.first_record_at.is_some();
+            if complete || *seen_len == len || *seen_len >= CWD_PEEK_BYTES as u64 {
+                return facts.clone();
             }
         }
     }
-    let cwd = peek_cwd(path);
-    if let Ok(mut cache) = CWD_CACHE.lock() {
-        cache.insert(path.to_path_buf(), (len, cwd.clone()));
+    let facts = peek_head(path);
+    if let Ok(mut cache) = HEAD_CACHE.lock() {
+        if cache.len() >= HEAD_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(path.to_path_buf(), (len, facts.clone()));
     }
-    cwd
+    facts
 }
 
-fn peek_cwd(path: &Path) -> Option<String> {
+/// The working directory a transcript records, read from its first records.
+pub fn file_cwd(path: &Path) -> Option<String> {
+    head_facts(path).cwd
+}
+
+/// The timestamp of a transcript's first timestamped record.
+pub fn file_first_record_at(path: &Path) -> Option<DateTime<Utc>> {
+    head_facts(path).first_record_at
+}
+
+fn peek_head(path: &Path) -> HeadFacts {
     let mut head = Vec::with_capacity(CWD_PEEK_BYTES);
-    std::fs::File::open(path)
-        .ok()?
-        .take(CWD_PEEK_BYTES as u64)
-        .read_to_end(&mut head)
-        .ok()?;
+    let read = std::fs::File::open(path)
+        .ok()
+        .and_then(|file| file.take(CWD_PEEK_BYTES as u64).read_to_end(&mut head).ok());
+    if read.is_none() {
+        return HeadFacts::default();
+    }
     // The last line may be cut off by the byte limit; only whole lines count.
     let complete = match head.iter().rposition(|byte| *byte == b'\n') {
         Some(end) => &head[..end],
         None if head.len() < CWD_PEEK_BYTES => &head[..],
-        None => return None,
+        None => return HeadFacts::default(),
     };
-    complete
+    let mut facts = HeadFacts::default();
+    for record in complete
         .split(|byte| *byte == b'\n')
         .take(CWD_PEEK_LINES)
         .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
-        .find_map(|record| record_cwd(&record))
+    {
+        if facts.cwd.is_none() {
+            facts.cwd = record_cwd(&record);
+        }
+        if facts.first_record_at.is_none() {
+            facts.first_record_at = record_timestamp(&record);
+        }
+        if facts.cwd.is_some() && facts.first_record_at.is_some() {
+            break;
+        }
+    }
+    facts
 }
 
 /// Claude and Pi/OMP write `cwd` on the record, Codex inside `payload`.
@@ -396,6 +465,28 @@ fn record_cwd(record: &serde_json::Value) -> Option<String> {
         .get("cwd")
         .and_then(text)
         .or_else(|| record.get("payload")?.get("cwd").and_then(text))
+}
+
+/// Claude, Codex and Pi/OMP stamp records with an RFC 3339 `timestamp` (Codex
+/// also inside `payload`); a number is epoch milliseconds or seconds.
+fn record_timestamp(record: &serde_json::Value) -> Option<DateTime<Utc>> {
+    let parse = |value: &serde_json::Value| match value {
+        serde_json::Value::String(text) => DateTime::parse_from_rfc3339(text.trim())
+            .ok()
+            .map(|time| time.with_timezone(&Utc)),
+        serde_json::Value::Number(number) => number.as_i64().and_then(|number| {
+            if number > 100_000_000_000 {
+                DateTime::from_timestamp_millis(number)
+            } else {
+                DateTime::from_timestamp(number, 0)
+            }
+        }),
+        _ => None,
+    };
+    record
+        .get("timestamp")
+        .and_then(parse)
+        .or_else(|| record.get("payload")?.get("timestamp").and_then(parse))
 }
 
 #[cfg(test)]
@@ -640,6 +731,84 @@ mod tests {
         );
         assert!(!with_project.admits_file(&other));
         assert!(with_project.admits_file(&new));
+    }
+
+    /// The file system can be wrong in the direction that leaks: a copy made
+    /// without its creation time, a file a provider replaced, or a file system
+    /// with no creation time all make an old session look new. The session's own
+    /// first timestamp corrects it.
+    #[test]
+    fn a_file_that_looks_new_but_records_an_older_start_is_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let since = Utc::now();
+        std::thread::sleep(Duration::from_millis(60));
+        // All three files were created after `since`.
+        let copied_old = dir.path().join("copied.jsonl");
+        fs::write(
+            &copied_old,
+            "{\"type\":\"summary\"}\n{\"timestamp\":\"2026-01-10T10:00:00.000Z\",\"cwd\":\"/work/a\"}\n",
+        )
+        .unwrap();
+        let codex_old = dir.path().join("codex.jsonl");
+        fs::write(
+            &codex_old,
+            "{\"type\":\"session_meta\",\"payload\":{\"timestamp\":\"2026-01-10T10:00:00Z\",\"cwd\":\"/work/b\"}}\n",
+        )
+        .unwrap();
+        let numeric_old = dir.path().join("numeric.jsonl");
+        fs::write(
+            &numeric_old,
+            "{\"timestamp\":1768039200000,\"cwd\":\"/work/c\"}\n",
+        )
+        .unwrap();
+        let genuinely_new = dir.path().join("new.jsonl");
+        fs::write(
+            &genuinely_new,
+            format!(
+                "{{\"timestamp\":\"{}\",\"cwd\":\"/work/a\"}}\n",
+                (Utc::now() + chrono::Duration::seconds(1)).to_rfc3339()
+            ),
+        )
+        .unwrap();
+        let no_timestamp = dir.path().join("plain.jsonl");
+        fs::write(&no_timestamp, "{\"cwd\":\"/work/a\"}\n").unwrap();
+
+        let scope = ImportScope::starting(since, "cli");
+        assert!(!scope.admits_file(&copied_old));
+        assert!(!scope.admits_file(&codex_old));
+        assert!(!scope.admits_file(&numeric_old));
+        assert!(scope.admits_file(&genuinely_new));
+        assert!(
+            scope.admits_file(&no_timestamp),
+            "no timestamp: the file system decides"
+        );
+
+        // The corrected start is the earlier of the two, and a project opt-in
+        // still brings an old session back whatever its file says.
+        assert_eq!(
+            file_started_at(&copied_old),
+            Some(at("2026-01-10T10:00:00Z"))
+        );
+        let with_project = ImportScope {
+            projects: vec![PathBuf::from("/work/a")],
+            ..scope
+        };
+        assert!(with_project.admits_file(&copied_old));
+        assert!(!with_project.admits_file(&codex_old));
+    }
+
+    #[test]
+    fn the_head_cache_is_bounded_and_final_once_the_window_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = dir.path().join("big.jsonl");
+        // No cwd or timestamp anywhere in the first window.
+        let filler = format!("{{\"note\":\"{}\"}}\n", "x".repeat(1000));
+        fs::write(&big, filler.repeat(80)).unwrap();
+        assert_eq!(file_cwd(&big), None);
+        // Later lines never change the answer: the head of a full window is final.
+        let mut appended = fs::OpenOptions::new().append(true).open(&big).unwrap();
+        std::io::Write::write_all(&mut appended, b"{\"cwd\":\"/work/late\"}\n").unwrap();
+        assert_eq!(file_cwd(&big), None);
     }
 
     #[test]
