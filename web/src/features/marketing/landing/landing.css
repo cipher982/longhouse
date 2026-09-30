@@ -221,9 +221,10 @@
   }
 
   .hero-install {
-    display: grid;
-    gap: 16px;
-    max-width: 560px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    max-width: 640px;
   }
 
   .hero-install-mac {
@@ -266,6 +267,38 @@
 
   .hero-install-mac-detail {
     color: rgba(23, 17, 12, 0.68);
+    font-size: 0.71rem;
+  }
+
+  .hero-install-ios {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    width: fit-content;
+    min-width: 250px;
+    padding: 13px 19px;
+    color: #f3e9d8;
+    background: rgba(201, 166, 107, 0.08);
+    border: 1px solid rgba(225, 191, 131, 0.42);
+    border-radius: 13px;
+    text-decoration: none;
+    transition: transform var(--motion-duration-fast), background var(--motion-duration-fast);
+  }
+
+  .hero-install-ios:hover {
+    background: rgba(201, 166, 107, 0.16);
+    transform: translateY(-1px);
+  }
+
+  .hero-install-ios-icon {
+    width: 20px;
+    height: 25px;
+    flex: 0 0 auto;
+    color: #e1bf83;
+  }
+
+  .hero-install-ios-detail {
+    color: rgba(243, 233, 216, 0.68);
     font-size: 0.71rem;
   }
 
@@ -1299,7 +1332,8 @@
       line-height: 1.65;
     }
 
-    .hero-install-mac {
+    .hero-install-mac,
+    .hero-install-ios {
       width: 100%;
       min-width: 0;
     }

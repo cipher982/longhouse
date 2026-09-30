@@ -4,6 +4,7 @@ import { Button } from "@/shared/ui";
 import config from "@/shared/lib/config";
 import { trackAcquisitionEvent } from "../analytics";
 import { HeroDemoFallback } from "../hero-demo/HeroDemoFallback";
+import { IOS_TESTFLIGHT_URL } from "./links";
 
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
@@ -26,6 +27,26 @@ function AppleIcon() {
       aria-hidden="true"
     >
       <path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z" />
+    </svg>
+  );
+}
+
+function PhoneIcon() {
+  return (
+    <svg
+      className="hero-install-ios-icon"
+      width="20"
+      height="24"
+      viewBox="0 0 20 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="4" y="1.5" width="12" height="21" rx="3" />
+      <path d="M8.5 19.5h3" />
     </svg>
   );
 }
@@ -91,6 +112,14 @@ export function HeroSection() {
     });
   };
 
+  const handleIosDownloadClick = () => {
+    trackAcquisitionEvent("ios_download_click", {
+      surface: "landing",
+      placement: "hero",
+      method: "testflight",
+    });
+  };
+
   return (
     <section className="landing-hero" id="landing-install">
       <div className="landing-hero-content">
@@ -125,6 +154,19 @@ export function HeroSection() {
               <span className="hero-install-mac-label">Download for macOS</span>
               <span className="hero-install-mac-detail">
                 Free and open source · Apple silicon
+              </span>
+            </span>
+          </a>
+          <a
+            href={IOS_TESTFLIGHT_URL}
+            className="hero-install-ios"
+            onClick={handleIosDownloadClick}
+          >
+            <PhoneIcon />
+            <span className="hero-install-mac-text">
+              <span className="hero-install-mac-label">Download on iOS</span>
+              <span className="hero-install-ios-detail">
+                Free beta on TestFlight · iPhone
               </span>
             </span>
           </a>

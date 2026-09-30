@@ -124,9 +124,9 @@ control paths. The exact operation support is capability-specific; see
 in-product provider view for current details. This README is not a
 compatibility matrix.
 
-The iOS client lives in `ios/` and handles APNs push on `needs_user`, but there is no
-TestFlight or App Store build and no `.ipa` in any release. Getting it on a phone today
-means opening `ios/XcodeHarness` in Xcode and running it onto your own device.
+The iOS client lives in `ios/` and handles APNs push on `needs_user`. Install the beta on
+an iPhone from TestFlight: <https://testflight.apple.com/join/CmEd5kY7> (or tap "Explore the
+demo" on its first screen to look around without an account).
 
 See [RELEASE.md](RELEASE.md) for how releases are cut.
 

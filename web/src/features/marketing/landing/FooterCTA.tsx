@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { SwarmLogo } from "@/shared/ui/SwarmLogo";
 import { Button } from "@/shared/ui";
 import { trackAcquisitionEvent } from "../analytics";
+import { IOS_TESTFLIGHT_URL } from "./links";
 
 export function FooterCTA() {
   const handleDownload = () => {
@@ -11,6 +12,15 @@ export function FooterCTA() {
       method: "direct_download",
     });
     window.location.assign("/download/macos");
+  };
+
+  const handleIosDownload = () => {
+    trackAcquisitionEvent("ios_download_click", {
+      surface: "landing",
+      placement: "footer",
+      method: "testflight",
+    });
+    window.location.assign(IOS_TESTFLIGHT_URL);
   };
 
   const handleDocs = () => {
@@ -29,12 +39,16 @@ export function FooterCTA() {
         <div className="landing-footer-cta">
           <h2 className="landing-footer-quote">Start steering the agents you already run.</h2>
           <p className="landing-footer-cta-copy">
-            Install on macOS, or from the shell on Linux and WSL. Point it at your
-            existing CLIs and your sessions show up.
+            Install on macOS, or from the shell on Linux and WSL, and point it at
+            your existing CLIs. Check on your sessions from an iPhone with the
+            TestFlight beta.
           </p>
           <div className="landing-footer-cta-buttons">
             <Button variant="primary" size="lg" onClick={handleDownload}>
               Download for macOS
+            </Button>
+            <Button variant="secondary" size="lg" onClick={handleIosDownload}>
+              Download on iOS
             </Button>
             <Button variant="secondary" size="lg" onClick={handleDocs}>
               Read the docs
