@@ -843,6 +843,7 @@ print_success() {
     echo ""
     if [[ "$CONNECTED_THIS_MACHINE" == "1" ]]; then
         echo "Next:"
+        [[ "$AGENT_UNCONFIRMED" != "1" ]] || echo "  First run longhouse local-health --json: the Machine Agent has not confirmed it is healthy yet."
         echo "  Open Longhouse, start a session, and pick this machine."
         echo "  Sign in to each coding agent from the launcher's 'Sign in' button."
     elif [[ -n "$CONNECT_PENDING_URL" ]]; then
@@ -901,6 +902,7 @@ print_success() {
 # Devices page's server line also passed LONGHOUSE_DEVICE_TOKEN, otherwise
 # through the browser approval of `longhouse auth` when a browser can open here.
 CONNECTED_THIS_MACHINE=0
+AGENT_UNCONFIRMED=0
 CONNECT_PENDING_URL=""
 
 # Record the Runtime Host address on a machine that has no machine state yet.
@@ -989,6 +991,7 @@ connect_this_machine() {
         warn "Run 'sudo loginctl enable-linger $(id -un)' so the Machine Agent keeps running after you log out"
     fi
     CONNECTED_THIS_MACHINE=1
+    [[ "$repair_pending" != "1" ]] || AGENT_UNCONFIRMED=1
     # The name auth stored is the token's own; report that one.
     local stored_name
     stored_name="$(sed -n 's/^ *"machine_name": *"\([^"]*\)".*/\1/p' "${LONGHOUSE_HOME:-$HOME/.longhouse}/machine/state.json" 2>/dev/null | head -n 1 || true)"

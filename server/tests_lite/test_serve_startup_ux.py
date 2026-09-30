@@ -57,6 +57,32 @@ def test_port_probe_sees_a_listener_but_not_time_wait():
     assert serve_cli._port_is_free("127.0.0.1", port) is True
 
 
+def test_port_probe_never_raises_for_a_host_it_cannot_resolve():
+    # `--host ::1` reaches an AF_INET probe: a traceback here replaced the friendly exit.
+    assert serve_cli._port_is_free("::1", _free_port()) in (True, False)
+    assert serve_cli._port_is_free("no-such-host.invalid", _free_port()) in (True, False)
+
+
+def test_pid_file_being_written_is_not_a_dead_server(tmp_path, monkeypatch):
+    pid_file = tmp_path / "server.pid"
+    monkeypatch.setattr(serve_cli, "_get_pid_file", lambda: pid_file)
+
+    pid_file.write_text("")  # mid-write
+    assert serve_cli._is_server_running() == (False, None)
+    assert pid_file.exists()  # not deleted out from under the daemon writing it
+
+    pid_file.write_text(str(os.getpid()))
+    assert serve_cli._is_server_running() == (True, os.getpid())
+
+    dead = os.fork()
+    if dead == 0:
+        os._exit(0)
+    os.waitpid(dead, 0)
+    pid_file.write_text(str(dead))
+    assert serve_cli._is_server_running() == (False, None)
+    assert not pid_file.exists()  # a genuinely dead pid is still cleaned up
+
+
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         self.send_response(200)

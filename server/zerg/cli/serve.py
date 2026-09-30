@@ -241,6 +241,8 @@ def _port_is_free(host: str, port: int) -> bool:
         probe.settimeout(0.5)
         if probe.connect_ex((probe_host, port)) == 0:
             return False
+    except OSError:
+        pass  # an address this AF_INET probe cannot resolve: the bind below decides, as it always did
     finally:
         probe.close()
 
@@ -310,10 +312,16 @@ def _is_server_running() -> tuple[bool, int | None]:
 
     try:
         pid = int(pid_file.read_text().strip())
+    except (ValueError, OSError):
+        # Empty or half-written: a daemon is mid-startup. Not proof of anything, and not ours to delete.
+        return False, None
+    try:
         # Check if process exists
         os.kill(pid, 0)
         return True, pid
-    except (ValueError, OSError, ProcessLookupError):
+    except PermissionError:
+        return True, pid  # exists, owned by someone else
+    except OSError:
         # PID file exists but process is gone
         pid_file.unlink(missing_ok=True)
         return False, None

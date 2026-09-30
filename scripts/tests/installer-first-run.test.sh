@@ -77,6 +77,7 @@ run_installer repair-pending LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_UR
 [[ "$STATUS" == 0 ]] || fail "an unverified start must not fail the install" repair-pending
 grep -q "has not confirmed it is healthy" "$TEST_ROOT/repair-pending.log" || fail "no warning for an unverified start" repair-pending
 ! grep -q "sessions will appear" "$TEST_ROOT/repair-pending.log" || fail "installer promised sessions after an unverified start" repair-pending
+grep -q "First run longhouse local-health" "$TEST_ROOT/repair-pending.log" || fail "closing text does not send the user to local-health" repair-pending
 
 # 2c. a recovered service still connects
 run_installer repair-ok LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_URL=http://127.0.0.1:1 \
