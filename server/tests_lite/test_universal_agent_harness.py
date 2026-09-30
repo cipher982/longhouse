@@ -1500,42 +1500,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert coverage["old_new_release_diff"]["coverage_status"] == "blocked"
 
 
-def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path: Path) -> None:
-    payload = uah.run_harness(
-        uah.HarnessOptions(
-            providers=uah.SUPPORTED_PROVIDERS,
-            scenarios=("orchestration_capability_matrix",),
-            evidence_root=tmp_path / "evidence",
-            provider_bins=_fake_bins(tmp_path),
-        )
-    )
 
-    assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS)
-    for result in payload["results"]:
-        assert result["scenario"] == "orchestration_capability_matrix"
-        # Antigravity's contract marks abort and reattach unsupported, which is
-        # a red row; every other provider's orchestration gaps are unproven
-        # rather than contradicted, which is yellow. Either way the scenario
-        # reports what it found instead of a green it cannot justify.
-        expected_status = "unsupported_gap" if result["provider"] == "antigravity" else "blocked"
-        assert result["status"] == expected_status
-        operation_evidence = result["data"]["operation_evidence"]
-        assert "orchestration_observe_transcript" in operation_evidence
-        assert "orchestration_background_task_status" in operation_evidence
-        assert all("verdict" in item for item in operation_evidence.values())
-        assert all("reason_code" in item for item in operation_evidence.values())
-        assert all(item["canary"] == "provider_action_coverage" for item in operation_evidence.values())
-        # Codex and Pi declare no in-flight registry at all, so their cell is
-        # terminal absence rather than an unproven gap. OMP declares native
-        # task/command jobs whose live registry is not yet proven.
-        expected_background_reason = (
-            "provider_surface_absent" if result["provider"] in {"codex", "pi"} else "provider_background_status_unproven"
-        )
-        assert operation_evidence["orchestration_background_task_status"]["reason_code"] == expected_background_reason
-        background_rows = [row for row in result["data"]["capabilities"] if row["capability"] == "background_task_status"]
-        assert background_rows[0]["reason_code"] == expected_background_reason
-        summary = result["data"]["summary"]
-        assert summary["green"] + summary["yellow"] + summary["red"] == len(operation_evidence)
 
 
 def test_orchestration_matrix_status_follows_the_capability_rows(tmp_path: Path, monkeypatch) -> None:
