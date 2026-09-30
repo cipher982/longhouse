@@ -385,10 +385,36 @@ use crate::import_scope::ImportScope;
 
 /// The import scope this process enforces right now (see `import_scope`).
 pub fn import_scope() -> ImportScope {
-    match get_machine_dir() {
+    import_scope_for(get_machine_dir())
+}
+
+/// A machine directory that cannot be resolved (no `HOME`) is not "no scope":
+/// nothing can be checked, so history stays closed.
+fn import_scope_for(machine_dir: Result<PathBuf>) -> ImportScope {
+    match machine_dir {
         Ok(machine_dir) => import_scope_in(&machine_dir),
-        Err(_) => ImportScope::all("unresolved"),
+        Err(_) => closed_scope(Path::new("<unresolved>"), "unresolved"),
     }
+}
+
+/// History closed from the moment this process first needed it for this machine
+/// directory: only sessions that start from then on. The moment is per
+/// directory and fixed, so it does not slide forward on every call.
+fn closed_scope(machine_dir: &Path, via: &str) -> ImportScope {
+    static SINCE: std::sync::LazyLock<
+        std::sync::Mutex<HashMap<PathBuf, chrono::DateTime<chrono::Utc>>>,
+    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+    let since = SINCE
+        .lock()
+        .map(|mut known| {
+            *known
+                .entry(machine_dir.to_path_buf())
+                .or_insert_with(chrono::Utc::now)
+        })
+        .unwrap_or_else(|_| chrono::Utc::now());
+    let closed = ImportScope::starting(since, via);
+    remember_scope(machine_dir, &closed);
+    closed
 }
 
 /// The scope each machine directory last resolved to in this process. A daemon
@@ -417,8 +443,6 @@ fn last_known_scope(machine_dir: &Path) -> Option<ImportScope> {
 /// and the error is logged. A corrupt file can hide history that should ship; it
 /// can never leak history that should not.
 pub fn import_scope_in(machine_dir: &Path) -> ImportScope {
-    static UNREADABLE_SINCE: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> =
-        std::sync::OnceLock::new();
     match ImportScope::load(machine_dir) {
         Ok(Some(scope)) => {
             remember_scope(machine_dir, &scope);
@@ -426,17 +450,15 @@ pub fn import_scope_in(machine_dir: &Path) -> ImportScope {
         }
         Ok(None) => last_known_scope(machine_dir).unwrap_or_else(|| ImportScope::all("unset")),
         Err(error) => {
-            let since = *UNREADABLE_SINCE.get_or_init(|| {
+            if !matches!(last_known_scope(machine_dir), Some(known) if known.chosen_via == "invalid")
+            {
                 tracing::error!(
                     error = %format!("{error:#}"),
                     "Import scope is unreadable; importing only sessions that start from now until it is fixed"
                 );
-                chrono::Utc::now()
-            });
+            }
             // Remembered, so deleting the broken file does not read as "no scope".
-            let closed = ImportScope::starting(since, "invalid");
-            remember_scope(machine_dir, &closed);
-            closed
+            closed_scope(machine_dir, "invalid")
         }
     }
 }
@@ -840,6 +862,35 @@ mod import_scope_tests {
         )
         .unwrap();
         assert!(state_has_shipped_history(&bare).unwrap());
+    }
+
+    #[test]
+    fn a_machine_directory_that_cannot_be_resolved_closes_history() {
+        let scope = import_scope_for(Err(anyhow::anyhow!("HOME not set")));
+        assert!(!scope.is_unrestricted());
+        assert_eq!(scope.chosen_via, "unresolved");
+        // Fixed moment, not one that slides forward on every call.
+        assert_eq!(
+            import_scope_for(Err(anyhow::anyhow!("HOME not set"))).since,
+            scope.since
+        );
+    }
+
+    #[test]
+    fn each_broken_machine_directory_is_closed_from_its_own_first_moment() {
+        let one = tempfile::tempdir().unwrap();
+        let two = tempfile::tempdir().unwrap();
+        for dir in [&one, &two] {
+            std::fs::write(dir.path().join("import-scope.json"), "{oops").unwrap();
+        }
+        let first = import_scope_in(one.path());
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let second = import_scope_in(two.path());
+        assert!(
+            second.since > first.since,
+            "the second machine does not borrow the first one's moment"
+        );
+        assert_eq!(import_scope_in(one.path()).since, first.since);
     }
 
     #[test]

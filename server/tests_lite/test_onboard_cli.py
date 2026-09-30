@@ -468,8 +468,10 @@ def test_local_health_probe_ignores_proxy_settings(monkeypatch):
         server.server_close()
 
 
-def _scope_calls(monkeypatch, *, facade: str | None, help_returncode: int = 0, interactive: bool = False):
+def _scope_calls(monkeypatch, tmp_path, *, facade: str | None, help_returncode: int = 0, interactive: bool = False):
     calls: list[list[str]] = []
+    monkeypatch.delenv("LONGHOUSE_IMPORT_SCOPE", raising=False)
+    monkeypatch.setattr(onboard_cli, "_get_longhouse_home", lambda: tmp_path / ".longhouse")
     monkeypatch.setattr(onboard_cli.shutil, "which", lambda name: facade if name == "longhouse" else None)
     monkeypatch.setattr(onboard_cli.sys.stdin, "isatty", lambda: interactive, raising=False)
     monkeypatch.setattr(onboard_cli.sys.stdout, "isatty", lambda: interactive, raising=False)
@@ -483,8 +485,8 @@ def _scope_calls(monkeypatch, *, facade: str | None, help_returncode: int = 0, i
     return calls
 
 
-def test_onboard_asks_what_to_import_before_importing_and_defaults_to_new_sessions(monkeypatch):
-    calls = _scope_calls(monkeypatch, facade="/x/longhouse")
+def test_onboard_asks_what_to_import_before_importing_and_defaults_to_new_sessions(monkeypatch, tmp_path):
+    calls = _scope_calls(monkeypatch, tmp_path, facade="/x/longhouse")
     onboard_cli._choose_import_scope()
     assert calls == [
         ["/x/longhouse", "machine", "scope", "--help"],
@@ -492,20 +494,46 @@ def test_onboard_asks_what_to_import_before_importing_and_defaults_to_new_sessio
     ]
 
 
-def test_onboard_prompts_when_there_is_a_terminal(monkeypatch):
-    calls = _scope_calls(monkeypatch, facade="/x/longhouse", interactive=True)
+def test_onboard_prompts_when_there_is_a_terminal(monkeypatch, tmp_path):
+    calls = _scope_calls(monkeypatch, tmp_path, facade="/x/longhouse", interactive=True)
     onboard_cli._choose_import_scope()
     assert calls[-1] == ["/x/longhouse", "machine", "scope", "--prompt"]
 
 
-def test_onboard_says_so_when_the_native_cli_predates_import_scopes(monkeypatch, capsys):
-    calls = _scope_calls(monkeypatch, facade="/x/longhouse", help_returncode=2)
+def test_onboard_says_so_when_the_native_cli_predates_import_scopes(monkeypatch, tmp_path, capsys):
+    calls = _scope_calls(monkeypatch, tmp_path, facade="/x/longhouse", help_returncode=2)
     onboard_cli._choose_import_scope()
     assert calls == [["/x/longhouse", "machine", "scope", "--help"]]
     assert "predates import scopes and imports ALL existing history" in _strip_ansi(capsys.readouterr().out)
 
 
-def test_onboard_without_a_native_cli_runs_nothing(monkeypatch):
-    calls = _scope_calls(monkeypatch, facade=None)
+def test_onboard_without_a_native_cli_runs_nothing(monkeypatch, tmp_path):
+    calls = _scope_calls(monkeypatch, tmp_path, facade=None)
     onboard_cli._choose_import_scope()
     assert calls == []
+
+
+def test_onboard_keeps_an_earlier_import_choice_instead_of_resetting_it(monkeypatch, tmp_path, capsys):
+    calls = _scope_calls(monkeypatch, tmp_path, facade="/x/longhouse")
+    (tmp_path / ".longhouse" / "machine").mkdir(parents=True)
+    (tmp_path / ".longhouse" / "machine" / "import-scope.json").write_text("{}")
+    onboard_cli._choose_import_scope()
+    assert calls == []
+    assert "Keeping this machine's existing import choice" in capsys.readouterr().out
+
+
+def test_onboard_keeps_the_choice_of_a_machine_that_already_imported(monkeypatch, tmp_path):
+    calls = _scope_calls(monkeypatch, tmp_path, facade="/x/longhouse")
+    (tmp_path / ".longhouse" / "agent").mkdir(parents=True)
+    (tmp_path / ".longhouse" / "agent" / "longhouse-shipper.db").write_text("")
+    onboard_cli._choose_import_scope()
+    assert calls == []
+
+
+def test_onboard_honours_an_explicit_import_scope_even_over_an_earlier_choice(monkeypatch, tmp_path):
+    calls = _scope_calls(monkeypatch, tmp_path, facade="/x/longhouse")
+    (tmp_path / ".longhouse" / "machine").mkdir(parents=True)
+    (tmp_path / ".longhouse" / "machine" / "import-scope.json").write_text("{}")
+    monkeypatch.setenv("LONGHOUSE_IMPORT_SCOPE", "all")
+    onboard_cli._choose_import_scope()
+    assert calls[-1] == ["/x/longhouse", "machine", "scope", "--since", "all"]

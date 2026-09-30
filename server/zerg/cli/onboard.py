@@ -377,6 +377,14 @@ def _choose_import_scope() -> None:
     facade = shutil.which("longhouse")
     if not facade:
         return
+    explicit = os.environ.get("LONGHOUSE_IMPORT_SCOPE", "").strip()
+    if not explicit:
+        # Running onboard again must not undo an earlier choice (or narrow a
+        # machine that already imported everything).
+        home = _get_longhouse_home()
+        if (home / "machine" / "import-scope.json").exists() or (home / "agent" / "longhouse-shipper.db").exists():
+            typer.echo("  Keeping this machine's existing import choice (longhouse machine scope shows it)")
+            return
     try:
         supported = subprocess.run([facade, "machine", "scope", "--help"], capture_output=True, text=True).returncode == 0
     except OSError:
@@ -388,9 +396,12 @@ def _choose_import_scope() -> None:
         )
         return
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
-    args = [facade, "machine", "scope", "--prompt" if interactive else "--since"]
-    if not interactive:
-        args.append("now")
+    if explicit:
+        args = [facade, "machine", "scope", "--since", explicit]
+    elif interactive:
+        args = [facade, "machine", "scope", "--prompt"]
+    else:
+        args = [facade, "machine", "scope", "--since", "now"]
     try:
         subprocess.run(args, check=False)
     except OSError as error:
