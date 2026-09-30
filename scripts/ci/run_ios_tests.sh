@@ -25,6 +25,18 @@ IOS_TEST_SLICE="${IOS_TEST_SLICE:-}"
 
 mkdir -p "${DERIVED_DATA_PATH}"
 
+# A slice that names a scheme this run does not build would otherwise run every
+# scheme whole and pass.
+if [[ "${IOS_TEST_SLICE}" == *:* ]]; then
+  case " ${IOS_TEST_SCHEMES} " in
+    *" ${IOS_TEST_SLICE%%:*} "*) ;;
+    *)
+      echo "IOS_TEST_SLICE '${IOS_TEST_SLICE}' names a scheme that IOS_TEST_SCHEMES ('${IOS_TEST_SCHEMES}') does not run" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 # Elapsed time at each stage: this lane's minutes go to a few long phases (build,
 # simulator boot, the UI tests) and the job log shows none of them by name.
 stage() { echo "[run_ios_tests] $* (t+${SECONDS}s)"; }

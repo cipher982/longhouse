@@ -181,8 +181,8 @@ struct ChatUITestFixtureView: View {
                     try? await Task.sleep(nanoseconds: 50_000_000)
                 }
                 await waitForStressTrigger()
-                await client.appendAssistantMessage("Assistant fixture stress update after user scroll.")
-                await viewModel.reload(sessionId: client.sessionID, appState: appState)
+                let rowID = await client.appendAssistantMessage("Assistant fixture stress update after user scroll.")
+                await reloadUntilPublished(rowID: rowID)
                 return
             }
             guard fixtureName.hasPrefix("assistant-update") || fixtureName.hasPrefix("assistant-stream") else { return }
@@ -226,7 +226,7 @@ struct ChatUITestFixtureView: View {
     /// may have read the workspace before the reply was appended. Nothing asks
     /// again, so on a slow runner the update never reached the screen
     /// (testLongAssistantUpdateKeepsWrappedTailAboveBottomChrome, run
-    /// 36645544095). Reload until the row is there, for at most ten seconds.
+    /// 36645544095). Reload until the row is there: 40 attempts, 250 ms apart.
     private func reloadUntilPublished(rowID: String) async {
         for _ in 0..<40 {
             await viewModel.reload(sessionId: client.sessionID, appState: appState)
