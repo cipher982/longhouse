@@ -95,6 +95,10 @@ struct SessionDelegationTask: Identifiable, Hashable, Codable, Sendable {
     /// The exact child session, when the provider and catalog established one.
     /// A missing link is not inferred from the task id.
     let sessionId: String?
+    /// Nullable archive enrichment; absence never implies zero work.
+    var userMessages: Int? = nil
+    var assistantMessages: Int? = nil
+    var toolCalls: Int? = nil
 }
 
 /// Provider-owned evidence for delegated/background work. `items == nil`

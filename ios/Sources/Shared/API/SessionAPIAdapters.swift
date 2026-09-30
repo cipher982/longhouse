@@ -65,7 +65,10 @@ private extension APISessionDelegationTaskResponse {
             firstObservedAt: firstObservedAt,
             startedAt: startedAt,
             lastActivityAt: lastActivityAt,
-            sessionId: sessionId
+            sessionId: sessionId,
+            userMessages: userMessages,
+            assistantMessages: assistantMessages,
+            toolCalls: toolCalls
         )
     }
 }

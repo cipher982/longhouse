@@ -498,6 +498,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Helm Send Reconciliation"
         case "background-tasks":
             return "Background Tasks"
+        case "background-tasks-sheet":
+            return "Background Tasks (sheet)"
         case "background-tasks-timeline":
             return "Background Tasks (timeline)"
         case "background-tasks-timeline-stale":
@@ -649,7 +651,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                         firstObservedAt: Self.fixedTimestamp(offset: -18),
                         startedAt: Self.fixedTimestamp(offset: -16),
                         lastActivityAt: Self.fixedTimestamp(offset: -2),
-                        sessionId: "019fc50b-1111-4111-8111-111111111111"
+                        sessionId: "019fc50b-1111-4111-8111-111111111111",
+                        userMessages: 1, assistantMessages: 4, toolCalls: 12
                     ),
                     SessionDelegationTask(
                         id: "shell-1",

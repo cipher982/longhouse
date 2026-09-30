@@ -393,7 +393,7 @@ func stateDurationLabel(for session: SessionSummary) -> String? {
 }
 
 private func runtimeBadgeAccessibilityLabel(for session: SessionSummary, stale: Bool) -> String {
-    var parts = [session.timelineStatusLabel]
+    var parts = [session.spokenStatusLabel()]
     if let duration = stateDurationLabel(for: session) {
         parts.append(duration)
     }

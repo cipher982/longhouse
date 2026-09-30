@@ -184,6 +184,12 @@ struct SessionDelegationTaskSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let archive = archiveWorkLine(for: task) {
+                Text("Archive · \(archive)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 10)
@@ -233,6 +239,15 @@ struct SessionDelegationTaskSheet: View {
         let kind = rawKind.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kind.isEmpty else { return "Background task" }
         return kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func archiveWorkLine(for task: SessionDelegationTask) -> String? {
+        guard let sessionId = task.sessionId, !sessionId.isEmpty else { return nil }
+        var parts: [String] = []
+        if let count = task.toolCalls { parts.append("\(count) \(count == 1 ? "tool call" : "tool calls")") }
+        if let count = task.assistantMessages { parts.append("\(count) \(count == 1 ? "reply" : "replies")") }
+        if let count = task.userMessages { parts.append("\(count) \(count == 1 ? "prompt" : "prompts")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func timingLine(for task: SessionDelegationTask) -> String? {

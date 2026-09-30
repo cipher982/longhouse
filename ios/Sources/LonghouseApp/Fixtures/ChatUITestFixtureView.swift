@@ -13,6 +13,7 @@ struct ChatUITestFixtureView: View {
     @State private var invalidationTick = 0
     @State private var benchmarkStartRequested = false
     @State private var benchmarkScrollCompleted = false
+    @State private var showBackgroundSheet = false
 
     init(fixtureName: String) {
         let fixture = ChatUITestFixture(name: fixtureName)
@@ -28,6 +29,7 @@ struct ChatUITestFixtureView: View {
         }
         let client = ChatUITestWorkspaceClient(fixture: fixture, sessionID: sessionID)
         self.fixtureName = fixtureName
+        _showBackgroundSheet = State(initialValue: fixtureName == "background-tasks-sheet")
         self.client = client
         _probe = State(initialValue: ChatUITestProbe(path: UITestHooks.chatFixtureProbePath))
         // Every non-benchmark fixture shares one session ID, and the transcript
@@ -92,6 +94,16 @@ struct ChatUITestFixtureView: View {
                 .navigationTitle("Subagent")
                 .navigationBarTitleDisplayMode(.inline)
             }
+        }
+        .sheet(isPresented: $showBackgroundSheet) {
+            SessionDelegationTaskSheet(
+                facts: viewModel.detail?.stateFacts.delegation,
+                asOf: Date(),
+                onOpenSubagent: { childSessionId in
+                    showBackgroundSheet = false
+                    navigationPath.append(childSessionId)
+                }
+            )
         }
         .overlay(alignment: .topLeading) {
             VStack(spacing: 0) {
