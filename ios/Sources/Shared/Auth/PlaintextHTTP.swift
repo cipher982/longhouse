@@ -13,6 +13,11 @@ import Foundation
 /// `engine/src/plaintext_http.rs` and `server/zerg/services/plaintext_http.py`.
 /// `schemas/plaintext-http-vectors.json` is the shared case list all four read
 /// in their tests; change the rule there first.
+///
+/// Names are trusted by their suffix, not resolved: `*.ts.net` (MagicDNS) counts
+/// as Tailscale and `*.local` as LAN. On a network whose DNS an attacker
+/// controls, a poisoned answer for such a name could point a client at a host
+/// outside the tailnet. Use the 100.x address where that matters.
 public enum PlaintextHTTP {
     public static let optInFlag = "--allow-insecure-http"
     public static let optInEnvironment = "LONGHOUSE_ALLOW_INSECURE_HTTP"

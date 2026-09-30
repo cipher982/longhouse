@@ -22,7 +22,6 @@ from zerg.services.plaintext_http import OPT_IN_ENV
 from zerg.services.plaintext_http import OPT_IN_FLAG
 from zerg.services.plaintext_http import Outcome
 from zerg.services.plaintext_http import check_runtime_url
-from zerg.services.plaintext_http import insecure_warning
 from zerg.services.plaintext_http import refusal_message
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
@@ -42,7 +41,6 @@ def _resolve_configured_url(
     config_dir: Path | None,
     *,
     allow_insecure_http: bool = False,
-    quiet: bool = False,
 ) -> str:
     """The Runtime Host address to ship to: `--url`, else the stored one.
 
@@ -54,8 +52,8 @@ def _resolve_configured_url(
         allow = allow_insecure_http is True or get_allow_insecure_http(config_dir, candidate)
         normalized = normalize_zerg_url(candidate, allow_insecure_http=allow)
         if normalized:
-            if check_runtime_url(normalized, allow_insecure_http=allow) is Outcome.ALLOWED_WARN and not quiet:
-                typer.secho(insecure_warning(normalized), fg=typer.colors.YELLOW, err=True)
+            # The engine that ships to it applies the rule again and prints the
+            # warning for an opted-in LAN address, once per run.
             return normalized
         outcome = check_runtime_url(candidate, allow_insecure_http=allow)
         if outcome in (Outcome.REFUSED_LAN, Outcome.REFUSED_PUBLIC):
@@ -121,7 +119,7 @@ def ship(
 
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
 
-    url = _resolve_configured_url(url, config_dir, allow_insecure_http=allow_insecure_http is True, quiet=quiet is True)
+    url = _resolve_configured_url(url, config_dir, allow_insecure_http=allow_insecure_http is True)
     if not token:
         token = load_token(config_dir)
 

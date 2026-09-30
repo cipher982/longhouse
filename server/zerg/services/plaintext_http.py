@@ -9,6 +9,11 @@ One rule, four clients: this module, ``engine/src/plaintext_http.rs``,
 ``desktop/.../PlaintextHTTP.swift`` and ``ios/Sources/Shared/Auth/PlaintextHTTP.swift``.
 ``schemas/plaintext-http-vectors.json`` is the shared case list all four read
 in their tests; change the rule there first.
+
+Names are trusted by their suffix, not resolved: `*.ts.net` (MagicDNS) counts as
+Tailscale and `*.local` as LAN. On a network whose DNS an attacker controls, a
+poisoned answer for such a name could point a client at a host outside the tailnet.
+Use the 100.x address where that matters.
 """
 
 from __future__ import annotations

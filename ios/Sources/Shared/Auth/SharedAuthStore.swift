@@ -92,12 +92,15 @@ enum SharedAuthStore {
             return
         }
         defaults?.set(value, forKey: serverURLKey)
+        if let optedIn = defaults?.string(forKey: insecureHTTPOptInKey), optedIn != normalizedOptInURL(value) {
+            defaults?.removeObject(forKey: insecureHTTPOptInKey)
+        }
     }
 
     /// Records that the user opted into plain http to this LAN address (the
     /// iOS form of `longhouse auth --allow-insecure-http`; see `PlaintextHTTP`).
-    /// It is tied to the exact address, so switching servers drops it. Pass nil
-    /// to clear.
+    /// It is tied to the exact address, so it never applies to another server,
+    /// and saving a different server URL drops it. Pass nil to clear.
     static func saveInsecureHTTPOptIn(for serverURL: String?) {
         guard let serverURL else {
             defaults?.removeObject(forKey: insecureHTTPOptInKey)

@@ -195,6 +195,8 @@ def clear_machine_runtime_url(base_dir: Path | None = None, *, written_by: str) 
         base_dir=base_dir,
         written_by=written_by,
         runtime_url=None,
+        # The opt-in belongs to the address that is gone.
+        allow_insecure_http=None,
     )
     return True
 

@@ -125,6 +125,18 @@ def test_a_public_http_address_is_never_saved_even_with_the_opt_in(tmp_path: Pat
         save_zerg_url("http://demo.longhouse.ai", tmp_path, allow_insecure_http=True)
 
 
+def test_clearing_the_runtime_url_drops_the_opt_in_that_belonged_to_it(tmp_path: Path):
+    from zerg.services.machine_state import clear_machine_runtime_url
+
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
+    assert clear_machine_runtime_url(tmp_path, written_by="test") is True
+
+    state = load_machine_state(tmp_path)
+    assert state is not None
+    assert state.runtime_url is None
+    assert state.allow_insecure_http is None
+
+
 def test_machine_state_keeps_the_opt_in_across_unrelated_rewrites(tmp_path: Path):
     write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
     write_machine_state(base_dir=tmp_path, written_by="test", machine_name="laptop")
@@ -181,20 +193,20 @@ def test_ship_refuses_a_lan_address_naming_the_opt_in_then_warns_when_opted_in(m
     code, calls = _ship(monkeypatch, tmp_path, url="http://192.168.1.20:8080", allow_insecure_http=True)
     assert code == 0
     assert calls[0][0][3] == "http://192.168.1.20:8080"
-    # The engine subprocess applies the same rule, so it is told about the opt-in.
+    # The engine subprocess applies the same rule, so it is told about the opt-in,
+    # and it prints the warning (once per run, so not here as well).
     assert calls[0][1]["env"][OPT_IN_ENV] == "1"
-    assert "WARNING" in capsys.readouterr().err
+    assert "WARNING" not in capsys.readouterr().err
 
 
 def test_ship_uses_the_stored_opt_in_only_for_the_address_it_was_stored_with(monkeypatch, tmp_path: Path, capsys):
     write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
     monkeypatch.setattr(connect, "resolve_longhouse_home_from_provider_home", lambda claude_dir: tmp_path)
 
-    # The stored address keeps working, with the warning.
+    # The stored address keeps working (the engine it runs warns).
     code, calls = _ship(monkeypatch, tmp_path, claude_dir="/unused")
     assert code == 0
     assert calls[0][0][3] == "http://192.168.1.20:8080"
-    assert "WARNING" in capsys.readouterr().err
 
     # A different LAN address handed to --url is a new decision.
     code, calls = _ship(monkeypatch, tmp_path, claude_dir="/unused", url="http://192.168.1.99:8080")
