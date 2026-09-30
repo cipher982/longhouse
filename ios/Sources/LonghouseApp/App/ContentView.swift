@@ -94,6 +94,12 @@ struct ServerConfigSheet: View {
         PlaintextHTTP.check(urlText, allowInsecureHTTP: false) == .refusedLAN
     }
 
+    /// Saved only when the switch is on and was turned on for this very address.
+    private func optsIntoInsecureHTTP(for address: String) -> Bool {
+        guard offersInsecureHTTPOptIn, allowInsecureHTTP, let optInAddress else { return false }
+        return SharedAuthStore.isSameServerAddress(optInAddress, address)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -135,7 +141,7 @@ struct ServerConfigSheet: View {
                     Button("Save") {
                         let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            appState.setServer(trimmed, allowInsecureHTTP: offersInsecureHTTPOptIn && allowInsecureHTTP)
+                            appState.setServer(trimmed, allowInsecureHTTP: optsIntoInsecureHTTP(for: trimmed))
                         }
                         dismiss()
                     }
@@ -144,6 +150,7 @@ struct ServerConfigSheet: View {
             .onAppear {
                 urlText = appState.serverURL
                 allowInsecureHTTP = appState.allowsInsecureHTTP
+                optInAddress = allowInsecureHTTP ? urlText : nil
             }
             .onChange(of: allowInsecureHTTP) { _, isOn in
                 optInAddress = isOn ? urlText : nil

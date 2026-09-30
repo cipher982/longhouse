@@ -7,6 +7,7 @@ Desktop and iOS tests alike, so the four clients cannot drift apart.
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -367,3 +368,80 @@ def test_the_stored_opt_in_matches_its_address_without_regard_to_case(tmp_path: 
     write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
 
     assert get_allow_insecure_http(tmp_path, "HTTP://192.168.1.20:8080/") is True
+
+
+def test_rewriting_the_same_address_spelled_differently_keeps_its_opt_in(tmp_path: Path):
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
+
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="HTTP://192.168.1.20:8080/")
+
+    state = load_machine_state(tmp_path)
+    assert state is not None
+    assert state.allow_insecure_http is True
+
+
+def test_the_desktop_ui_url_honours_the_opt_in_stored_under_a_custom_longhouse_home(monkeypatch, tmp_path: Path):
+    from zerg.services import desktop_app
+
+    monkeypatch.delenv(OPT_IN_ENV, raising=False)
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / "home"))
+    write_machine_state(base_dir=tmp_path / "home", written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
+    monkeypatch.setattr(desktop_app, "_log_dir", lambda claude_dir: tmp_path / "logs")
+
+    plist = desktop_app._generate_launchd_plist(
+        launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+        health_arguments=["/usr/bin/true"],
+        refresh_seconds=30,
+        ui_url="http://192.168.1.20:8080",
+        claude_dir=None,
+    )
+
+    assert "--ui-url" in plist
+    assert "http://192.168.1.20:8080" in plist
+
+
+def test_background_collectors_skip_a_stored_address_the_rule_forbids(monkeypatch, tmp_path: Path):
+    from zerg.services import local_health
+    from zerg.services import provider_capability_remote_proof as remote_proof
+
+    monkeypatch.delenv(OPT_IN_ENV, raising=False)
+    sent: list[str] = []
+
+    def opener(request, timeout=None):
+        sent.append(request.full_url)
+        raise AssertionError("the token must not be sent")
+
+    for refused_url in ("http://demo.longhouse.ai", "http://192.168.1.20:8080"):
+        refused = remote_proof.refresh_cached_provider_capability_proofs(
+            tmp_path, runtime_url=refused_url, token="device-token", opener=opener
+        )
+        assert refused.summary["refresh_state"] == "invalid_runtime_url"
+        assert "Refusing plaintext" in refused.summary["error"]
+        assert sent == []
+
+    # A Tailscale address is now a valid Runtime Host for the proof refresh too.
+    def offline(request, timeout=None):
+        sent.append(request.full_url)
+        raise urllib.error.URLError("offline")
+
+    tailscale = remote_proof.refresh_cached_provider_capability_proofs(
+        tmp_path, runtime_url="http://100.64.0.1:8080", token="device-token", opener=offline
+    )
+    assert sent == ["http://100.64.0.1:8080/api/agents/provider-capability-proofs"]
+    assert tailscale.summary["refresh_state"] != "invalid_runtime_url"
+
+    from zerg.services.shipper.token import may_send_token_to
+
+    assert may_send_token_to("https://demo.longhouse.ai", tmp_path)
+    assert may_send_token_to("http://100.64.0.1:8080", tmp_path)
+    assert not may_send_token_to("http://demo.longhouse.ai", tmp_path)
+    assert may_send_token_to("not a url", tmp_path)
+
+    # Local-health title hydration sends the same header: nothing goes to a refused address.
+    fetched: list[str] = []
+    monkeypatch.setattr(local_health, "_fetch_managed_session_title", lambda url, token, session_id: fetched.append(url) or {})
+    rows = [{"session_id": "s1", "state": "attached"}]
+    local_health._enrich_managed_session_titles(tmp_path, rows, runtime_url="http://demo.longhouse.ai", token="device-token")
+    assert fetched == []
+    local_health._enrich_managed_session_titles(tmp_path, rows, runtime_url="http://100.64.0.1:8080", token="device-token")
+    assert fetched == ["http://100.64.0.1:8080"]

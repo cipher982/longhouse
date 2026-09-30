@@ -1046,6 +1046,7 @@ fn registration_credentials(config: &LaunchConfig) -> anyhow::Result<(String, St
             .filter(|value| !value.is_empty())
     });
     let url = url.context("No Longhouse URL configured. Run `longhouse auth` first.")?;
+    crate::plaintext_http::enforce_for_machine(&machine, &url)?;
     let token = token.context("No device token found. Run `longhouse auth` first.")?;
     let machine_name = state
         .get("machine_name")

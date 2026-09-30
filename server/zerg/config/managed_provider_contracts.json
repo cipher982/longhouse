@@ -3698,7 +3698,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "3445552d2ad39171d6327765b4efbd3e53941a288c05052934002927f775af73"
+      "adapter_digest": "e6757be201fb3af3430e4702c1dd17327764d2685b322feec862472c48c280fa"
     },
     {
       "provider": "pi",
@@ -4319,7 +4319,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "b550bdaca9335fea232123a6f67646e88eb15cc9a154db05fe4c5357fb5ecc3a"
+      "adapter_digest": "a951fd4cee20a82300820586f5a520dc3e89004d7db4749b2c8846acb3c3b620"
     },
     {
       "provider": "omp",
@@ -4939,7 +4939,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "c2887898504e432ce109e377985bf8b428d19c912bf966b00c03be171c441dce"
+      "adapter_digest": "45921b62bfb9bb8b516abde9632b70c8da9886c7d543440406068b2a7452ceeb"
     }
   ]
 }

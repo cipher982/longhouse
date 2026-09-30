@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import tempfile
@@ -17,8 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.plaintext_http import check_runtime_url
+from zerg.services.plaintext_http import refusal_message
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof import proof_record_from_mapping
+from zerg.services.shipper.token import get_allow_insecure_http
 
 _REMOTE_BUNDLE_KIND = "trusted_provider_capability_proof_bundle"
 _CACHE_KIND = "trusted_provider_capability_proof_cache"
@@ -40,21 +42,18 @@ def _cache_path(base_dir: Path | None) -> Path:
     return resolve_longhouse_home(base_dir) / "provider-capability-proofs" / _CACHE_NAME
 
 
-def _runtime_origin(runtime_url: str) -> str:
+def _runtime_origin(runtime_url: str, base_dir: Path | None = None) -> str:
     parsed = urllib.parse.urlsplit(str(runtime_url or "").strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.hostname is None:
         raise ValueError("provider proof Runtime URL must be an http(s) URL")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("provider proof Runtime URL must not contain credentials")
-    hostname = parsed.hostname.rstrip(".").lower()
-    loopback = hostname == "localhost"
-    if not loopback:
-        try:
-            loopback = ipaddress.ip_address(hostname).is_loopback
-        except ValueError:
-            loopback = False
-    if parsed.scheme != "https" and not loopback:
-        raise ValueError("provider proof Runtime URL must use HTTPS except on localhost")
+    # The device token rides the request, and the proofs it returns are trusted:
+    # plain http is judged by the rule every native client shares (loopback and
+    # Tailscale, or a LAN address the user opted into).
+    outcome = check_runtime_url(runtime_url, allow_insecure_http=get_allow_insecure_http(base_dir, runtime_url))
+    if not outcome.usable:
+        raise ValueError(refusal_message(runtime_url, outcome))
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
 
 
@@ -130,7 +129,7 @@ def load_cached_provider_capability_proofs(
         cached_origin = payload.get("runtime_origin")
         if not isinstance(cached_origin, str) or not cached_origin:
             raise ValueError("trusted provider proof cache has no Runtime origin")
-        if runtime_url is not None and cached_origin != _runtime_origin(runtime_url):
+        if runtime_url is not None and cached_origin != _runtime_origin(runtime_url, base_dir):
             return _empty(path=path, cache_state="origin_mismatch", refresh_state="cache_only")
         records_by_provider, trusted_ids = _parse_remote_bundle(payload.get("bundle"))
     except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -215,7 +214,7 @@ def refresh_cached_provider_capability_proofs(
             summary={**cached.summary, "refresh_state": "not_configured"},
         )
     try:
-        origin = _runtime_origin(runtime_url)
+        origin = _runtime_origin(runtime_url, base_dir)
     except ValueError as exc:
         cached = load_cached_provider_capability_proofs(base_dir, runtime_url=runtime_url)
         return TrustedProviderProofs(

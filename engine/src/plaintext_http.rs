@@ -209,6 +209,12 @@ pub fn enforce(url: &str, allow_insecure_http: bool) -> Result<Outcome> {
     Ok(outcome)
 }
 
+/// `enforce` for a process that reads its opt-in from `machine_dir`: the
+/// environment, or the one stored with exactly this address.
+pub fn enforce_for_machine(machine_dir: &Path, url: &str) -> Result<Outcome> {
+    enforce(url, opt_in_enabled(machine_dir, url))
+}
+
 pub fn env_opt_in() -> bool {
     std::env::var(OPT_IN_ENV)
         .map(|value| {
@@ -385,6 +391,28 @@ mod tests {
         )
         .unwrap();
         assert!(!stored_opt_in_for(dir.path(), lan));
+    }
+
+    #[test]
+    fn enforce_for_machine_reads_the_stored_opt_in_for_that_address() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("state.json"),
+            r#"{"runtime_url":"http://192.168.1.20:8080","allow_insecure_http":true}"#,
+        )
+        .unwrap();
+        temp_env::with_var_unset(OPT_IN_ENV, || {
+            assert_eq!(
+                enforce_for_machine(dir.path(), "http://192.168.1.20:8080").unwrap(),
+                Outcome::AllowedWarn
+            );
+            assert!(enforce_for_machine(dir.path(), "http://192.168.1.99:8080").is_err());
+            assert!(enforce_for_machine(dir.path(), "http://demo.longhouse.ai").is_err());
+            assert_eq!(
+                enforce_for_machine(dir.path(), "http://100.64.0.1:8080").unwrap(),
+                Outcome::Allowed
+            );
+        });
     }
 
     #[test]

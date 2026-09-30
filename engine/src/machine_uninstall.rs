@@ -61,6 +61,9 @@ pub enum RevokeOutcome {
     Unsupported,
     /// The host could not be reached.
     Unreachable(String),
+    /// The rule for plain http (`plaintext_http`) forbids sending the token to
+    /// the stored address, so nothing was sent.
+    Blocked(String),
     /// The host answered with something else.
     Refused(String),
 }
@@ -86,6 +89,7 @@ impl RevokeOutcome {
                 "{base} is too old to revoke a device token from the machine; revoke it at {base}/settings/devices"
             ),
             Self::Unreachable(error) => format!("could not reach {base} to revoke the token ({error})"),
+            Self::Blocked(message) => format!("did not send the token to {base}: {message}"),
             Self::Refused(detail) => format!("{base} refused to revoke the token ({detail})"),
         }
     }
@@ -148,6 +152,11 @@ pub fn revoke_stored_token(machine_dir: &Path) -> (RevokeOutcome, Option<String>
             None,
         );
     };
+    // The token rides this request as a header, so the stored address has to
+    // pass the same plain-http rule it did when it was stored.
+    if let Err(blocked) = crate::plaintext_http::enforce_for_machine(machine_dir, &url) {
+        return (RevokeOutcome::Blocked(blocked.to_string()), Some(url));
+    }
     (revoke_device_token(&url, &token), Some(url))
 }
 
@@ -784,6 +793,28 @@ mod tests {
     use std::fs;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn revoke_never_sends_the_token_to_an_address_the_plain_http_rule_forbids() {
+        for stored in ["http://demo.longhouse.ai", "http://192.168.1.20:8080"] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join("device-token"), "zdt_abc").unwrap();
+            fs::write(
+                dir.path().join("state.json"),
+                serde_json::json!({"runtime_url": stored}).to_string(),
+            )
+            .unwrap();
+            temp_env::with_var_unset(crate::plaintext_http::OPT_IN_ENV, || {
+                let (outcome, url) = revoke_stored_token(dir.path());
+                assert!(
+                    matches!(&outcome, RevokeOutcome::Blocked(message) if message.contains("Refusing plaintext")),
+                    "{stored}: {outcome:?}"
+                );
+                assert!(!outcome.token_is_dead());
+                assert_eq!(url.as_deref(), Some(stored));
+            });
+        }
+    }
 
     #[derive(Default)]
     struct FakeEffects {

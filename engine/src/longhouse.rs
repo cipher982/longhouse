@@ -2890,6 +2890,9 @@ fn resolve_codex_config(
         .or(state.runtime_url)
         .filter(|value| !value.trim().is_empty())
         .context("No Longhouse URL configured. Run `longhouse auth` first.")?;
+    // The managed launch registers with this address and hands it to the
+    // bridges it starts, all carrying the device token.
+    plaintext_http::enforce_for_machine(&machine_dir, &url)?;
     let token = token
         .or_else(|| std::fs::read_to_string(machine_dir.join("device-token")).ok())
         .filter(|value| !value.trim().is_empty())

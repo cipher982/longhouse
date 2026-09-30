@@ -72,6 +72,13 @@ def normalize_runtime_url(url: object | None) -> str | None:
     return normalized
 
 
+def same_runtime_address(first: str | None, second: str | None) -> bool:
+    """Whether two runtime URLs name the same address: scheme and host are case-insensitive, a trailing slash is not a difference."""
+    if first is None or second is None:
+        return first is second
+    return first.strip().rstrip("/").lower() == second.strip().rstrip("/").lower()
+
+
 def sanitize_machine_name(name: object | None) -> str | None:
     """Sanitize a machine name for service args and user-facing labels."""
     if not isinstance(name, str):
@@ -138,7 +145,7 @@ def write_machine_state(
     next_runtime_url = _resolve_runtime_url(runtime_url, current_state)
     # A LAN opt-in belongs to one address. A write that moves to another address
     # and does not say otherwise does not carry it along.
-    if allow_insecure_http is _MISSING and current_state and next_runtime_url != current_state.runtime_url:
+    if allow_insecure_http is _MISSING and current_state and not same_runtime_address(next_runtime_url, current_state.runtime_url):
         allow_insecure_http = None
     draft_state = MachineState(
         schema_version=SCHEMA_VERSION,

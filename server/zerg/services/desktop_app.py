@@ -169,7 +169,8 @@ def _generate_launchd_plist(
     ]
     for argument in health_arguments[1:]:
         program_arguments.extend(["--health-arg", str(argument)])
-    normalized_ui_url = normalize_zerg_url(ui_url, allow_insecure_http=get_allow_insecure_http(url=ui_url))
+    state_root = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    normalized_ui_url = normalize_zerg_url(ui_url, allow_insecure_http=get_allow_insecure_http(state_root, ui_url))
     if normalized_ui_url:
         program_arguments.extend(["--ui-url", normalized_ui_url])
 

@@ -2307,6 +2307,7 @@ fn registration_credentials(config: &LaunchConfig) -> Result<(String, String, St
         })
         .filter(|value| !value.trim().is_empty())
         .context("No Longhouse URL configured. Run `longhouse auth` first.")?;
+    crate::plaintext_http::enforce_for_machine(&machine, &url)?;
     let token = config
         .token
         .clone()

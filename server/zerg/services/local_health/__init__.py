@@ -65,6 +65,7 @@ from zerg.services.provider_capability_remote_proof import load_cached_provider_
 from zerg.services.provider_capability_remote_proof import refresh_cached_provider_capability_proofs
 from zerg.services.provider_support_state import collect_provider_support_state
 from zerg.services.shipper.service import get_service_info
+from zerg.services.shipper.token import may_send_token_to
 from zerg.services.transport_health import TransportHealthAssessment
 from zerg.services.transport_health import TransportHealthSample
 from zerg.services.transport_health import assess_transport_health
@@ -443,6 +444,10 @@ def _enrich_managed_session_titles(
         token = _read_trimmed_file(get_machine_token_path(base_dir))
     token = _normalize_optional_string(token)
     if runtime_url is None or token is None:
+        return
+    # The token rides these requests as a header: a stored address the plain-http
+    # rule forbids gets none of them.
+    if not may_send_token_to(runtime_url, base_dir):
         return
     by_id = {
         session_id: row

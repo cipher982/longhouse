@@ -8,6 +8,7 @@ from pathlib import Path
 from zerg.services.longhouse_paths import get_machine_token_path
 from zerg.services.machine_state import clear_machine_runtime_url
 from zerg.services.machine_state import load_machine_state
+from zerg.services.machine_state import same_runtime_address
 from zerg.services.plaintext_http import Outcome
 from zerg.services.plaintext_http import check_runtime_url
 from zerg.services.plaintext_http import env_opt_in
@@ -164,9 +165,14 @@ def normalize_zerg_url(url: object | None, *, allow_insecure_http: bool = False)
     return normalized
 
 
-def _address_key(url: str) -> str:
-    """An address compared the way the engine compares it: scheme and host are case-insensitive."""
-    return url.strip().rstrip("/").lower()
+def may_send_token_to(url: object | None, config_dir: Path | None = None) -> bool:
+    """Whether the plaintext-http rule lets the device token go to ``url``.
+
+    For background collectors that cannot fail loudly: they skip the request
+    instead. An address the rule cannot parse is left to the request to fail on.
+    """
+    outcome = check_runtime_url(url, allow_insecure_http=get_allow_insecure_http(config_dir, url))
+    return outcome not in (Outcome.REFUSED_LAN, Outcome.REFUSED_PUBLIC)
 
 
 def get_allow_insecure_http(config_dir: Path | None = None, url: object | None = None) -> bool:
@@ -181,7 +187,7 @@ def get_allow_insecure_http(config_dir: Path | None = None, url: object | None =
     state = load_machine_state(config_dir)
     if not (state and state.allow_insecure_http and state.runtime_url and isinstance(url, str)):
         return False
-    return _address_key(state.runtime_url) == _address_key(url)
+    return same_runtime_address(state.runtime_url, url)
 
 
 def save_zerg_url(url: str, config_dir: Path | None = None, *, allow_insecure_http: bool = False) -> None:
