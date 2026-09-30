@@ -96,16 +96,17 @@ def read_sources(root: Path) -> dict[str, str]:
     return {path: (root / path).read_text(encoding="utf-8") for path in sorted(paths)}
 
 
+# An import statement of zerg code that starts a line or follows a `;` (`python -c "import os; from zerg.x import y"`).
 _EMBEDDED_IMPORT = re.compile(
-    r"^[ \t]*(?:from[ \t]+zerg[\w.]*[ \t]+import\b.*|import[ \t]+zerg[\w.]*.*)$", re.MULTILINE
+    r"(?:^|;)[ \t]*((?:from[ \t]+zerg[\w.]*[ \t]+import\b|import[ \t]+zerg[\w.]*)[^;\n]*)", re.MULTILINE
 )
 
 
 def _import_nodes(tree: ast.AST) -> Iterator[ast.AST]:
     """Every node of a module, plus the import statements inside embedded Python: a string (or f-string
-    chunk) with a line `from zerg... import ...` or `import zerg...` is code the verifier hands to a
-    subprocess, and it depends on the subject as much as a real import does. Only whole literal lines
-    are seen. `from zerg.x import {name}` counts as an import of zerg.x; an interpolated module name
+    chunk) with a statement `from zerg... import ...` or `import zerg...` is code the verifier hands to a
+    subprocess, and it depends on the subject as much as a real import does. Only statements that start a
+    line or follow a `;` are seen. `from zerg.x import {name}` counts as an import of zerg.x; an interpolated module name
     (`import zerg.{mod}`) or a script assembled from pieces is not seen."""
     for node in ast.walk(tree):
         yield node

@@ -145,6 +145,11 @@ class ImportGraph(unittest.TestCase):
                 "        {more})\n"
                 '    """\n'
             ),
+            "server/zerg/qa/oneliner.py": (
+                'ARGS = ["python", "-c", "import os; from zerg.services.late import x; print(x)"]\n'
+                'OTHER = "import zerg.services.other as o;print(o)"\n'
+                'PROSE = "then import zerg is fine, and so is a; from ordinary import thing"\n'
+            ),
             "server/zerg/qa/aliased.py": (
                 "import builtins\n"
                 "from importlib import import_module as load\n"
@@ -162,6 +167,8 @@ class ImportGraph(unittest.TestCase):
                 ("qa/embedded.py", "services/__init__.py"),  # `from zerg.services import {symbol}`
                 ("qa/embedded.py", "services/other.py"),  # a parenthesized list
                 ("qa/embedded.py", "services/late.py"),  # names on the opener line
+                ("qa/oneliner.py", "services/late.py"),
+                ("qa/oneliner.py", "services/other.py"),
                 ("qa/aliased.py", "services/other.py"),
                 ("qa/aliased.py", "services/paths.py"),
             },
