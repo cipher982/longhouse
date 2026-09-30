@@ -380,8 +380,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 }
 
 extension SessionDetail {
-    /// The session-level verdict: the activity axis, plus a host observation
-    /// that may retract a claim the window has not expired yet.
+    /// The session-level presentation verdict, plus a host observation
+    /// that may retract a work claim whose owning window has not expired.
     ///
     /// A host we positively observed offline or stale outranks a work claim, but
     /// it may never *add* an alarm: an idle session stays idle rather than

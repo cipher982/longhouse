@@ -28,6 +28,22 @@ extension SessionStateFacts {
         return now <= expiresAt
     }
 
+    /// The first clock boundary that can retire the presentation's work claim.
+    var workClaimValidUntil: String? {
+        guard primary?.key == "delegated_work" else { return activityValidUntil }
+        let delegationWindow = delegation?.validUntil
+        guard activityState == "thinking" || activityState == "executing" else {
+            return delegationWindow
+        }
+        guard let activityDeadline = activityValidUntil.flatMap(LonghouseDateParser.parse) else {
+            return delegationWindow
+        }
+        guard let delegationDeadline = delegationWindow.flatMap(LonghouseDateParser.parse) else {
+            return activityValidUntil
+        }
+        return activityDeadline < delegationDeadline ? activityValidUntil : delegationWindow
+    }
+
     /// The presentation's work claim owns its clock; delegation outlives parent activity.
     func workClaimExpired(asOf now: Date = Date()) -> Bool {
         if pendingInteractionKind != nil || primary?.key == "needs_answer" || primary?.key == "needs_approval" {
@@ -182,7 +198,7 @@ extension SessionStateFacts {
 }
 
 extension SessionStateFacts {
-    /// The ledger verdict for the activity axis.
+    /// The ledger verdict for the presentation's independently clocked work claim.
     ///
     /// The viewer's socket is deliberately not an input. A connected stream only
     /// means updates can arrive, so a `connecting` or `disconnected` socket is
@@ -194,11 +210,17 @@ extension SessionStateFacts {
         hasPendingInteraction: Bool = false,
         asOf now: Date = Date()
     ) -> SessionLedgerEvidence {
-        if hasPendingInteraction || pendingInteractionKind != nil {
+        if hasPendingInteraction || pendingInteractionKind != nil
+            || primary?.key == "needs_answer" || primary?.key == "needs_approval" {
             return .attention
         }
-        guard ["thinking", "executing"].contains(activityState) else { return .quiet }
-        return activityEvidenceIsLive(asOf: now) ? .working : .uncertain
+        if workClaimExpired(asOf: now) { return .uncertain }
+        let tone = primary?.tone
+        if tone == "active" || tone == "running" || tone == "thinking"
+            || activityState == "thinking" || activityState == "executing" {
+            return .working
+        }
+        return .quiet
     }
 }
 

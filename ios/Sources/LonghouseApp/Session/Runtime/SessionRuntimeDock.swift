@@ -135,7 +135,7 @@ struct SessionRuntimeDock: View {
         // server's valid_until passes, labels and motion change immediately.
         .task(id: evidenceDeadlineKey) {
             evidenceNow = Date()
-            guard let deadline = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) else {
+            guard let deadline = detail.stateFacts.workClaimValidUntil.flatMap(LonghouseDateParser.parse) else {
                 return
             }
             let remaining = deadline.timeIntervalSinceNow
@@ -266,7 +266,7 @@ struct SessionRuntimeDock: View {
 
 
     private var evidenceDeadlineKey: String {
-        "\(detail.id):\(detail.stateFacts.activityValidUntil ?? "")"
+        "\(detail.id):\(detail.stateFacts.primary?.key ?? ""):\(detail.stateFacts.workClaimValidUntil ?? "")"
     }
     private var statusSignature: String {
         var components = [detail.id]
@@ -346,7 +346,7 @@ struct SessionRuntimeDock: View {
     }
 
     private var elapsedStart: Date? {
-        guard isOpen else { return nil }
+        guard isOpen && detail.isSessionExecuting else { return nil }
         if let anchor = elapsedAnchor, anchor.key == elapsedAnchorKey {
             return anchor.start
         }
@@ -403,7 +403,7 @@ struct SessionRuntimeDock: View {
     }
 
     private func usesPrimaryDelegationHeadline(for state: SessionLedgerEvidence) -> Bool {
-        detail.stateFacts.primary?.key == "delegated_work" && state != .working
+        detail.stateFacts.primary?.key == "delegated_work" && state != .attention
     }
 
     @ViewBuilder
@@ -805,7 +805,7 @@ struct SessionRuntimeDock: View {
             parts.append(RuntimeElapsed.label(seconds: Double(lastTurn.durationMs) / 1000, precise: true))
         }
         if let detailLabel = operationLine(for: state) { parts.append(detailLabel) }
-        if let backgroundSummary = delegationSummaryLabel { parts.append(backgroundSummary) }
+        if !usesPrimaryDelegationHeadline(for: state), let backgroundSummary = delegationSummaryLabel { parts.append(backgroundSummary) }
         if style.capability != .live, let label = detail.runtimeCapabilityLabel { parts.append(label) }
         if evidenceDisclosure || state == .uncertain || transportFailureVisible {
             parts.append(evidenceLabel(state))

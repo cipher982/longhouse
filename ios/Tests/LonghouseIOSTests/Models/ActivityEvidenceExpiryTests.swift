@@ -93,6 +93,38 @@ struct ActivityEvidenceExpiryTests {
     }
 
     @Test
+    func delegatedDetailWorkUsesItsOwnWindowAndPreservesParentAndInteractionPrecedence() {
+        let primary = SessionStateLabel(
+            key: "delegated_work", label: "Background", tone: "active", observedAt: nil
+        )
+        var facts = makeSessionStateFacts(
+            activity: "quiescent",
+            activityValidUntil: "2026-08-23T12:01:00Z",
+            primaryOverride: primary
+        )
+        facts.delegation = SessionDelegationFacts(
+            state: "pending", count: 1, kinds: ["subagent": 1], source: "claude_hook",
+            observedAt: "2026-08-23T12:00:00Z", validUntil: "2026-08-23T12:30:00Z", items: nil
+        )
+        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .working)
+        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:30:00Z")) == .uncertain)
+
+        var parentWorking = makeSessionStateFacts(
+            activity: "executing", activityValidUntil: "2026-08-23T12:01:00Z",
+            primaryOverride: primary
+        )
+        parentWorking.delegation = facts.delegation
+        #expect(parentWorking.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .uncertain)
+
+        var interaction = makeSessionStateFacts(
+            activity: "quiescent", pendingInteractionKind: "question",
+            activityValidUntil: "2026-08-23T12:01:00Z"
+        )
+        interaction.delegation = facts.delegation
+        #expect(interaction.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .attention)
+    }
+
+    @Test
     func elapsedStopsAtExpiryWithoutCountingFutureValidity() {
         let now = at("2026-08-23T12:05:00Z")
         let future = at("2026-08-23T12:10:00Z")

@@ -48,8 +48,8 @@ struct SessionSignalField<Content: View>: View {
 
     private var holdMotion: Bool { reduceMotion || UITestHooks.holdsAmbientMotion }
 
-    private var activityDeadlineKey: String {
-        "\(detail.id):\(detail.stateFacts.activityValidUntil ?? "")"
+    private var workDeadlineKey: String {
+        "\(detail.id):\(detail.stateFacts.primary?.key ?? ""):\(detail.stateFacts.workClaimValidUntil ?? "")"
     }
 
     var body: some View {
@@ -119,9 +119,9 @@ struct SessionSignalField<Content: View>: View {
                     )
             )
             .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.12), radius: 16, y: 5)
-            .task(id: activityDeadlineKey) {
+            .task(id: workDeadlineKey) {
                 fieldNow = Date()
-                guard let deadline = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) else {
+                guard let deadline = detail.stateFacts.workClaimValidUntil.flatMap(LonghouseDateParser.parse) else {
                     return
                 }
                 let remaining = deadline.timeIntervalSinceNow
