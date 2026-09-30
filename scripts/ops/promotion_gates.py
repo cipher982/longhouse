@@ -11,7 +11,10 @@ looks green:
                  (not that it once did).
   hosted_qa      a completed Hosted Live QA run on that exact commit recorded the
                  verdict `passed`. A superseded run also concludes success, so it
-                 is not evidence, and neither is a failed or unfinished one.
+                 is not evidence, and neither is a failed or unfinished one. The
+                 run must be of the workflow file on the default branch of this
+                 repository: a `workflow_dispatch` from a test branch runs
+                 whatever tooling that branch carries, so it proves nothing.
   engine_compat  the previous released engine shipped a transcript to this
                  commit's server and it was served (the receipt says `passed`; a
                  skip is not a pass).
@@ -50,6 +53,8 @@ RECEIPT_SCHEMA = "longhouse.production-promotion-receipt.v1"
 QA_SCHEMA = "longhouse.hosted-qa-verdict.v1"
 QA_MEMBER = "hosted-live-qa-verdict.json"
 QA_WORKFLOW = "Hosted Live QA"
+QA_WORKFLOW_PATH = ".github/workflows/hosted-live-qa.yml"
+DEFAULT_BRANCH = "main"
 COMPAT_SCHEMA = "longhouse.engine-compat.v1"
 COMPAT_MEMBER = "receipt.json"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -242,12 +247,25 @@ def gate_hosted_qa(cfg: Config, sources: Sources, sha: str, digest: str | None) 
             f"Hosted Live QA run {run_id} is not a completed successful run "
             f"(workflow={run.get('name')!r} status={run.get('status')!r} conclusion={run.get('conclusion')!r})"
         )
+    # The QA tooling comes from the workflow's own commit (the run's head), not from the commit under test, so
+    # only a run of main's workflow file is evidence: a dispatch from any other branch or a fork can carry
+    # tooling that passes anything, under the same workflow name and a receipt that names the right commit.
+    origin = (run.get("path"), run.get("head_branch"), (run.get("head_repository") or {}).get("full_name"), (run.get("repository") or {}).get("full_name"))
+    if origin != (QA_WORKFLOW_PATH, DEFAULT_BRANCH, cfg.repo, cfg.repo):
+        raise Refusal(
+            f"Hosted Live QA run {run_id} is not a run of {QA_WORKFLOW_PATH} on {DEFAULT_BRANCH} in {cfg.repo} "
+            f"(path={origin[0]!r} branch={origin[1]!r} head repository={origin[2]!r} repository={origin[3]!r}): "
+            f"a run from another branch or fork is not qualification. "
+            f"Re-run it from {DEFAULT_BRANCH}: gh workflow run hosted-live-qa.yml --ref {DEFAULT_BRANCH} -f source_sha={sha}"
+        )
     tested = receipt.get("canary_image_digest")
     if digest and tested and tested != digest:
         raise Refusal(f"Hosted Live QA tested {tested}, not the promoted {digest}")
     return {
         "run_id": run_id,
         "run_url": run.get("html_url"),
+        "run_branch": run.get("head_branch"),
+        "run_workflow_sha": run.get("head_sha"),
         "verdict": "passed",
         "verified_sha": receipt["verified_sha"],
         "decided_at": receipt.get("decided_at"),

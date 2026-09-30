@@ -53,6 +53,24 @@ def qa_receipt(*, verdict: str = "passed", sha: str = SHA, run: int = QA_RUN, di
     }
 
 
+def qa_run(**changes: Any) -> dict:
+    """The GitHub run of the Hosted Live QA workflow that uploaded the receipt: main's workflow file, dispatched on main."""
+    return {
+        "id": QA_RUN,
+        "name": "Hosted Live QA",
+        "path": gates.QA_WORKFLOW_PATH,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": "c" * 40,
+        "head_repository": {"full_name": REPO},
+        "repository": {"full_name": REPO},
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.test/qa",
+        **changes,
+    }
+
+
 def compat_receipt(*, result: str = "passed", sha: str = SHA) -> dict:
     receipt = {
         "schema": gates.COMPAT_SCHEMA,
@@ -131,7 +149,7 @@ def green_world() -> dict[str, Any]:
             artifact(102, f"engine-compat-{SHA}", compat_receipt(), run=COMPAT_RUN, created="2026-09-29T22:50:00Z"),
         ],
         "runs": {
-            str(QA_RUN): {"id": QA_RUN, "name": "Hosted Live QA", "status": "completed", "conclusion": "success", "html_url": "https://github.test/qa"},
+            str(QA_RUN): qa_run(),
         },
         "publish_runs": [
             {"databaseId": 555, "number": 44, "attempt": 1, "headSha": SHA, "workflowName": "Publish Runtime Image", "conclusion": "success"}

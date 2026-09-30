@@ -179,6 +179,34 @@ class HostedQaGateTests(unittest.TestCase):
         world["runs"] = {}
         self.assertIn("cannot read Hosted Live QA run", refused(evaluate(world))["hosted_qa"])
 
+    def test_only_a_run_of_mains_workflow_file_in_this_repository_is_qa_evidence(self) -> None:
+        # A workflow_dispatch from a test branch has the same workflow name, a receipt naming the right commit and
+        # a green conclusion, and runs whatever QA tooling that branch carries. It must never qualify production.
+        for change in (
+            {"head_branch": "qa-isolation-test"},
+            {"head_branch": None},
+            {"path": ".github/workflows/copy-of-hosted-live-qa.yml"},
+            {"head_repository": {"full_name": "someone/longhouse"}},
+            {"head_repository": None},
+            {"repository": {"full_name": "someone/longhouse"}},
+        ):
+            world = w.green_world()
+            world["runs"][str(w.QA_RUN)] = w.qa_run(**change)
+            message = refused(evaluate(world))["hosted_qa"]
+            self.assertIn("is not a run of .github/workflows/hosted-live-qa.yml on main", message, change)
+            self.assertIn("gh workflow run hosted-live-qa.yml --ref main", message, change)
+        world = w.green_world()
+        world["runs"][str(w.QA_RUN)] = w.qa_run(head_branch="main")
+        self.assertTrue(evaluate(world)["promotable"])
+
+    def test_a_scheduled_run_on_main_is_evidence_and_the_receipt_says_where_it_ran(self) -> None:
+        world = w.green_world()
+        world["runs"][str(w.QA_RUN)] = w.qa_run(event="schedule")
+        receipt = evaluate(world)
+        self.assertTrue(receipt["promotable"], refused(receipt))
+        evidence = receipt["gates"]["hosted_qa"]["evidence"]
+        self.assertEqual((evidence["run_branch"], evidence["run_workflow_sha"]), ("main", "c" * 40))
+
     def test_a_receipt_for_another_commit_or_run_is_not_this_commits(self) -> None:
         world = w.green_world()
         world["artifacts"][0]["receipt"] = w.qa_receipt(sha=w.OTHER_SHA)
