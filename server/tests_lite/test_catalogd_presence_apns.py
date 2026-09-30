@@ -164,3 +164,31 @@ async def test_catalogd_bootstraps_single_tenant_owner_idempotently(daemon_paths
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_turns_the_trial_owner_into_the_configured_owner(daemon_paths):
+    from zerg.services.single_tenant import OSS_DEFAULT_EMAIL
+
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    trial = {"email": OSS_DEFAULT_EMAIL, "provider": "local", "provider_user_id": "local-user-1"}
+    password_owner = {"email": "owner@longhouse.local", "provider": "local", "provider_user_id": None}
+    try:
+        created = await client.call("auth.single_tenant.ensure.v2", trial)
+        adopted = await client.call("auth.single_tenant.ensure.v2", password_owner)
+
+        assert adopted["created"] is False
+        assert adopted["user"]["id"] == created["user"]["id"]  # history stays with the user id
+        assert adopted["user"]["email"] == "owner@longhouse.local"
+        assert adopted["user"]["role"] == "ADMIN"
+
+        # The placeholder is a one-time bridge: a real owner is still protected from a different email.
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("auth.single_tenant.ensure.v2", {**password_owner, "email": "someone@example.com"})
+        assert exc_info.value.details == {"reason": "owner_email_mismatch"}
+    finally:
+        await client.close()
+        await daemon.close()

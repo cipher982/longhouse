@@ -2347,7 +2347,30 @@ class CatalogStore:
             if owners:
                 owner = owners[0]
                 if str(owner["email"]).casefold() != email.casefold():
-                    return {"conflict": "owner_email_mismatch", "commit_seq": str(_current_commit_seq(connection))}
+                    if not _is_oss_trial_owner(owner):
+                        return {"conflict": "owner_email_mismatch", "commit_seq": str(_current_commit_seq(connection))}
+                    # The auth-disabled trial owner is a placeholder with no credential. Turning
+                    # auth on for the same database (the README's trial-to-self-host step) makes it
+                    # the configured owner in place: sessions belong to the user id, so history
+                    # follows. Without this the server refused to start on the trial's own data.
+                    connection.execute(
+                        update(user_table)
+                        .where(user_table.c.id == owner["id"])
+                        .values(
+                            email=email,
+                            provider=provider,
+                            provider_user_id=provider_user_id,
+                            role="ADMIN",
+                            updated_at=now,
+                        )
+                    )
+                    commit_seq = _advance_commit_seq(connection, now)
+                    owner = connection.execute(select(user_table).where(user_table.c.id == owner["id"])).mappings().one()
+                    return {
+                        "created": False,
+                        "user": _user_dto(owner),
+                        "commit_seq": str(commit_seq),
+                    }
                 if owner["role"] != "ADMIN":
                     connection.execute(update(user_table).where(user_table.c.id == owner["id"]).values(role="ADMIN", updated_at=now))
                     commit_seq = _advance_commit_seq(connection, now)
@@ -16864,6 +16887,14 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             )
         )
     return facts
+
+
+# The owner an auth-disabled (trial) instance creates; zerg.services.single_tenant.OSS_DEFAULT_EMAIL.
+_OSS_TRIAL_OWNER_EMAIL = "local@zerg"
+
+
+def _is_oss_trial_owner(row) -> bool:
+    return row["provider"] == "local" and str(row["email"]).casefold() == _OSS_TRIAL_OWNER_EMAIL
 
 
 def _user_dto(row) -> dict[str, Any]:
