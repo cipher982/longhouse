@@ -1048,6 +1048,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         record_startup_refusal(startup_storage_reason(error), &format!("{error:#}"));
     })?;
 
+    // 1b. Settle which local history this machine may ship before any scan
+    // runs. A machine that already shipped keeps all of it; a new one starts
+    // from now on, so old transcripts are imported only once someone chooses.
+    let import_scope = crate::config::resolve_import_scope(&conn).inspect_err(|error| {
+        record_startup_refusal("import_scope_invalid", &format!("{error:#}"));
+    })?;
+    tracing::info!(
+        chosen_via = %import_scope.chosen_via,
+        "Import scope: {}",
+        import_scope.describe()
+    );
+    let scope_dir = crate::config::get_machine_dir()?;
+    let mut last_scope_fingerprint = crate::import_scope::fingerprint(&scope_dir);
+
     // 2. Prune stale file_state entries (files deleted from disk, >30 days old)
     {
         let fs = FileState::new(&conn);
@@ -1299,6 +1313,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut provider_roots_timer = tokio::time::interval(Duration::from_secs(1));
     provider_roots_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     provider_roots_timer.tick().await;
+    // `longhouse machine scope` rewrites the scope file while this daemon runs.
+    // Widening it must backfill what became eligible now, not at the next
+    // periodic scan, so a change is noticed within seconds and rescanned.
+    let mut scope_timer = tokio::time::interval(Duration::from_secs(2));
+    scope_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    scope_timer.tick().await;
 
     let mut failed_ship_retry_timer = tokio::time::interval(failed_ship_retry_interval);
     failed_ship_retry_timer.tick().await; // consume first immediate tick
@@ -3106,6 +3126,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            _ = scope_timer.tick() => {
+                let current = crate::import_scope::fingerprint(&scope_dir);
+                if current != last_scope_fingerprint {
+                    last_scope_fingerprint = current;
+                    tracing::info!(
+                        "Import scope: {}",
+                        crate::config::import_scope().describe()
+                    );
+                    start_discovery_task(
+                        &mut discovery_tasks,
+                        &providers,
+                        WorkPriority::Scan,
+                        "import scope changed",
+                    );
+                }
+            }
+
             _ = provider_roots_timer.tick(), if !pending_provider_roots.is_empty() => {
                 if watcher.refresh_provider_roots(&mut providers, &mut pending_provider_roots) {
                     start_discovery_task(
@@ -4340,6 +4377,31 @@ fn maybe_seal_history_reconciliation(
     }
 }
 
+/// Say how much local history the import scope is keeping out of a scan, so a
+/// machine that ships less than its disk holds explains itself in the log. The
+/// periodic scan repeats the same fact every few minutes, so only the scans
+/// that mean something (startup, a scope change) say it at info.
+fn log_scope_exclusions(reason: &str, excluded: &std::collections::BTreeMap<&'static str, u64>) {
+    let total: u64 = excluded.values().sum();
+    if total == 0 {
+        return;
+    }
+    if reason == "reconciliation scan" {
+        tracing::debug!(
+            excluded_sources = total,
+            ?excluded,
+            "Import scope excluded local sources"
+        );
+    } else {
+        tracing::info!(
+            reason,
+            excluded_sources = total,
+            ?excluded,
+            "Import scope kept local sources out of this scan; widen it with `longhouse machine scope`"
+        );
+    }
+}
+
 fn discovery_observation_source(priority: WorkPriority) -> &'static str {
     match priority {
         WorkPriority::Scan => "reconciliation_scan",
@@ -4356,6 +4418,7 @@ fn start_discovery_task(
     let providers = providers.to_vec();
     discovery_tasks.spawn_blocking(move || {
         let scan = discovery::discover_all_files_with_inventory(&providers);
+        log_scope_exclusions(reason, &scan.excluded_by_scope);
         DiscoveryTaskResult {
             files: scan.files,
             inventory: scan.inventory,
@@ -4373,6 +4436,7 @@ fn start_inventory_task(
     let providers = providers.to_vec();
     discovery_tasks.spawn_blocking(move || {
         let scan = discovery::discover_all_files_with_inventory(&providers);
+        log_scope_exclusions("startup inventory", &scan.excluded_by_scope);
         DiscoveryTaskResult {
             files: Vec::new(),
             inventory: scan.inventory,
@@ -4483,6 +4547,9 @@ async fn handle_live_transcript_file_events(
     let events = watcher.collect_ready_batch(first_event);
     let (managed_state_changes, transcript_events) =
         partition_managed_state_events(events, managed_state_dirs);
+    // Read once per batch: the scope is a file a person can change while the
+    // daemon runs, and one read is cheaper than a stat per event.
+    let import_scope = crate::config::import_scope();
     for event in transcript_events {
         let Some((session_path, provider)) =
             discovery::session_path_for_watcher_event(&event.path, providers)
@@ -4493,6 +4560,16 @@ async fn handle_live_transcript_file_events(
             );
             continue;
         };
+        // An old session someone resumed writes to a file that was never in
+        // scope; shipping its new lines would ship the session it belongs to.
+        if !discovery::source_in_import_scope(&import_scope, provider, &session_path) {
+            tracing::trace!(
+                provider,
+                path = %session_path.display(),
+                "Skipping live event for a source outside the import scope"
+            );
+            continue;
+        }
 
         let session_event = WatcherEvent {
             path: session_path,

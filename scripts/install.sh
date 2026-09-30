@@ -883,6 +883,8 @@ print_success() {
     echo "  longhouse auth              Connect this machine (browser approval)"
     echo "  longhouse local-health --json"
     echo "  longhouse machine repair --dry-run"
+    echo "  longhouse machine scope     Choose which existing sessions are imported"
+    echo "  longhouse uninstall         Remove Longhouse and revoke this machine's token"
     echo ""
     echo "For help: longhouse --help"
     echo "Docs: https://longhouse.ai/docs"
@@ -1011,6 +1013,47 @@ connect_this_machine() {
     fi
 }
 
+# Choose which existing local history the Machine Agent may import. This runs
+# before the agent can start, so a stranger's old transcripts (which can hold
+# code and secrets from any project they ever ran an agent in) are imported only
+# once they say so. Order of authority: an explicit LONGHOUSE_IMPORT_SCOPE
+# (now, all, or a date), a previous choice on this machine, a question when a
+# terminal is available, and otherwise "from now on".
+choose_import_scope() {
+    CURRENT_INSTALL_STAGE="import_scope"
+    local longhouse_bin="$HOME/.local/bin/longhouse"
+    local state_home="${LONGHOUSE_HOME:-$HOME/.longhouse}"
+    step "Choosing what history to import"
+    if ! "$longhouse_bin" machine scope --help >/dev/null 2>&1; then
+        warn "This Longhouse release predates import scopes: it imports ALL existing session history once connected."
+        warn "Install a newer release before connecting a computer whose old sessions you do not want uploaded."
+        return 0
+    fi
+    if [[ -n "${LONGHOUSE_IMPORT_SCOPE:-}" ]]; then
+        if "$longhouse_bin" machine scope --since "$LONGHOUSE_IMPORT_SCOPE"; then
+            return 0
+        fi
+        error "LONGHOUSE_IMPORT_SCOPE must be now, all, or a date like 2026-09-01"
+        return 1
+    fi
+    if [[ -f "$state_home/machine/import-scope.json" || -f "$state_home/agent/longhouse-shipper.db" ]]; then
+        info "Keeping this machine's existing choice. See it with: longhouse machine scope"
+        return 0
+    fi
+    # `curl | bash` reads the script from stdin, so ask on the terminal itself.
+    if { : < /dev/tty; } 2>/dev/null; then
+        if "$longhouse_bin" machine scope --prompt < /dev/tty; then
+            return 0
+        fi
+        warn "Could not record a choice; only sessions you start from now on will be imported."
+    fi
+    if "$longhouse_bin" machine scope --since now; then
+        info "Older sessions stay on this computer. To import history later: longhouse machine scope --since all"
+    else
+        warn "Could not write the import choice. The Machine Agent still defaults to sessions that start from now on."
+    fi
+}
+
 # Main installation flow
 main() {
     echo -e "${BOLD}"
@@ -1045,6 +1088,9 @@ main() {
 
     # Verify everything works
     verify_installation
+
+    # Decide what history may leave this machine before the agent can start.
+    choose_import_scope
 
     # Connect and start the Machine Agent when the command carried this
     # machine's Runtime Host address (and, for a server, a device token).

@@ -30,11 +30,44 @@ Longhouse does not replace a provider with its own agent runtime or terminal UI.
 curl -fsSL https://get.longhouse.ai/install.sh | LONGHOUSE_URL=https://you.longhouse.ai bash
 ```
 
-The shell installer installs the native pair, stores the Runtime Host
-address, opens it in a browser to approve this machine, and starts the
-Machine Agent. On macOS it also drops `Longhouse.app` into `/Applications`.
-An empty timeline shows this line with its own address filled in. Runtime Host
-operators install `longhouse-server` in that server environment.
+The shell installer installs the native pair, asks what existing history to
+import (below), stores the Runtime Host address, opens it in a browser to
+approve this machine, and starts the Machine Agent. On macOS it also drops
+`Longhouse.app` into `/Applications`. An empty timeline shows this line with
+its own address filled in. Runtime Host operators install `longhouse-server`
+in that server environment.
+
+### What gets imported
+
+Old transcripts can hold code and secrets from any project you ever ran an
+agent in, so a machine that connects imports **only sessions that start from
+now on** unless you choose otherwise. The installer asks (and falls back to
+"from now on" with no terminal); `LONGHOUSE_IMPORT_SCOPE=now|all|2026-09-01`
+answers it non-interactively. Change it any time; widening backfills what
+became eligible:
+
+```bash
+longhouse machine scope                        # the current scope and what it leaves out
+longhouse machine scope --project ~/git/app    # also import one project's full history
+longhouse machine scope --since all            # everything on this computer
+```
+
+Older sessions that are out of scope stay on your computer and are never
+uploaded. Machines that were already shipping history before scopes existed
+keep shipping all of it. Details: [`longhouse machine scope`](https://longhouse.ai/docs/cli).
+
+### Uninstall
+
+```bash
+longhouse uninstall --dry-run   # what would be removed
+longhouse uninstall             # revoke this machine's token, stop the service,
+                                # remove hooks and binaries (--purge also deletes ~/.longhouse)
+```
+
+`longhouse auth --clear` alone revokes this machine's device token on the
+Runtime Host and deletes the stored credentials. Sessions already uploaded stay
+in your Runtime Host's archive until you delete them there. To cut off a
+machine you cannot reach, revoke it under Settings, Devices on the Runtime Host.
 
 **No Longhouse address yet?** Run one on this machine (Linux or macOS, about a minute):
 
@@ -107,7 +140,7 @@ longhouse-server serve --host 0.0.0.0 --domain longhouse.example.com
 **On each dev machine:**
 
 ```bash
-curl -fsSL https://get.longhouse.ai/install.sh | bash
+curl -fsSL https://get.longhouse.ai/install.sh | bash   # asks what history to import
 longhouse auth --url https://longhouse.example.com
 longhouse machine repair --repair-service
 ```

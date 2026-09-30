@@ -187,8 +187,11 @@ longhouse opencode --model <provider/model>`}
       <p>
         The native Machine Agent service is installed with{" "}
         <code>longhouse machine repair --repair-service</code> after{" "}
-        <code>longhouse auth</code>. To backfill Claude Code history that
-        predates it, the Runtime Host can run a one-shot import:
+        <code>longhouse auth</code>. It imports only what the machine&apos;s
+        import scope allows (sessions that start from now on unless you chose
+        otherwise; see <code>longhouse machine scope</code>). To backfill
+        history that predates it, widen the scope, or have the Runtime Host run
+        a one-shot import of what the scope allows:
       </p>
       <CodeBlock title="terminal">{`longhouse-server ship`}</CodeBlock>
 

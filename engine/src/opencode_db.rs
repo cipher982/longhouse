@@ -35,6 +35,25 @@ pub struct OpenCodeSessionCandidate {
     pub source_key: String,
     pub version: u64,
     pub fingerprint: String,
+    /// When OpenCode created the session, for the machine's import scope.
+    pub created_ms: Option<i64>,
+    /// The folder the session ran in, for the machine's import scope.
+    pub directory: Option<String>,
+}
+
+impl OpenCodeSessionCandidate {
+    /// Whether the machine's import scope lets this session be shipped.
+    pub fn in_import_scope(&self, scope: &crate::import_scope::ImportScope) -> bool {
+        // A row with no creation time is not known to be new, so it is old.
+        scope.admits(
+            Some(
+                self.created_ms
+                    .and_then(chrono::DateTime::from_timestamp_millis)
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+            ),
+            || self.directory.clone(),
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -266,7 +285,7 @@ fn list_opencode_sessions_inner(
     )";
     let sql = format!(
         r#"
-        SELECT s.id, {version_expression} AS version_ms
+        SELECT s.id, {version_expression} AS version_ms, s.time_created, s.directory
         FROM session s
         ORDER BY version_ms DESC, s.id ASC
         {}
@@ -286,6 +305,8 @@ fn list_opencode_sessions_inner(
             provider_session_id,
             version: version_from_ms(version_ms),
             fingerprint: String::new(),
+            created_ms: row.get(2)?,
+            directory: row.get(3)?,
         })
     };
     let mut rows = match page {

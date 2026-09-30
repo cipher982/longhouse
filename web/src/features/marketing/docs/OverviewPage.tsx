@@ -12,7 +12,7 @@ export default function OverviewPage() {
       <h1>Longhouse Documentation</h1>
       <p className="docs-subtitle">
         Mission control for CLI agent sessions running on machines you own.
-        Import existing sessions fast, then start new work through Longhouse so
+        Import the history you choose, then start new work through Longhouse so
         it stays steerable for later.
       </p>
 
@@ -20,8 +20,8 @@ export default function OverviewPage() {
         <p>
           <strong>New here?</strong> Start with the{" "}
           <Link to="/docs/quickstart">Quick Start</Link> — you will have
-          Longhouse running, your first session imported, and the normal launch
-          path in under two minutes.
+          Longhouse running, your first session in the timeline, and the normal
+          launch path in under two minutes.
         </p>
       </div>
 

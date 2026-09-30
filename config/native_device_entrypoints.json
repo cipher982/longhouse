@@ -37,6 +37,26 @@
       "notes": "Writes and starts the paired Machine Agent service."
     },
     {
+      "id": "machine-scope",
+      "status": "available",
+      "native_target_command": "longhouse machine scope",
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "no_token",
+      "cwd_policy": "not_applicable",
+      "notes": "Chooses which existing local history the Machine Agent may import: a start time plus optional project folders, stored in machine state. Sessions that start later always ship; widening backfills."
+    },
+    {
+      "id": "uninstall",
+      "status": "available",
+      "native_target_command": "longhouse uninstall",
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "not_applicable",
+      "notes": "Revokes this machine's device token on the Runtime Host, then removes the service, provider hooks and binaries; --purge also deletes local state."
+    },
+    {
       "id": "claude-managed",
       "status": "available",
       "native_target_command": "longhouse claude",

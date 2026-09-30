@@ -98,6 +98,17 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     }
     let cwd = string(input, "cwd");
     let transcript_path = string(input, "transcript_path");
+    // A bare Claude session that started before the machine's import scope is
+    // not shipped, so it is not announced either: presence carries the
+    // session's folder and tool names. A session Longhouse launched is the
+    // owner's own doing and always reports.
+    if managed_session_id.is_none() {
+        if let Some(path) = transcript_path.as_deref() {
+            if !crate::config::import_scope().admits_file(Path::new(path)) {
+                return Ok(());
+            }
+        }
+    }
     if event == "SessionStart" {
         if let (Some(managed), Some(native)) = (
             managed_session_id.as_deref(),

@@ -911,6 +911,190 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         shutil.rmtree(longhouse_home, ignore_errors=True)
 
 
+def _facade_bin() -> Path | None:
+    """The native ``longhouse`` CLI built beside the engine, when there is one."""
+    facade = ENGINE_BIN.parent / "longhouse"
+    return facade if facade.exists() else None
+
+
+def _choose_scope(longhouse_home: Path, *args: str) -> None:
+    """Run ``longhouse machine scope`` the way a person (or the installer) does."""
+    facade = _facade_bin()
+    if facade is None:
+        pytest.skip(f"native longhouse CLI not built beside {ENGINE_BIN}")
+    result = subprocess.run(
+        [str(facade), "machine", "scope", *args],
+        env={**os.environ, "LONGHOUSE_HOME": str(longhouse_home), "LONGHOUSE_ENGINE_BIN": str(ENGINE_BIN)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"longhouse machine scope {args} failed\nstdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+def test_connected_machine_imports_only_new_sessions_until_the_scope_is_widened(server, tmp_path):
+    """A machine that connected and never chose ships nothing old.
+
+    The GTM promise: a stranger's old transcripts (employer code included) are
+    not imported at first connect. Sessions started afterwards ship live, and
+    widening the scope later backfills exactly what became eligible.
+    """
+    home = tmp_path / "home"
+    claude_root = home / ".claude"
+    fixture_text = (FIXTURES_DIR / CLAUDE_FIXTURE).read_text()
+
+    def write_session(project: str) -> tuple[str, Path]:
+        session_id = str(uuid4())
+        transcript = claude_root / "projects" / project / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(fixture_text.replace(CLAUDE_SESSION_ID, session_id))
+        return session_id, transcript
+
+    # Two sessions that predate the machine's connection, in different folders.
+    # Their transcripts record cwd /tmp/longhouse-test (the fixture's folder).
+    old_id, _ = write_session("old-project")
+    time.sleep(0.3)
+
+    longhouse_home = Path("/tmp") / f"lh-scope-{old_id[:8]}"
+    (longhouse_home / "machine").mkdir(parents=True)
+    # "Connected": the installer, `longhouse auth` and Desktop setup all leave
+    # a stored Runtime Host address. No scope was ever chosen.
+    (longhouse_home / "machine" / "state.json").write_text(json.dumps({"runtime_url": _server_url(server)}))
+    log_dir = tmp_path / "logs"
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(claude_root),
+        "LONGHOUSE_HOME": str(longhouse_home),
+        "LONGHOUSE_LOG_DIR": str(log_dir),
+    }
+    proc = _popen_captured(
+        [
+            str(ENGINE_BIN),
+            "connect",
+            "--url",
+            _server_url(server),
+            "--token",
+            _server_token(server),
+            "--db",
+            str(tmp_path / "engine.db"),
+            "--compression",
+            "gzip",
+            "--fallback-scan-secs",
+            "300",
+            "--spool-replay-secs",
+            "300",
+            "--machine-name",
+            "shipper-e2e",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_dir=tmp_path / "process-output",
+        name="daemon-scope-e2e",
+    )
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+        # The first-run answer is written down and stated in the log.
+        stored = json.loads((longhouse_home / "machine" / "import-scope.json").read_text())
+        assert stored["chosen_via"] == "default" and stored["since"] is not None and stored["projects"] == []
+        # The startup scan saw the old session and left it out on purpose.
+        _wait_for_log_contains(log_dir, "Import scope kept local sources out of this scan")
+
+        # A session started after the scope ships live.
+        new_id, _ = write_session("new-project")
+        assert len(_wait_for_session_events(server, new_id, min_events=2)) >= 2
+        # By now the old one has had every chance to ship; it did not.
+        assert _get_session(server, old_id) is None
+
+        # Widening the scope backfills the old session without a restart.
+        _choose_scope(longhouse_home, "--since", "all")
+        assert len(_wait_for_session_events(server, old_id, min_events=2)) >= 2
+        assert json.loads((longhouse_home / "machine" / "import-scope.json").read_text())["since"] is None
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"scope integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
+def test_project_opt_in_backfills_only_that_projects_old_sessions(server, tmp_path):
+    """`--project` brings back one folder's history and nothing else."""
+    home = tmp_path / "home"
+    claude_root = home / ".claude"
+    fixture_text = (FIXTURES_DIR / CLAUDE_FIXTURE).read_text()
+    project_dir = tmp_path / "opted-in-project"
+    other_dir = tmp_path / "other-project"
+    project_dir.mkdir()
+    other_dir.mkdir()
+
+    def write_old_session(folder: Path) -> str:
+        session_id = str(uuid4())
+        transcript = claude_root / "projects" / folder.name / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            fixture_text.replace(CLAUDE_SESSION_ID, session_id).replace("/tmp/longhouse-test", str(folder.resolve()))
+        )
+        return session_id
+
+    opted_in_id = write_old_session(project_dir)
+    other_id = write_old_session(other_dir)
+    time.sleep(0.3)
+
+    longhouse_home = Path("/tmp") / f"lh-scope-{opted_in_id[:8]}"
+    (longhouse_home / "machine").mkdir(parents=True)
+    (longhouse_home / "machine" / "state.json").write_text(json.dumps({"runtime_url": _server_url(server)}))
+    log_dir = tmp_path / "logs"
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(claude_root),
+        "LONGHOUSE_HOME": str(longhouse_home),
+        "LONGHOUSE_LOG_DIR": str(log_dir),
+    }
+    proc = _popen_captured(
+        [
+            str(ENGINE_BIN),
+            "connect",
+            "--url",
+            _server_url(server),
+            "--token",
+            _server_token(server),
+            "--db",
+            str(tmp_path / "engine.db"),
+            "--compression",
+            "gzip",
+            "--fallback-scan-secs",
+            "300",
+            "--spool-replay-secs",
+            "300",
+            "--machine-name",
+            "shipper-e2e",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_dir=tmp_path / "process-output",
+        name="daemon-scope-project-e2e",
+    )
+    try:
+        _wait_for_log_contains(log_dir, "Import scope kept local sources out of this scan")
+        _choose_scope(longhouse_home, "--project", str(project_dir))
+        assert len(_wait_for_session_events(server, opted_in_id, min_events=2)) >= 2
+        assert _get_session(server, other_id) is None
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"project scope integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
 def _ask_user_transcript_lines(session_id: str) -> tuple[list[dict], dict]:
     initial_lines = [
         {

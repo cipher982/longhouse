@@ -53,6 +53,33 @@ stored_runtime_url() {
   sed -n 's/^[[:space:]]*"runtime_url":[[:space:]]*"\(https\{0,1\}:\/\/[^"]*\)".*/\1/p' "$state" | head -n 1
 }
 
+# Decide what existing history the Machine Agent may import before it can
+# start: a stranger's old transcripts can hold code and secrets from any project
+# they ever ran an agent in. An explicit LONGHOUSE_IMPORT_SCOPE (now, all, or a
+# date) wins, a previous choice on this Mac is kept, and otherwise the user is
+# asked (this script runs in a Terminal window).
+choose_import_scope() {
+  local state_home="${LONGHOUSE_HOME:-$HOME/.longhouse}"
+  if ! longhouse machine scope --help >/dev/null 2>&1; then
+    log "WARNING: this Longhouse release predates import scopes and imports ALL existing session history."
+    log "Update it (curl -fsSL https://get.longhouse.ai/install.sh | bash) before connecting a Mac whose old sessions you do not want uploaded."
+    return
+  fi
+  if [[ -n "${LONGHOUSE_IMPORT_SCOPE:-}" ]]; then
+    longhouse machine scope --since "$LONGHOUSE_IMPORT_SCOPE"
+    return
+  fi
+  if [[ -f "$state_home/machine/import-scope.json" || -f "$state_home/agent/longhouse-shipper.db" ]]; then
+    log "Keeping this Mac's existing import choice (longhouse machine scope shows it)."
+    return
+  fi
+  if [[ -t 0 ]]; then
+    longhouse machine scope --prompt
+  else
+    longhouse machine scope --since now
+  fi
+}
+
 configure_machine() {
   if [[ -n "${LONGHOUSE_DEVICE_TOKEN:-}" && -n "${LONGHOUSE_RUNTIME_URL:-}" ]]; then
     log "Authorizing this Mac with the configured Runtime Host..."
@@ -74,6 +101,7 @@ configure_machine() {
 
 main() {
   install_native_pair
+  choose_import_scope
   configure_machine
   log "Longhouse setup finished. Return to Longhouse.app and click Refresh."
 }

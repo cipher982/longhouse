@@ -71,11 +71,30 @@ longhouse machine repair --repair-service`}
         where work happens.
       </p>
 
-      <h2>3. Find one prior session</h2>
+      <h2>3. Choose what history to import</h2>
       <p>
-        Use the timeline or search to find one real past session. If you have
-        used Claude Code, Codex, Cursor Agent, OpenCode, or Antigravity on this
-        machine, Longhouse will import your sessions during setup.
+        Setup asks what to do with sessions your agents already saved on this
+        computer. Old transcripts can hold code and secrets from any project you
+        ever ran an agent in, so the default imports <strong>nothing old</strong>:
+        only sessions you start from now on. Import history when you want it,
+        for one project or for everything:
+      </p>
+      <CodeBlock title="terminal">
+        {`longhouse machine scope                        # what is imported, what is left out
+longhouse machine scope --project ~/git/app    # add one project's full history
+longhouse machine scope --since all            # import everything on this computer`}
+      </CodeBlock>
+      <p>
+        Changing the scope backfills what became eligible; nothing older than
+        your choice is uploaded until then. To remove Longhouse from a computer
+        (and revoke its token), run <code>longhouse uninstall</code>.
+      </p>
+
+      <h2>4. Find a session</h2>
+      <p>
+        Start a session in Claude Code, Codex, Cursor Agent, OpenCode, or
+        Antigravity, then look for it in the timeline or search. A session you
+        start after setup appears within seconds.
       </p>
       <div className="docs-callout">
         <p>
@@ -93,7 +112,7 @@ longhouse machine repair --repair-service`}
         </p>
       </div>
 
-      <h2>4. Launch a managed session</h2>
+      <h2>5. Launch a managed session</h2>
       <p>
         Bare provider CLIs are useful for compatibility import, but they are
         not the default path once Longhouse is installed. Start through

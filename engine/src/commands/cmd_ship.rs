@@ -149,6 +149,16 @@ pub async fn cmd_ship(
     }
 
     let mut conn = open_db(config.db_path.as_deref())?;
+    // Settle the import scope before reading any history: discovery applies it,
+    // and a machine that never chose gets its first-run answer (from now on)
+    // here, not after its whole archive was shipped.
+    let import_scope = crate::config::resolve_import_scope(&conn)?;
+    if !json_output {
+        eprintln!(
+            "Import scope: {} (change it with `longhouse machine scope`)",
+            import_scope.describe()
+        );
+    }
     let client = ShipperClient::with_compression(&config, algo)?;
     let negotiated = client
         .negotiate_storage_v2_at_startup(&config.machine_name)

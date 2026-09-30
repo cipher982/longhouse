@@ -42,6 +42,7 @@ mod fault_injection;
 mod flight;
 mod heartbeat;
 mod hook_outbox;
+mod import_scope;
 mod input_attachments;
 mod machine_presence;
 mod managed_antigravity_scan;
@@ -809,6 +810,13 @@ enum DeviceCommands {
     /// Print the current native device command status summary
     Status {
         /// Emit the status summary as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Print the machine's import scope and how much local history it covers
+    ImportScope {
+        /// Emit the scope and per-provider counts as JSON
         #[arg(long)]
         json: bool,
     },
@@ -2031,6 +2039,9 @@ fn main() -> anyhow::Result<()> {
                 confirm,
             } => {
                 device::cmd_shipping_discard(&source_epoch, confirm)?;
+            }
+            DeviceCommands::ImportScope { json } => {
+                discovery::cmd_import_scope(json)?;
             }
             DeviceCommands::LocalHealth { json, state_root } => {
                 device::cmd_device_local_health(json, state_root.as_deref())?;

@@ -8,6 +8,12 @@
 mod build_identity;
 #[path = "codex_config.rs"]
 mod codex_config;
+#[path = "import_scope.rs"]
+mod import_scope;
+#[path = "machine_scope.rs"]
+mod machine_scope;
+#[path = "machine_uninstall.rs"]
+mod machine_uninstall;
 #[path = "managed_identity.rs"]
 mod managed_identity;
 #[path = "managed_identity_contract.rs"]
@@ -72,6 +78,9 @@ enum Commands {
         #[command(subcommand)]
         command: MachineCommand,
     },
+    /// Remove Longhouse from this computer: stop the Machine Agent, revoke its
+    /// device token, and remove its hooks and binaries.
+    Uninstall(machine_uninstall::UninstallArgs),
     /// Configure native Longhouse hooks for Claude.
     #[command(args_conflicts_with_subcommands = true)]
     Claude {
@@ -253,9 +262,14 @@ struct AuthArgs {
     /// Open the signed-in Runtime Host in a browser to connect this device.
     #[arg(long)]
     browser: bool,
-    /// Remove stored native device credentials.
+    /// Disconnect this machine: revoke its device token on the Runtime Host,
+    /// then remove the stored credentials.
     #[arg(long)]
     clear: bool,
+    /// With --clear: delete the stored credentials without revoking the token.
+    /// It stays valid on the Runtime Host until revoked in Settings, Devices.
+    #[arg(long, requires = "clear")]
+    local_only: bool,
     /// Machine name for browser approval. With an existing token it must
     /// match the token's own device name, which is what gets stored.
     #[arg(long)]
@@ -265,6 +279,8 @@ struct AuthArgs {
 #[derive(Subcommand)]
 enum MachineCommand {
     Repair(MachineRepairArgs),
+    /// Choose which local session history the Machine Agent may import.
+    Scope(machine_scope::MachineScopeArgs),
 }
 
 #[derive(Args)]
@@ -780,6 +796,30 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
     let machine_dir = longhouse_home()?.join("machine");
     let state_path = machine_dir.join("state.json");
     if args.clear {
+        // Deleting the file alone leaves a credential that still works
+        // everywhere else it was ever copied, so the Runtime Host revokes it
+        // first. A host that cannot be reached keeps the local copy, which is
+        // what makes a retry possible.
+        if args.local_only {
+            if machine_uninstall::stored_token(&machine_dir).is_some() {
+                println!(
+                    "Not revoking: this machine's device token stays valid on its Runtime Host until you revoke it in Settings, Devices."
+                );
+            }
+        } else {
+            let (outcome, url) = machine_uninstall::revoke_stored_token(&machine_dir);
+            let base = url.as_deref().unwrap_or("the Runtime Host");
+            if !outcome.token_is_dead() {
+                anyhow::bail!(
+                    "{}. The stored credentials were kept. Try again when it is reachable, or run \
+`longhouse auth --clear --local-only` to delete them here and revoke the token in Settings, Devices.",
+                    outcome.describe(base)
+                );
+            }
+            if outcome != machine_uninstall::RevokeOutcome::NoCredentials {
+                println!("{}", outcome.describe(base));
+            }
+        }
         let _ = std::fs::remove_file(machine_dir.join("device-token"));
         if let Ok(raw) = std::fs::read(&state_path) {
             let mut state: serde_json::Value =
@@ -4868,7 +4908,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Shipping { command } => native_shipping(command)?,
         Commands::Machine { command } => match command {
             MachineCommand::Repair(args) => native_machine_repair(args)?,
+            MachineCommand::Scope(args) => machine_scope::run(args)?,
         },
+        Commands::Uninstall(args) => machine_uninstall::run(args)?,
         Commands::Claude { command, launch } => match command {
             Some(ClaudeCommand::Configure { claude_dir }) => configure_claude_hooks(claude_dir)?,
             None => launch_managed_claude(launch)?,
@@ -5190,6 +5232,7 @@ mod tests {
                     token_env: "LONGHOUSE_F5_TEST_TOKEN".to_string(),
                     browser: false,
                     clear: false,
+                    local_only: false,
                     device: device.map(str::to_string),
                 })
             },

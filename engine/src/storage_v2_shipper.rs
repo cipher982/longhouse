@@ -2735,10 +2735,14 @@ fn opencode_rest_key(conn: &Connection, db_path: &Path) -> Result<Option<String>
     ) else {
         return Ok(None);
     };
+    // The import scope decides which sessions a walk may read, so widening it
+    // must end the rest: a database that was at rest under the old scope has
+    // sessions the new one wants.
     Ok(Some(format!(
-        "{stamp}|{managed}|{}|{}",
+        "{stamp}|{managed}|{}|{}|{}",
         source_epoch::active_lane_fingerprint(conn, "opencode")?,
-        crate::build_identity::COMMIT
+        crate::build_identity::COMMIT,
+        crate::config::import_scope().signature()
     )))
 }
 
@@ -2802,6 +2806,11 @@ fn walk_opencode_database(
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
+    // One database holds every OpenCode session the machine ever ran, so the
+    // machine's import scope is applied here, per session, rather than at
+    // discovery. A session outside it is skipped before any of its records are
+    // read or its source epoch opened.
+    let import_scope = crate::config::import_scope();
     let mut page_offset = 0usize;
     loop {
         let candidates = opencode_db::list_opencode_sessions_page(
@@ -2813,6 +2822,9 @@ fn walk_opencode_database(
             return Ok(None);
         }
         for (candidate_index, candidate) in candidates.iter().enumerate() {
+            if !candidate.in_import_scope(&import_scope) {
+                continue;
+            }
             let opaque_source_id = opaque_source_id(&format!(
                 "{path_text}\0opencode-session\0{}",
                 candidate.provider_session_id

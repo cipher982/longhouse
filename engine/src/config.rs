@@ -375,3 +375,234 @@ fn provider_home_to_longhouse_home(path: PathBuf) -> PathBuf {
         .map(|parent| parent.join(".longhouse"))
         .unwrap_or_else(|| path.join(".longhouse"))
 }
+
+// ---------------------------------------------------------------------------
+// Import scope (what local history this engine may ship)
+// ---------------------------------------------------------------------------
+
+/// The import scope this process enforces right now (see `import_scope`).
+pub fn import_scope() -> crate::import_scope::ImportScope {
+    match get_machine_dir() {
+        Ok(machine_dir) => import_scope_in(&machine_dir),
+        Err(_) => crate::import_scope::ImportScope::all("unresolved"),
+    }
+}
+
+/// `import_scope` for an explicit machine directory.
+///
+/// No stored scope means nobody ever chose, which is what every install did
+/// before scopes existed: unrestricted. `resolve_import_scope` writes the
+/// first-run answer when the daemon starts, so a running daemon always finds
+/// one. A stored scope that cannot be read is not guessed at: history stays
+/// closed from the moment this process first noticed, and the error is logged.
+/// A corrupt file can hide history that should ship; it can never leak history
+/// that should not.
+pub fn import_scope_in(machine_dir: &Path) -> crate::import_scope::ImportScope {
+    use crate::import_scope::ImportScope;
+    static UNREADABLE_SINCE: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> =
+        std::sync::OnceLock::new();
+    match ImportScope::load(machine_dir) {
+        Ok(Some(scope)) => scope,
+        Ok(None) => ImportScope::all("unset"),
+        Err(error) => {
+            let since = *UNREADABLE_SINCE.get_or_init(|| {
+                tracing::error!(
+                    error = %format!("{error:#}"),
+                    "Import scope is unreadable; importing only sessions that start from now until it is fixed"
+                );
+                chrono::Utc::now()
+            });
+            ImportScope::starting(since, "invalid")
+        }
+    }
+}
+
+/// Settle this machine's import scope at daemon start (and for one-shot
+/// `ship`): honour a stored one, otherwise write the first-run answer.
+///
+/// - A machine that already shipped history keeps all of it. Silently narrowing
+///   it would strand history half-shipped.
+/// - A machine connected to a Runtime Host that never chose starts from now on,
+///   so a stranger's old transcripts are imported only once they say so.
+/// - An engine run by hand with no machine state (explicit `--url`/`--token`,
+///   as tests and benchmarks do) has no machine to protect and is unrestricted;
+///   nothing is written.
+pub fn resolve_import_scope(
+    conn: &rusqlite::Connection,
+) -> Result<crate::import_scope::ImportScope> {
+    resolve_import_scope_in(&get_machine_dir()?, conn)
+}
+
+pub fn resolve_import_scope_in(
+    machine_dir: &Path,
+    conn: &rusqlite::Connection,
+) -> Result<crate::import_scope::ImportScope> {
+    use crate::import_scope::{resolve_at_startup, ImportScope};
+    if let Some(scope) = ImportScope::load(machine_dir)? {
+        return Ok(scope);
+    }
+    let has_history = state_has_shipped_history(conn)? || canonical_state_has_history(machine_dir);
+    if !has_history && !machine_is_connected(machine_dir) {
+        return Ok(ImportScope::all("unset"));
+    }
+    resolve_at_startup(machine_dir, has_history)
+}
+
+/// Whether this machine has been connected to a Runtime Host: the installer,
+/// `longhouse auth` and Desktop setup all leave a stored address.
+fn machine_is_connected(machine_dir: &Path) -> bool {
+    let state = machine_dir.join("state.json");
+    state.exists()
+        && load_machine_state(&state)
+            .ok()
+            .and_then(|state| normalized_state_field(state.runtime_url))
+            .is_some()
+}
+
+/// Whether the shipper state database has ever tracked a source.
+fn state_has_shipped_history(conn: &rusqlite::Connection) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_epoch_registry) OR EXISTS(SELECT 1 FROM file_state)",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+/// The same question about the database this machine's own service uses, for
+/// an engine started with a different `--db`. A scratch database must not make
+/// a machine that has shipped for months look new. A database that exists but
+/// cannot be read counts as history: the failure that matters is narrowing a
+/// machine that already shipped, not keeping a new one open a moment longer.
+fn canonical_state_has_history(machine_dir: &Path) -> bool {
+    let Some(home) = machine_dir.parent() else {
+        return false;
+    };
+    let path = home.join("agent").join("longhouse-shipper.db");
+    if !path.is_file() {
+        return false;
+    }
+    rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .ok()
+        .and_then(|conn| state_has_shipped_history(&conn).ok())
+        .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod import_scope_tests {
+    use super::*;
+
+    fn track_a_source(conn: &rusqlite::Connection) {
+        conn.execute(
+            "INSERT INTO file_state (path, provider, queued_offset, acked_offset, last_updated)
+             VALUES ('/x.jsonl', 'claude', 10, 10, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    }
+
+    fn connect_machine(machine: &Path) {
+        std::fs::create_dir_all(machine).unwrap();
+        std::fs::write(
+            machine.join("state.json"),
+            "{\"runtime_url\":\"https://you.longhouse.ai\",\"machine_name\":\"laptop\"}",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn shipped_history_is_read_from_the_state_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        assert!(!state_has_shipped_history(&conn).unwrap());
+        track_a_source(&conn);
+        assert!(state_has_shipped_history(&conn).unwrap());
+    }
+
+    /// The promise to existing installs: a machine that already shipped history
+    /// keeps all of it, and the answer is written down so an emptied database
+    /// cannot narrow it later.
+    #[test]
+    fn a_machine_that_already_shipped_history_keeps_all_of_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        track_a_source(&conn);
+        let scope = resolve_import_scope_in(&machine, &conn).unwrap();
+        assert_eq!(scope.chosen_via, "legacy");
+        assert!(scope.is_unrestricted());
+        assert!(import_scope_in(&machine).is_unrestricted());
+        assert_eq!(resolve_import_scope_in(&machine, &conn).unwrap(), scope);
+    }
+
+    /// An engine started with a scratch `--db` beside a real machine directory
+    /// must not narrow the machine: the machine's own database decides.
+    #[test]
+    fn a_scratch_database_does_not_make_a_shipping_machine_look_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        std::fs::create_dir_all(dir.path().join("agent")).unwrap();
+        let real = crate::state::db::open_db(Some(&dir.path().join("agent/longhouse-shipper.db")))
+            .unwrap();
+        track_a_source(&real);
+        drop(real);
+        let scratch = crate::state::db::open_db(Some(&dir.path().join("scratch.db"))).unwrap();
+        let scope = resolve_import_scope_in(&machine, &scratch).unwrap();
+        assert_eq!(scope.chosen_via, "legacy");
+        assert!(scope.is_unrestricted());
+    }
+
+    #[test]
+    fn a_connected_machine_that_never_shipped_starts_from_now_and_the_engine_enforces_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        let scope = resolve_import_scope_in(&machine, &conn).unwrap();
+        assert_eq!(scope.chosen_via, "default");
+        assert!(!scope.is_unrestricted());
+        assert_eq!(import_scope_in(&machine), scope);
+        // Written down: a later start reads the same answer.
+        assert_eq!(resolve_import_scope_in(&machine, &conn).unwrap(), scope);
+    }
+
+    /// Tests, benchmarks and hand runs pass `--url` and `--token` and have no
+    /// machine state; there is no machine to protect and nothing is written.
+    #[test]
+    fn an_engine_run_by_hand_with_no_machine_state_stays_unrestricted_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        let scope = resolve_import_scope_in(&machine, &conn).unwrap();
+        assert!(scope.is_unrestricted());
+        assert!(!machine.join("import-scope.json").exists());
+    }
+
+    #[test]
+    fn an_explicit_choice_beats_the_first_run_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        crate::import_scope::ImportScope::all("cli")
+            .save(&machine)
+            .unwrap();
+        let scope = resolve_import_scope_in(&machine, &conn).unwrap();
+        assert_eq!(scope.chosen_via, "cli");
+        assert!(scope.is_unrestricted());
+    }
+
+    #[test]
+    fn an_unreadable_scope_closes_history_instead_of_opening_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        std::fs::create_dir_all(&machine).unwrap();
+        std::fs::write(machine.join("import-scope.json"), "{oops").unwrap();
+        let scope = import_scope_in(&machine);
+        assert!(!scope.is_unrestricted());
+        assert_eq!(scope.chosen_via, "invalid");
+        let conn = crate::state::db::open_db(Some(&dir.path().join("s.db"))).unwrap();
+        assert!(resolve_import_scope_in(&machine, &conn).is_err());
+    }
+}

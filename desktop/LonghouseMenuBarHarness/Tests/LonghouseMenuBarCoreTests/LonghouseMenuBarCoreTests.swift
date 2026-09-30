@@ -2434,6 +2434,8 @@ struct LonghouseMenuBarCoreTests {
         #expect(script.contains("LONGHOUSE_RUNTIME_URL"))
         #expect(script.contains("longhouse auth --url"))
         #expect(script.contains("longhouse machine repair --repair-service"))
+        // What history may leave the Mac is chosen before the agent can start.
+        #expect(script.contains("longhouse machine scope --prompt"))
         // A first-run Mac has no token in its environment: the script must ask
         // for the Runtime Host and run the browser handshake itself.
         #expect(script.contains("read -r \"url?Longhouse URL: \""))

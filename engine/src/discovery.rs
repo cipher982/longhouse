@@ -191,6 +191,22 @@ pub struct DiscoveredFile {
 pub struct DiscoveryScan {
     pub files: Vec<DiscoveredFile>,
     pub inventory: SourceInventoryObservation,
+    /// Sources left out because the machine's import scope excludes them, by
+    /// provider. They are not in `files` or `inventory`: the history import
+    /// reports progress against what it may ship.
+    pub excluded_by_scope: BTreeMap<&'static str, u64>,
+}
+
+/// Whether a transcript source is inside the machine's import scope.
+///
+/// OpenCode keeps every session in one database, so the database is always a
+/// source and the scope is applied to each session where it is read.
+pub fn source_in_import_scope(
+    scope: &crate::import_scope::ImportScope,
+    provider: &str,
+    path: &Path,
+) -> bool {
+    provider == "opencode" || scope.admits_file(path)
 }
 
 /// Discover sources and build a path-free provider inventory in one traversal.
@@ -199,7 +215,16 @@ pub struct DiscoveryScan {
 /// footprint bytes. SHM files are transient mappings and are intentionally not
 /// counted. The inventory never contains a local path or filename.
 pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> DiscoveryScan {
+    discover_files_in_scope(providers, &crate::config::import_scope())
+}
+
+/// `discover_all_files_with_inventory` for an explicit import scope.
+pub fn discover_files_in_scope(
+    providers: &[ProviderConfig],
+    scope: &crate::import_scope::ImportScope,
+) -> DiscoveryScan {
     let started = Instant::now();
+    let mut excluded_by_scope: BTreeMap<&'static str, u64> = BTreeMap::new();
     let mut files: Vec<(PathBuf, &'static str, SystemTime)> = Vec::new();
     let mut inventory: BTreeMap<&'static str, ProviderSourceInventory> = BTreeMap::new();
     let mut scan_error_count = 0_u64;
@@ -229,6 +254,10 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
                     }
                 };
                 if meta.len() == 0 {
+                    continue;
+                }
+                if !source_in_import_scope(scope, provider.name, path) {
+                    *excluded_by_scope.entry(provider.name).or_default() += 1;
                     continue;
                 }
                 let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -338,7 +367,114 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
             footprint_bytes,
             providers,
         },
+        excluded_by_scope,
     }
+}
+
+/// How much of this machine's local history the import scope covers, per
+/// provider. Read-only: `longhouse machine scope` shows it and the installers'
+/// prompt quotes it, so a choice is made knowing what it hides.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ScopeSummaryProvider {
+    pub provider: String,
+    pub in_scope: u64,
+    pub outside_scope: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ScopeSummary {
+    /// The stored scope; `None` when nobody has chosen yet.
+    pub scope: Option<crate::import_scope::ImportScope>,
+    pub described: String,
+    pub providers: Vec<ScopeSummaryProvider>,
+    pub total_in_scope: u64,
+    pub total_outside_scope: u64,
+}
+
+pub fn scope_summary(
+    providers: &[ProviderConfig],
+    stored: Option<crate::import_scope::ImportScope>,
+) -> ScopeSummary {
+    let effective = stored
+        .clone()
+        .unwrap_or_else(|| crate::import_scope::ImportScope::all("unset"));
+    let scan = discover_files_in_scope(providers, &effective);
+    let mut counts: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    for item in &scan.inventory.providers {
+        counts.entry(item.provider.clone()).or_default().0 += item.source_count;
+    }
+    for (provider, excluded) in &scan.excluded_by_scope {
+        counts.entry((*provider).to_string()).or_default().1 += excluded;
+    }
+    // OpenCode's database is one source holding many sessions; count sessions.
+    let opencode_dbs: Vec<&DiscoveredFile> = scan
+        .files
+        .iter()
+        .filter(|file| file.provider == "opencode")
+        .collect();
+    if !opencode_dbs.is_empty() {
+        let (mut inside, mut outside) = (0_u64, 0_u64);
+        for file in opencode_dbs {
+            let sessions =
+                crate::opencode_db::list_opencode_sessions_page(&file.path, usize::MAX >> 1, 0)
+                    .unwrap_or_default();
+            for session in &sessions {
+                if session.in_import_scope(&effective) {
+                    inside += 1;
+                } else {
+                    outside += 1;
+                }
+            }
+        }
+        counts.insert("opencode".to_string(), (inside, outside));
+    }
+    let providers: Vec<ScopeSummaryProvider> = counts
+        .into_iter()
+        .map(
+            |(provider, (in_scope, outside_scope))| ScopeSummaryProvider {
+                provider,
+                in_scope,
+                outside_scope,
+            },
+        )
+        .collect();
+    ScopeSummary {
+        described: effective.describe(),
+        total_in_scope: providers.iter().map(|item| item.in_scope).sum(),
+        total_outside_scope: providers.iter().map(|item| item.outside_scope).sum(),
+        scope: stored,
+        providers,
+    }
+}
+
+/// `longhouse-engine device import-scope`: print the stored scope and what it
+/// covers on this machine.
+pub fn cmd_import_scope(json: bool) -> anyhow::Result<()> {
+    let machine_dir = crate::config::get_machine_dir()?;
+    let stored = crate::import_scope::ImportScope::load(&machine_dir)?;
+    let summary = scope_summary(&get_providers(), stored);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+    match &summary.scope {
+        Some(scope) => println!(
+            "Import scope: {} (set by {})",
+            summary.described, scope.chosen_via
+        ),
+        None => println!("Import scope: not chosen yet; the Machine Agent will start from now on"),
+    }
+    for item in &summary.providers {
+        println!(
+            "  {:<12} {} in scope, {} not imported",
+            item.provider, item.in_scope, item.outside_scope
+        );
+    }
+    println!(
+        "  total        {} in scope, {} not imported",
+        summary.total_in_scope, summary.total_outside_scope
+    );
+    Ok(())
 }
 
 fn source_wal_bytes(provider: &ProviderConfig, path: &Path) -> (u64, u64) {
@@ -623,7 +759,118 @@ fn is_workflow_journal(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::import_scope::ImportScope;
     use std::fs;
+
+    fn claude_root(dir: &Path) -> Vec<ProviderConfig> {
+        vec![ProviderConfig {
+            name: "claude",
+            root: dir.canonicalize().unwrap(),
+            extension: "jsonl",
+        }]
+    }
+
+    #[test]
+    fn scope_keeps_older_sources_out_of_files_and_inventory() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("old.jsonl"), "{\"cwd\":\"/work/a\"}\n").unwrap();
+        fs::write(
+            root.path().join("older-elsewhere.jsonl"),
+            "{\"cwd\":\"/work/z\"}\n",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let since = chrono::Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        fs::write(root.path().join("new.jsonl"), "{\"cwd\":\"/work/z\"}\n").unwrap();
+        let providers = claude_root(root.path());
+
+        // No scope: everything, and nothing is excluded.
+        let all = discover_files_in_scope(&providers, &ImportScope::all("cli"));
+        assert_eq!(all.files.len(), 3);
+        assert!(all.excluded_by_scope.is_empty());
+
+        // From now on: only the new session; the rest is counted, not listed,
+        // and the inventory (which drives import progress) covers only what may ship.
+        let from_now = ImportScope::starting(since, "cli");
+        let scan = discover_files_in_scope(&providers, &from_now);
+        let names: Vec<_> = scan
+            .files
+            .iter()
+            .map(|file| file.path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["new.jsonl"]);
+        assert_eq!(scan.excluded_by_scope.get("claude"), Some(&2));
+        assert_eq!(scan.inventory.source_count, 1);
+
+        // Opting one project in brings back that project's old session only.
+        let with_project = ImportScope {
+            projects: vec![PathBuf::from("/work/a")],
+            ..from_now
+        };
+        let scan = discover_files_in_scope(&providers, &with_project);
+        let mut names: Vec<_> = scan
+            .files
+            .iter()
+            .map(|file| file.path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["new.jsonl", "old.jsonl"]);
+        assert_eq!(scan.excluded_by_scope.get("claude"), Some(&1));
+    }
+
+    #[test]
+    fn widening_the_scope_admits_what_the_narrow_one_left_out() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("old.jsonl"), "{}\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let providers = claude_root(root.path());
+        let narrow = ImportScope::starting(chrono::Utc::now(), "cli");
+        assert!(discover_files_in_scope(&providers, &narrow)
+            .files
+            .is_empty());
+        let wide = ImportScope::all("cli");
+        assert_eq!(discover_files_in_scope(&providers, &wide).files.len(), 1);
+    }
+
+    #[test]
+    fn opencode_database_is_always_a_source_and_gated_per_session() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("opencode.db"),
+            "not a database but non-empty",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let providers = vec![ProviderConfig {
+            name: "opencode",
+            root: root.path().canonicalize().unwrap(),
+            extension: "db",
+        }];
+        let scope = ImportScope::starting(chrono::Utc::now(), "cli");
+        let scan = discover_files_in_scope(&providers, &scope);
+        assert_eq!(
+            scan.files.len(),
+            1,
+            "sessions inside are gated where they are read"
+        );
+        assert!(scan.excluded_by_scope.is_empty());
+    }
+
+    #[test]
+    fn watcher_events_for_sources_outside_the_scope_are_dropped() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("old.jsonl");
+        fs::write(&old, "{}\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let scope = ImportScope::starting(chrono::Utc::now(), "cli");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let new = root.path().join("new.jsonl");
+        fs::write(&new, "{}\n").unwrap();
+        assert!(!source_in_import_scope(&scope, "claude", &old));
+        assert!(source_in_import_scope(&scope, "claude", &new));
+        assert!(source_in_import_scope(&scope, "opencode", &old));
+    }
 
     #[test]
     #[cfg(unix)]
