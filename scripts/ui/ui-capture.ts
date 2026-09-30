@@ -29,6 +29,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
+ *   bunx tsx scripts/ui/ui-capture.ts devices --scene=devices-revoke
  *   bunx tsx scripts/ui/ui-capture.ts landing --scene=provider-certification --viewport=desktop-tall
  *   bunx tsx scripts/ui/ui-capture.ts machines
  *   bunx tsx scripts/ui/ui-capture.ts --all
@@ -100,6 +101,7 @@ const SCENES = [
   "landing-session",
   "provider-certification",
   "first-run",
+  "devices-revoke",
 ] as const;
 type SceneName = (typeof SCENES)[number];
 
@@ -113,6 +115,9 @@ const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landi
 // A brand-new Runtime Host: no sessions, no machines. The timeline shows its
 // connect command; the machines page opens its Connect a machine sheet.
 const FIRST_RUN_SCENE: SceneName = "first-run";
+// The Devices page with a machine holding two valid tokens (each `longhouse
+// auth` mints one) and a revoked one, framed on the revoke-machine confirmation.
+const DEVICES_REVOKE_SCENE: SceneName = "devices-revoke";
 
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
@@ -281,13 +286,17 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-resume" ||
     scene === "session-stale-observation" ||
     scene === "session-tones" ||
-    scene === FIRST_RUN_SCENE
+    scene === FIRST_RUN_SCENE ||
+    scene === DEVICES_REVOKE_SCENE
   );
 }
 
 function validateOptions(opts: Options): void {
   if ((opts.scene === PROVIDER_CERTIFICATION_SCENE) !== (opts.page === "landing")) {
     throw new Error(`PAGE=landing and --scene=${PROVIDER_CERTIFICATION_SCENE} capture only each other.`);
+  }
+  if (opts.scene === DEVICES_REVOKE_SCENE && opts.page !== "devices") {
+    throw new Error(`--scene=${DEVICES_REVOKE_SCENE} captures PAGE=devices only.`);
   }
   if (opts.page === "session-detail" && !SESSION_DETAIL_SCENES.includes(opts.scene)) {
     throw new Error(`session-detail requires one of: ${SESSION_DETAIL_SCENES.map((s) => `--scene=${s}`).join(", ")}.`);
@@ -677,6 +686,24 @@ async function installSceneMocks(
       return;
     }
 
+    if (scene === DEVICES_REVOKE_SCENE && pathname === "/api/devices/tokens") {
+      const token = (id: string, device_id: string, created_at: string, last_used_at: string | null, revoked_at: string | null = null) => ({
+        id,
+        device_id,
+        created_at,
+        last_used_at,
+        revoked_at,
+        is_valid: revoked_at === null,
+      });
+      const tokens = [
+        token("11111111-1111-4111-8111-111111111111", "work-macbook", "2026-04-15T09:00:00Z", "2026-04-15T16:00:00Z"),
+        token("22222222-2222-4222-8222-222222222222", "work-macbook", "2026-04-10T09:00:00Z", "2026-04-12T10:00:00Z"),
+        token("33333333-3333-4333-8333-333333333333", "old-thinkpad", "2026-03-01T09:00:00Z", "2026-03-20T10:00:00Z", "2026-03-21T10:00:00Z"),
+      ];
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ tokens, total: tokens.length }) });
+      return;
+    }
+
     if (scene === FIRST_RUN_SCENE && (pathname === "/api/runners/" || pathname === "/api/runners")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runners: [] }) });
       return;
@@ -1031,6 +1058,11 @@ async function captureBundle(
     await page.waitForSelector("[data-screenshot-ready='true'], [data-ready='true']", { timeout: 5000 });
   } catch {
     await page.waitForLoadState("networkidle", { timeout: 10000 });
+  }
+
+  if (scene === DEVICES_REVOKE_SCENE) {
+    await page.click("text=Revoke machine >> nth=0");
+    await page.waitForSelector("[data-testid='confirm-dialog']", { timeout: 5000 });
   }
 
   if (scene === FIRST_RUN_SCENE && pageName === "machines") {

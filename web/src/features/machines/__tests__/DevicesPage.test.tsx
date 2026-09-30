@@ -7,7 +7,7 @@
  * one-time `code`. The page must never hold a device token, and approving must
  * not mint one -- the CLI redeems the code with its PKCE verifier.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ const deviceApiMocks = vi.hoisted(() => ({
   listDeviceTokens: vi.fn(),
   createDeviceToken: vi.fn(),
   createDeviceConnectCode: vi.fn(),
-  revokeDeviceToken: vi.fn(),
+  revokeMachine: vi.fn(),
 }));
 
 vi.mock("@/shared/api/devices", () => deviceApiMocks);
@@ -189,5 +189,59 @@ describe("DevicesPage device-auth callback", () => {
     expect(line).toContain("LONGHOUSE_MACHINE_NAME='vps-1'");
     expect(line).toContain(`LONGHOUSE_URL='${window.location.origin}'`);
     expect(line.endsWith(" bash")).toBe(true);
+  });
+});
+
+describe("DevicesPage revoke machine", () => {
+  const token = (id: string, device_id: string, is_valid = true) => ({
+    id,
+    device_id,
+    created_at: "2026-09-29T10:00:00Z",
+    last_used_at: null,
+    revoked_at: is_valid ? null : "2026-09-29T11:00:00Z",
+    is_valid,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    deviceApiMocks.listDeviceTokens.mockResolvedValue({
+      tokens: [token("t1", "macbook"), token("t2", "macbook"), token("t3", "cinder", false)],
+      total: 3,
+    });
+    deviceApiMocks.revokeMachine.mockResolvedValue({ device_id: "macbook", revoked: 2 });
+  });
+
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("offers revoke only on valid rows and revokes the machine by its device name", async () => {
+    const user = userEvent.setup();
+    renderDevicesPage("");
+
+    const rowButtons = await screen.findAllByRole("button", { name: /^revoke machine$/i });
+    // Two valid tokens for "macbook"; the already-revoked "cinder" row has no action.
+    expect(rowButtons).toHaveLength(2);
+
+    await user.click(rowButtons[0]);
+    const dialog = await screen.findByTestId("confirm-dialog");
+    // The text names what actually happens: all tokens for the name, and the agent stops.
+    expect(within(dialog).getByText(/every token issued to this device name/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/machine agent on it stops shipping/i)).toBeInTheDocument();
+    expect(deviceApiMocks.revokeMachine).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: /^revoke machine$/i }));
+    await waitFor(() => expect(deviceApiMocks.revokeMachine).toHaveBeenCalledTimes(1));
+    expect(deviceApiMocks.revokeMachine.mock.calls[0][0]).toBe("macbook");
+  });
+
+  it("does nothing when the confirmation is declined", async () => {
+    const user = userEvent.setup();
+    renderDevicesPage("");
+
+    await user.click((await screen.findAllByRole("button", { name: /^revoke machine$/i }))[0]);
+    await user.click(within(await screen.findByTestId("confirm-dialog")).getByRole("button", { name: /keep/i }));
+
+    expect(deviceApiMocks.revokeMachine).not.toHaveBeenCalled();
   });
 });

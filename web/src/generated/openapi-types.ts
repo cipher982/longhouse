@@ -3666,6 +3666,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/devices/machines/{device_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Machine
+         * @description Revoke every currently valid device token issued to one device name.
+         *
+         *     Each `longhouse auth` mints a new token and the older ones stay valid, so
+         *     disconnecting a machine means revoking all of them, not the latest.
+         *     Scoped to the calling owner; a name with no live token revokes nothing and
+         *     still answers 200.
+         */
+        post: operations["revoke_machine_devices_machines__device_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/device-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke Own Device Token
+         * @description Revoke exactly the device token presented on this request.
+         *
+         *     Used by `longhouse auth --clear` and `longhouse uninstall` so a machine that
+         *     disconnects does not leave a live credential behind. Any later use of the
+         *     same token answers 401, including a second call to this route.
+         */
+        delete: operations["revoke_own_device_token_agents_device_token_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health/db": {
         parameters: {
             query?: never;
@@ -5388,6 +5437,22 @@ export interface components {
             machine_name: string;
             /** Changed */
             changed: boolean;
+        };
+        /**
+         * MachineRevokeResponse
+         * @description Result of revoking every live token issued to one device name.
+         */
+        MachineRevokeResponse: {
+            /**
+             * Device Id
+             * @description The device name whose tokens were revoked
+             */
+            device_id: string;
+            /**
+             * Revoked
+             * @description How many valid tokens were revoked (0 when none were live)
+             */
+            revoked: number;
         };
         /**
          * MachineSearchCoverage
@@ -17523,6 +17588,55 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    revoke_machine_devices_machines__device_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_own_device_token_agents_device_token_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

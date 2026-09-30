@@ -69,8 +69,19 @@ export async function createDeviceConnectCode(body: {
   });
 }
 
-export async function revokeDeviceToken(tokenId: string): Promise<void> {
-  return request<void>(`/devices/tokens/${tokenId}`, {
-    method: "DELETE",
+/** What revoking a machine did: how many of its valid tokens were revoked. */
+export interface MachineRevokeResult {
+  device_id: string;
+  revoked: number;
+}
+
+/**
+ * Revoke every valid token issued to one device name. Each `longhouse auth`
+ * mints a new token and the older ones stay valid, so revoking "the machine"
+ * means all of them; the machine agent on it then stops shipping.
+ */
+export async function revokeMachine(deviceId: string): Promise<MachineRevokeResult> {
+  return request<MachineRevokeResult>(`/devices/machines/${encodeURIComponent(deviceId)}/revoke`, {
+    method: "POST",
   });
 }

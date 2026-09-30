@@ -11,7 +11,7 @@ import { useMutation } from "@tanstack/react-query";
 import {
   useDeviceTokens,
   useCreateDeviceToken,
-  useRevokeDeviceToken,
+  useRevokeMachine,
 } from "./useDeviceTokens";
 import { createDeviceConnectCode, type DeviceTokenCreated } from "@/shared/api/devices";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
@@ -59,7 +59,7 @@ export default function DevicesPage() {
 
   const { data, isLoading, error } = useDeviceTokens();
   const createToken = useCreateDeviceToken();
-  const revokeToken = useRevokeDeviceToken();
+  const revokeMachine = useRevokeMachine();
   const confirm = useConfirm();
   // `longhouse auth` opens this page with a loopback callback, a state and a
   // PKCE challenge. A request without a challenge comes from a CLI older than
@@ -138,17 +138,18 @@ export default function DevicesPage() {
     );
   };
 
-  const handleRevoke = async (tokenId: string, deviceId: string) => {
+  const handleRevoke = async (deviceId: string) => {
     const confirmed = await confirm({
-      title: `Revoke token for "${deviceId}"?`,
-      message: "This device will no longer be able to authenticate. This cannot be undone.",
-      confirmLabel: "Revoke",
+      title: `Revoke "${deviceId}"?`,
+      message:
+        "This revokes every token issued to this device name. The machine agent on it stops shipping sessions, and reconnecting needs a new approval. This cannot be undone.",
+      confirmLabel: "Revoke machine",
       cancelLabel: "Keep",
       variant: "danger",
     });
 
     if (!confirmed) return;
-    revokeToken.mutate(tokenId);
+    revokeMachine.mutate(deviceId);
   };
 
   const handleCopy = async (text: string) => {
@@ -298,9 +299,9 @@ export default function DevicesPage() {
                       <Button
                         variant="danger"
                         size="sm"
-                        onClick={() => handleRevoke(token.id, token.device_id)}
+                        onClick={() => handleRevoke(token.device_id)}
                       >
-                        Revoke
+                        Revoke machine
                       </Button>
                     )}
                   </td>

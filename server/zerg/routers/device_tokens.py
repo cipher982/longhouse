@@ -4,6 +4,8 @@ Provides endpoints for:
 - POST /api/devices/tokens - Create a new device token
 - GET /api/devices/tokens - List user's device tokens
 - DELETE /api/devices/tokens/{id} - Revoke a token
+- POST /api/devices/machines/{device_id}/revoke - Revoke every live token issued to one device name
+- DELETE /api/agents/device-token - A device revokes the token it presents (`longhouse auth --clear`, `longhouse uninstall`)
 - POST /api/devices/connect-codes - Approve a waiting `longhouse auth` (browser)
 - POST /api/devices/connect-codes/redeem - CLI exchanges code + verifier for a token
 """
@@ -24,6 +26,7 @@ from uuid import uuid4
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
@@ -404,17 +407,8 @@ async def redeem_connect_code(
     return await _mint_device_token(owner_id=pending.owner_id, device_id=pending.device_id, db=db)
 
 
-@router.get("/tokens", response_model=TokenListResponse)
-async def list_device_tokens(
-    include_revoked: bool = False,
-    db: Session | None = Depends(_auth_compat_db),
-    current_user=Depends(get_current_user),
-) -> TokenListResponse:
-    """List all device tokens for the current user.
-
-    By default, only shows valid (non-revoked) tokens.
-    Use include_revoked=true to see revoked tokens as well.
-    """
+async def _load_owner_tokens(*, owner_id: int, include_revoked: bool, db: Session | None) -> list[TokenResponse]:
+    """One owner's device tokens, newest first, from the catalog or the test DB."""
     if _catalog_device_tokens_enabled():
         from zerg.catalogd.client import CatalogRemoteError
         from zerg.catalogd.client import CatalogUnavailable
@@ -430,7 +424,7 @@ async def list_device_tokens(
             result = await client.call(
                 "auth.device.list.v2",
                 {
-                    "owner_id": int(current_user.id),
+                    "owner_id": owner_id,
                     "include_revoked": include_revoked,
                 },
             )
@@ -461,35 +455,42 @@ async def list_device_tokens(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"code": "catalog_protocol_error", "message": "Catalog returned an invalid token list."},
             )
-        return TokenListResponse(
-            tokens=[TokenResponse.model_validate(payload) for payload in token_payloads],
-            total=len(token_payloads),
-        )
+        return [TokenResponse.model_validate(payload) for payload in token_payloads]
 
     if db is None:
         raise RuntimeError("legacy device-token list requires a test database")
-    query = db.query(DeviceToken).filter(DeviceToken.owner_id == current_user.id)
+    query = db.query(DeviceToken).filter(DeviceToken.owner_id == owner_id)
 
     if not include_revoked:
         query = query.filter(DeviceToken.revoked_at.is_(None))
 
     query = query.order_by(DeviceToken.created_at.desc(), DeviceToken.id)
-    tokens = query.all()
+    return [
+        TokenResponse(
+            id=str(t.id),
+            device_id=t.device_id,
+            created_at=t.created_at,
+            last_used_at=t.last_used_at,
+            revoked_at=t.revoked_at,
+            is_valid=t.is_valid,
+        )
+        for t in query.all()
+    ]
 
-    return TokenListResponse(
-        tokens=[
-            TokenResponse(
-                id=str(t.id),
-                device_id=t.device_id,
-                created_at=t.created_at,
-                last_used_at=t.last_used_at,
-                revoked_at=t.revoked_at,
-                is_valid=t.is_valid,
-            )
-            for t in tokens
-        ],
-        total=len(tokens),
-    )
+
+@router.get("/tokens", response_model=TokenListResponse)
+async def list_device_tokens(
+    include_revoked: bool = False,
+    db: Session | None = Depends(_auth_compat_db),
+    current_user=Depends(get_current_user),
+) -> TokenListResponse:
+    """List all device tokens for the current user.
+
+    By default, only shows valid (non-revoked) tokens.
+    Use include_revoked=true to see revoked tokens as well.
+    """
+    tokens = await _load_owner_tokens(owner_id=int(current_user.id), include_revoked=include_revoked, db=db)
+    return TokenListResponse(tokens=tokens, total=len(tokens))
 
 
 @router.post("/apns-register", response_model=APNSRegisterResponse)
@@ -745,16 +746,13 @@ async def end_apns_live_activity(
     )
 
 
-@router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_device_token(
-    token_id: UUID,
-    db: Session | None = Depends(_auth_compat_db),
-    current_user=Depends(get_current_user),
-) -> None:
-    """Revoke a device token.
+async def _revoke_owned_token(*, owner_id: int, token_id: UUID, db: Session | None) -> bool:
+    """Revoke one of an owner's device tokens. Returns whether that token exists.
 
-    A revoked token can no longer be used for authentication.
-    This action cannot be undone.
+    Revoking an already-revoked token keeps its first revocation time and still
+    reports it as found. Every revoke path (owner API, machine revoke, the
+    machine's own self-revoke) goes through here so none can drift from the
+    catalog contract.
     """
     if _catalog_device_tokens_enabled():
         from zerg.catalogd.client import CatalogRemoteError
@@ -771,7 +769,7 @@ async def revoke_device_token(
             result = await client.call(
                 "auth.device.revoke.v2",
                 {
-                    "owner_id": int(current_user.id),
+                    "owner_id": owner_id,
                     "token_id": str(token_id),
                 },
                 timeout_seconds=1.0,
@@ -793,41 +791,142 @@ async def revoke_device_token(
                 detail={"code": "catalog_operation_failed", "message": "Catalog mutation failed."},
             ) from exc
         if result.get("found") is not True:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Token {token_id} not found",
-            )
+            return False
         logger.info(
             "Revoked device token %s for user %s at catalog commit %s",
             token_id,
-            current_user.id,
+            owner_id,
             result.get("commit_seq"),
         )
-        return
+        return True
 
     ws = get_write_serializer()
     if db is None:
         raise RuntimeError("legacy device-token revoke requires a test database")
 
-    def _revoke_token(wdb: Session) -> None:
-        token = wdb.query(DeviceToken).filter(DeviceToken.id == token_id, DeviceToken.owner_id == current_user.id).first()
-
+    def _revoke_token(wdb: Session) -> bool:
+        token = wdb.query(DeviceToken).filter(DeviceToken.id == token_id, DeviceToken.owner_id == owner_id).first()
         if not token:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Token {token_id} not found",
-            )
-
+            return False
         if token.revoked_at is None:
             token.revoked_at = datetime.now(timezone.utc)
+        return True
 
-    await ws.execute_or_direct(
+    found = await ws.execute_or_direct(
         _revoke_token,
         db,
         label="device-token-revoke",
     )
+    if found:
+        logger.info(f"Revoked device token {token_id} for user {owner_id}")
+    return bool(found)
 
-    logger.info(f"Revoked device token {token_id} for user {current_user.id}")
+
+@router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_device_token(
+    token_id: UUID,
+    db: Session | None = Depends(_auth_compat_db),
+    current_user=Depends(get_current_user),
+) -> None:
+    """Revoke a device token.
+
+    A revoked token can no longer be used for authentication.
+    This action cannot be undone.
+    """
+    if not await _revoke_owned_token(owner_id=int(current_user.id), token_id=token_id, db=db):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Token {token_id} not found",
+        )
+
+
+class MachineRevokeResponse(BaseModel):
+    """Result of revoking every live token issued to one device name."""
+
+    device_id: str = Field(..., description="The device name whose tokens were revoked")
+    revoked: int = Field(..., description="How many valid tokens were revoked (0 when none were live)")
+
+
+@router.post("/machines/{device_id}/revoke", response_model=MachineRevokeResponse)
+async def revoke_machine(
+    device_id: str,
+    db: Session | None = Depends(_auth_compat_db),
+    current_user=Depends(get_current_user),
+) -> MachineRevokeResponse:
+    """Revoke every currently valid device token issued to one device name.
+
+    Each `longhouse auth` mints a new token and the older ones stay valid, so
+    disconnecting a machine means revoking all of them, not the latest.
+    Scoped to the calling owner; a name with no live token revokes nothing and
+    still answers 200.
+    """
+    owner_id = int(current_user.id)
+    live = [
+        token
+        for token in await _load_owner_tokens(owner_id=owner_id, include_revoked=False, db=db)
+        if token.device_id == device_id and token.is_valid
+    ]
+    revoked = 0
+    for token in live:
+        if await _revoke_owned_token(owner_id=owner_id, token_id=UUID(token.id), db=db):
+            revoked += 1
+    logger.info("Revoked %s device token(s) for machine %r of user %s", revoked, device_id, owner_id)
+    return MachineRevokeResponse(device_id=device_id, revoked=revoked)
+
+
+# ---------------------------------------------------------------------------
+# Machine surface: a device disconnecting itself
+# ---------------------------------------------------------------------------
+
+agents_router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def _require_device_token_header(request: Request) -> DeviceToken:
+    """Resolve the presented `zdt_` device token, and nothing else.
+
+    Deliberately not `verify_agents_token`: that dependency admits managed-session
+    tokens and, with auth disabled, no token at all, and rate-limits writes.
+    Self-revoke is the one call that must work for a token that is being retired,
+    so it is neither counted against the ingest bucket nor open to any other
+    credential class.
+    """
+    from zerg.dependencies.agents_auth import _validate_device_token_for_request
+
+    provided = request.headers.get("X-Agents-Token")
+    if not provided:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication - provide X-Agents-Token header",
+        )
+    if not provided.startswith("zdt_"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A device token is required to revoke a device",
+        )
+    device_token = _validate_device_token_for_request(provided)
+    if device_token is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked device token")
+    return device_token
+
+
+@agents_router.delete("/device-token", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_own_device_token(
+    device_token: DeviceToken = Depends(_require_device_token_header),
+    db: Session | None = Depends(_auth_compat_db),
+) -> None:
+    """Revoke exactly the device token presented on this request.
+
+    Used by `longhouse auth --clear` and `longhouse uninstall` so a machine that
+    disconnects does not leave a live credential behind. Any later use of the
+    same token answers 401, including a second call to this route.
+    """
+    found = await _revoke_owned_token(
+        owner_id=int(device_token.owner_id),
+        token_id=UUID(str(device_token.id)),
+        db=db,
+    )
+    if not found:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked device token")
 
 
 @router.get("/tokens/{token_id}", response_model=TokenResponse)
