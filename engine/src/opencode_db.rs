@@ -713,6 +713,9 @@ const SHARED_PROJECT_ID: &str = "global";
 
 const STREAM_REVISION_PREFIX: &str = "opencode-stream-v2:";
 
+/// Parts at most this large are parsed to tell whether they are in flight.
+const SMALL_PART_BYTES: usize = 16 * 1024;
+
 fn hex32(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -753,8 +756,10 @@ fn load_session_rows(conn: &Connection, provider_session_id: &str) -> Result<Ope
 /// * the session record leads the stream and only its title is checked: OpenCode
 ///   names a session after its first exchange, once, while it is small, and a
 ///   later rename is a person's edit. Its other fields (`agent`, which flips
-///   with the mode, `version`, `time_updated`) are shipped once; what the host
-///   needs from them is recomputed into each envelope's session facts;
+///   with the mode, `version`, `time_updated`) are archived as of the first
+///   envelope: the host reads none of them (its session facts are recomputed from
+///   the rows for every envelope), and checking `agent` would replace the epoch
+///   every time someone switches mode;
 /// * a message is checked without its `summary`, which OpenCode recomputes after
 ///   the turn and which is derived from the parts.
 ///
@@ -806,15 +811,16 @@ fn settle_or_wait(in_flight: bool, time_updated: i64, now_ms: i64) -> Settling {
 /// a part type or status this code has not heard of ships as it always has.
 fn part_is_in_flight(data: &str) -> bool {
     // Nearly every byte is a long-finished tool output, and this runs on every
-    // walk: a tool is in flight only if it says so, so rule the rest out without
-    // parsing them. Text and reasoning parts are small, and testing their JSON
-    // for an end time by substring is fooled by any other field of that name, so
-    // they are always parsed.
-    let maybe = data.contains("\"running\"")
-        || data.contains("\"pending\"")
-        || data.contains("\"type\":\"text\"")
-        || data.contains("\"type\":\"reasoning\"");
-    if !maybe {
+    // walk, so a large part is parsed only if it says it is running or pending.
+    // A small one is always parsed: text and reasoning parts are small, and a
+    // substring test for an end time is fooled by any other field of that name
+    // and by any spacing in the JSON.
+    if data.len() > SMALL_PART_BYTES
+        && !data.contains("\"running\"")
+        && !data.contains("\"pending\"")
+        && !data.contains("\"type\":\"text\"")
+        && !data.contains("\"type\":\"reasoning\"")
+    {
         return false;
     }
     let Ok(part) = serde_json::from_str::<Value>(data) else {
@@ -2350,6 +2356,8 @@ mod tests {
             r#"{"type":"tool","tool":"bash","state":{"status":"pending","input":{}}}"#,
             r#"{"type":"text","text":"","time":{"start":5}}"#,
             r#"{"type":"reasoning","text":"","time":{"start":5}}"#,
+            // Spacing in the JSON does not change what it says.
+            r#"{"type": "text", "text": "", "time": {"start": 5}}"#,
             // Another field named "end" is not the part's end time.
             r#"{"type":"text","text":"x","time":{"start":5},"other":{"end":1}}"#,
         ];
