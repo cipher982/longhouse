@@ -256,10 +256,6 @@ class Settings:  # noqa: D401 – simple data container
     umami_tag: str | None = None
     live_database_url: str = ""
 
-    # Content-free usage facts for a consenting hosted tester (services/funnel_facts.py).
-    # Off unless the operating control plane sets it on that tester's tenant at launch.
-    funnel_facts_enabled: bool = False
-
     # iOS APNs push -----------------------------------------------------
     apns_team_id: str | None = None
     apns_key_id: str | None = None
@@ -551,7 +547,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
         database_url=database_url,
         live_database_url=live_database_url,
-        funnel_facts_enabled=_truthy(os.getenv("LONGHOUSE_FUNNEL_FACTS")),
         archive_root=archive_root,
         archive_primary_tenant_id=archive_primary_tenant_id,
         archive_primary_chunk_target_bytes=32 * 1024 * 1024,

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -152,10 +153,10 @@ _store_guard = threading.Lock()
 
 def funnel_facts_path() -> Path | None:
     """The side file lives beside the live catalog; None when that is not a file."""
-    from zerg.config import get_settings
+    from zerg.config import get_settings_unchecked
     from zerg.config import sqlite_file_path
 
-    live = sqlite_file_path(get_settings().live_database_url)
+    live = sqlite_file_path(get_settings_unchecked().live_database_url)
     return live.parent / "funnel-facts.sqlite3" if live is not None else None
 
 
@@ -177,9 +178,8 @@ def reset_store_for_tests() -> None:
 
 
 def enabled() -> bool:
-    from zerg.config import get_settings
-
-    return bool(get_settings().funnel_facts_enabled)
+    """One environment lookup per request; the settings object is not rebuilt for a feature that is off."""
+    return os.environ.get("LONGHOUSE_FUNNEL_FACTS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _headers(scope: Scope) -> dict[str, str]:
@@ -250,7 +250,7 @@ def observe_request(scope: Scope, status_code: int) -> None:
         if store.pending(surface, milestones):
             asyncio.get_running_loop().run_in_executor(None, _record, store, surface, milestones)
     except Exception:  # noqa: BLE001
-        logger.warning("funnel facts observe failed", exc_info=True)
+        logger.debug("funnel facts observe failed", exc_info=True)
 
 
 def build_document(catalog_facts: dict[str, Any], side_facts: dict[str, Any]) -> dict[str, Any]:

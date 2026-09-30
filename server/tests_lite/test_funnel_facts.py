@@ -185,13 +185,12 @@ class TestStore:
 
 @pytest.fixture
 def facts_runtime(tmp_path, monkeypatch):
-    """A settings object pointing the side file into tmp_path, with the flag as asked."""
+    """A runtime whose live catalog is in tmp_path, with the flag as asked (the real env var)."""
     funnel_facts.reset_store_for_tests()
 
     def configure(enabled: bool):
-        live = tmp_path / "longhouse-live.db"
-        settings = SimpleNamespace(funnel_facts_enabled=enabled, live_database_url=f"sqlite:///{live}")
-        monkeypatch.setattr("zerg.config.get_settings", lambda: settings)
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'longhouse.db'}")
+        monkeypatch.setenv("LONGHOUSE_FUNNEL_FACTS", "1" if enabled else "")
         return tmp_path / "funnel-facts.sqlite3"
 
     yield configure
@@ -309,13 +308,8 @@ def funnel_route(monkeypatch, tmp_path):
     catalog = _Catalog()
 
     def configure(enabled: bool):
-        settings = SimpleNamespace(
-            internal_api_secret="funnel-test-only",
-            funnel_facts_enabled=enabled,
-            live_database_url=f"sqlite:///{tmp_path / 'longhouse-live.db'}",
-        )
-        monkeypatch.setattr(internal_funnel, "get_settings", lambda: settings)
-        monkeypatch.setattr("zerg.config.get_settings", lambda: settings)
+        monkeypatch.setenv("LONGHOUSE_FUNNEL_FACTS", "1" if enabled else "")
+        monkeypatch.setattr(internal_funnel, "get_settings", lambda: SimpleNamespace(internal_api_secret="funnel-test-only"))
         monkeypatch.setattr(internal_funnel, "get_catalogd_client", lambda: catalog)
         return TestClient(api_app), catalog
 
