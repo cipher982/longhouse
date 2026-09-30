@@ -14,6 +14,8 @@ interface PageMetaOptions {
 export interface CollectedPageMeta {
   title?: string;
   description?: string;
+  /** What useRootUiEffects set for the page; absent when the page sets none. */
+  uiEffects?: boolean;
 }
 export const PageMetaCollectorContext = createContext<CollectedPageMeta | null>(null);
 

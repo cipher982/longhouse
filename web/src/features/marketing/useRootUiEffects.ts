@@ -1,6 +1,10 @@
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
+import { PageMetaCollectorContext } from "@/shared/hooks/usePageMeta";
 
 export function useRootUiEffects(enabled: boolean) {
+  const collector = useContext(PageMetaCollectorContext);
+  if (collector) collector.uiEffects = enabled;
+
   useEffect(() => {
     const container = document.getElementById("react-root");
     const previous = container?.getAttribute("data-ui-effects");

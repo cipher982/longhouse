@@ -38,9 +38,10 @@ export function buildPage(shell, { origin, pathname }, { html, meta }) {
   page = replaceOnce(page, /<\/head>/, `<link rel="canonical" href="${escapeAttr(url)}" />\n  </head>`, "</head>");
 
   // usePublicPageScroll adds these once the app runs; without them the page
-  // cannot scroll before (or without) JavaScript. main.tsx sets data-ui-effects.
+  // cannot scroll before (or without) JavaScript. data-ui-effects is what
+  // main.tsx sets ("on") unless the page turns effects off (useRootUiEffects).
   page = replaceOnce(page, /<html lang="en">/, `<html lang="en" class="public-page-scroll">`, "<html lang>");
   page = replaceOnce(page, /<body>/, `<body class="public-page-scroll">`, "<body>");
-  page = replaceOnce(page, /<div id="react-root"><\/div>/, `<div id="react-root" data-ui-effects="on">${html}</div>`, "empty #react-root");
+  page = replaceOnce(page, /<div id="react-root"><\/div>/, `<div id="react-root" data-ui-effects="${meta.uiEffects === false ? "off" : "on"}">${html}</div>`, "empty #react-root");
   return page;
 }

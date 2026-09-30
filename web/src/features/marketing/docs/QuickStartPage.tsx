@@ -92,7 +92,7 @@ longhouse antigravity  # Antigravity CLI, send only`}
       </CodeBlock>
       <p>
         When Longhouse launches the session, it owns the session record and
-        local observation path. All six providers ship today; what they can do
+        local observation path. All seven providers ship today; what they can do
         after launch differs. Claude and Codex can be steered mid-turn. Cursor
         Agent takes send and interrupt but not mid-turn steer. OpenCode Helm
         supports managed send, interrupt, terminate, pause-answer, and

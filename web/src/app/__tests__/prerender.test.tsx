@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AfterHydration } from "@/features/marketing/AfterHydration";
+import { getLaunchProviderSupportList } from "@/shared/lib/providers";
 import { PageMetaCollectorContext, usePageMeta, type CollectedPageMeta } from "@/shared/hooks/usePageMeta";
 // @ts-expect-error plain .mjs shared with web/scripts/prerender.mjs
 import { buildPage, sitemapRoutes } from "../../../scripts/prerender-page.mjs";
@@ -48,6 +49,15 @@ describe("prerender page assembly", () => {
     expect(page).toContain('<div id="react-root" data-ui-effects="on"><h1>CLI</h1></div>');
     expect(page).toContain('<html lang="en" class="public-page-scroll">');
     expect(page).not.toContain("shell description");
+  });
+
+  it("marks the root the way the page's own effects setting will", () => {
+    const route = { origin: "https://longhouse.ai", pathname: "/blog" };
+    const meta = { title: "t", description: "d" };
+
+    expect(buildPage(SHELL, route, { html: "", meta: { ...meta, uiEffects: false } })).toContain('data-ui-effects="off"');
+    expect(buildPage(SHELL, route, { html: "", meta: { ...meta, uiEffects: true } })).toContain('data-ui-effects="on"');
+    expect(buildPage(SHELL, route, { html: "", meta })).toContain('data-ui-effects="on"');
   });
 
   it("refuses a page that never set its own title", () => {
@@ -101,6 +111,21 @@ describe("prerendered routes", () => {
     expect(meta.description, `${pathname} sets no description`).toBeTruthy();
     expect(html).toContain("<h1");
     expect(html).not.toContain("Something went wrong");
+  });
+
+  it("the blog turns effects off and the landing page keeps them on", async () => {
+    expect((await renderRoute("/blog")).meta.uiEffects).toBe(false);
+    expect((await renderRoute("/")).meta.uiEffects).toBe(true);
+  });
+
+  it("the integrations page lists every launch provider and counts them", async () => {
+    const { html, meta } = await renderRoute("/docs/integrations");
+    const providers = getLaunchProviderSupportList();
+
+    for (const provider of providers) expect(html).toContain(provider.marketingName);
+    expect(providers).toHaveLength(7);
+    expect(meta.description).toContain("seven");
+    expect(html).toContain("Seven providers ship today");
   });
 
   it("the landing page carries the headline and the iOS download, and no claim about live certification", async () => {

@@ -7,7 +7,8 @@ from zerg.frontend_pages import prerendered_page
 
 
 def _dist(tmp_path: Path) -> Path:
-    dist = tmp_path / "dist"
+    # Resolved: the helper returns resolved paths, and /var is a symlink on macOS.
+    dist = (tmp_path / "dist").resolve()
     (dist / "_prerender" / "docs" / "quickstart").mkdir(parents=True)
     (dist / "index.html").write_text("shell")
     (dist / "_prerender" / "index.html").write_text("landing")

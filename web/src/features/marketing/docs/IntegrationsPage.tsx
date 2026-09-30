@@ -34,7 +34,7 @@ export default function IntegrationsPage() {
   usePageMeta({
     title: "Integrations - Longhouse Docs",
     description:
-      "The six CLI agents Longhouse launches and controls: Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, and Antigravity CLI.",
+      "The seven CLI agents Longhouse launches and controls: Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, Oh My Pi, and Antigravity CLI.",
   });
 
   return (
@@ -49,9 +49,9 @@ export default function IntegrationsPage() {
         users on.
       </p>
 
-      <h2>Six providers ship today</h2>
+      <h2>Seven providers ship today</h2>
       <p>
-        All six launch through the native <code>longhouse</code> CLI and land in
+        All seven launch through the native <code>longhouse</code> CLI and land in
         the same timeline. What they can do after launch differs, and the
         difference is not cosmetic — it is what each provider&apos;s own CLI
         exposes. The table is generated from{" "}
@@ -172,7 +172,7 @@ longhouse opencode --model <provider/model>`}
         and nothing persists between turns.
       </p>
       <p>
-        <strong>Antigravity CLI</strong> is the narrowest of the six. It launches
+        <strong>Antigravity CLI</strong> is the narrowest of the seven. It launches
         under Longhouse&apos;s hook-inbox control path and accepts send;
         interrupt, terminate, and reattach are not supported. It refuses to
         start if its Longhouse hook is not installed rather than opening an

@@ -100,7 +100,7 @@ export default function OverviewPage() {
         </Link>
         <Link to="/docs/integrations" className="docs-overview-card">
           <h3>Integrations</h3>
-          <p>The six CLI agents Longhouse launches, and what each can do.</p>
+          <p>The seven CLI agents Longhouse launches, and what each can do.</p>
         </Link>
         <Link to="/docs/configuration" className="docs-overview-card">
           <h3>Configuration</h3>
