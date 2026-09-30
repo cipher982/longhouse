@@ -502,8 +502,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Background Tasks (sheet)"
         case "background-tasks-timeline":
             return "Background Tasks (timeline)"
-        case "background-tasks-timeline-attention":
-            return "Background Tasks (timeline) (attention)"
+        case "background-tasks-attention":
+            return "Background Tasks (attention)"
         case "background-tasks-timeline-stale":
             return "Background Tasks (timeline) (stale)"
         case "background-tasks-transition":
@@ -534,6 +534,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         let isMarketing = title == titleForFixture("marketing")
         let isHelmChannelReconcile = title == titleForFixture("helm-channel-reconcile")
         let isTimelineDelegation = title.contains("Background Tasks (timeline)")
+        let isAttentionDelegation = title == titleForFixture("background-tasks-attention")
         let composerPlaceholder = isMarketing
             ? "Message"
             : "Steer this turn"
@@ -617,12 +618,12 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     reattach: unavailable,
                     resume: unavailable,
                     branch: unavailable,
-                    pendingInteractionKind: title.contains("Background Tasks (timeline) (attention)") ? "question" : nil,
+                    pendingInteractionKind: isAttentionDelegation ? "question" : nil,
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(
-                        key: isTimelineDelegation ? "delegated_work" : (isHelmChannelReconcile ? "thinking" : "idle"),
-                        label: isTimelineDelegation ? "Background · 1 agent · 1 command" : (isHelmChannelReconcile ? "Thinking" : "Idle"),
-                        tone: isTimelineDelegation ? "active" : (isHelmChannelReconcile ? "thinking" : "idle"),
+                        key: isAttentionDelegation ? "needs_answer" : (isTimelineDelegation ? "delegated_work" : (isHelmChannelReconcile ? "thinking" : "idle")),
+                        label: isAttentionDelegation ? "Needs answer" : (isTimelineDelegation ? "Background · 1 agent · 1 command" : (isHelmChannelReconcile ? "Thinking" : "Idle")),
+                        tone: isAttentionDelegation ? "blocked" : (isTimelineDelegation ? "active" : (isHelmChannelReconcile ? "thinking" : "idle")),
                         observedAt: nil
                     ),
                     access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),

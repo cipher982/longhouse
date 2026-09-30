@@ -222,7 +222,8 @@ extension SessionStateFacts {
             return .attention
         }
         if workClaimExpired(asOf: now) { return .uncertain }
-        if primary?.key == "delegated_work"
+        let tone = primary?.tone
+        if tone == "active" || tone == "running" || tone == "thinking"
             || activityState == "thinking" || activityState == "executing" {
             return .working
         }

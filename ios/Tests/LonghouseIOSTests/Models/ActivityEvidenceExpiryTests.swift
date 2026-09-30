@@ -140,12 +140,13 @@ struct ActivityEvidenceExpiryTests {
     }
 
     @Test
-    func anActiveToneCannotInventWorkForAQuietNonDelegatedParent() {
-        let primary = SessionStateLabel(key: "idle", label: "Idle", tone: "active", observedAt: nil)
+    func startingUsesItsServedWorkClaimRatherThanTheQuietParentClock() {
+        let primary = SessionStateLabel(key: "starting", label: "Starting", tone: "active", observedAt: nil)
         let facts = makeSessionStateFacts(
-            activity: "quiescent", activityValidUntil: "2026-08-23T12:01:00Z", primaryOverride: primary
+            activity: "quiescent", launchState: "dispatched", runLifecycle: "starting",
+            activityValidUntil: "2026-08-23T12:01:00Z", primaryOverride: primary
         )
-        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .quiet)
+        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .working)
         #expect(facts.workClaimValidUntil == nil)
     }
 

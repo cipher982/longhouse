@@ -403,7 +403,7 @@ struct SessionRuntimeDock: View {
     }
 
     private func usesPrimaryDelegationHeadline(for state: SessionLedgerEvidence) -> Bool {
-        detail.stateFacts.primary?.key == "delegated_work" && state != .attention
+        detail.stateFacts.primary?.key == "delegated_work" && detail.activePauseRequest == nil
     }
 
     @ViewBuilder
@@ -584,7 +584,6 @@ struct SessionRuntimeDock: View {
             return "Activity uncertain"
         case .attention:
             if detail.activePauseRequest != nil { return "Permission needed" }
-            if detail.stateFacts.primary?.key == "delegated_work" { return "Needs attention" }
             return detail.runtimeHeadline
         default:
             if detail.stateFacts.primary?.key == "delegated_work",
