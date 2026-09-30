@@ -236,17 +236,18 @@ def _port_is_free(host: str, port: int) -> bool:
     # A listener answers a connect on every platform. SO_REUSEADDR alone is not enough to
     # see one: BSD/macOS let a second reuseaddr socket bind beside a wildcard or specific
     # listener that Linux would refuse.
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    family = socket.AF_INET6 if ":" in probe_host else socket.AF_INET
+    probe = socket.socket(family, socket.SOCK_STREAM)
     try:
         probe.settimeout(0.5)
         if probe.connect_ex((probe_host, port)) == 0:
             return False
     except OSError:
-        pass  # an address this AF_INET probe cannot resolve: the bind below decides, as it always did
+        pass  # an address the probe cannot resolve: the bind below decides, as it always did
     finally:
         probe.close()
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock = socket.socket(family, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((probe_host, port))
@@ -339,11 +340,14 @@ def _await_daemon_ready(host: str, port: int, *, timeout: float = 45.0) -> tuple
     import urllib.request
 
     probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
-    url = f"http://{probe_host}:{port}/api/health"
+    url = f"http://{probe_host}:{port}/api/health" if ":" not in probe_host else f"http://[{probe_host}]:{port}/api/health"
+    # Loopback must not go through http_proxy/ALL_PROXY: a proxy with no loopback no_proxy entry
+    # would report a healthy daemon as not answering.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(url, timeout=1).close()
+            opener.open(url, timeout=1).close()
             return True, ""
         except urllib.error.HTTPError:
             return True, ""  # answering, whatever it says about its own health

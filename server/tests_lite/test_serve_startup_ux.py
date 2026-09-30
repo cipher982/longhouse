@@ -58,9 +58,38 @@ def test_port_probe_sees_a_listener_but_not_time_wait():
 
 
 def test_port_probe_never_raises_for_a_host_it_cannot_resolve():
-    # `--host ::1` reaches an AF_INET probe: a traceback here replaced the friendly exit.
-    assert serve_cli._port_is_free("::1", _free_port()) in (True, False)
     assert serve_cli._port_is_free("no-such-host.invalid", _free_port()) in (True, False)
+
+
+def test_port_probe_handles_an_ipv6_literal():
+    try:
+        listener = socket.socket(socket.AF_INET6)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("::1", 0))
+    except OSError:
+        return  # no IPv6 loopback here
+    port = listener.getsockname()[1]
+    listener.listen(1)
+    try:
+        assert serve_cli._port_is_free("::1", port) is False
+    finally:
+        listener.close()
+    assert serve_cli._port_is_free("::1", port) is True
+
+
+def test_daemon_health_probe_ignores_proxy_settings(monkeypatch):
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")  # nothing listens: a proxied probe would fail
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    server = HTTPServer(("127.0.0.1", 0), _Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        ok, _ = serve_cli._await_daemon_ready("127.0.0.1", server.server_port, timeout=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ok is True
 
 
 def test_pid_file_being_written_is_not_a_dead_server(tmp_path, monkeypatch):

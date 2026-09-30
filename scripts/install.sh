@@ -974,7 +974,10 @@ connect_this_machine() {
     local repair_log repair_status=0
     repair_log="$(mktemp)"
     "$longhouse_bin" machine repair --repair-service 2>&1 | tee "$repair_log" || repair_status=$?
-    if [[ "$repair_status" != 0 ]] || grep -Eq '\((failed|rejected_[a-z_]+)\)[[:space:]]*$' "$repair_log"; then
+    # The verdict is the first line after the "Longhouse repair: …" progress lines.
+    local repair_verdict
+    repair_verdict="$(grep -v '^Longhouse repair:' "$repair_log" | head -n 1)"
+    if [[ "$repair_status" != 0 ]] || grep -Eq '\((failed|rejected_[a-z_]+)\)[[:space:]]*$' <<< "$repair_verdict"; then
         rm -f "$repair_log"
         error "Stored credentials, but the Machine Agent service did not start, so nothing will sync yet."
         error "On Linux it needs a systemd user session (log in over SSH or a desktop, not su or sudo -u)."
@@ -982,7 +985,7 @@ connect_this_machine() {
         return 1
     fi
     local repair_pending=0
-    grep -Eq '\(recovery_pending\)[[:space:]]*$' "$repair_log" && repair_pending=1
+    grep -Eq '\(recovery_pending\)[[:space:]]*$' <<< "$repair_verdict" && repair_pending=1
     rm -f "$repair_log"
     if has_command claude; then
         "$longhouse_bin" claude configure >/dev/null 2>&1 || warn "Could not configure Claude hooks; run: longhouse claude configure"

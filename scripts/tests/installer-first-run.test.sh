@@ -26,7 +26,8 @@ case "${1:-}" in
         ;;
     machine) echo "Longhouse repair: checking the local service and retained state."
              echo "${LONGHOUSE_TEST_REPAIR_VERDICT:?}"
-             echo "Machine State" ;;
+             echo "Machine State"
+             [[ -z "${LONGHOUSE_TEST_REPAIR_EXTRA:-}" ]] || echo "$LONGHOUSE_TEST_REPAIR_EXTRA" ;;
     *) exit 0 ;;
 esac
 EOF
@@ -85,6 +86,13 @@ run_installer repair-ok LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_URL=htt
     LONGHOUSE_TEST_REPAIR_VERDICT="The local Machine Agent is running again (service_recovered)"
 [[ "$STATUS" == 0 ]] || fail "a recovered service must still install" repair-ok
 grep -q "Connected as fake-box" "$TEST_ROOT/repair-ok.log" || fail "no Connected line after a recovered service" repair-ok
+
+# 2d. only the verdict line decides: a later diagnostic ending in (failed) does not fail a recovered install
+run_installer repair-noted LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_URL=http://127.0.0.1:1 \
+    LONGHOUSE_DEVICE_TOKEN=test-token \
+    LONGHOUSE_TEST_REPAIR_VERDICT="The local Machine Agent is running again (service_recovered)" \
+    LONGHOUSE_TEST_REPAIR_EXTRA="Note: an earlier attempt (failed)"
+[[ "$STATUS" == 0 ]] || fail "a diagnostic line failed a recovered install" repair-noted
 
 # 3. an unwritable Applications dir stops the Mac install before any download
 mkdir -p "$TEST_ROOT/shim"
