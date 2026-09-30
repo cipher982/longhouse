@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { resolve, sep } from "node:path";
 
@@ -42,6 +42,26 @@ const SESSION_FILE_SUFFIX = ".jsonl";
 const socketPath = process.env.LONGHOUSE_OMP_HELM_CHANNEL_PATH;
 const authToken = process.env.LONGHOUSE_OMP_HELM_CHANNEL_TOKEN;
 const launchSessionId = process.env.LONGHOUSE_MANAGED_SESSION_ID;
+// QA negative control: disable only the native background evidence writer. The
+// provider still runs, but no compact async registry/progress facts are emitted.
+// This is deliberately environment-gated and has no effect on release builds.
+const qaBackgroundWriterDisabled =
+  process.env.LONGHOUSE_QA_FAULT === "omp_background_writer_disabled";
+let qaBackgroundFaultRecorded = false;
+const recordQaBackgroundFault = (): void => {
+  if (!qaBackgroundWriterDisabled || qaBackgroundFaultRecorded) return;
+  qaBackgroundFaultRecorded = true;
+  const receiptPath = process.env.LONGHOUSE_QA_FAULT_RECEIPT;
+  if (!receiptPath) return;
+  try {
+    appendFileSync(
+      receiptPath,
+      `${JSON.stringify({ fault: "omp_background_writer_disabled", writer_disabled: true })}\n`,
+    );
+  } catch {
+    // The producer treats a missing receipt as inconclusive.
+  }
+};
 const initialPrompt = process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT ?? "";
 const initialPromptDeliveredAtLaunch =
   process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED === "1";
@@ -63,6 +83,242 @@ type ToolResult = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const MALFORMED_BOOLEAN_MARKER = "malformed";
+
+const ASYNC_JOB_STATUSES: Record<string, true> = {
+  running: true,
+  completed: true,
+  failed: true,
+  cancelled: true,
+};
+const TASK_PROGRESS_STATUSES: Record<string, true> = {
+  pending: true,
+  running: true,
+  completed: true,
+  failed: true,
+  aborted: true,
+};
+const MAX_ASYNC_JOB_ROWS = 64;
+const MAX_TASK_PROGRESS_ROWS = 64;
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const boundedString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim()
+    ? value.trim().slice(0, MAX_METADATA_STRING_LENGTH)
+    : undefined;
+
+const progressRowsFrom = (value: unknown): Frame[] => {
+  const record = isRecord(value) ? value : undefined;
+  if (!record) return [];
+  const details = isRecord(record.details) ? record.details : record;
+  return Array.isArray(details.progress)
+    ? details.progress.filter(isRecord).slice(0, MAX_TASK_PROGRESS_ROWS)
+    : [];
+};
+
+const asyncDetailsFrom = (value: unknown): Frame | undefined => {
+  const record = isRecord(value) ? value : undefined;
+  if (!record) return undefined;
+  const details = isRecord(record.details) ? record.details : record;
+  return isRecord(details.async) ? details.async : undefined;
+};
+
+const compactTaskProgress = (
+  row: Frame,
+  jobIdByAgentId: Map<string, string>,
+): Frame | undefined => {
+  const agentId = boundedString(row.id);
+  const status = boundedString(row.status);
+  if (!agentId || !status || !TASK_PROGRESS_STATUSES[status]) return undefined;
+  const compact: Frame = {
+    agent_id: agentId,
+    status,
+  };
+  const jobId = jobIdByAgentId.get(agentId);
+  if (jobId) compact.job_id = jobId;
+  for (const [source, target] of [
+    ["index", "index"],
+    ["agent", "agent"],
+    ["agentSource", "agent_source"],
+    ["description", "description"],
+    ["lastIntent", "last_intent"],
+    ["currentTool", "current_tool"],
+    ["currentToolStartMs", "current_tool_start_ms"],
+    ["toolCount", "tool_count"],
+    ["requests", "requests"],
+    ["tokens", "tokens"],
+    ["contextTokens", "context_tokens"],
+    ["contextWindow", "context_window"],
+    ["cost", "cost"],
+    ["durationMs", "duration_ms"],
+    ["modelRole", "model_role"],
+    ["resolvedModelIdentity", "resolved_model_identity"],
+    ["resolvedThinkingLevel", "resolved_thinking_level"],
+  ] as const) {
+    const value = row[source];
+    if (
+      source === "description" ||
+      source === "lastIntent" ||
+      source === "currentTool" ||
+      source === "agent" ||
+      source === "agentSource" ||
+      source === "modelRole" ||
+      source === "resolvedModelIdentity" ||
+      source === "resolvedThinkingLevel"
+    ) {
+      const text = boundedString(value);
+      if (text) compact[target] = text;
+    } else {
+      const number = finiteNumber(value);
+      if (number !== undefined) compact[target] = number;
+    }
+  }
+  if (typeof row.advisor === "boolean") compact.advisor = row.advisor;
+  if (typeof row.resolvedModelIsFallback === "boolean")
+    compact.resolved_model_is_fallback = row.resolvedModelIsFallback;
+  const retryState = isRecord(row.retryState) ? row.retryState : undefined;
+  if (retryState) {
+    const retry: Frame = {};
+    for (const [source, target] of [
+      ["attempt", "attempt"],
+      ["maxAttempts", "max_attempts"],
+      ["delayMs", "delay_ms"],
+      ["startedAtMs", "started_at_ms"],
+    ] as const) {
+      const number = finiteNumber(retryState[source]);
+      if (number !== undefined) retry[target] = number;
+    }
+    if (Object.keys(retry).length > 0) compact.retry_state = retry;
+  }
+  const retryFailure = isRecord(row.retryFailure) ? row.retryFailure : undefined;
+  if (retryFailure) {
+    const attempt = finiteNumber(retryFailure.attempt);
+    compact.retry_failure = attempt === undefined ? true : { attempt };
+  }
+  return compact;
+};
+
+/**
+ * Preserve the provider's bounded async-job view on the existing Helm event
+ * transport. The ExtensionContext facade is owner-scoped by OMP, so an
+ * absent ownerId is intentional: the authenticated session/run fields on the
+ * outer frame are the ownership fence. Never turn a task progress id or a
+ * parentSession value into a job id here.
+ */
+export function compactAsyncJobEvidence(
+  event: Frame,
+  snapshot: unknown,
+  observedAt = Date.now(),
+): Frame {
+  if (qaBackgroundWriterDisabled) {
+    recordQaBackgroundFault();
+    return {};
+  }
+  const jobsById = new Map<string, Frame>();
+  const jobIdByAgentId = new Map<string, string>();
+  const snapshotRecord = isRecord(snapshot) ? snapshot : undefined;
+  const runningJobs = Array.isArray(snapshotRecord?.running)
+    ? snapshotRecord.running
+    : [];
+  const snapshotComplete =
+    snapshotRecord !== undefined &&
+    Array.isArray(snapshotRecord.running) &&
+    runningJobs.length <= MAX_ASYNC_JOB_ROWS &&
+    runningJobs.every(
+      (row) =>
+        isRecord(row) &&
+        Boolean(boundedString(row.id)) &&
+        row.status === "running",
+    );
+  const snapshotRows = [
+    ...runningJobs,
+    ...(Array.isArray(snapshotRecord?.recent) ? snapshotRecord.recent : []),
+  ];
+  for (const value of snapshotRows) {
+    const row = isRecord(value) ? value : undefined;
+    const id = boundedString(row?.id);
+    const status = boundedString(row?.status);
+    if (!row || !id || !status || !ASYNC_JOB_STATUSES[status]) continue;
+    const job: Frame = { id, status };
+    for (const [source, target] of [
+      ["type", "type"],
+      ["label", "label"],
+      ["ownerId", "owner_id"],
+      ["agentId", "agent_id"],
+    ] as const) {
+      const text = boundedString(row[source]);
+      if (text) job[target] = text;
+    }
+    for (const [source, target] of [
+      ["startTime", "start_time"],
+      ["endTime", "end_time"],
+    ] as const) {
+      const number = finiteNumber(row[source]);
+      if (number !== undefined) job[target] = number;
+    }
+    if (typeof row.queued === "boolean") job.queued = row.queued;
+    job.source = "async_job_manager";
+    jobsById.set(id, job);
+    const agentId = boundedString(row.agentId);
+    if (agentId) jobIdByAgentId.set(agentId, id);
+  }
+
+  const candidates = [event.partialResult, event.result];
+  const details = candidates.map(asyncDetailsFrom).find(Boolean);
+  const asyncJobId = boundedString(details?.jobId);
+  const asyncType = boundedString(details?.type);
+  const asyncState = boundedString(details?.state);
+  if (
+    asyncJobId &&
+    asyncState &&
+    ASYNC_JOB_STATUSES[asyncState] &&
+    !jobsById.has(asyncJobId)
+  ) {
+    jobsById.set(asyncJobId, {
+      id: asyncJobId,
+      ...(asyncType ? { type: asyncType } : {}),
+      status: asyncState,
+      source: "task_details",
+    });
+  }
+
+  const progress = candidates
+    .flatMap(progressRowsFrom)
+    .map((row) => compactTaskProgress(row, jobIdByAgentId))
+    .filter((row): row is Frame => row !== undefined);
+  const observed = finiteNumber(observedAt);
+  const evidence: Frame = {};
+  if (snapshotComplete || jobsById.size > 0) {
+    evidence.async_jobs = Array.from(jobsById.values()).slice(
+      0,
+      MAX_ASYNC_JOB_ROWS,
+    );
+  }
+  if (snapshotComplete) {
+    evidence.async_running_complete = true;
+    evidence.async_jobs_source = "omp.async_job_manager";
+  } else if (jobsById.size > 0) {
+    evidence.async_jobs_source = "omp.task_tool_details";
+  }
+  if (progress.length > 0)
+    evidence.task_progress = progress.slice(0, MAX_TASK_PROGRESS_ROWS);
+  if (Object.keys(evidence).length > 0 && observed !== undefined) {
+    evidence.async_observed_at = new Date(observed).toISOString();
+  }
+  return evidence;
+}
+
+const asyncJobSnapshotFor = (ctx: unknown): unknown => {
+  const record = isRecord(ctx) ? ctx : undefined;
+  if (typeof record?.getAsyncJobSnapshot !== "function") return undefined;
+  try {
+    return record.getAsyncJobSnapshot();
+  } catch {
+    return undefined;
+  }
+};
 
 const jsonSchema = (properties: Record<string, unknown>) => ({
   type: "object",
@@ -661,7 +917,11 @@ export default function (pi: any) {
     old?.removeAllListeners();
   };
 
-  const compactLifecycleEvent = (kind: string, event: Frame): Frame => {
+  const compactLifecycleEvent = (
+    kind: string,
+    event: Frame,
+    snapshot?: unknown,
+  ): Frame => {
     const compact: Frame = {
       type:
         typeof event.type === "string"
@@ -716,6 +976,7 @@ export default function (pi: any) {
     for (const key of ["success", "isError", "provider_idle"]) {
       if (typeof event[key] === "boolean") compact[key] = event[key];
     }
+    Object.assign(compact, compactAsyncJobEvidence(event, snapshot));
     return compact;
   };
 
@@ -727,7 +988,11 @@ export default function (pi: any) {
     ompProviderIsIdle(lastAgentEndTerminal, Boolean(ctx.isIdle()));
 
   const sendEvent = (kind: string, event: Frame, ctx: any) =>
-    write({ kind, event: compactLifecycleEvent(kind, event), ...session(ctx) });
+    write({
+      kind,
+      event: compactLifecycleEvent(kind, event, asyncJobSnapshotFor(ctx)),
+      ...session(ctx),
+    });
 
   /// Ask for the initial prompt until the launcher grants it.
   ///
@@ -874,10 +1139,19 @@ export default function (pi: any) {
         keepaliveTimer = setInterval(() => {
           if (shuttingDown || socket !== candidate) return;
           try {
+            const asyncEvidence = compactAsyncJobEvidence(
+              { type: "extension_keepalive" },
+              asyncJobSnapshotFor(ctx),
+            );
+            const event =
+              Object.keys(asyncEvidence).length > 0
+                ? { type: "extension_keepalive", ...asyncEvidence }
+                : undefined;
             candidate.write(
               `${JSON.stringify({
                 kind: "extension_keepalive",
                 provider_idle: providerIsIdle(ctx),
+                ...(event ? { event } : {}),
                 ...session(ctx),
               })}\n`,
             );

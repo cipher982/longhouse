@@ -12,7 +12,6 @@ from tests_lite.live_catalog_harness import live_catalog as live_catalog
 from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.services.session_runtime import runtime_key_for_session
 
-
 PROVIDER = "claude"
 DEVICE_ID = "cinder"
 
@@ -839,3 +838,135 @@ def test_over_budget_registry_preserves_prior_evidence_and_parent_activity(live_
     after = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
     assert after["activity"]["state"] == "thinking"
     assert after["delegation"] == before["delegation"]
+
+
+def test_child_lifecycle_is_source_only_and_survives_registry_late_arrival(live_catalog, live_catalog_client):
+    email = "delegation-lifecycle-edge@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=30)
+    before = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    edge = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=base + timedelta(seconds=10),
+        dedupe_key="child-completed-before-registry-delivery",
+    )
+    edge.update(kind="delegation_signal", phase=None)
+    edge["payload"] = {
+        "delegation_update": {
+            "operation": "remove",
+            "membership": "existing_exact_link_only",
+            "item": _task("agent-done", "subagent", "completed", "Finished child", parent_tool_call_id="toolu_done"),
+            "source_event": "SubagentStop",
+            "source_agent_id": "agent-done",
+            "observed_at": edge["occurred_at"],
+        }
+    }
+    _post_event(live_catalog_client, token=token, event=edge)
+    unmatched = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert unmatched["activity"] == before["activity"]
+    assert unmatched["delegation"]["state"] == "unknown"
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=base,
+            snapshot_observed_at=base,
+            dedupe_key="late-original-registry",
+            items=[
+                _task("agent-done", "subagent", "running", "Original child", parent_tool_call_id="toolu_done"),
+                _task("shell-kept", "shell", "running", "Other work remains"),
+            ],
+        ),
+    )
+    served = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    delegation = served["delegation"]
+    assert delegation["state"] == "pending"
+    assert delegation["count"] == 1
+    assert delegation["kinds"] == {"shell": 1}
+    assert [item["id"] for item in delegation["items"]] == ["shell-kept"]
+    assert datetime.fromisoformat(delegation["observed_at"].replace("Z", "+00:00")) == base
+    assert datetime.fromisoformat(delegation["valid_until"].replace("Z", "+00:00")) == base + timedelta(milliseconds=120_000)
+
+
+def test_presence_child_registry_without_phase_does_not_refresh_parent_activity(live_catalog, live_catalog_client):
+    email = "delegation-independent-presence@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=base,
+            dedupe_key="parent-own-work",
+            phase="thinking",
+        ),
+    )
+    before = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    observed = base + timedelta(seconds=5)
+    response = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": observed.isoformat(),
+            "delegation": {"items": [_task("child-active", "subagent", "running", "Child continues")], "observed_at": observed.isoformat()},
+        },
+    )
+    assert response.status_code == 204, response.text
+    served = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert served["activity"] == before["activity"]
+    assert served["delegation"]["state"] == "pending"
+    assert [item["id"] for item in served["delegation"]["items"]] == ["child-active"]
+
+
+def test_native_completion_edge_wins_over_same_callback_running_snapshot(live_catalog, live_catalog_client):
+    email = "delegation-combined-callback@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=10)
+    before = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    event = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed,
+        dedupe_key="native-stop-with-still-running-registry",
+        items=[
+            _task("finished-agent", "subagent", "running", "Finishing worker"),
+            _task("independent-shell", "shell", "running", "Shell continues"),
+        ],
+    )
+    event.update(kind="delegation_signal", phase=None)
+    event["payload"]["delegation_update"] = {
+        "operation": "remove",
+        "membership": "existing_exact_link_only",
+        "item": _task("finished-agent", "subagent", "completed", "Finishing worker"),
+        "source_event": "SubagentStop",
+        "source_agent_id": "finished-agent",
+        "observed_at": observed.isoformat(),
+    }
+    _post_event(live_catalog_client, token=token, event=event)
+    served = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert served["activity"] == before["activity"]
+    delegation = served["delegation"]
+    assert delegation["state"] == "pending"
+    assert delegation["count"] == 1
+    assert delegation["kinds"] == {"shell": 1}
+    assert [item["id"] for item in delegation["items"]] == ["independent-shell"]
+    assert datetime.fromisoformat(delegation["observed_at"].replace("Z", "+00:00")) == observed
+    assert datetime.fromisoformat(delegation["valid_until"].replace("Z", "+00:00")) == observed + timedelta(milliseconds=120_000)

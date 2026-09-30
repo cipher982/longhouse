@@ -32,6 +32,7 @@ import os
 import re
 from datetime import datetime
 from datetime import timezone
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 
@@ -75,6 +76,7 @@ from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.session_state_contract import SessionDelegationProgress
 from zerg.services.write_backpressure import raise_hot_write_backpressure
 from zerg.services.write_serializer import WriteQueueTimeoutError
 from zerg.services.write_serializer import execute_post_write
@@ -115,6 +117,10 @@ class DelegationTaskIn(UTCBaseModel):
     status: str = Field(min_length=1, max_length=32)
     description: str | None = Field(default=None, max_length=512)
     parent_tool_call_id: str | None = Field(default=None, max_length=256)
+    native_child_id: str | None = Field(default=None, max_length=256)
+    native_child_source_path: str | None = Field(default=None, max_length=2048)
+    registered_at: datetime | None = None
+    native_progress: SessionDelegationProgress | None = None
 
 
 class DelegationSnapshotIn(UTCBaseModel):
@@ -127,17 +133,31 @@ class DelegationSnapshotIn(UTCBaseModel):
     freshness_ms: Optional[int] = None
 
 
+class DelegationUpdateIn(UTCBaseModel):
+    """One native child edge, never a replacement background registry."""
+
+    operation: Literal["observe", "remove"]
+    membership: Literal["existing_exact_link_only"]
+    item: DelegationTaskIn
+    observed_at: datetime
+    source_event: Literal["SubagentStart", "SubagentStop"]
+    source_agent_id: str = Field(min_length=1, max_length=256)
+    source_agent_type: str | None = Field(default=None, max_length=256)
+    source_agent_transcript_path: str | None = Field(default=None, max_length=2048)
+
+
 class PresenceIn(UTCBaseModel):
     """Payload from a Claude Code hook."""
 
     session_id: str
-    state: str  # thinking | running | idle | needs_user | blocked | stalled
+    state: str | None = None  # Absent only for independent delegation evidence.
     tool_name: Optional[str] = None
     cwd: Optional[str] = None
     provider: Optional[str] = "claude"
     occurred_at: Optional[datetime] = None
     dedupe_key: Optional[str] = None
     delegation: Optional[DelegationSnapshotIn] = None
+    delegation_update: DelegationUpdateIn | None = None
     # Managed hooks carry the exact provider run generation from the launcher;
     # it is required to bind canonical facts without a timestamp join.
     run_id: Optional[UUID] = None
@@ -155,9 +175,11 @@ async def upsert_presence(
     _token: object = Depends(verify_agents_caller),
 ) -> Response:
     """Upsert real-time presence state for a session."""
-    if payload.state not in VALID_STATES:
+    if payload.state is not None and payload.state not in VALID_STATES:
         # Silently ignore unknown states rather than erroring hooks
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if payload.state is None and payload.delegation is None and payload.delegation_update is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Presence requires phase or delegation evidence")
     managed_principal = caller_principal(_token)
     if isinstance(managed_principal, ManagedSessionToken) and payload.session_id != managed_principal.session_id:
         raise HTTPException(
@@ -179,20 +201,25 @@ async def upsert_presence(
     runtime_dedupe_key = payload.dedupe_key or (
         f"presence:{payload.session_id}:{payload.state}:{runtime_tool_name or '-'}:{now.isoformat()}"
     )
+    delegation_payload = {}
+    if payload.delegation is not None:
+        delegation_payload["delegation"] = payload.delegation.model_dump(mode="json", exclude_none=True)
+    if payload.delegation_update is not None:
+        delegation_payload["delegation_update"] = payload.delegation_update.model_dump(mode="json", exclude_none=True)
     runtime_event = RuntimeEventIngest(
         runtime_key=runtime_key,
         session_id=coerce_session_uuid(payload.session_id),
         provider=runtime_provider,
         device_id=getattr(_token, "device_id", None),
         source=_source_for_provider_hook(runtime_provider),
-        kind="phase_signal",
+        kind="phase_signal" if payload.state is not None else "delegation_signal",
         phase=payload.state,
         tool_name=runtime_tool_name,
         occurred_at=now,
-        freshness_ms=phase_freshness_ms(payload.state),
+        freshness_ms=phase_freshness_ms(payload.state) if payload.state is not None else None,
         dedupe_key=runtime_dedupe_key,
         run_id=payload.run_id,
-        payload=({"delegation": payload.delegation.model_dump(exclude_none=True)} if payload.delegation is not None else {}),
+        payload=delegation_payload,
     )
     runtime_events = [runtime_event]
     provider_session_id = str(payload.provider_session_id or "").strip()
@@ -337,7 +364,7 @@ async def upsert_presence(
             source=runtime_event.source,
         )
 
-    if session_uuid is not None and canonical_presence_state in {"idle", "needs_user"}:
+    if payload.state is not None and session_uuid is not None and canonical_presence_state in {"idle", "needs_user"}:
         with post_write_db_session(ws, db) as delivery_db:
             from zerg.services.session_input_queue import wake_session_input_queue
 

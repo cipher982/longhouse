@@ -311,6 +311,19 @@ struct APISessionControlFacts: Codable, Hashable, Sendable {
     let actions: APISessionControlActions
 }
 
+struct APISessionDelegationProgress: Codable, Hashable, Sendable {
+    let observedAt: String?
+    let status: String?
+    let currentTool: String?
+    let lastIntent: String?
+    let toolCount: Int?
+    let requests: Int?
+    let tokens: Int?
+    let contextTokens: Int?
+    let contextWindow: Int?
+    let durationMs: Int?
+}
+
 struct APISessionDelegationTaskResponse: Codable, Hashable, Sendable {
     let id: String
     let kind: String
@@ -323,6 +336,8 @@ struct APISessionDelegationTaskResponse: Codable, Hashable, Sendable {
     let userMessages: Int?
     let assistantMessages: Int?
     let toolCalls: Int?
+    let registeredAt: String?
+    let nativeProgress: APISessionDelegationProgress?
 }
 
 struct APISessionDelegationFacts: Codable, Hashable, Sendable {

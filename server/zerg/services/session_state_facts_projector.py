@@ -39,6 +39,7 @@ from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionControlActions
 from zerg.services.session_state_contract import SessionControlFacts
 from zerg.services.session_state_contract import SessionDelegationFacts
+from zerg.services.session_state_contract import SessionDelegationProgress
 from zerg.services.session_state_contract import SessionDelegationTaskResponse
 from zerg.services.session_state_contract import SessionDispositionFacts
 from zerg.services.session_state_contract import SessionHostFacts
@@ -209,7 +210,9 @@ def project_shadow_session_state_facts(
         # from them rather than from `ended_at` alone.
         run=_project_run(catalog_facts, launch=launch, control=control, activity=activity, now=normalized_now),
         activity=activity,
-        delegation=_project_delegation(delegation_head, now=normalized_now, children=_mapping(catalog_facts.get("delegation_children"))),
+        delegation=_project_delegation(
+            delegation_head, now=normalized_now, children=_mapping(catalog_facts.get("delegation_children")), heads=heads
+        ),
         control=control,
         control_run_id=_control_run_id(control_head),
         fact_sources=fact_sources,
@@ -837,11 +840,70 @@ def _project_activity(
     )
 
 
+def _registry_items_with_lifecycle(
+    items: list[dict[str, Any]],
+    *,
+    registry: Mapping[str, Any],
+    observed_at: datetime,
+    heads: Collection[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fold exact child edges, including late delivery, without renewing membership."""
+    values = []
+    for head in heads:
+        if head.get("family") != "delegation_lifecycle" or head.get("source") != registry.get("source"):
+            continue
+        try:
+            value = _head_value(head, family="delegation_lifecycle", session_id=registry["session_id"])
+            edge_at = _wire_datetime(value.get("observed_at"), "observed_at")
+        except (ValueError, TypeError, KeyError):
+            continue
+        if (
+            value.get("run_id") != registry.get("run_id")
+            or value.get("provider") != registry.get("provider")
+            or value.get("authority_class") != "provider_runtime"
+            or head.get("source_epoch") != registry.get("run_id")
+            or edge_at < observed_at
+        ):
+            continue
+        values.append((edge_at, value))
+    result = list(items)
+    for _edge_at, value in sorted(values, key=lambda pair: pair[0]):
+        edge = _mapping(value.get("item"))
+        if edge.get("kind") != "subagent":
+            continue
+        tool_id = edge.get("parent_tool_call_id")
+        matches = [
+            index
+            for index, item in enumerate(result)
+            if item.get("kind") == "subagent"
+            and (
+                (
+                    item.get("id") == edge.get("id")
+                    and (not tool_id or not item.get("parent_tool_call_id") or item.get("parent_tool_call_id") == tool_id)
+                )
+                or (tool_id and item.get("parent_tool_call_id") == tool_id)
+            )
+        ]
+        if len(matches) != 1:
+            continue
+        index = matches[0]
+        if value.get("operation") == "remove":
+            result.pop(index)
+        elif value.get("operation") == "observe":
+            item = dict(result[index])
+            if tool_id:
+                item["parent_tool_call_id"] = tool_id
+            item["status"] = edge["status"]
+            result[index] = item
+    return result
+
+
 def _project_delegation(
     winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
     *,
     now: datetime,
     children: Mapping[str, Any],
+    heads: Collection[Mapping[str, Any]] = (),
 ) -> SessionDelegationFacts:
     """Project the delegated-work axis, expired evidence included.
 
@@ -874,9 +936,15 @@ def _project_delegation(
     raw_items = value.get("items")
     items = None
     if isinstance(raw_items, list):
+        raw_items = _registry_items_with_lifecycle(raw_items, registry=value, observed_at=observed_at, heads=heads)
+        count = len(raw_items)
+        kinds = {}
+        for item in raw_items:
+            kind = item["kind"]
+            kinds[kind] = kinds.get(kind, 0) + 1
         items = []
         for item in raw_items:
-            child = _mapping(children.get(item.get("parent_tool_call_id")))
+            child = _mapping(children.get(item.get("parent_tool_call_id")) or children.get(f"native:{item.get('native_child_id')}"))
             items.append(
                 SessionDelegationTaskResponse(
                     id=item["id"],
@@ -890,6 +958,10 @@ def _project_delegation(
                     user_messages=(int(child["user_messages"]) if child.get("user_messages") is not None else None),
                     assistant_messages=(int(child["assistant_messages"]) if child.get("assistant_messages") is not None else None),
                     tool_calls=int(child["tool_calls"]) if child.get("tool_calls") is not None else None,
+                    registered_at=_optional_wire_datetime(item.get("registered_at"), "registered_at"),
+                    native_progress=SessionDelegationProgress(**item["native_progress"])
+                    if item.get("native_progress") is not None
+                    else None,
                 )
             )
     return SessionDelegationFacts(
@@ -1065,7 +1137,7 @@ def _head_receipt(head: Mapping[str, Any]) -> datetime | None:
 def _head_value(
     head: Mapping[str, Any],
     *,
-    family: Literal["activity", "delegation", "control", "continuation"],
+    family: Literal["activity", "delegation", "delegation_lifecycle", "control", "continuation"],
     session_id: str,
 ) -> dict[str, Any]:
     raw = head.get("value_json")
@@ -1086,6 +1158,12 @@ def _head_value(
         if not run_id:
             raise ValueError(f"{family} run_id is missing")
         expected_subject = f"run:{run_id}"
+    elif family == "delegation_lifecycle":
+        run_id = str(value.get("run_id") or "").strip()
+        agent_id = _text(_mapping(value.get("item")).get("id"))
+        if not run_id or not agent_id:
+            raise ValueError("delegation lifecycle identity is missing")
+        expected_subject = f"run:{run_id}:agent:{agent_id}"
     elif family == "control":
         connection_id = str(value.get("connection_id") or "").strip()
         lease_generation = str(value.get("lease_generation") or "").strip()

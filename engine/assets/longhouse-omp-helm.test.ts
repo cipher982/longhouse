@@ -25,6 +25,7 @@ const channelPath = process.env.LONGHOUSE_OMP_HELM_CHANNEL_PATH!;
 const {
   default: registerExtension,
   agentEndIsTerminal,
+  compactAsyncJobEvidence,
   ompProviderIsIdle,
 } = await import("./longhouse-omp-helm");
 
@@ -86,6 +87,199 @@ describe("agentEndIsTerminal", () => {
     );
     expect(agentEndIsTerminal({ type: "agent_end", isTerminal: "true" })).toBe(
       false,
+    );
+  });
+});
+
+describe("async job evidence", () => {
+  it("keeps manager lifecycle fields and bounded task progress", () => {
+    const evidence = compactAsyncJobEvidence(
+      {
+        partialResult: {
+          details: {
+            async: { state: "running", jobId: "agent-a", type: "task" },
+            progress: [
+              {
+                id: "agent-a",
+                agent: "scout",
+                agentSource: "bundled",
+                status: "pending",
+                description: "inspect the source",
+                task: "secret task text must not cross the carrier",
+                currentTool: "read",
+                currentToolArgs: "secret argument",
+                currentToolStartMs: 1_700_000_000_100,
+                toolCount: 2,
+                requests: 3,
+                tokens: 42,
+                contextTokens: 100,
+                contextWindow: 1_000,
+                cost: 0.01,
+                durationMs: 500,
+                modelRole: "task",
+                resolvedModelIdentity: "openai/gpt",
+                recentOutput: ["secret output"],
+                retryState: {
+                  attempt: 2,
+                  maxAttempts: 4,
+                  delayMs: 1_000,
+                  startedAtMs: 1_700_000_000_200,
+                  errorMessage: "secret provider error",
+                },
+              },
+            ],
+          },
+        },
+      },
+      {
+        running: [
+          {
+            id: "agent-a",
+            type: "task",
+            status: "running",
+            label: "source survey",
+            startTime: 1_700_000_000_000,
+            agentId: "agent-a",
+          },
+        ],
+        recent: [
+          {
+            id: "bg_2",
+            type: "bash",
+            status: "completed",
+            label: "bounded command",
+            startTime: 1_699_999_999_000,
+            endTime: 1_700_000_000_500,
+          },
+          {
+            id: "bg_3",
+            type: "task",
+            status: "failed",
+            label: "failed task",
+            startTime: 1_699_999_998_000,
+            endTime: 1_700_000_000_600,
+            agentId: "agent-failed",
+          },
+          {
+            id: "bg_4",
+            type: "task",
+            status: "cancelled",
+            label: "cancelled task",
+            startTime: 1_699_999_997_000,
+            endTime: 1_700_000_000_700,
+            agentId: "agent-cancelled",
+          },
+        ],
+      },
+      1_700_000_001_000,
+    );
+
+    expect(evidence).toMatchObject({
+      async_jobs: [
+        {
+          id: "agent-a",
+          type: "task",
+          status: "running",
+          agent_id: "agent-a",
+          start_time: 1_700_000_000_000,
+          source: "async_job_manager",
+        },
+        {
+          id: "bg_2",
+          type: "bash",
+          status: "completed",
+          end_time: 1_700_000_000_500,
+        },
+        { id: "bg_3", status: "failed" },
+        { id: "bg_4", status: "cancelled" },
+      ],
+      task_progress: [
+        {
+          job_id: "agent-a",
+          agent_id: "agent-a",
+          status: "pending",
+          current_tool: "read",
+          tool_count: 2,
+          requests: 3,
+          tokens: 42,
+          retry_state: {
+            attempt: 2,
+            max_attempts: 4,
+            delay_ms: 1_000,
+            started_at_ms: 1_700_000_000_200,
+          },
+        },
+      ],
+      async_observed_at: "2023-11-14T22:13:21.000Z",
+      async_running_complete: true,
+      async_jobs_source: "omp.async_job_manager",
+    });
+    const rows = evidence.async_jobs as Array<Record<string, unknown>>;
+    expect(rows[0]).not.toHaveProperty("owner_id");
+    const serialized = JSON.stringify(evidence);
+    expect(serialized).not.toContain("secret task text");
+    expect(serialized).not.toContain("secret argument");
+    expect(serialized).not.toContain("secret output");
+    expect(serialized).not.toContain("secret provider error");
+  });
+
+  it("does not promote parentSession or an ambiguous native id into a job", () => {
+    expect(
+      compactAsyncJobEvidence(
+        {
+          parentSession: "native-parent",
+          id: "bg_1",
+          type: "session",
+        },
+        undefined,
+        1_700_000_001_000,
+      ),
+    ).toEqual({});
+  });
+
+
+  it("marks tool details as partial rather than a complete registry snapshot", () => {
+    expect(
+      compactAsyncJobEvidence(
+        {
+          result: {
+            details: {
+              async: { state: "completed", jobId: "bg_1", type: "bash" },
+            },
+          },
+        },
+        undefined,
+        1_700_000_001_000,
+      ),
+    ).toEqual({
+      async_jobs: [
+        {
+          id: "bg_1",
+          type: "bash",
+          status: "completed",
+          source: "task_details",
+        },
+      ],
+      async_jobs_source: "omp.task_tool_details",
+      async_observed_at: "2023-11-14T22:13:21.000Z",
+    });
+  });
+
+  it("distinguishes an authoritative empty snapshot from no snapshot", () => {
+    expect(
+      compactAsyncJobEvidence(
+        { type: "agent_end" },
+        { running: [], recent: [] },
+        1_700_000_001_000,
+      ),
+    ).toEqual({
+      async_jobs: [],
+      async_running_complete: true,
+      async_jobs_source: "omp.async_job_manager",
+      async_observed_at: "2023-11-14T22:13:21.000Z",
+    });
+    expect(compactAsyncJobEvidence({ type: "agent_end" }, undefined)).toEqual(
+      {},
     );
   });
 });

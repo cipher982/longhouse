@@ -88,7 +88,8 @@ const RUNTIME_EVENT_SWEEP_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Debug, Clone, Deserialize)]
 struct PresenceOutboxPayload {
     session_id: String,
-    state: String,
+    #[serde(default)]
+    state: Option<String>,
     #[serde(default)]
     tool_name: Option<String>,
     #[serde(default)]
@@ -109,6 +110,8 @@ struct PresenceOutboxPayload {
     /// independent from latest activity so a newer phase cannot erase it.
     #[serde(default)]
     delegation: Option<Value>,
+    #[serde(default)]
+    delegation_update: Option<Value>,
     #[serde(default)]
     occurred_at: Option<String>,
     /// Provider adapters use this for local-health-only phase evidence. It is
@@ -320,6 +323,8 @@ fn collect_outbox_impl(
         PendingPresenceFile,
     > = HashMap::new();
     let mut delegation_paths = HashSet::new();
+    // Partial lifecycle edges are not replaceable snapshots. Keep every edge.
+    let mut delegation_updates: Vec<PendingPresenceFile> = Vec::new();
     // Local phase observations are durable evidence for the engine's own
     // health projection. Keep them separate: they must reach SQLite but never
     // become hosted presence traffic.
@@ -375,14 +380,17 @@ fn collect_outbox_impl(
             let _ = std::fs::remove_file(&path);
             continue;
         }
-        let state = payload.state.trim();
-        if state.is_empty() {
+        let state = payload.state.as_deref().unwrap_or_default().trim();
+        let managed_binding_required = is_managed_binding_payload(&payload);
+        let delegation_required = has_delegation_snapshot(&payload);
+        let update_required = payload
+            .delegation_update
+            .as_ref()
+            .is_some_and(Value::is_object);
+        if state.is_empty() && !delegation_required && !update_required {
             let _ = std::fs::remove_file(&path);
             continue;
         }
-
-        let managed_binding_required = is_managed_binding_payload(&payload);
-        let delegation_required = has_delegation_snapshot(&payload);
         // Presence is ephemeral, but a managed transcript binding and a
         // registry snapshot are durable identity/state evidence. Keep either
         // intent through daemon outages so the first healthy collector can
@@ -393,6 +401,7 @@ fn collect_outbox_impl(
                     if age > Duration::from_secs(STALE_SECS)
                         && !managed_binding_required
                         && !delegation_required
+                        && !update_required
                     {
                         let _ = std::fs::remove_file(&path);
                         continue;
@@ -413,6 +422,13 @@ fn collect_outbox_impl(
             observed_at,
         };
 
+        if update_required {
+            // A callback can carry a full snapshot and an exact completion
+            // edge together. Retain the whole source observation: coalescing
+            // the snapshot must never discard that nonreplaceable edge.
+            delegation_updates.push(next_file);
+            continue;
+        }
         if delegation_required {
             delegation_paths.insert(path.clone());
             let delegation_key = (
@@ -428,6 +444,16 @@ fn collect_outbox_impl(
             if replace {
                 delegation_by_session_run.insert(delegation_key, next_file.clone());
             }
+        }
+        if next_file
+            .payload
+            .state
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            continue;
         }
 
         if next_file.payload.local_only {
@@ -469,20 +495,24 @@ fn collect_outbox_impl(
     }
 
     let mut result = OutboxLocalDrainResult::default();
-    let local_phase_conn =
-        if persist_local_state && (!by_session.is_empty() || !local_phase_by_session.is_empty()) {
-            match crate::state::db::resolve_db_path(db_path)
-                .and_then(|path| crate::state::db::open_connection(&path))
-            {
-                Ok(conn) => Some(conn),
-                Err(err) => {
-                    warn!("opening local session phase DB failed: {err}");
-                    None
-                }
+    let local_phase_conn = if persist_local_state
+        && (!by_session.is_empty()
+            || !local_phase_by_session.is_empty()
+            || !delegation_by_session_run.is_empty()
+            || !delegation_updates.is_empty())
+    {
+        match crate::state::db::resolve_db_path(db_path)
+            .and_then(|path| crate::state::db::open_connection(&path))
+        {
+            Ok(conn) => Some(conn),
+            Err(err) => {
+                warn!("opening local session phase DB failed: {err}");
+                None
             }
-        } else {
-            None
-        };
+        }
+    } else {
+        None
+    };
 
     let mut persisted_binding_paths = HashSet::new();
     if let Some(conn) = local_phase_conn.as_ref() {
@@ -508,7 +538,12 @@ fn collect_outbox_impl(
             let signal = SessionPhaseSignal {
                 session_id: payload.session_id.trim().to_string(),
                 provider: provider.to_string(),
-                phase: payload.state.trim().to_string(),
+                phase: payload
+                    .state
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
                 tool_name: payload.tool_name.clone(),
                 source: source.to_string(),
                 observed_at: pending.observed_at,
@@ -540,6 +575,11 @@ fn collect_outbox_impl(
             .values()
             .map(|pending| pending.path.clone()),
     );
+    selected_paths.extend(
+        delegation_updates
+            .iter()
+            .map(|pending| pending.path.clone()),
+    );
     for path in persisted_binding_paths.difference(&selected_paths) {
         let _ = std::fs::remove_file(path);
     }
@@ -564,6 +604,8 @@ fn collect_outbox_impl(
             selected_presence.push(pending);
         }
     }
+    selected_presence.extend(delegation_updates);
+    selected_presence.sort_by_key(|pending| pending.observed_at);
     for pending in selected_presence {
         let PendingPresenceFile {
             path,
@@ -573,7 +615,12 @@ fn collect_outbox_impl(
         } = pending;
         let provider = normalize_provider(payload.provider.as_deref()).to_string();
         let session_id = payload.session_id.trim().to_string();
-        let phase = payload.state.trim().to_string();
+        let phase = payload
+            .state
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         let transcript_path = normalize_transcript_path(payload.transcript_path.as_deref());
 
         let managed_binding_required = is_managed_binding_payload(&payload);
@@ -586,16 +633,18 @@ fn collect_outbox_impl(
             continue;
         }
 
-        result.signals.push(DrainedPresenceSignal {
-            session_id: session_id.clone(),
-            provider: provider.clone(),
-            phase: phase.clone(),
-            observed_at: observed_at.clone(),
-            transcript_path,
-        });
+        if !phase.is_empty() {
+            result.signals.push(DrainedPresenceSignal {
+                session_id: session_id.clone(),
+                provider: provider.clone(),
+                phase: phase.clone(),
+                observed_at: observed_at.clone(),
+                transcript_path,
+            });
+        }
         result.posts.push(PendingPresencePost { path, bytes });
 
-        if let Some(conn) = local_phase_conn.as_ref() {
+        if let Some(conn) = local_phase_conn.as_ref().filter(|_| !phase.is_empty()) {
             let signal = SessionPhaseSignal {
                 session_id: session_id.clone(),
                 provider: provider.clone(),
@@ -1905,6 +1954,50 @@ mod tests {
         );
         assert!(snapshot_path.exists());
         assert!(activity_path.exists());
+    }
+
+    #[test]
+    fn exact_completion_edge_survives_a_newer_registry_snapshot() {
+        let dir = make_outbox();
+        let completion = write_presence_payload(
+            dir.path(),
+            "prs.child-stop.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:00Z",
+                "delegation": {
+                    "observed_at": "2026-09-30T15:00:00Z",
+                    "items": [{"id": "child", "kind": "subagent", "status": "running"}]
+                },
+                "delegation_update": {
+                    "operation": "remove", "membership": "existing_exact_link_only",
+                    "source_event": "SubagentStop", "source_agent_id": "child",
+                    "observed_at": "2026-09-30T15:00:00Z",
+                    "item": {"id": "child", "kind": "subagent", "status": "completed"}
+                }
+            }),
+        );
+        let newer = write_presence_payload(
+            dir.path(),
+            "prs.later-registry.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:10Z",
+                "delegation": {"items": [], "observed_at": "2026-09-30T15:00:10Z"}
+            }),
+        );
+        let drained = collect_outbox_impl(dir.path(), None, false);
+        assert_eq!(
+            drained.posts.len(),
+            2,
+            "snapshot replacement must not erase an exact lifecycle transition"
+        );
+        assert_eq!(drained.posts[0].path, completion);
+        assert_eq!(drained.posts[1].path, newer);
+        assert!(
+            drained.signals.is_empty(),
+            "child lifecycle evidence must not become parent activity"
+        );
     }
 
     #[test]

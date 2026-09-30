@@ -1,0 +1,124 @@
+{
+  "provider": "opencode",
+  "version": "1.17.20",
+  "capture": "sanitized-native-parent-child",
+  "parent": {
+    "session": {
+      "id": "ses_parent_native",
+      "parent_id": null,
+      "time_created": 1790762400000,
+      "time_updated": 1790762405000
+    },
+    "messages": [
+      {"id": "msg_task", "session_id": "ses_parent_native", "time_created": 1790762400100, "time_updated": 1790762400500, "data": {"role": "assistant"}}
+    ],
+    "parts": [
+      {
+        "id": "prt_task_running",
+        "session_id": "ses_parent_native",
+        "time_created": 1790762400101,
+        "time_updated": 1790762401100,
+        "data": {
+          "type": "tool",
+          "tool": "task",
+          "callID": "call_task_native",
+          "state": {
+            "status": "running",
+            "metadata": {
+              "parentSessionId": "ses_parent_native",
+              "sessionId": "ses_child_native",
+              "background": true,
+              "jobId": "bg_7"
+            },
+            "time": {"start": 1790762400101},
+            "progress": {"completed": 1, "total": 3}
+          }
+        }
+      },
+      {
+        "id": "prt_task_failed",
+        "session_id": "ses_parent_native",
+        "time_created": 1790762400101,
+        "time_updated": 1790762403200,
+        "data": {
+          "type": "tool",
+          "tool": "task",
+          "callID": "call_task_native",
+          "state": {
+            "status": "failed",
+            "metadata": {
+              "parentSessionId": "ses_parent_native",
+              "sessionId": "ses_child_native",
+              "background": true,
+              "jobId": "bg_7"
+            },
+            "time": {"start": 1790762400101, "end": 1790762403200},
+            "progress": {"completed": 2, "total": 3},
+            "error": {"code": "native_child_failed"}
+          }
+        }
+      },
+      {
+        "id": "prt_task_completed",
+        "session_id": "ses_parent_native",
+        "time_created": 1790762400101,
+        "time_updated": 1790762404300,
+        "data": {
+          "type": "tool",
+          "tool": "task",
+          "callID": "call_task_native",
+          "state": {
+            "status": "completed",
+            "metadata": {
+              "parentSessionId": "ses_parent_native",
+              "sessionId": "ses_child_native",
+              "background": true,
+              "jobId": "bg_7"
+            },
+            "output": "<task id=\"ses_child_native\" state=\"completed\">done</task>",
+            "time": {"start": 1790762400101, "end": 1790762404300},
+            "progress": {"completed": 3, "total": 3}
+          }
+        }
+      }
+    ]
+  },
+  "child": {
+    "session": {
+      "id": "ses_child_native",
+      "parent_id": "ses_parent_native",
+      "time_created": 1790762400500,
+      "time_updated": 1790762403500
+    },
+    "messages": [
+      {"id": "msg_child_tool", "session_id": "ses_child_native", "time_created": 1790762400600, "time_updated": 1790762401700, "data": {"role": "assistant"}},
+      {"id": "msg_child_reply", "session_id": "ses_child_native", "time_created": 1790762401800, "time_updated": 1790762403500, "data": {"role": "assistant"}}
+    ],
+    "parts": [
+      {"id": "prt_child_tool", "session_id": "ses_child_native", "time_created": 1790762400601, "time_updated": 1790762401700, "data": {"type": "tool", "tool": "bash", "callID": "call_child_tool", "state": {"status": "completed", "time": {"start": 1790762400601, "end": 1790762401700}}}},
+      {"id": "prt_child_reply", "session_id": "ses_child_native", "time_created": 1790762401800, "time_updated": 1790762403500, "data": {"type": "text", "text": "child progress only"}}
+    ]
+  },
+  "late_arrival": {
+    "parent_record_before_child_session": true,
+    "child_provider_session_id": "ses_child_native",
+    "parent_provider_session_id": "ses_parent_native"
+  },
+  "no_link_negative": {
+    "part": {
+      "id": "prt_unlinked_job",
+      "data": {
+        "type": "tool",
+        "tool": "task",
+        "callID": "call_unlinked_job",
+        "state": {
+          "status": "running",
+          "metadata": {"parentSessionId": "ses_parent_native", "background": true, "jobId": "bg_7"},
+          "time": {"start": 1790762405001}
+        }
+      }
+    },
+    "expected_child_provider_session_id": null,
+    "expected_delegation_activity": false
+  }
+}

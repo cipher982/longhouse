@@ -655,7 +655,16 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                         startedAt: Self.fixedTimestamp(offset: -16),
                         lastActivityAt: Self.fixedTimestamp(offset: -2),
                         sessionId: "019fc50b-1111-4111-8111-111111111111",
-                        userMessages: 1, assistantMessages: 4, toolCalls: 12
+                        userMessages: 1, assistantMessages: 4, toolCalls: 12,
+                        registeredAt: Self.fixedTimestamp(offset: -20),
+                        nativeProgress: SessionDelegationProgress(
+                            observedAt: Self.fixedTimestamp(offset: -3),
+                            status: "running",
+                            currentTool: "Read",
+                            lastIntent: "Inspect reconnect evidence",
+                            toolCount: 14, requests: 6, tokens: 4200,
+                            contextTokens: nil, contextWindow: nil, durationMs: 8000
+                        )
                     ),
                     SessionDelegationTask(
                         id: "shell-1",

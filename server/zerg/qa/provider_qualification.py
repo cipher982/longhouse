@@ -22,6 +22,7 @@ from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import conversation_reset_qualification
 from zerg.qa import cursor_release_identity
+from zerg.qa import omp_background_producer
 from zerg.qa import omp_console_producer
 from zerg.qa import omp_helm_lifecycle
 from zerg.qa import opencode_release_identity
@@ -49,6 +50,7 @@ _PROFILES = {
     ("pi", pi_qualification.PROFILE): pi_qualification.run,
     ("pi", pi_console_tool_producer.PROFILE): pi_console_tool_producer.run,
     ("pi", pi_helm_lifecycle.PROFILE): pi_helm_lifecycle.run,
+    ("omp", omp_background_producer.PROFILE): omp_background_producer.run,
     ("omp", omp_console_producer.PROFILE): omp_console_producer.run,
     ("omp", omp_helm_lifecycle.PROFILE): omp_helm_lifecycle.run,
     **{
@@ -62,6 +64,13 @@ _IDENTITY_PROFILES = {
     ("pi", pi_qualification.PROFILE): pi_qualification._PROFILE,
     ("pi", pi_console_tool_producer.PROFILE): pi_console_tool_producer._PROFILE,
     ("pi", pi_helm_lifecycle.PROFILE): pi_helm_lifecycle._PROFILE,
+    ("omp", omp_background_producer.PROFILE): omp_background_producer.identity.IdentityProfile(
+        provider="omp",
+        profile=omp_background_producer.PROFILE,
+        scenario_id=omp_background_producer.SCENARIO_ID,
+        version_line=omp_background_producer.identity.semver_version_line(version_prefix=r"omp/"),
+        oracle_source=Path(omp_background_producer.__file__),
+    ),
     ("omp", omp_console_producer.PROFILE): omp_console_producer._PROFILE,
     ("omp", omp_helm_lifecycle.PROFILE): omp_helm_lifecycle._PROFILE,
 }

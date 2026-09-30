@@ -29,6 +29,9 @@ from uuid import uuid4
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.qa import qualification_request as qualification_request_contract
+from zerg.qa.background_fidelity import combine_real_replay_results
+from zerg.qa.background_fidelity import run_claude_lifecycle_hook_replay
+from zerg.qa.background_fidelity import run_engine_fact_replay
 from zerg.qa.provider_build_store import GENERATED_FAKE_PROVENANCE
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import verify_provider_builds
@@ -214,6 +217,7 @@ SCENARIOS = (
     "parse_ingest_project",
     "orchestration_capability_matrix",
     "delegation_projection",
+    "background_fidelity_replay",
     "session_projection",
     "timeline_projection",
     "tool_presentation_projection",
@@ -4665,7 +4669,67 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
     return payload
 
 
-def delegation_projection(package: EvidencePackage, provider: str) -> dict[str, Any]:
+def _delegation_snapshot_from_engine_facts(facts: object) -> dict[str, Any] | None:
+    """Accept only a provider-emitted complete registry, never child lineage.
+
+    ``delegation.spawn`` and ``delegation.activity`` are source-bound child
+    evidence. They do not establish aggregate membership or a pending count.
+    A registry enters this adapter only through an explicitly registry-shaped
+    engine fact.
+    """
+
+    if not isinstance(facts, list):
+        return None
+    for fact in facts:
+        if not isinstance(fact, Mapping) or str(fact.get("kind") or "") not in {
+            "delegation.registry",
+            "delegation.snapshot",
+        }:
+            continue
+        payload = fact.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        snapshot = payload.get("snapshot")
+        if isinstance(snapshot, Mapping):
+            payload = snapshot
+        if (
+            isinstance(payload.get("count"), int)
+            and not isinstance(payload.get("count"), bool)
+            and isinstance(payload.get("kinds"), Mapping)
+            and isinstance(payload.get("items"), list)
+        ):
+            return {
+                "count": int(payload["count"]),
+                "kinds": dict(payload["kinds"]),
+                "items": list(payload["items"]),
+            }
+    return None
+
+
+def _child_evidence_from_engine_facts(facts: object) -> list[dict[str, Any]]:
+    """Retain child facts separately without promoting them to membership."""
+
+    if not isinstance(facts, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for fact in facts:
+        if not isinstance(fact, Mapping):
+            continue
+        kind = str(fact.get("kind") or "")
+        if kind not in {"delegation.metadata", "delegation.spawn", "delegation.activity"}:
+            continue
+        payload = fact.get("payload")
+        if isinstance(payload, Mapping):
+            result.append({"kind": kind, "payload": dict(payload)})
+    return result
+
+
+def delegation_projection(
+    package: EvidencePackage,
+    provider: str,
+    *,
+    native_facts: object = None,
+) -> dict[str, Any]:
     """Prove the delegated-work chain hermetically, through the real code.
 
     An observation carrying an orchestration registry must become its own fact
@@ -4754,9 +4818,51 @@ def delegation_projection(package: EvidencePackage, provider: str) -> dict[str, 
                 ]
             )
 
-        registry = {"count": 2, "kinds": {"subagent": 1, "shell": 1}}
-        promoted = apply(occurred_at=now, payload={"delegation": registry}, key="delegation-with")
+        native_registry = _delegation_snapshot_from_engine_facts(native_facts)
+        registry = native_registry if native_facts is not None else {"count": 2, "kinds": {"subagent": 1, "shell": 1}}
+        promoted = apply(
+            occurred_at=now,
+            payload={"delegation": registry} if registry is not None else {},
+            key="delegation-with",
+        )
         silent = apply(occurred_at=now, payload={}, key="delegation-without")
+        child_rows: tuple[dict[str, Any], ...] = ()
+        served_child_facts: list[dict[str, Any]] = []
+        if native_facts is not None and native_registry is None and isinstance(native_facts, list):
+            parsed_rows = []
+            for index, fact in enumerate(native_facts):
+                if not isinstance(fact, Mapping) or str(fact.get("kind") or "") not in {
+                    "delegation.metadata",
+                    "delegation.spawn",
+                    "delegation.activity",
+                }:
+                    continue
+                payload = fact.get("payload")
+                at = fact.get("at")
+                if not isinstance(payload, Mapping) or not isinstance(at, str):
+                    continue
+                try:
+                    occurred_at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                parsed_rows.append(
+                    {
+                        "kind": str(fact["kind"]),
+                        "at": occurred_at,
+                        "source_position": int(fact.get("source_offset") or index),
+                        "payload": dict(payload),
+                    }
+                )
+            child_rows = tuple(parsed_rows)
+            if child_rows:
+                store.insert_session_provider_facts(
+                    session_id=str(session_id),
+                    source_epoch=str(run_id),
+                    provider_facts=child_rows,
+                )
+                served_child_facts = store.list_session_provider_facts(session_id=str(session_id)).get("facts", [])
+        expected_count = int(registry.get("count", 0)) if registry is not None else 0
+        expected_kinds = dict(registry.get("kinds", {})) if registry is not None else {}
 
         with engine.connect() as connection:
             _commit_seq, heads = read_session_fact_heads(connection, session_id=str(session_id))
@@ -4793,21 +4899,32 @@ def delegation_projection(package: EvidencePackage, provider: str) -> dict[str, 
         expired = served(delegation_heads, at=now + timedelta(seconds=31 * 60))
 
         assertions = {
-            # The registry is its own fact, bound to the run that observed it,
-            # and a later observation that carries no registry neither adds nor
-            # replaces one.
-            "registry_promoted_as_its_own_fact": int(promoted["delegation_facts"]["promoted"]) == 1 and len(delegation_heads) == 1,
-            "silent_observation_never_invents_a_registry": int(silent["delegation_facts"]["promoted"]) == 0 and len(delegation_heads) == 1,
-            # Served: pending work speaks for an idle session, with the count and
-            # kinds it observed and its own sentence.
-            "served_as_pending_for_an_idle_session": live.delegation.state == "pending"
-            and live.delegation.count == 2
-            and live.delegation.kinds == {"subagent": 1, "shell": 1}
-            and live.presentation.primary is not None
-            and live.presentation.primary.key == "delegated_work"
-            and live.working_set == "open",
-            # An observation that aged out is the absence of a claim, never a
-            # claim that nothing is running.
+            "registry_promoted_as_its_own_fact": (
+                int(promoted["delegation_facts"]["promoted"]) == (1 if registry is not None else 0)
+                and len(delegation_heads) == (1 if registry is not None else 0)
+            ),
+            "silent_observation_never_invents_a_registry": (
+                int(silent["delegation_facts"]["promoted"]) == 0 and len(delegation_heads) == (1 if registry is not None else 0)
+            ),
+            "child_evidence_served_without_membership": (
+                registry is not None or (bool(child_rows) and len(served_child_facts) >= len(child_rows))
+            ),
+            "served_as_pending_for_an_idle_session": (
+                (
+                    (
+                        live.delegation.state == "pending"
+                        and live.delegation.count == expected_count
+                        and live.delegation.kinds == expected_kinds
+                        and live.presentation.primary is not None
+                        and live.presentation.primary.key == "delegated_work"
+                        and live.working_set == "open"
+                    )
+                    if expected_count > 0
+                    else live.delegation.state in {"none", "idle"} and live.working_set != "open"
+                )
+                if registry is not None
+                else live.delegation.state != "pending" and live.working_set != "open"
+            ),
             "expired_evidence_reads_unknown_never_none": expired.delegation.state == "unknown" and expired.working_set != "open",
         }
 
@@ -4815,6 +4932,7 @@ def delegation_projection(package: EvidencePackage, provider: str) -> dict[str, 
             "longhouse/delegation-projection.json",
             {
                 "provider": provider,
+                "native_registry": registry,
                 "promoted": promoted["delegation_facts"],
                 "silent": silent["delegation_facts"],
                 "delegation_heads": len(delegation_heads),
@@ -4851,6 +4969,96 @@ def run_delegation_projection(adapter: AgentHarnessAdapter, package: EvidencePac
     return scenario_result(
         provider=adapter.config.provider,
         scenario="delegation_projection",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_background_fidelity_replay(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+    fixture_path: Path | None,
+) -> ScenarioResult:
+    """Replay one retained native capture through the existing proof seam.
+
+    The universal harness owns package/result wrapping; the provider-specific
+    producer owns capture shape and live execution. Missing or malformed input
+    is an explicit blocked/fail result, never a synthetic green replay.
+    """
+
+    adapter.prepare(package)
+    payload: dict[str, Any]
+    try:
+        if fixture_path is None:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "background_fidelity_replay",
+                "failure_code": "background_capture_missing",
+                "message": "A retained native background capture is required for replay.",
+            }
+        else:
+            try:
+                loaded = json.loads(fixture_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                # Native captures are often JSONL. The engine is the parser
+                # authority; do not parse those lines into a copied proof here.
+                loaded = {"source_capture": {"path": str(fixture_path)}}
+            if not isinstance(loaded, Mapping):
+                payload = {
+                    "status": STATUS_BLOCKED,
+                    "scenario": "background_fidelity_replay",
+                    "failure_code": "background_capture_invalid_shape",
+                    "message": "Background capture must be a JSON object or JSONL source.",
+                }
+            else:
+                capture = dict(loaded)
+                source_value = capture.get("source_capture")
+                source = dict(source_value) if isinstance(source_value, Mapping) else {}
+                source.setdefault("path", str(fixture_path))
+                capture["source_capture"] = source
+                if capture.get("entrypoint") == "claude_lifecycle_hook":
+                    hook_result = run_claude_lifecycle_hook_replay(package, capture=capture)
+                    emitted = hook_result.get("outbox_events")
+                    registry_events = (
+                        [
+                            event.get("delegation")
+                            for event in emitted
+                            if isinstance(event, Mapping) and isinstance(event.get("delegation"), Mapping)
+                        ]
+                        if isinstance(emitted, list)
+                        else []
+                    )
+                    native_facts = [{"kind": "delegation.snapshot", "payload": registry_events[-1]}] if registry_events else []
+                    parser_result = dict(hook_result)
+                    parser_result["assertions"] = {
+                        "engine_facts_produced": hook_result.get("assertions", {}).get("hook_outbox_produced") is True,
+                    }
+                else:
+                    parser_result = run_engine_fact_replay(package, capture=capture)
+                    native_facts = parser_result.get("facts")
+                native_registry = _delegation_snapshot_from_engine_facts(native_facts)
+                child_evidence = _child_evidence_from_engine_facts(native_facts)
+                catalog_result = delegation_projection(
+                    package,
+                    adapter.config.provider,
+                    native_facts=native_facts if isinstance(native_facts, list) else [],
+                )
+                if native_registry is None and not child_evidence:
+                    catalog_result["status"] = STATUS_BLOCKED
+                    catalog_result["failure_code"] = "background_registry_missing"
+                    catalog_result["child_evidence"] = child_evidence
+                payload = combine_real_replay_results(
+                    parser_result=parser_result,
+                    catalog_result=catalog_result,
+                )
+                payload["fixture_path"] = str(fixture_path)
+                payload["source_kind"] = "retained_source_replay"
+        package.write_json("assertions/background-fidelity-replay.json", payload)
+    finally:
+        adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="background_fidelity_replay",
         package=package,
         payload=payload,
     )
@@ -5788,6 +5996,7 @@ SCENARIO_RUNNERS = {
     "parse_ingest_project": run_parse_ingest_project,
     "orchestration_capability_matrix": run_orchestration_capability_matrix,
     "delegation_projection": run_delegation_projection,
+    "background_fidelity_replay": run_background_fidelity_replay,
     "tool_presentation_projection": run_tool_presentation_projection,
     "run_prompt_once": run_prompt_once,
     "send_receive": run_send_receive,
@@ -5827,7 +6036,7 @@ def run_scenario(
         # make an explicitly supplied prompt the only alternate input.
         package.write_text("input/prompt.txt", prompt or DEFAULT_HARNESS_PROMPT)
     runner = SCENARIO_RUNNERS[scenario]
-    if scenario == "parse_ingest_project":
+    if scenario in {"parse_ingest_project", "background_fidelity_replay"}:
         result = runner(adapter, package, fixture_path)  # type: ignore[misc]
     elif scenario == "run_prompt_once":
         result = runner(adapter, package, prompt)  # type: ignore[misc]

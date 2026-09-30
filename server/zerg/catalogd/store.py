@@ -49,6 +49,7 @@ from sqlalchemy.orm import Session
 from zerg.catalogd.fact_reducer import MAX_DELEGATION_VALUE_JSON_BYTES
 from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
+from zerg.catalogd.fact_reducer import MAX_VALUE_JSON_BYTES
 from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import ReducerResult
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
@@ -7164,7 +7165,7 @@ class CatalogStore:
                 _head_commit_seq, grouped_heads, truncated_sessions = read_bounded_sessions_fact_heads(
                     connection,
                     session_ids=session_ids,
-                    families=("activity", "control", "continuation", "delegation"),
+                    families=("activity", "control", "continuation", "delegation", "delegation_lifecycle"),
                     limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
                 )
                 heads_by_session = {session_id: (heads, session_id in truncated_sessions) for session_id, heads in grouped_heads.items()}
@@ -7278,7 +7279,7 @@ class CatalogStore:
             commit_seq, heads, heads_truncated = read_bounded_session_fact_heads(
                 connection,
                 session_id=session_id,
-                families=("activity", "control", "continuation", "delegation"),
+                families=("activity", "control", "continuation", "delegation", "delegation_lifecycle"),
                 limit=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
             _attach_delegation_children(connection, facts=session_facts, heads_by_session={session_id: heads})
@@ -7340,7 +7341,7 @@ class CatalogStore:
             commit_seq, heads_by_session, truncated = read_bounded_sessions_fact_heads(
                 connection,
                 session_ids=owned_ids,
-                families=("activity", "control", "continuation", "delegation"),
+                families=("activity", "control", "continuation", "delegation", "delegation_lifecycle"),
                 limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
             _attach_delegation_children(connection, facts=facts, heads_by_session=heads_by_session)
@@ -16676,21 +16677,31 @@ _DELEGATION_COUNT_LIMIT = 256
 def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], heads_by_session: Mapping[str, Any]) -> None:
     """Join named tasks to source-authored child lineage within this read snapshot."""
     requested: dict[str, set[str]] = {}
+    native_requested: dict[tuple[str, str], str] = {}
     by_session = {str(fact["catalog"]["session_id"]): fact for fact in facts}
     for session_id, fact in by_session.items():
         run_id = (fact.get("latest_run") or {}).get("id")
         if not run_id or (fact.get("latest_run") or {}).get("ended_at") is not None:
             continue
         for head in heads_by_session.get(session_id, []):
-            if head["family"] != "delegation":
+            if head["family"] not in {"delegation", "delegation_lifecycle"}:
                 continue
             value = json.loads(head["value_json"])
             if value.get("run_id") != str(run_id):
                 continue
-            for item in value.get("items", []) or []:
+            items = value.get("items") if head["family"] == "delegation" else [value.get("item")]
+            for item in items or []:
+                if not isinstance(item, Mapping):
+                    continue
                 tool_id = item.get("parent_tool_call_id")
                 if item.get("kind") == "subagent" and isinstance(tool_id, str) and tool_id:
                     requested.setdefault(session_id, set()).add(tool_id)
+                native_id = item.get("native_child_id")
+                native_path = item.get("native_child_source_path")
+                if item.get("kind") == "subagent" and isinstance(native_id, str) and native_id and isinstance(native_path, str):
+                    for opaque_id in _opaque_source_ids_for_path(native_path):
+                        native_requested[(session_id, opaque_id)] = f"native:{native_id}"
+    _attach_native_delegation_children(connection, by_session=by_session, requested=native_requested)
     if not requested:
         return
     child = StorageSession.__table__
@@ -16740,6 +16751,68 @@ def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], head
         }
 
 
+def _attach_native_delegation_children(connection, *, by_session: Mapping[str, Any], requested: Mapping[tuple[str, str], str]) -> None:
+    """Resolve exact OMP task artifacts, never reusable job handles."""
+    if not requested:
+        return
+    child = StorageSession.__table__
+    parent = child.alias("native_delegation_parent")
+    raw = LiveRawObject.__table__
+    rendered = (child.c.render_state == "ready") & child.c.current_render_generation.is_not(None)
+    rows = connection.execute(
+        select(
+            child.c.subagent_parent_session_id,
+            raw.c.opaque_source_id,
+            child.c.session_id,
+            child.c.started_at,
+            child.c.last_activity_at,
+            case((rendered, child.c.user_messages), else_=None).label("user_messages"),
+            case((rendered, child.c.assistant_messages), else_=None).label("assistant_messages"),
+            case((rendered, child.c.tool_calls), else_=None).label("tool_calls"),
+        )
+        .select_from(
+            child.join(parent, parent.c.session_id == child.c.subagent_parent_session_id).join(raw, raw.c.session_id == child.c.session_id)
+        )
+        .where(
+            child.c.subagent_parent_session_id.in_({key[0] for key in requested}),
+            raw.c.opaque_source_id.in_({key[1] for key in requested}),
+            child.c.owner_id == parent.c.owner_id,
+            child.c.provider == parent.c.provider,
+            child.c.provider == "omp",
+            raw.c.provider == "omp",
+            child.c.machine_id == parent.c.machine_id,
+            child.c.is_subagent == 1,
+            child.c.raw_state != "retired",
+            child.c.render_state != "retired",
+        )
+        .distinct()
+    ).mappings()
+    ambiguous: set[tuple[str, str]] = set()
+    for row in rows:
+        session_id = str(row["subagent_parent_session_id"])
+        key = requested.get((session_id, str(row["opaque_source_id"])))
+        if key is None:
+            continue
+        children = by_session[session_id].setdefault("delegation_children", {})
+        coordinate = (session_id, key)
+        if coordinate in ambiguous:
+            continue
+        existing = children.get(key)
+        if existing is not None:
+            if existing["session_id"] != str(row["session_id"]):
+                children.pop(key)
+                ambiguous.add(coordinate)
+            continue
+        children[key] = {
+            "session_id": str(row["session_id"]),
+            "started_at": _encode_datetime(row["started_at"]),
+            "last_activity_at": _encode_datetime(row["last_activity_at"]),
+            "user_messages": int(row["user_messages"]) if row["user_messages"] is not None else None,
+            "assistant_messages": int(row["assistant_messages"]) if row["assistant_messages"] is not None else None,
+            "tool_calls": int(row["tool_calls"]) if row["tool_calls"] is not None else None,
+        }
+
+
 def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerFact]:
     """Reduce registry observations independently of the parent's activity clock."""
     run_table = LiveSessionRun.__table__
@@ -16747,12 +16820,18 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
     head_table = FactHead.__table__
     facts: list[ReducerFact] = []
     prior_by_run: dict[tuple[str, str], dict[str, Any]] = {}
-    for event in sorted(events, key=lambda item: item.occurred_at):
-        if event.kind != "phase_signal" or event.session_id is None or event.run_id is None:
+    # One source observation may report a registry and an exact child edge.
+    # Reduce both independently, with the edge following its own snapshot.
+    for event, lane in (
+        (event, lane)
+        for event in sorted(events, key=lambda item: item.occurred_at)
+        for lane in ("delegation", "delegation_update")
+        if isinstance((event.payload or {}).get(lane), Mapping)
+    ):
+        if event.kind not in {"phase_signal", "delegation_signal"} or event.session_id is None or event.run_id is None:
             continue
-        snapshot = (event.payload or {}).get("delegation")
-        if not isinstance(snapshot, Mapping):
-            continue
+        snapshot = (event.payload or {}).get("delegation") if lane == "delegation" else None
+        update = (event.payload or {}).get("delegation_update") if lane == "delegation_update" else None
         session_id, run_id = str(event.session_id), str(event.run_id)
         bound = connection.execute(
             select(run_table.c.id)
@@ -16761,7 +16840,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
         ).scalar_one_or_none()
         if bound is None:
             continue
-        raw_observed = snapshot.get("observed_at")
+        raw_observed = (snapshot if isinstance(snapshot, Mapping) else update).get("observed_at")
         try:
             occurred_at = _as_aware_utc(
                 datetime.fromisoformat(raw_observed.replace("Z", "+00:00"))
@@ -16787,6 +16866,54 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             ).scalar_one_or_none()
             prior_by_run[coordinate] = json.loads(previous) if previous else {}
         prior = prior_by_run[coordinate]
+        if not isinstance(snapshot, Mapping):
+            if str(event.provider) != "claude":
+                continue
+            raw_item = update.get("item")
+            operation = update.get("operation")
+            if (
+                update.get("membership") != "existing_exact_link_only"
+                or operation not in {"observe", "remove"}
+                or update.get("source_event") != ("SubagentStart" if operation == "observe" else "SubagentStop")
+                or not isinstance(raw_item, Mapping)
+                or not isinstance(raw_item.get("id"), str)
+                or not 0 < len(raw_item["id"]) <= 256
+                or not isinstance(raw_item.get("status"), str)
+                or not 0 < len(raw_item["status"]) <= 32
+                or raw_item.get("kind") != "subagent"
+                or raw_item.get("id") != update.get("source_agent_id")
+            ):
+                continue
+            value = {
+                "authority_class": "provider_runtime",
+                "provider": str(event.provider),
+                "session_id": session_id,
+                "run_id": run_id,
+                "source": raw_source,
+                "observed_at": occurred_at.isoformat(),
+                "operation": operation,
+                "item": dict(raw_item),
+                "source_event": update["source_event"],
+            }
+            if len(canonical_value_json(value).encode()) > MAX_VALUE_JSON_BYTES:
+                continue
+            dedupe_key = hashlib.sha256(f"runtime-delegation-edge:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()
+            facts.append(
+                ReducerFact(
+                    family="delegation_lifecycle",
+                    subject_key=f"run:{run_id}:agent:{raw_item['id']}",
+                    source=raw_source,
+                    source_epoch=run_id,
+                    source_seq=None,
+                    dedupe_key=dedupe_key,
+                    evidence_hash=canonical_evidence_hash(value),
+                    value=value,
+                    observed_at=occurred_at,
+                    session_id=session_id,
+                    raw_locator=f"runtime:{raw_source}:{event.dedupe_key}"[:1024],
+                )
+            )
+            continue
         previous_items = {(item.get("kind"), item.get("id")): item for item in prior.get("items", []) or [] if isinstance(item, dict)}
         kinds: dict[str, int] = {}
         items: list[dict[str, Any]] | None = None
@@ -16821,6 +16948,9 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                     continue
                 seen.add(task_id)
                 previous_item = previous_items.get((kind, task_id), {})
+                registered_at = raw.get("registered_at")
+                if registered_at != previous_item.get("registered_at") and registered_at is not None:
+                    previous_item = {}
                 item = {
                     "id": task_id,
                     "kind": kind,
@@ -16831,6 +16961,19 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 tool_call_id = raw.get("parent_tool_call_id")
                 if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
                     item["parent_tool_call_id"] = tool_call_id
+                native_child_id = raw.get("native_child_id")
+                if isinstance(native_child_id, str) and 0 < len(native_child_id) <= 256:
+                    item["native_child_id"] = native_child_id
+                native_child_source_path = raw.get("native_child_source_path")
+                if isinstance(native_child_source_path, str) and 0 < len(native_child_source_path) <= 2048:
+                    item["native_child_source_path"] = native_child_source_path
+                if isinstance(registered_at, str):
+                    item["registered_at"] = registered_at
+                progress = raw.get("native_progress")
+                if isinstance(progress, Mapping):
+                    item["native_progress"] = dict(progress)
+                elif previous_item.get("native_progress") is not None:
+                    item["native_progress"] = previous_item["native_progress"]
                 items.append(item)
                 kinds[kind] = kinds.get(kind, 0) + 1
             if invalid:

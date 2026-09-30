@@ -33,6 +33,19 @@ export interface SessionBackgroundTask {
   sessionId: string | null;
   latestActivityAt: string | null;
   toolCalls: number | null;
+  registeredAt: string | null;
+  nativeProgress: {
+    observed_at?: string | null;
+    status?: string | null;
+    current_tool?: string | null;
+    last_intent?: string | null;
+    tool_count?: number | null;
+    requests?: number | null;
+    tokens?: number | null;
+    context_tokens?: number | null;
+    context_window?: number | null;
+    duration_ms?: number | null;
+  } | null;
 }
 
 export interface SessionBackgroundInspector {
@@ -490,6 +503,22 @@ export function SessionLedger({
                             archive tools {task.toolCalls == null ? "—" : task.toolCalls}
                           </span>
                         </div>
+                        {task.registeredAt ? (
+                          <div className="session-ledger__background-task-meta">
+                            <span>registered {observedAgeLabel(task.registeredAt, inspectorNowMs)}</span>
+                          </div>
+                        ) : null}
+                        {task.nativeProgress ? (
+                          <div className="session-ledger__background-task-meta">
+                            <span>provider progress · {observedAgeLabel(task.nativeProgress.observed_at ?? null, inspectorNowMs)}</span>
+                            {task.nativeProgress.current_tool ? <span>{task.nativeProgress.current_tool}</span> : null}
+                            {task.nativeProgress.last_intent ? <span>{task.nativeProgress.last_intent}</span> : null}
+                            {task.nativeProgress.tool_count != null ? <span>{task.nativeProgress.tool_count} tools</span> : null}
+                            {task.nativeProgress.requests != null ? <span>{task.nativeProgress.requests} requests</span> : null}
+                            {task.nativeProgress.tokens != null ? <span>{task.nativeProgress.tokens} tokens</span> : null}
+                            {task.nativeProgress.duration_ms != null ? <span>{(task.nativeProgress.duration_ms / 1000).toFixed(1)}s observed</span> : null}
+                          </div>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

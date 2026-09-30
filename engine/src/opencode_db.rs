@@ -613,6 +613,40 @@ fn parse_rows(
                 );
             }
         }
+        if let Some(activity) = opencode_task_activity_evidence(&part_data) {
+            let parent_claim = activity
+                .metadata
+                .get("parentSessionId")
+                .or_else(|| activity.metadata.get("parent_session_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if !parent_claim.is_some_and(|value| value != provider_session_id) {
+                let mut activity_payload = serde_json::Map::new();
+                activity_payload.insert(
+                    "provider_session_id".to_string(),
+                    Value::from(activity.child_provider_session_id),
+                );
+                activity_payload.insert("kind".to_string(), Value::from(activity.kind));
+                activity_payload.insert("event_id".to_string(), Value::from(part.id.clone()));
+                if let Some(tool_call_id) = activity.tool_call_id {
+                    activity_payload
+                        .insert("parent_tool_call_id".to_string(), Value::from(tool_call_id));
+                }
+                if let Some(occurred_at_ms) = activity.occurred_at_ms {
+                    activity_payload
+                        .insert("occurred_at_ms".to_string(), Value::from(occurred_at_ms));
+                }
+                activity_payload.insert("metadata".to_string(), activity.metadata);
+                push_opencode_fact(
+                    &mut provider_facts,
+                    "delegation.activity",
+                    timestamp_from_ms(part.time_updated.max(message.time_updated)),
+                    source_offset,
+                    Value::Object(activity_payload),
+                );
+            }
+        }
     }
 
     events.sort_by(|left, right| {
@@ -665,9 +699,7 @@ fn parse_rows(
             forked_from_session_id: session.parent_id.clone(),
             lineage_kind,
             subagent_id: if task_child.is_some() {
-                task_child_agent
-                    .clone()
-                    .or_else(|| Some(provider_session_id.to_string()))
+                task_child_agent.clone()
             } else {
                 None
             },
@@ -1706,6 +1738,14 @@ struct OpenCodeTaskSpawnEvidence {
     tool_call_id: Option<String>,
     metadata: Value,
 }
+#[derive(Debug, Clone)]
+struct OpenCodeTaskActivityEvidence {
+    child_provider_session_id: String,
+    tool_call_id: Option<String>,
+    kind: String,
+    metadata: Value,
+    occurred_at_ms: Option<i64>,
+}
 
 fn opencode_task_output_child_id(output: &str) -> Option<&str> {
     let start = output.find("<task id=\"")? + "<task id=\"".len();
@@ -1740,6 +1780,7 @@ fn opencode_task_spawn_evidence(part_data: &Value) -> Option<OpenCodeTaskSpawnEv
         .get("callID")
         .and_then(Value::as_str)
         .or_else(|| part_data.get("callId").and_then(Value::as_str))
+        .filter(|call_id| !call_id.trim().is_empty())
         .map(str::to_string);
     let mut metadata = metadata_value.as_object().cloned().unwrap_or_default();
     // The agent selector is native input when OpenCode does not repeat it in
@@ -1763,12 +1804,62 @@ fn opencode_task_spawn_evidence(part_data: &Value) -> Option<OpenCodeTaskSpawnEv
         metadata: Value::Object(metadata),
     })
 }
+fn opencode_task_activity_evidence(part_data: &Value) -> Option<OpenCodeTaskActivityEvidence> {
+    let spawn = opencode_task_spawn_evidence(part_data)?;
+    let state = part_data.get("state").unwrap_or(&Value::Null);
+    let kind = string_field(state, &["status"])?;
+    let mut metadata = spawn.metadata.as_object().cloned().unwrap_or_default();
+    metadata.insert("status".to_string(), Value::from(kind.to_string()));
+    if let Some(time) = state.get("time") {
+        metadata.insert("time".to_string(), time.clone());
+    }
+    for key in [
+        "progress",
+        "tokens",
+        "requests",
+        "toolCount",
+        "currentTool",
+        "error",
+        "failure",
+    ] {
+        if let Some(value) = state.get(key) {
+            metadata.insert(key.to_string(), value.clone());
+        }
+    }
+    let terminal = matches!(
+        kind,
+        "completed" | "failed" | "error" | "cancelled" | "canceled"
+    );
+    let time_key = if terminal { "end" } else { "start" };
+    let occurred_at_ms = state
+        .get("time")
+        .and_then(Value::as_object)
+        .and_then(|time| time.get(time_key))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        });
+    Some(OpenCodeTaskActivityEvidence {
+        child_provider_session_id: spawn.child_provider_session_id,
+        tool_call_id: spawn.tool_call_id,
+        kind: kind.to_string(),
+        metadata: Value::Object(metadata),
+        occurred_at_ms,
+    })
+}
 
 fn opencode_task_child_evidence(
     conn: &Connection,
     parent_provider_session_id: &str,
     child_provider_session_id: &str,
 ) -> Result<Option<OpenCodeTaskChildEvidence>> {
+    if parent_provider_session_id.trim().is_empty()
+        || child_provider_session_id.trim().is_empty()
+        || parent_provider_session_id == child_provider_session_id
+    {
+        return Ok(None);
+    }
     let parts = load_parts(conn, parent_provider_session_id)?;
     for part in parts {
         let part_data: Value = serde_json::from_str(&part.data)
@@ -3282,6 +3373,194 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        let activity_fact = parent_result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.activity")
+            .expect("parent task status emits an activity fact");
+        assert_eq!(activity_fact.payload["provider_session_id"], "ses_test");
+        assert_eq!(activity_fact.payload["kind"], "completed");
+        assert_eq!(activity_fact.payload["event_id"], "prt_parent_task");
+        assert_eq!(activity_fact.payload["parent_tool_call_id"], "call_task");
+        assert_eq!(
+            activity_fact.payload["occurred_at_ms"],
+            1_779_000_000_061_i64
+        );
+        assert_eq!(activity_fact.payload["metadata"]["status"], "completed");
+        assert_eq!(
+            activity_fact.payload["metadata"]["time"]["end"],
+            1_779_000_000_061_i64
+        );
+        assert_eq!(activity_fact.payload["metadata"]["background"], true);
+        assert_eq!(activity_fact.payload["metadata"]["jobId"], "ses_test");
+    }
+    #[test]
+    fn opencode_task_activity_preserves_failure_and_rejects_reusable_job_id() {
+        let failed = json!({
+            "type": "tool",
+            "tool": "task",
+            "callID": "call_failed",
+            "state": {
+                "status": "failed",
+                "metadata": {
+                    "parentSessionId": "ses_parent",
+                    "sessionId": "ses_child",
+                    "background": true,
+                    "jobId": "bg_1"
+                },
+                "time": {
+                    "start": 1_779_000_000_100_i64,
+                    "end": 1_779_000_000_250_i64
+                },
+                "progress": {"completed": 3, "total": 9},
+                "error": {"code": "provider_failed"}
+            }
+        });
+        let evidence =
+            opencode_task_activity_evidence(&failed).expect("native child status is linked");
+        assert_eq!(evidence.child_provider_session_id, "ses_child");
+        assert_eq!(evidence.kind, "failed");
+        assert_eq!(evidence.tool_call_id.as_deref(), Some("call_failed"));
+        assert_eq!(evidence.occurred_at_ms, Some(1_779_000_000_250_i64));
+        assert_eq!(evidence.metadata["status"], "failed");
+        assert_eq!(evidence.metadata["jobId"], "bg_1");
+        assert_eq!(evidence.metadata["progress"]["completed"], 3);
+        assert_eq!(evidence.metadata["error"]["code"], "provider_failed");
+
+        // OpenCode reuses bg_N slots. A job handle without sessionId or a
+        // provider task output id is not a child identity and emits nothing.
+        let unlinked = json!({
+            "type": "tool",
+            "tool": "task",
+            "callID": "call_unlinked",
+            "state": {
+                "status": "running",
+                "metadata": {
+                    "parentSessionId": "ses_parent",
+                    "background": true,
+                    "jobId": "bg_1"
+                },
+                "time": {"start": 1_779_000_000_300_i64}
+            }
+        });
+        assert!(opencode_task_activity_evidence(&unlinked).is_none());
+        assert!(opencode_task_spawn_evidence(&unlinked).is_none());
+    }
+
+    #[test]
+    fn blank_native_call_id_does_not_create_a_tool_edge() {
+        let part = json!({
+            "type": "tool",
+            "tool": "task",
+            "callID": "  ",
+            "state": {
+                "status": "completed",
+                "metadata": {"sessionId": "ses_child"},
+                "output": "<task id=\"ses_child\" state=\"completed\">done</task>"
+            }
+        });
+        let evidence = opencode_task_spawn_evidence(&part).expect("child session evidence");
+        assert_eq!(evidence.tool_call_id, None);
+        assert!(!evidence
+            .metadata
+            .as_object()
+            .unwrap()
+            .contains_key("callID"));
+    }
+
+    #[test]
+    fn self_parent_provider_id_is_not_task_lineage() {
+        let parent = "ses_test";
+        let child = "ses_test";
+        assert!(opencode_task_child_evidence(
+            &Connection::open_in_memory().unwrap(),
+            parent,
+            child
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn mismatched_parent_claim_cannot_cross_opencode_scope() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE part (
+                id text PRIMARY KEY,
+                message_id text NOT NULL,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL,
+                data text NOT NULL
+            );",
+        )
+        .unwrap();
+        let task = json!({
+            "type": "tool",
+            "tool": "task",
+            "callID": "call-cross-scope",
+            "state": {
+                "status": "completed",
+                "metadata": {
+                    "parentSessionId": "ses_other_parent",
+                    "sessionId": "ses_child"
+                },
+                "output": "<task id=\"ses_child\" state=\"completed\">done</task>"
+            }
+        });
+        conn.execute(
+            "INSERT INTO part
+             (id, message_id, session_id, time_created, time_updated, data)
+             VALUES ('part-cross-scope', 'message-cross-scope', 'ses_parent',
+                     1, 2, ?1)",
+            [task.to_string()],
+        )
+        .unwrap();
+
+        assert!(
+            opencode_task_child_evidence(&conn, "ses_parent", "ses_child")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn output_only_child_id_survives_late_metadata_arrival() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE part (
+                id text PRIMARY KEY,
+                message_id text NOT NULL,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL,
+                data text NOT NULL
+            );",
+        )
+        .unwrap();
+        let task = json!({
+            "type": "tool",
+            "tool": "task",
+            "callID": "call-late-child",
+            "state": {
+                "status": "completed",
+                "metadata": {},
+                "output": "<task id=\"ses_late_child\" state=\"completed\">done</task>"
+            }
+        });
+        conn.execute(
+            "INSERT INTO part
+             (id, message_id, session_id, time_created, time_updated, data)
+             VALUES ('part-late-child', 'message-late-child', 'ses_parent',
+                     1, 2, ?1)",
+            [task.to_string()],
+        )
+        .unwrap();
+
+        let evidence = opencode_task_child_evidence(&conn, "ses_parent", "ses_late_child")
+            .unwrap()
+            .expect("completed output identifies the child");
+        assert_eq!(evidence.tool_call_id.as_deref(), Some("call-late-child"));
     }
 
     #[test]

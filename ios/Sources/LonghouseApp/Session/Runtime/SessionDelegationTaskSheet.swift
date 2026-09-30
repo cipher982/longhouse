@@ -190,6 +190,12 @@ struct SessionDelegationTaskSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let progress = task.nativeProgress {
+                Text("Provider progress · \(nativeProgressLine(progress))")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 10)
@@ -250,8 +256,29 @@ struct SessionDelegationTaskSheet: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    private func nativeProgressLine(_ progress: SessionDelegationProgress) -> String {
+        var parts: [String] = []
+        if let observedAt = progress.observedAt,
+           let date = LonghouseDateParser.parse(observedAt),
+           let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {
+            parts.append("observed \(age)")
+        }
+        if let tool = progress.currentTool { parts.append(tool) }
+        if let intent = progress.lastIntent { parts.append(intent) }
+        if let count = progress.toolCount { parts.append("\(count) tools") }
+        if let count = progress.requests { parts.append("\(count) requests") }
+        if let count = progress.tokens { parts.append("\(count) tokens") }
+        if let duration = progress.durationMs { parts.append(String(format: "%.1fs observed", Double(duration) / 1000)) }
+        return parts.joined(separator: " · ")
+    }
+
     private func timingLine(for task: SessionDelegationTask) -> String? {
         var parts: [String] = []
+        if let registeredAt = task.registeredAt,
+           let date = LonghouseDateParser.parse(registeredAt),
+           let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {
+            parts.append("Registered \(age)")
+        }
         if let startedAt = task.startedAt,
            let date = LonghouseDateParser.parse(startedAt),
            let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {

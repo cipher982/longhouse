@@ -157,6 +157,17 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
           tool_calls: 12,
           assistant_messages: 4,
           user_messages: 1,
+          registered_at: "2026-04-15T15:46:00Z",
+          native_progress: {
+            observed_at: "2026-04-15T16:11:35Z",
+            status: "running",
+            current_tool: "Read",
+            last_intent: "Inspect reconnect evidence",
+            tool_count: 14,
+            requests: 6,
+            tokens: 4200,
+            duration_ms: 8000,
+          },
         },
         {
           id: "detail-task-check",

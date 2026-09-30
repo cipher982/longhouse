@@ -62,7 +62,22 @@ fn run_inner() -> anyhow::Result<()> {
 fn handle_input(input: &Value) -> anyhow::Result<()> {
     let event = string(input, "hook_event_name").unwrap_or_default();
     let observation = observation_for_event(&event, input);
-    if observation.status.is_none() && observation.edge.is_none() {
+    let occurred_at = Utc::now().to_rfc3339();
+    // Stop and SubagentStop carry a complete registry scoped to the parent
+    // session. Other lifecycle events carry only one source-bound change.
+    // Keeping these lanes distinct is important: a child callback must not
+    // become a parent phase, while its parent-scoped registry is still useful.
+    let registry = if matches!(event.as_str(), "Stop" | "SubagentStop") {
+        delegation_snapshot(input, &occurred_at)
+    } else {
+        None
+    };
+    let lifecycle_update = lifecycle_update_for_event(&event, input, &occurred_at);
+    if observation.status.is_none()
+        && observation.edge.is_none()
+        && registry.is_none()
+        && lifecycle_update.is_none()
+    {
         return Ok(());
     }
     let managed_session_id = crate::managed_identity::managed_session_id_for(
@@ -93,7 +108,8 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     // session after ingest. Turn control above stays: it is what honours an
     // interrupt at a tool boundary, and it writes control-plane markers
     // rather than served state.
-    if string(input, "agent_id").is_some() {
+    let child_origin = string(input, "agent_id").is_some();
+    if child_origin && registry.is_none() && lifecycle_update.is_none() {
         return Ok(());
     }
     let cwd = string(input, "cwd");
@@ -118,10 +134,8 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
                 crate::claude_channel_server::update_managed_provider_session_id(managed, native);
         }
     }
-    let occurred_at = Utc::now().to_rfc3339();
     let mut payload = json!({
         "session_id": session_id,
-        "state": observation.status,
         "tool_name": string(input, "tool_name"),
         "cwd": cwd,
         "provider": "claude",
@@ -130,6 +144,11 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         // This is the hook's observation time, not the daemon's delivery time.
         "occurred_at": occurred_at,
     });
+    // Child-origin lifecycle updates are source evidence only. Never carry an
+    // idle/running phase from the child into the parent's activity head.
+    if !child_origin {
+        payload["state"] = json!(observation.status);
+    }
     // Managed launchers carry the exact durable run generation in the
     // environment. Preserve it on the hook event so Runtime Host can bind
     // provider facts to the run without a timestamp or session join.
@@ -141,11 +160,15 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
             payload["run_id"] = json!(run_id);
         }
     }
-    // The in-flight registry rides every presence observation that carries it.
-    // The daemon retains this separately from latest activity, so a newer
-    // observation without a registry cannot erase it.
-    if let Some(snapshot) = delegation_snapshot(input, &occurred_at) {
+    // The complete registry is independent of activity and is retained by
+    // the daemon even when a later phase observation has no registry.
+    if let Some(snapshot) = registry {
         payload["delegation"] = snapshot;
+    }
+    // Start/stop hooks are partial, source-bound changes. They must not be
+    // mistaken for a complete registry or renew unrelated items.
+    if let Some(update) = lifecycle_update {
+        payload["delegation_update"] = update;
     }
     attach_provider_session_id(
         &mut payload,
@@ -158,10 +181,14 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
             payload["provider_process_start_time"] = json!(provider_process_start_time);
         }
     }
-    // Only when the event actually says something about activity. A
-    // `PermissionRequest` carries no phase, and writing one anyway is how a
-    // dialog became a session-wide "Blocked".
-    if observation.status.is_some() {
+    // Registry and lifecycle evidence share the native callback's observation
+    // time but remain separate fact families downstream. Keep both fields on
+    // the producer payload: the daemon preserves the complete snapshot while
+    // reducing the exact child edge independently.
+    if (!child_origin && observation.status.is_some())
+        || payload.get("delegation").is_some()
+        || payload.get("delegation_update").is_some()
+    {
         crate::hook_outbox::enqueue_presence(&longhouse_home()?, &payload)?;
     }
     if let Some(edge) = observation.edge.as_ref() {
@@ -331,14 +358,13 @@ fn bounded_tool_use_id(value: Option<&Value>) -> Option<String> {
     (!value.chars().any(char::is_control)).then_some(value)
 }
 
-/// Read only the exact provider sidecar named by a task in a parent Stop.
-///
-/// Claude task ids are local path components, not globally unique aliases.
-/// Requiring the parent transcript's exact stem and an existing regular file
-/// avoids directory scans and prevents guessed child joins.
+/// Read only the exact provider sidecar named by a parent-scoped lifecycle
+/// event (`Stop`, `SubagentStart`, or `SubagentStop`).
 fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
-    if input.get("hook_event_name").and_then(Value::as_str) != Some("Stop")
-        || !safe_task_path_component(task_id)
+    if !matches!(
+        input.get("hook_event_name").and_then(Value::as_str),
+        Some("Stop" | "SubagentStart" | "SubagentStop")
+    ) || !safe_task_path_component(task_id)
     {
         return None;
     }
@@ -374,6 +400,76 @@ fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
     let bytes = std::fs::read(sidecar).ok()?;
     let sidecar: Value = serde_json::from_slice(&bytes).ok()?;
     bounded_tool_use_id(sidecar.get("toolUseId"))
+}
+
+/// A single lifecycle edge observed between complete parent registry snapshots.
+///
+/// The provider gives `SubagentStart`/`SubagentStop` an agent identity, but
+/// neither event is a complete registry, so these updates carry an explicit
+/// operation and source fields; the consumer must not treat a start as a
+/// replacement snapshot or refresh an unrelated item.
+const DELEGATION_UPDATE_PATH_MAX_CHARS: usize = 1024;
+
+fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> Option<Value> {
+    let (operation, id, kind, status) = match event {
+        // A start proves native child identity, not background membership.
+        // The consumer may enrich an already-linked item, but must not add a
+        // count from this event alone.
+        "SubagentStart" => ("observe", string(input, "agent_id")?, "subagent", "running"),
+        "SubagentStop" => (
+            "remove",
+            string(input, "agent_id")?,
+            "subagent",
+            "completed",
+        ),
+        _ => return None,
+    };
+    if id.chars().count() > DELEGATION_ID_MAX_CHARS || id.chars().any(char::is_control) {
+        return None;
+    }
+
+    let mut item = json!({
+        "id": id,
+        "kind": kind,
+        "status": status,
+        "description": Value::Null,
+    });
+    if kind == "subagent" {
+        if let Some(parent_tool_call_id) = parent_tool_call_id(input, &id) {
+            item["parent_tool_call_id"] = json!(parent_tool_call_id);
+        }
+        if let Some(agent_type) =
+            bounded_required_task_text(input.get("agent_type"), DELEGATION_STATUS_MAX_CHARS)
+        {
+            item["agent_type"] = json!(agent_type);
+        }
+    }
+
+    let mut update = json!({
+        "operation": operation,
+        "item": item,
+        "observed_at": observed_at,
+        "source_event": event,
+        "membership": "existing_exact_link_only",
+    });
+    let source = update.as_object_mut()?;
+    if let Some(agent_id) = string(input, "agent_id") {
+        source.insert("source_agent_id".to_string(), json!(agent_id));
+    }
+    if let Some(agent_type) =
+        bounded_required_task_text(input.get("agent_type"), DELEGATION_STATUS_MAX_CHARS)
+    {
+        source.insert("source_agent_type".to_string(), json!(agent_type));
+    }
+    if let Some(path) = bounded_required_task_text(
+        input.get("agent_transcript_path"),
+        DELEGATION_UPDATE_PATH_MAX_CHARS,
+    ) {
+        if !path.chars().any(char::is_control) {
+            source.insert("source_agent_transcript_path".to_string(), json!(path));
+        }
+    }
+    Some(update)
 }
 
 fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
@@ -852,6 +948,16 @@ mod tests {
         result
     }
 
+    fn retained_native_lifecycle_rows() -> Vec<Value> {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/golden/claude/lifecycle_native.stdin.jsonl"
+        ))
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("native lifecycle fixture JSON"))
+        .collect()
+    }
+
     #[test]
     fn a_claude_run_inside_a_managed_codex_session_is_not_that_session() {
         // The exact impersonation: `claude` launched from inside managed Codex
@@ -1284,7 +1390,299 @@ mod tests {
         }
     }
 
-    /// Serialize an environment mutation against the shared lock and restore it.
+    #[test]
+    fn lifecycle_edges_preserve_native_identity_and_parent_sidecar() {
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("parent.jsonl");
+        std::fs::write(&transcript, b"").unwrap();
+        let subagents = transcript.with_extension("").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            subagents.join("agent-agent-start.meta.json"),
+            br#"{"toolUseId":"toolu_lifecycle_parent"}"#,
+        )
+        .unwrap();
+
+        let start = lifecycle_update_for_event(
+            "SubagentStart",
+            &json!({
+                "hook_event_name": "SubagentStart",
+                "transcript_path": transcript,
+                "agent_id": "agent-start",
+                "agent_type": "Explore",
+            }),
+            "2026-09-30T10:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(start["operation"], "observe");
+        assert_eq!(start["item"]["id"], "agent-start");
+        assert_eq!(start["item"]["kind"], "subagent");
+        assert_eq!(start["item"]["status"], "running");
+        assert_eq!(start["item"]["agent_type"], "Explore");
+        assert_eq!(
+            start["item"]["parent_tool_call_id"],
+            "toolu_lifecycle_parent"
+        );
+        assert_eq!(start["source_event"], "SubagentStart");
+        assert_eq!(start["source_agent_id"], "agent-start");
+        assert_eq!(start["membership"], "existing_exact_link_only");
+
+        let stop = lifecycle_update_for_event(
+            "SubagentStop",
+            &json!({
+                "hook_event_name": "SubagentStop",
+                "transcript_path": root.path().join("parent.jsonl"),
+                "agent_id": "agent-start",
+                "agent_type": "Explore",
+                "agent_transcript_path": root.path().join("child.jsonl"),
+            }),
+            "2026-09-30T10:00:01Z",
+        )
+        .unwrap();
+        assert_eq!(stop["operation"], "remove");
+        assert_eq!(stop["item"]["id"], "agent-start");
+        assert_eq!(stop["item"]["status"], "completed");
+        assert_eq!(
+            stop["source_agent_transcript_path"].as_str(),
+            Some(root.path().join("child.jsonl").to_str().unwrap())
+        );
+        assert_eq!(stop["observed_at"], "2026-09-30T10:00:01Z");
+    }
+
+    #[test]
+    fn retained_native_hooks_keep_callback_identity_and_registry_truth() {
+        let rows = retained_native_lifecycle_rows();
+        let start = rows
+            .iter()
+            .find(|row| row["hook_event_name"] == "SubagentStart")
+            .expect("native SubagentStart");
+        let agent_id = string(start, "agent_id").expect("native start agent id");
+        let stop = rows
+            .iter()
+            .find(|row| {
+                row["hook_event_name"] == "SubagentStop"
+                    && string(row, "agent_id").as_deref() == Some(agent_id.as_str())
+            })
+            .expect("matching native SubagentStop");
+        let unpaired_stop = rows
+            .iter()
+            .find(|row| {
+                row["hook_event_name"] == "SubagentStop"
+                    && string(row, "agent_id").as_deref() != Some(agent_id.as_str())
+            })
+            .expect("native unpaired SubagentStop");
+        let unpaired_update =
+            lifecycle_update_for_event("SubagentStop", unpaired_stop, "2026-09-30T10:00:01Z")
+                .expect("unpaired native stop edge");
+        assert_eq!(
+            unpaired_update["source_agent_id"],
+            unpaired_stop["agent_id"]
+        );
+        assert_eq!(
+            unpaired_update["membership"], "existing_exact_link_only",
+            "an unpaired terminal identity cannot create registry membership"
+        );
+        let active_parent_stop = rows
+            .iter()
+            .find(|row| {
+                row["hook_event_name"] == "Stop"
+                    && row["background_tasks"]
+                        .as_array()
+                        .is_some_and(|tasks| tasks.len() > 1)
+            })
+            .expect("native parent Stop with active registry");
+        let empty_parent_stop = rows
+            .iter()
+            .find(|row| row["hook_event_name"] == "Stop" && row["background_tasks"] == json!([]))
+            .expect("native parent Stop with explicit empty registry");
+
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("parent.jsonl");
+        std::fs::write(&transcript, b"").unwrap();
+        let subagents = transcript.with_extension("").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let sidecar: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/golden/claude/lifecycle_native.sidecar.meta.json"
+        )))
+        .unwrap();
+        std::fs::write(
+            subagents.join(format!("agent-{agent_id}.meta.json")),
+            serde_json::to_vec(&sidecar).unwrap(),
+        )
+        .unwrap();
+
+        let mut start_input = start.clone();
+        start_input["transcript_path"] = json!(transcript);
+        let start_update =
+            lifecycle_update_for_event("SubagentStart", &start_input, "2026-09-30T10:00:00Z")
+                .expect("native start edge");
+        assert_eq!(start_update["operation"], "observe");
+        assert_eq!(start_update["item"]["id"], start["agent_id"]);
+        assert_eq!(start_update["item"]["kind"], "subagent");
+        assert_eq!(start_update["item"]["agent_type"], start["agent_type"]);
+        assert_eq!(
+            start_update["item"]["parent_tool_call_id"],
+            sidecar["toolUseId"]
+        );
+        assert_eq!(start_update["membership"], "existing_exact_link_only");
+
+        let mut stop_input = stop.clone();
+        stop_input["transcript_path"] = json!(transcript);
+        let stop_update =
+            lifecycle_update_for_event("SubagentStop", &stop_input, "2026-09-30T10:00:01Z")
+                .expect("native stop edge");
+        assert_eq!(stop_update["operation"], "remove");
+        assert_eq!(stop_update["item"]["id"], stop["agent_id"]);
+        assert_eq!(stop_update["source_agent_id"], stop["agent_id"]);
+        assert_eq!(
+            stop["background_tasks"][0]["id"], start["agent_id"],
+            "terminal callback must match the prior running registry identity"
+        );
+        let carrier = with_managed_home(
+            root.path(),
+            "managed-native-parent",
+            "run-native-parent",
+            || {
+                handle_input(&stop_input).unwrap();
+                let path = root
+                    .path()
+                    .join("agent/outbox")
+                    .read_dir()
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .path();
+                serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap()
+            },
+        );
+        assert!(carrier["delegation"].is_object());
+        assert!(carrier["delegation_update"].is_object());
+        assert!(carrier.get("state").is_none());
+
+        // The provider's terminal callback is a completion edge, but its
+        // simultaneously captured registry still says running. Do not invent
+        // a completed registry row from the callback.
+        let callback_registry =
+            delegation_snapshot(stop, "2026-09-30T10:00:01Z").expect("callback registry");
+        assert_eq!(callback_registry["count"], json!(1));
+        assert_eq!(callback_registry["items"][0]["id"], start["agent_id"]);
+        assert_eq!(callback_registry["items"][0]["status"], "running");
+
+        let active_registry =
+            delegation_snapshot(active_parent_stop, "2026-09-30T10:00:02Z").unwrap();
+        assert_eq!(active_registry["count"], json!(2));
+        assert_eq!(active_registry["items"][0]["id"], start["agent_id"]);
+        assert_eq!(active_registry["items"][0]["status"], "running");
+
+        let empty_registry =
+            delegation_snapshot(empty_parent_stop, "2026-09-30T10:00:03Z").unwrap();
+        assert_eq!(empty_registry["count"], json!(0));
+        assert_eq!(empty_registry["items"], json!([]));
+        assert!(
+            delegation_snapshot(&json!({"hook_event_name": "Stop"}), "2026-09-30T10:00:03Z")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn lifecycle_edges_reject_missing_or_unbounded_identity() {
+        assert!(lifecycle_update_for_event(
+            "SubagentStart",
+            &json!({"agent_type": "Explore"}),
+            "2026-09-30T10:00:00Z",
+        )
+        .is_none());
+        assert!(lifecycle_update_for_event(
+            "SubagentStop",
+            &json!({"agent_id": "bad\u{0000}id"}),
+            "2026-09-30T10:00:00Z",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn child_stop_carries_parent_registry_without_parent_phase_or_run_loss() {
+        let home = tempfile::tempdir().unwrap();
+        let transcript = home.path().join("parent.jsonl");
+        std::fs::write(&transcript, b"").unwrap();
+        let subagents = transcript.with_extension("").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            subagents.join("agent-child-1.meta.json"),
+            br#"{"toolUseId":"toolu_parent_child_1"}"#,
+        )
+        .unwrap();
+        let payload = with_managed_home(home.path(), "longhouse-parent", "run-parent-1", || {
+            handle_input(&json!({
+                "hook_event_name": "SubagentStop",
+                "session_id": "native-parent",
+                "transcript_path": transcript,
+                "agent_id": "child-1",
+                "agent_type": "Explore",
+                "agent_transcript_path": home.path().join("child-1.jsonl"),
+                "background_tasks": [{
+                    "id": "child-1",
+                    "type": "subagent",
+                    "status": "running",
+                }],
+                "session_crons": [],
+            }))
+            .unwrap();
+            let path = home
+                .path()
+                .join("agent/outbox")
+                .read_dir()
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap()
+        });
+        assert_eq!(payload["session_id"], "longhouse-parent");
+        assert_eq!(payload["provider_session_id"], "native-parent");
+        assert_eq!(payload["run_id"], "run-parent-1");
+        assert!(payload.get("state").is_none());
+        assert_eq!(payload["delegation"]["count"], 1);
+        assert_eq!(
+            payload["delegation"]["items"][0]["parent_tool_call_id"],
+            "toolu_parent_child_1"
+        );
+        assert_eq!(payload["delegation_update"]["operation"], "remove");
+        assert_eq!(payload["delegation_update"]["source_agent_id"], "child-1");
+    }
+
+    fn with_managed_home<T>(
+        home: &std::path::Path,
+        session_id: &str,
+        run_id: &str,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        let previous_session = std::env::var_os("LONGHOUSE_MANAGED_SESSION_ID");
+        let previous_run = std::env::var_os("LONGHOUSE_RUN_ID");
+        std::env::set_var("LONGHOUSE_HOME", home);
+        std::env::set_var("LONGHOUSE_MANAGED_SESSION_ID", session_id);
+        std::env::set_var("LONGHOUSE_RUN_ID", run_id);
+        let result = body();
+        match previous_home {
+            Some(value) => std::env::set_var("LONGHOUSE_HOME", value),
+            None => std::env::remove_var("LONGHOUSE_HOME"),
+        }
+        match previous_session {
+            Some(value) => std::env::set_var("LONGHOUSE_MANAGED_SESSION_ID", value),
+            None => std::env::remove_var("LONGHOUSE_MANAGED_SESSION_ID"),
+        }
+        match previous_run {
+            Some(value) => std::env::set_var("LONGHOUSE_RUN_ID", value),
+            None => std::env::remove_var("LONGHOUSE_RUN_ID"),
+        }
+        result
+    }
+
     fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {
         let _guard = crate::console_adapter::agent_state_guard();
         let previous = std::env::var_os("LONGHOUSE_HOME");

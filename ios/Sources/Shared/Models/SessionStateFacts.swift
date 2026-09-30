@@ -104,6 +104,19 @@ struct SessionProviderEvidenceIdentity: Equatable, Sendable {
     let tool: String?
     let source: String?
 }
+struct SessionDelegationProgress: Hashable, Codable, Sendable {
+    let observedAt: String?
+    let status: String?
+    let currentTool: String?
+    let lastIntent: String?
+    let toolCount: Int?
+    let requests: Int?
+    let tokens: Int?
+    let contextTokens: Int?
+    let contextWindow: Int?
+    let durationMs: Int?
+}
+
 /// One named unit of provider-reported background work. The provider owns the
 /// vocabulary and lifecycle; the client deliberately keeps status raw instead
 /// of translating it into a guessed "running" or "done" state.
@@ -122,6 +135,8 @@ struct SessionDelegationTask: Identifiable, Hashable, Codable, Sendable {
     var userMessages: Int? = nil
     var assistantMessages: Int? = nil
     var toolCalls: Int? = nil
+    var registeredAt: String? = nil
+    var nativeProgress: SessionDelegationProgress? = nil
 }
 
 /// Provider-owned evidence for delegated/background work. `items == nil`

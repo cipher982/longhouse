@@ -165,6 +165,21 @@ class SessionActivityFacts(_FrozenModel):
 DelegationState = Literal["pending", "none", "unknown"]
 
 
+class SessionDelegationProgress(_FrozenModel):
+    """Provider-reported task progress, distinct from archive counters and rates."""
+
+    observed_at: datetime | None = None
+    status: str | None = None
+    current_tool: str | None = None
+    last_intent: str | None = None
+    tool_count: int | None = None
+    requests: int | None = None
+    tokens: int | None = None
+    context_tokens: int | None = None
+    context_window: int | None = None
+    duration_ms: int | None = None
+
+
 class SessionDelegationTaskResponse(_FrozenModel):
     """A provider task, with archive enrichment only through exact lineage."""
 
@@ -179,6 +194,8 @@ class SessionDelegationTaskResponse(_FrozenModel):
     user_messages: int | None = None
     assistant_messages: int | None = None
     tool_calls: int | None = None
+    registered_at: datetime | None = None
+    native_progress: SessionDelegationProgress | None = None
 
 
 class SessionDelegationFacts(_FrozenModel):

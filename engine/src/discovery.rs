@@ -618,6 +618,46 @@ pub(crate) fn canonical_transcript_hint<'a>(provider: &str, path: &'a Path) -> C
         Cow::Borrowed(path)
     }
 }
+
+/// Map an Antigravity task-log change back to its owning full transcript.
+///
+/// `.system_generated/tasks/<id>.log` is provider state, not an independent
+/// session source. The task log has no complete session identity or parser
+/// contract of its own, so enrolling it would create a duplicate/empty
+/// session. A watcher event can still wake the authoritative parent archive,
+/// whose `INVOKE_SUBAGENT`/task evidence is the only source Longhouse can
+/// interpret without inventing a child identity.
+/// This is a layout-scoped watcher rule, not a claim about every Antigravity
+/// release or a substitute for a current native source receipt.
+fn antigravity_task_log_parent_transcript(path: &Path) -> Option<PathBuf> {
+    if path.extension().and_then(|value| value.to_str()) != Some("log")
+        || path.file_stem().and_then(|value| value.to_str()).is_none()
+    {
+        return None;
+    }
+    let tasks = path.parent()?;
+    if tasks.file_name().and_then(|value| value.to_str()) != Some("tasks") {
+        return None;
+    }
+    let system_generated = tasks.parent()?;
+    if system_generated
+        .file_name()
+        .and_then(|value| value.to_str())
+        != Some(".system_generated")
+    {
+        return None;
+    }
+    let conversation = system_generated.parent()?;
+    if conversation.file_name().and_then(|value| value.to_str()).is_none() {
+        return None;
+    }
+    let brain = conversation.parent()?;
+    if brain.file_name().and_then(|value| value.to_str()) != Some("brain") {
+        return None;
+    }
+    Some(system_generated.join("logs").join("transcript_full.jsonl"))
+}
+
 fn omp_native_id_conflict(path: &Path, providers: &[ProviderConfig]) -> bool {
     let Ok(header) = crate::omp_session::read_session_header(path) else {
         return false;
@@ -673,6 +713,17 @@ pub fn session_path_for_watcher_event(
         if provider.name == "cursor" {
             if let Some(db_path) = cursor_database_path_for_event(path) {
                 return Some((db_path, provider.name));
+            }
+            if is_provider_session_file(provider, path) {
+                return Some((path.to_path_buf(), provider.name));
+            }
+            continue;
+        }
+        if provider.name == "antigravity" {
+            if let Some(parent_transcript) = antigravity_task_log_parent_transcript(path) {
+                if parent_transcript.starts_with(&provider.root) {
+                    return Some((parent_transcript, provider.name));
+                }
             }
             if is_provider_session_file(provider, path) {
                 return Some((path.to_path_buf(), provider.name));
@@ -1575,6 +1626,45 @@ mod tests {
         assert_eq!(
             provider_for_path(&full_transcript, &providers),
             Some("antigravity")
+        );
+    }
+
+    #[test]
+    fn antigravity_task_logs_wake_parent_without_enrolling_child_source() {
+        let home = PathBuf::from("/tmp/home");
+        let providers = provider_candidates(
+            &home,
+            &PathBuf::from("/tmp/custom-claude"),
+            &home.join(".config"),
+        );
+        let parent = home
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("brain")
+            .join("conversation-id");
+        let task = parent
+            .join(".system_generated")
+            .join("tasks")
+            .join("task-7.log");
+        let transcript = parent
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript_full.jsonl");
+
+        assert_eq!(provider_for_path(&task, &providers), None);
+        assert_eq!(
+            session_path_for_watcher_event(&task, &providers),
+            Some((transcript, "antigravity"))
+        );
+        assert_eq!(
+            session_path_for_watcher_event(
+                &parent
+                    .join(".system_generated")
+                    .join("tasks")
+                    .join("task-7.json"),
+                &providers,
+            ),
+            None
         );
     }
 

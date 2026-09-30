@@ -40,6 +40,7 @@ from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import codex_tool_call_result
 from zerg.qa import cursor_release_identity
+from zerg.qa import omp_background_producer
 from zerg.qa import omp_console_producer
 from zerg.qa import omp_helm_lifecycle
 from zerg.qa import opencode_server_qualification
@@ -1213,6 +1214,7 @@ _PROFILES = {
     ("pi", pi_qualification.PROFILE): pi_qualification.run,
     ("pi", pi_console_tool_producer.PROFILE): pi_console_tool_producer.run,
     ("pi", pi_helm_lifecycle.PROFILE): pi_helm_lifecycle.run,
+    ("omp", omp_background_producer.PROFILE): omp_background_producer.run,
     ("omp", omp_console_producer.PROFILE): omp_console_producer.run,
     ("omp", omp_helm_lifecycle.PROFILE): omp_helm_lifecycle.run,
 }

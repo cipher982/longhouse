@@ -89,6 +89,8 @@ struct OmpHelmStateFile {
     session_id: String,
     run_id: String,
     provider: String,
+    #[serde(default)]
+    machine_name: Option<String>,
     model: Option<String>,
     profile: Option<String>,
     native_session_id: String,
@@ -1063,6 +1065,19 @@ impl OmpHelmServer {
         if is_activity_frame_kind(kind) && !self.has_committed_identity() {
             return;
         }
+        if matches!(
+            kind,
+            "agent_start"
+                | "agent_end"
+                | "activity"
+                | "tool_execution_start"
+                | "tool_execution_update"
+                | "tool_execution_end"
+                | "message_end"
+                | "extension_keepalive"
+        ) {
+            self.publish_background_snapshot(&frame);
+        }
         if is_activity_frame_kind(kind) && kind != "agent_start" {
             self.reconcile_turn_generation(&frame);
         }
@@ -1496,6 +1511,140 @@ impl OmpHelmServer {
         guard.state.updated_at = Utc::now().to_rfc3339();
         drop(guard);
         let _ = self.persist_state();
+    }
+
+    fn publish_background_snapshot(&self, frame: &Value) {
+        let Some(event) = frame.get("event") else {
+            return;
+        };
+        if event.get("async_running_complete").and_then(Value::as_bool) != Some(true) {
+            return;
+        }
+        let Some(jobs) = event.get("async_jobs").and_then(Value::as_array) else {
+            return;
+        };
+        let Some(observed_at) = event.get("async_observed_at").and_then(Value::as_str) else {
+            return;
+        };
+        let state = self.current_state();
+        if !state.ready || state.pending_transition || state.terminal_state.is_some() {
+            return;
+        }
+        let mut items = Vec::new();
+        let mut kinds = serde_json::Map::new();
+        for job in jobs {
+            if job.get("source").and_then(Value::as_str) != Some("async_job_manager")
+                || job.get("status").and_then(Value::as_str) != Some("running")
+            {
+                continue;
+            }
+            let Some(id) = job.get("id").and_then(Value::as_str) else {
+                return;
+            };
+            let job_type = job.get("type").and_then(Value::as_str);
+            let agent_id = job.get("agent_id").and_then(Value::as_str);
+            let kind = match (job_type, agent_id) {
+                (Some("task"), Some(_)) => "subagent",
+                (Some("bash"), _) => "shell",
+                _ => "other",
+            };
+            let mut item = json!({
+                "id": id,
+                "kind": kind,
+                "status": if job.get("queued").and_then(Value::as_bool) == Some(true) { "queued" } else { "running" },
+                "description": job.get("label").and_then(Value::as_str),
+            });
+            if let Some(registered) = job
+                .get("start_time")
+                .and_then(Value::as_i64)
+                .and_then(chrono::DateTime::from_timestamp_millis)
+            {
+                item["registered_at"] = json!(registered.to_rfc3339());
+            }
+            if let Some(agent_id) = agent_id {
+                let component = Path::new(agent_id);
+                if !agent_id.is_empty()
+                    && component.components().count() == 1
+                    && !matches!(agent_id, "." | "..")
+                    && !agent_id.contains(['/', '\\'])
+                {
+                    let child_path = Path::new(&state.session_file)
+                        .with_extension("")
+                        .join(format!("{agent_id}.jsonl"));
+                    if let Ok(child) = crate::omp_session::read_session_header(&child_path) {
+                        if child.parent_session.as_deref() == Some(state.session_file.as_str()) {
+                            item["native_child_id"] = json!(child.native_id);
+                            item["native_child_source_path"] = json!(child_path);
+                        }
+                    }
+                }
+                if let Some(progress) = event
+                    .get("task_progress")
+                    .and_then(Value::as_array)
+                    .and_then(|rows| {
+                        rows.iter().find(|row| {
+                            row.get("agent_id").and_then(Value::as_str) == Some(agent_id)
+                                && row
+                                    .get("job_id")
+                                    .and_then(Value::as_str)
+                                    .is_none_or(|job_id| job_id == id)
+                        })
+                    })
+                {
+                    let mut native = serde_json::Map::new();
+                    native.insert("observed_at".into(), json!(observed_at));
+                    for field in [
+                        "status",
+                        "current_tool",
+                        "last_intent",
+                        "tool_count",
+                        "requests",
+                        "tokens",
+                        "context_tokens",
+                        "context_window",
+                        "duration_ms",
+                    ] {
+                        if let Some(value) = progress.get(field) {
+                            native.insert(field.into(), value.clone());
+                        }
+                    }
+                    item["native_progress"] = Value::Object(native);
+                }
+            }
+            let amount = kinds.get(kind).and_then(Value::as_u64).unwrap_or_default() + 1;
+            kinds.insert(kind.into(), json!(amount));
+            items.push(item);
+        }
+        if items.len() > 256 {
+            return;
+        }
+        let snapshot = json!({
+            "count": items.len(),
+            "kinds": kinds,
+            "items": items,
+            "observed_at": observed_at,
+        });
+        let event_value = json!({
+            "runtime_key": format!("omp:{}", state.session_id),
+            "session_id": state.session_id,
+            "run_id": state.run_id,
+            "provider": "omp",
+            "source": "omp_background",
+            "kind": "delegation_signal",
+            "occurred_at": observed_at,
+            "dedupe_key": format!("omp-background:{}:{}:{}", state.run_id, state.lease_generation, observed_at),
+            "payload": {
+                "delegation": snapshot,
+                "provider_session_id": state.native_session_id,
+                "connection_id": state.connection_id,
+                "lease_generation": state.lease_generation,
+            },
+        });
+        if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {
+            if let Err(error) = crate::outbox::enqueue_runtime_event(&outbox, &event_value) {
+                eprintln!("Longhouse: OMP background observation could not be retained: {error}");
+            }
+        }
     }
 
     fn publish_phase_snapshot(&self, state: &OmpHelmStateFile, phase: &str, tool: Option<&str>) {
@@ -2517,6 +2666,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             .map(|value| value.run_id.clone())
             .unwrap_or(run_id),
         provider: "omp".into(),
+        machine_name: Some(machine_name.clone()),
         model: model.clone(),
         profile: profile.clone(),
         native_session_id: native_id,
@@ -2852,6 +3002,7 @@ mod tests {
             session_id: "session".into(),
             run_id: "run".into(),
             provider: "omp".into(),
+            machine_name: Some("machine".into()),
             model: None,
             profile: None,
             native_session_id: "native".into(),

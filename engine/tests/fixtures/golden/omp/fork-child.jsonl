@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"native-fork-child","timestamp":"2026-09-30T00:00:02.000Z","cwd":"/tmp/omp-task","parentSession":"native-parent"}
+{"type":"message","id":"fork-assistant","parentId":null,"timestamp":"2026-09-30T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"fork output"}]}}

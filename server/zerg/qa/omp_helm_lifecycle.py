@@ -1912,7 +1912,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             argv=_launch_argv(
                 args,
                 workspace=workspace,
-                prompt=_exact_marker_prompt(initial_marker),
+                prompt=getattr(args, "background_prompt", None) or _exact_marker_prompt(initial_marker),
             ),
             cwd=workspace,
             env=env,

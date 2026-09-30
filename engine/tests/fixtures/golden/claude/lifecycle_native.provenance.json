@@ -1,0 +1,64 @@
+{
+  "schema": "longhouse.claude.lifecycle-native-fixture.v1",
+  "provider": "claude",
+  "provider_version": "2.1.285 (Claude Code)",
+  "provider_binary_sha256": "33dad1ec615a2e08cc78b494f05c110e49916de2c79d78ec8799ebf46b233d29",
+  "index_path": "/tmp/agents/bg-native-mirror-uwglg5bn/local-index.json",
+  "index_manifest_sha256": "c2ae9d148b955db89aae8a172f02ed6325f9e28a928f65174e820e08e79ff461",
+  "source_root": "/tmp/agents/bg-native-mirror-uwglg5bn/bg-claude-native-fixed-jlr0_fua",
+  "source_manifest": "digest-manifest.sha256",
+  "source_records": [
+    {
+      "fixture_record": "subagent_start",
+      "source_path": "hook-stdin/0002-SubagentStart-6d7affabc21c9c40c38feb0afc96fe4fd09a6e30e85be32761f7d3323b649661.stdin",
+      "source_sha256": "6d7affabc21c9c40c38feb0afc96fe4fd09a6e30e85be32761f7d3323b649661",
+      "source_bytes": 467
+    },
+    {
+      "fixture_record": "subagent_stop_matched",
+      "source_path": "hook-stdin/0005-SubagentStop-1e5e063ad9efc3d25b742fe8f33006c418a994525714e4f96b2a7114a90d303a.stdin",
+      "source_sha256": "1e5e063ad9efc3d25b742fe8f33006c418a994525714e4f96b2a7114a90d303a",
+      "source_bytes": 969
+    },
+    {
+      "fixture_record": "subagent_stop_unpaired",
+      "source_path": "hook-stdin/0006-SubagentStop-508b22e8f200049324ea217febb93cd21a80d76373b849f3fe4a0d4cdaee17fc.stdin",
+      "source_sha256": "508b22e8f200049324ea217febb93cd21a80d76373b849f3fe4a0d4cdaee17fc",
+      "source_bytes": 877
+    },
+    {
+      "fixture_record": "parent_stop_explicit_empty",
+      "source_path": "hook-stdin/0009-Stop-1bf83f97e59624b9d5b0ba2fd292abff17ed96eb40ea9833f385a83b3bfe08d2.stdin",
+      "source_sha256": "1bf83f97e59624b9d5b0ba2fd292abff17ed96eb40ea9833f385a83b3bfe08d2",
+      "source_bytes": 612
+    },
+    {
+      "fixture_record": "parent_stop_active_registry",
+      "source_path": "hook-stdin/0003-Stop-b899352a9bad9202465e7e93ce5e22b1080f23f2474436d4a7b56cb87a20e2cf.stdin",
+      "source_sha256": "b899352a9bad9202465e7e93ce5e22b1080f23f2474436d4a7b56cb87a20e2cf",
+      "source_bytes": 1043
+    }
+  ],
+  "sidecar": {
+    "fixture_path": "lifecycle_native.sidecar.meta.json",
+    "source_path": "native-source/projects/-tmp-agents-bg-claude-native-fixed-jlr0-fua-isolated-workspace/cc9221bd-1b28-4c8e-9bf1-5ecdd471afc4/subagents/agent-accd7173a62e5d206.meta.json",
+    "source_sha256": "007a3c96fb3ed70274beac9cd6b9c273b975eb9d1f5ec0120a18b7f23b645e15",
+    "source_bytes": 196
+  },
+  "sanitization": [
+    "provider profile and workspace paths replaced with /fixture paths",
+    "session and prompt identifiers replaced with fixture-safe identifiers",
+    "assistant messages and task descriptions replaced with [redacted]",
+    "native agent identifiers retained where needed to test identity matching"
+  ],
+  "observed": {
+    "subagent_start_fields": ["agent_id", "agent_type", "prompt_id", "transcript_path"],
+    "subagent_stop_fields": ["agent_id", "agent_type", "agent_transcript_path", "background_tasks", "session_crons"],
+    "stop_registry_states": ["non_empty", "explicit_empty"],
+    "matched_terminal_identity": "accd7173a62e5d206 has both SubagentStart and SubagentStop captures",
+    "unpaired_terminal_identities": ["a4cfd20aca9346d9a", "a79a6850057002546", "a84a79a190786f6bf"],
+    "terminal_registry_boundary": "matched SubagentStop still reports its task as running; no completion status was synthesized",
+    "summary_discrepancy": "result.json reports explicit_empty_registry_observed=false, but retained raw Stop stdin bytes contain background_tasks=[]; fixture follows raw bytes"
+  },
+  "proof_boundary": "Native hook shapes and source identity are captured; canonical served replay and factory certification remain separate prerequisites."
+}

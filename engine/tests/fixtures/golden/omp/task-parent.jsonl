@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"native-parent","timestamp":"2026-09-30T00:00:00.000Z","cwd":"/tmp/omp-task"}
+{"type":"message","id":"parent-user","parentId":null,"timestamp":"2026-09-30T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"run the task"}]}}

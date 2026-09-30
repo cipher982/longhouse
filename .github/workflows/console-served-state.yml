@@ -126,8 +126,16 @@ jobs:
           echo "CONSOLE_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
           printf '%s\n' '{"modelProvider":"gemini"}' > "$home/.gemini/antigravity-cli/settings.json"
           chmod 600 "$home/.gemini/antigravity-cli/settings.json"
-          python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine
-          engine="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse-engine)"
+          # engine/build.rs requires the checkout-scoped identity before any
+          # cargo invocation. This lane builds from a fresh checkout, so the
+          # ignored identity must be generated in this same step and verified
+          # before cargo performs its preflight.
+          python3 "$GITHUB_WORKSPACE/scripts/build/generate_build_identity.py" \
+            --output "$GITHUB_WORKSPACE/.build/build-identity.json"
+          test -s "$GITHUB_WORKSPACE/.build/build-identity.json"
+          python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" exec -- \
+            build --manifest-path "$GITHUB_WORKSPACE/engine/Cargo.toml" --profile ci --bin longhouse-engine
+          engine="$(python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)"
           test -x "$engine"
           export HOME="$home"
           export PATH="$fixture_root/bin:$home/.local/bin:$PATH"

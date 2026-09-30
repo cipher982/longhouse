@@ -1610,6 +1610,67 @@ def test_delegation_projection_proves_the_chain_and_its_negative_controls(tmp_pa
     }
 
 
+def test_background_replay_requires_retained_source_before_catalog_projection(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("omp",),
+            scenarios=("background_fidelity_replay",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    result = payload["results"][0]
+    assert result["scenario"] == "background_fidelity_replay"
+    assert result["status"] == "blocked"
+    assert result["failure_code"] == "background_capture_missing"
+
+
+def test_background_fact_boundary_keeps_child_lineage_out_of_registry() -> None:
+    """Spawn/activity facts prove one child, never aggregate membership."""
+    child_facts = [
+        {
+            "kind": "delegation.spawn",
+            "payload": {
+                "child_id": "omp-child-1",
+                "parent_session_id": "omp-parent",
+                "status": "running",
+            },
+        },
+        {
+            "kind": "delegation.activity",
+            "payload": {"child_id": "omp-child-1", "status": "running"},
+        },
+    ]
+    assert uah._delegation_snapshot_from_engine_facts(child_facts) is None
+    assert [row["kind"] for row in uah._child_evidence_from_engine_facts(child_facts)] == [
+        "delegation.spawn",
+        "delegation.activity",
+    ]
+
+
+def test_background_fact_boundary_requires_complete_registry_shape() -> None:
+    """A provider registry is accepted only with count, kinds, and items."""
+    incomplete = [
+        {
+            "kind": "delegation.snapshot",
+            "payload": {"count": 1, "items": [{"id": "job-1"}]},
+        }
+    ]
+    complete = [
+        {
+            "kind": "delegation.snapshot",
+            "payload": {
+                "count": 1,
+                "kinds": {"background": 1},
+                "items": [{"id": "job-1", "status": "running"}],
+            },
+        }
+    ]
+    assert uah._delegation_snapshot_from_engine_facts(incomplete) is None
+    assert uah._delegation_snapshot_from_engine_facts(complete) == complete[0]["payload"]
+
+
 def test_every_default_universal_scenario_has_a_harness_runner() -> None:
     """A default scenario with no runner fails every release-proof run.
 

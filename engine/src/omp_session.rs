@@ -24,6 +24,10 @@ const OMP_PROFILE_ENV: &str = "OMP_PROFILE";
 const MAX_HEADER_SCAN_BYTES: u64 = 1024 * 1024;
 const OMP_TITLE_SLOT_BYTES: usize = 256;
 const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
+/// Nested task archives are accepted only through this bounded, header-linked
+/// artifact chain. It prevents a parked registry tree or an unrelated file
+/// below the provider root from becoming a discovered session.
+const MAX_NESTED_SESSION_DEPTH: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmpSessionHeader {
@@ -367,6 +371,58 @@ pub fn read_session_header(path: &Path) -> Result<OmpSessionHeader> {
     }
 }
 
+/// Validate a provider-owned nested artifact by walking its bounded chain of
+/// parent session files. `parentSession` is an authoritative archive edge,
+/// but it is not a running-worker claim: plain forks remain ordinary child
+/// archives and parked registry references are never scanned here.
+fn nested_session_has_authoritative_parent(
+    root: &Path,
+    path: &Path,
+    header: &OmpSessionHeader,
+) -> bool {
+    let mut current = path.to_path_buf();
+    let mut child_header = header.clone();
+    for _ in 0..MAX_NESTED_SESSION_DEPTH {
+        let Some(parent_dir) = current.parent() else {
+            return false;
+        };
+        if !parent_dir.starts_with(root) {
+            return false;
+        }
+        let parent_path = parent_dir.with_extension("jsonl");
+        if parent_path == current || !parent_path.starts_with(root) {
+            return false;
+        }
+        let Ok(parent_header) = read_session_header(&parent_path) else {
+            return false;
+        };
+        let parent_matches = child_header
+            .parent_session
+            .as_deref()
+            .is_some_and(|declared| {
+                declared == parent_header.native_id || Path::new(declared) == parent_path
+            });
+        if !parent_matches {
+            return false;
+        }
+        // A generated source is either directly under the session root or
+        // below one encoded-cwd bucket. Deeper paths are artifact children
+        // and must continue walking their own parentSession edge.
+        let relative_depth = parent_path
+            .strip_prefix(root)
+            .ok()
+            .map(|value| value.components().count())
+            .unwrap_or(usize::MAX);
+        if relative_depth <= 2 {
+            return native_filename_id(&parent_path)
+                .is_none_or(|filename_id| filename_id == parent_header.native_id);
+        }
+        current = parent_path;
+        child_header = parent_header;
+    }
+    false
+}
+
 fn native_filename_id(path: &Path) -> Option<&str> {
     let stem = path.file_stem()?.to_str()?;
     let (prefix, id) = stem.rsplit_once('_')?;
@@ -385,8 +441,11 @@ fn native_filename_id(path: &Path) -> Option<&str> {
 /// resume paths are validated by `read_session_header` alone.
 pub fn is_session_path(root: &Path, path: &Path) -> bool {
     let parent = path.parent();
-    let in_native_tree = parent == Some(root) || parent.and_then(Path::parent) == Some(root);
-    if path.extension().and_then(|value| value.to_str()) != Some("jsonl") || !in_native_tree {
+    let direct_source = parent == Some(root);
+    let bucket_source =
+        parent.and_then(Path::parent) == Some(root) && native_filename_id(path).is_some();
+    if path.extension().and_then(|value| value.to_str()) != Some("jsonl") || !path.starts_with(root)
+    {
         return false;
     }
     let Ok(metadata) = fs::symlink_metadata(path) else {
@@ -398,10 +457,16 @@ pub fn is_session_path(root: &Path, path: &Path) -> bool {
     let Ok(header) = read_session_header(path) else {
         return false;
     };
+    if !direct_source
+        && !bucket_source
+        && !nested_session_has_authoritative_parent(root, path, &header)
+    {
+        return false;
+    }
     // OMP accepts arbitrary explicit resume filenames. The timestamp/id suffix
-    // is only an additional check for its generated archive names, not a
-    // requirement for a valid exact source.
-    let generated_name = parent.and_then(Path::parent) == Some(root);
+    // is only an additional check for generated direct-child archive names;
+    // nested task artifacts are accepted only through their header edge.
+    let generated_name = direct_source || parent.and_then(Path::parent) == Some(root);
     !generated_name
         || native_filename_id(path).is_none_or(|filename_id| filename_id == header.native_id)
 }
@@ -1249,5 +1314,87 @@ mod tests {
         });
 
         assert!(roots.iter().any(|root| root == &pi_sessions));
+    }
+    #[test]
+    fn omp_nested_task_sources_require_an_authoritative_parent_header() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("sessions");
+        let parent_name = "2026-09-30T00-00-00-000Z_native-parent.jsonl";
+        let parent = root.join(parent_name);
+        let artifact_dir = root.join(parent_name.trim_end_matches(".jsonl"));
+        fs::create_dir_all(&artifact_dir).unwrap();
+        fs::write(
+            &parent,
+            include_str!("../tests/fixtures/golden/omp/task-parent.jsonl"),
+        )
+        .unwrap();
+        let child = artifact_dir.join("task-child.jsonl");
+        fs::write(
+            &child,
+            include_str!("../tests/fixtures/golden/omp/task-child.jsonl"),
+        )
+        .unwrap();
+        let fork = artifact_dir.join("fork-child.jsonl");
+        fs::write(
+            &fork,
+            include_str!("../tests/fixtures/golden/omp/fork-child.jsonl"),
+        )
+        .unwrap();
+
+        assert!(is_session_path(&root, &parent));
+        assert!(is_session_path(&root, &child));
+        // `parentSession` is an archive edge for both task and plain fork
+        // sources. Discovery retains the exact fork transcript but does not
+        // claim either source as a running worker.
+        assert!(is_session_path(&root, &fork));
+        assert_eq!(
+            read_session_header(&fork)
+                .unwrap()
+                .parent_session
+                .as_deref(),
+            Some("native-parent")
+        );
+        // Stock OMP stores sessions under an encoded-cwd bucket; the parent
+        // file and its artifact directory must retain the same binding rules.
+        let bucket = root.join("-tmp-omp-task");
+        let bucket_parent = bucket.join(parent_name);
+        let bucket_artifact_dir = bucket.join(parent_name.trim_end_matches(".jsonl"));
+        fs::create_dir_all(&bucket_artifact_dir).unwrap();
+        fs::write(
+            &bucket_parent,
+            include_str!("../tests/fixtures/golden/omp/task-parent.jsonl"),
+        )
+        .unwrap();
+        let bucket_child = bucket_artifact_dir.join("task-child.jsonl");
+        fs::write(
+            &bucket_child,
+            include_str!("../tests/fixtures/golden/omp/task-child.jsonl"),
+        )
+        .unwrap();
+        assert!(is_session_path(&root, &bucket_parent));
+        assert!(is_session_path(&root, &bucket_child));
+
+        let no_edge = artifact_dir.join("no-edge.jsonl");
+        fs::write(
+            &no_edge,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"native-no-edge\",\"cwd\":\"/tmp/omp-task\"}\n",
+        )
+        .unwrap();
+        assert!(!is_session_path(&root, &no_edge));
+
+        let mismatched_dir = root.join("2026-09-30T00-00-01-000Z_other-parent");
+        fs::create_dir_all(&mismatched_dir).unwrap();
+        fs::write(
+            mismatched_dir.with_extension("jsonl"),
+            "{\"type\":\"session\",\"version\":3,\"id\":\"native-other-parent\",\"cwd\":\"/tmp/omp-task\"}\n",
+        )
+        .unwrap();
+        let mismatched = mismatched_dir.join("task-child.jsonl");
+        fs::write(
+            &mismatched,
+            include_str!("../tests/fixtures/golden/omp/task-child.jsonl"),
+        )
+        .unwrap();
+        assert!(!is_session_path(&root, &mismatched));
     }
 }

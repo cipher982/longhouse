@@ -70,6 +70,8 @@ function buildBackgroundInspector(
       sessionId,
       latestActivityAt: task.last_activity_at ?? null,
       toolCalls,
+      registeredAt: task.registered_at ?? null,
+      nativeProgress: task.native_progress ?? null,
     };
   });
   const subagentCount = delegation.kinds?.subagent;

@@ -27,7 +27,13 @@ pub fn parse_codex_subagent_source(source: &Value) -> Option<CodexSubagentSource
         .or_else(|| source.get("subAgent"))
         .or_else(|| source.get("sub_agent"))?;
 
-    if subagent.is_string() {
+    if subagent.is_null() || (!subagent.is_string() && !subagent.is_object()) {
+        return None;
+    }
+    if let Some(marker) = subagent.as_str() {
+        if marker.trim().is_empty() {
+            return None;
+        }
         // A bare string says "this is a subagent" and nothing more: no spawn
         // record to read a depth or a name from.
         return Some(CodexSubagentSource::default());
@@ -240,6 +246,30 @@ mod tests {
     fn root_string_source_is_not_subagent() {
         assert!(parse_codex_subagent_source(&json!("vscode")).is_none());
     }
+    #[test]
+    fn ordinary_fork_parentage_does_not_claim_worker_lineage() {
+        let fork = json!({
+            "id": "fork-thread",
+            "forkedFromId": "parent-thread",
+            "source": "vscode"
+        });
+
+        assert!(!codex_thread_value_is_subagent(&fork));
+        assert!(codex_thread_value_has_primary_source(&fork));
+    }
+
+    #[test]
+    fn explicit_thread_parent_is_worker_evidence_without_source_tag() {
+        let child = json!({
+            "id": "child-thread",
+            "parentThreadId": "parent-thread"
+        });
+
+        let source = codex_thread_value_subagent_source(&child)
+            .expect("provider parentThreadId is worker evidence");
+        assert_eq!(source.parent_thread_id.as_deref(), Some("parent-thread"));
+        assert!(source.depth.is_none());
+    }
 
     #[test]
     fn parses_non_thread_spawn_subagent_without_parent() {
@@ -251,5 +281,12 @@ mod tests {
 
         let parsed = parse_codex_subagent_source(&source).unwrap();
         assert_eq!(parsed.parent_thread_id, None);
+    }
+    #[test]
+    fn null_scalar_or_empty_subagent_values_are_not_identity_evidence() {
+        assert!(parse_codex_subagent_source(&json!({"subagent": null})).is_none());
+        assert!(parse_codex_subagent_source(&json!({"subagent": 1})).is_none());
+        assert!(parse_codex_subagent_source(&json!({"subagent": []})).is_none());
+        assert!(parse_codex_subagent_source(&json!({"subagent": "  "})).is_none());
     }
 }

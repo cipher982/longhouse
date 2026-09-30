@@ -4396,6 +4396,46 @@ export interface components {
             description?: string | null;
             /** Parent Tool Call Id */
             parent_tool_call_id?: string | null;
+            /** Native Child Id */
+            native_child_id?: string | null;
+            /** Native Child Source Path */
+            native_child_source_path?: string | null;
+            /** Registered At */
+            registered_at?: string | null;
+            native_progress?: components["schemas"]["SessionDelegationProgress"] | null;
+        };
+        /**
+         * DelegationUpdateIn
+         * @description One native child edge, never a replacement background registry.
+         */
+        DelegationUpdateIn: {
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "observe" | "remove";
+            /**
+             * Membership
+             * @constant
+             */
+            membership: "existing_exact_link_only";
+            item: components["schemas"]["DelegationTaskIn"];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Source Event
+             * @enum {string}
+             */
+            source_event: "SubagentStart" | "SubagentStop";
+            /** Source Agent Id */
+            source_agent_id: string;
+            /** Source Agent Type */
+            source_agent_type?: string | null;
+            /** Source Agent Transcript Path */
+            source_agent_transcript_path?: string | null;
         };
         /** DeploymentFenceRequest */
         DeploymentFenceRequest: {
@@ -6149,7 +6189,7 @@ export interface components {
             /** Session Id */
             session_id: string;
             /** State */
-            state: string;
+            state?: string | null;
             /** Tool Name */
             tool_name?: string | null;
             /** Cwd */
@@ -6164,6 +6204,7 @@ export interface components {
             /** Dedupe Key */
             dedupe_key?: string | null;
             delegation?: components["schemas"]["DelegationSnapshotIn"] | null;
+            delegation_update?: components["schemas"]["DelegationUpdateIn"] | null;
             /** Run Id */
             run_id?: string | null;
             /** Provider Session Id */
@@ -8215,6 +8256,32 @@ export interface components {
             valid_until?: string | null;
         };
         /**
+         * SessionDelegationProgress
+         * @description Provider-reported task progress, distinct from archive counters and rates.
+         */
+        SessionDelegationProgress: {
+            /** Observed At */
+            observed_at?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Current Tool */
+            current_tool?: string | null;
+            /** Last Intent */
+            last_intent?: string | null;
+            /** Tool Count */
+            tool_count?: number | null;
+            /** Requests */
+            requests?: number | null;
+            /** Tokens */
+            tokens?: number | null;
+            /** Context Tokens */
+            context_tokens?: number | null;
+            /** Context Window */
+            context_window?: number | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+        };
+        /**
          * SessionDelegationTaskResponse
          * @description A provider task, with archive enrichment only through exact lineage.
          */
@@ -8241,6 +8308,9 @@ export interface components {
             assistant_messages?: number | null;
             /** Tool Calls */
             tool_calls?: number | null;
+            /** Registered At */
+            registered_at?: string | null;
+            native_progress?: components["schemas"]["SessionDelegationProgress"] | null;
         };
         /** SessionDeletionResponse */
         SessionDeletionResponse: {

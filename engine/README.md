@@ -21,4 +21,11 @@ system: the Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
 - `src/managed_phase_contract.rs` and `src/managed_identity_contract.rs` are
   generated; never edit them.
 
+Background evidence stays separate from parent activity. Claude registry
+snapshots and exact child lifecycle callbacks retain independent clocks; a
+completion callback can retire its matching task without renewing other work.
+OMP Helm observes the stock owner-scoped async manager and preserves native
+progress separately from child archive counters. Native handles never become
+child session IDs; navigation requires exact provider-authored lineage.
+
 Test: `make test-engine`. Install locally: `make install-engine`.

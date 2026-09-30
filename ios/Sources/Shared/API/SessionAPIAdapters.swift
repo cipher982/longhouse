@@ -68,7 +68,22 @@ private extension APISessionDelegationTaskResponse {
             sessionId: sessionId,
             userMessages: userMessages,
             assistantMessages: assistantMessages,
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            registeredAt: registeredAt,
+            nativeProgress: nativeProgress.map {
+                SessionDelegationProgress(
+                    observedAt: $0.observedAt,
+                    status: $0.status,
+                    currentTool: $0.currentTool,
+                    lastIntent: $0.lastIntent,
+                    toolCount: $0.toolCount,
+                    requests: $0.requests,
+                    tokens: $0.tokens,
+                    contextTokens: $0.contextTokens,
+                    contextWindow: $0.contextWindow,
+                    durationMs: $0.durationMs
+                )
+            }
         )
     }
 }

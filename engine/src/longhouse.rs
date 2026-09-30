@@ -671,6 +671,8 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     for event in [
         "SessionStart",
         "Stop",
+        "SubagentStart",
+        "SubagentStop",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
@@ -6161,6 +6163,18 @@ mod tests {
         assert!(settings["hooks"]["SessionStart"]
             .to_string()
             .contains("claude-lifecycle-hook"));
+        for event in ["SubagentStart", "SubagentStop"] {
+            assert_eq!(
+                settings["hooks"][event]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| entry.to_string().contains("claude-lifecycle-hook"))
+                    .count(),
+                1,
+                "expected one native Claude lifecycle hook for {event}"
+            );
+        }
         assert!(!temp.path().join(".claude.json").exists());
     }
 
