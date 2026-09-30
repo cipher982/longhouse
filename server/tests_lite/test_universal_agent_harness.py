@@ -1525,10 +1525,11 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         assert all("verdict" in item for item in operation_evidence.values())
         assert all("reason_code" in item for item in operation_evidence.values())
         assert all(item["canary"] == "provider_action_coverage" for item in operation_evidence.values())
-        # Codex, Pi and OMP declare no in-flight registry at all, so their cell
-        # is terminal absence rather than an unproven gap.
+        # Codex and Pi declare no in-flight registry at all, so their cell is
+        # terminal absence rather than an unproven gap. OMP declares native
+        # task/command jobs whose live registry is not yet proven.
         expected_background_reason = (
-            "provider_surface_absent" if result["provider"] in {"codex", "omp", "pi"} else "provider_background_status_unproven"
+            "provider_surface_absent" if result["provider"] in {"codex", "pi"} else "provider_background_status_unproven"
         )
         assert operation_evidence["orchestration_background_task_status"]["reason_code"] == expected_background_reason
         background_rows = [row for row in result["data"]["capabilities"] if row["capability"] == "background_task_status"]

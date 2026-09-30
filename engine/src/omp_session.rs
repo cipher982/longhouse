@@ -442,7 +442,11 @@ fn native_filename_id(path: &Path) -> Option<&str> {
 pub fn is_session_path(root: &Path, path: &Path) -> bool {
     let parent = path.parent();
     let direct_source = parent == Some(root);
-    let bucket_source = parent.and_then(Path::parent) == Some(root);
+    // One level down is either an encoded-cwd bucket, which holds sources
+    // whatever they are named, or a generated archive's artifact directory
+    // (`<timestamp>_<id>/`), whose files must prove their parent edge.
+    let bucket_source = parent.and_then(Path::parent) == Some(root)
+        && parent.is_some_and(|dir| native_filename_id(dir).is_none());
     if path.extension().and_then(|value| value.to_str()) != Some("jsonl") || !path.starts_with(root)
     {
         return false;
