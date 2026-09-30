@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler
 from http.server import HTTPServer
@@ -184,6 +185,10 @@ def main() -> None:
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     testflight.API = f"http://127.0.0.1:{server.server_port}"
+    fake_landing = tempfile.NamedTemporaryFile("w", suffix=".ts", delete=False)
+    fake_landing.write('export const IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/ABC123";\n')
+    fake_landing.close()
+    testflight.LANDING_LINK_FILE = Path(fake_landing.name)
     args = argparse.Namespace(build="42", version="0.1.56", whats_new="note for testers")
 
     try:
@@ -238,7 +243,28 @@ def main() -> None:
             raise AssertionError("publish must refuse an unprocessed build")
         FAKE.processing = "VALID"
 
-        # 5. a missing app record explains the one manual step
+        # 5. the link the landing page advertises is the group's link: a regenerated link fails the publish
+        # instead of leaving the Download on iOS buttons pointing at a dead invite.
+        advertised = ROOT / "web" / "src" / "features" / "marketing" / "landing" / "links.ts"
+        testflight.LANDING_LINK_FILE = advertised
+        real = testflight.landing_link()
+        assert real and real.startswith("https://testflight.apple.com/join/"), real
+        assert real in (ROOT / "README.md").read_text(), "README and links.ts must advertise the same link"
+        with tempfile.TemporaryDirectory() as directory:
+            landing = Path(directory) / "links.ts"
+            landing.write_text('export const IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/ABC123";\n')
+            testflight.LANDING_LINK_FILE = landing
+            assert run_publish(args)["public_link"] == "https://testflight.apple.com/join/ABC123"
+            FAKE.group["attributes"]["publicLink"] = "https://testflight.apple.com/join/REGEN99"
+            try:
+                run_publish(args)
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("publish must fail when the group's link is not the advertised one")
+        testflight.LANDING_LINK_FILE = advertised
+
+        # 6. a missing app record explains the one manual step
         FAKE.app_exists = False
         try:
             testflight.find_app(testflight.load_config())
@@ -249,6 +275,7 @@ def main() -> None:
         print("testflight.test: ok")
     finally:
         server.shutdown()
+        os.unlink(fake_landing.name)
 
 
 if __name__ == "__main__":

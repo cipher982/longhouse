@@ -26,6 +26,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -40,6 +41,8 @@ import jwt
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "ios" / "testflight" / "beta.toml"
 API = "https://api.appstoreconnect.apple.com"
+# The landing page's Download on iOS buttons read this file; the README carries the same link.
+LANDING_LINK_FILE = ROOT / "web" / "src" / "features" / "marketing" / "landing" / "links.ts"
 
 # externalBuildState values after which nothing more needs submitting.
 PAST_SUBMISSION = {
@@ -53,6 +56,12 @@ PAST_SUBMISSION = {
 
 class AscError(RuntimeError):
     pass
+
+
+def landing_link() -> str | None:
+    """The TestFlight link the landing page advertises."""
+    match = re.search(r'IOS_TESTFLIGHT_URL\s*=\s*"([^"]+)"', LANDING_LINK_FILE.read_text())
+    return match.group(1) if match else None
 
 
 def die(message: str) -> None:
@@ -413,6 +422,13 @@ def cmd_publish(args: argparse.Namespace) -> None:
         "public_link": group["attributes"].get("publicLink"),
     }
     print(json.dumps(result, indent=2))
+    # Re-enabling a switched-off link, or a recreated group, can mint a new one; the buttons must not go dead silently.
+    advertised = landing_link()
+    if result["public_link"] != advertised:
+        die(
+            f"the group's public link is {result['public_link']} but the landing page advertises {advertised}; "
+            "update IOS_TESTFLIGHT_URL in web/src/features/marketing/landing/links.ts and the link in README.md"
+        )
 
 
 def main() -> None:
