@@ -590,14 +590,17 @@ jobs:
     runs-on: macos-latest
     # One VM ran both merge schemes back to back: 10 to 25 minutes depending on
     # the hosted VM (measured 2026-09-20..29: 106 successes, median 17.7 min, max
-    # 24.8), 60% of it the UI scheme, whose 35 tests take about 8 minutes serially.
-    # Two lanes run the UI scheme's tests in halves side by side, the unit scheme
-    # riding in the first. A VM cannot overlap its own steps (booting the simulator
-    # during the compile made both slower on a 3-core VM), and the account's macOS
-    # concurrency is 5 jobs: three lanes plus a Launch Gate plus one more CI run
-    # queued lanes for 10 minutes, so this stays at two. `Scheme:i/n` slices that
-    # scheme only; scripts/tests/ios-test-slice.test.py fails if these lanes stop
-    # covering IOS_MERGE_TEST_SCHEMES in the Makefile.
+    # 24.8). Two lanes: the unit scheme plus the small UI test classes, and
+    # SessionChatUITests (28 of the 35 UI tests, about 75% of their time) by itself.
+    # `skip` and `only` name the same class, so a test added anywhere else runs in
+    # the first lane. Splitting a scheme's tests one by one (an enumeration and a
+    # stride) cost each lane 3.5 minutes to enumerate them; three lanes needed a
+    # third macOS runner, and this account's 5 macOS jobs at once were often taken
+    # by other CI runs and agents' dispatches: lanes waited 5 to 15 minutes to
+    # start. A VM cannot overlap its own steps (booting the simulator during the
+    # compile made both slower on a 3-core VM).
+    # scripts/tests/ios-test-lanes.test.py fails if these lanes stop covering
+    # IOS_MERGE_TEST_SCHEMES in the Makefile.
     # The timeout was 25 and cancelled healthy runs (the v0.1.56 and v0.1.58
     # release gates); 40 leaves headroom over the slowest success.
     timeout-minutes: 40
@@ -606,12 +609,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - lane: unit + ui 1/2
+          - lane: unit + ui
             schemes: "Longhouse LonghouseSmoke"
-            slice: "LonghouseSmoke:1/2"
-          - lane: ui 2/2
+            filter: "LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests"
+          - lane: ui chat
             schemes: LonghouseSmoke
-            slice: "LonghouseSmoke:2/2"
+            filter: "LonghouseSmoke:only:LonghouseIOSUITests/SessionChatUITests"
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -626,12 +629,12 @@ jobs:
       # The other place this runs (test-ios-helper) is gated on backend paths, so
       # an edit to only this matrix or the Makefile would skip it.
       - name: Check these lanes cover the merge gate
-        run: python3 scripts/tests/ios-test-slice.test.py
+        run: python3 scripts/tests/ios-test-lanes.test.py
 
       - name: Run iOS fixture in the isolated GitHub-hosted macOS VM
         env:
           NATIVE_OPTIONS_JSON: >-
-            {"IOS_TEST_SCHEMES": "${{ matrix.schemes }}", "IOS_TEST_SLICE": "${{ matrix.slice }}"}
+            {"IOS_TEST_SCHEMES": "${{ matrix.schemes }}", "IOS_TEST_FILTER": "${{ matrix.filter }}"}
         run: python3 scripts/qa/native-test-bootstrap.py --target test-ios
 
       - name: Upload native iOS evidence

@@ -18,69 +18,73 @@ fi
 DERIVED_DATA_PATH="${IOS_DERIVED_DATA_PATH:-${HOME}/Library/Developer/Xcode/DerivedData/LonghouseIOS-CI}"
 RESULTS_DIR="${IOS_RESULTS_DIR:-}"
 IOS_TEST_SCHEMES="${IOS_TEST_SCHEMES:-Longhouse}"
-# IOS_TEST_SLICE=i/n runs every n-th test of each scheme, starting at the i-th, so
-# n VMs can split one scheme's tests; Scheme:i/n slices that scheme only and runs
-# the others whole (scripts/ci/ios_test_slice.py). Unset runs all of them.
-IOS_TEST_SLICE="${IOS_TEST_SLICE:-}"
+# IOS_TEST_FILTER splits one scheme's tests over VMs: space-separated entries
+# `Scheme:only:Id` or `Scheme:skip:Id` (an -only-testing / -skip-testing target or
+# class) that apply to that scheme's run. CI gives one lane `skip:X` and another
+# `only:X`, so any test outside X runs in the first. Unset runs everything.
+IOS_TEST_FILTER="${IOS_TEST_FILTER:-}"
 
 mkdir -p "${DERIVED_DATA_PATH}"
 
-# A slice that names a scheme this run does not build would otherwise run every
-# scheme whole and pass.
-if [[ "${IOS_TEST_SLICE}" == *:* ]]; then
+# An entry that is malformed, or names a scheme this run does not build, would
+# otherwise be ignored and the run would pass having tested more or less than the
+# lane meant.
+for entry in ${IOS_TEST_FILTER}; do
+  entry_scheme="${entry%%:*}"
+  entry_rest="${entry#*:}"
   case " ${IOS_TEST_SCHEMES} " in
-    *" ${IOS_TEST_SLICE%%:*} "*) ;;
+    *" ${entry_scheme} "*) ;;
     *)
-      echo "IOS_TEST_SLICE '${IOS_TEST_SLICE}' names a scheme that IOS_TEST_SCHEMES ('${IOS_TEST_SCHEMES}') does not run" >&2
+      echo "IOS_TEST_FILTER entry '${entry}' names a scheme that IOS_TEST_SCHEMES ('${IOS_TEST_SCHEMES}') does not run" >&2
       exit 2
       ;;
   esac
-fi
+  case "${entry_rest}" in
+    only:?* | skip:?*) ;;
+    *)
+      echo "IOS_TEST_FILTER entry '${entry}' must look like Scheme:only:Id or Scheme:skip:Id" >&2
+      exit 2
+      ;;
+  esac
+done
 
 # Elapsed time at each stage: this lane's minutes go to a few long phases (build,
 # simulator boot, the UI tests) and the job log shows none of them by name.
 stage() { echo "[run_ios_tests] $* (t+${SECONDS}s)"; }
 
-# One -only-testing argument per line for the tests of $1 that this slice owns.
-# Any failure aborts the run: an empty answer would otherwise read as "nothing
-# to run" and pass.
-slice_arguments() {
-  local scheme="$1" slice="$2" directory enumeration status=0
-  # xcodebuild refuses to overwrite its output path, so hand it a name in a fresh
-  # directory rather than a mktemp file.
-  directory="$(mktemp -d)"
-  enumeration="${directory}/tests.json"
-  # errexit is off inside the command substitution this runs in, so the status is
-  # carried by hand; a bare `rm` last would turn a failed helper into success.
-  xcodebuild \
-    -project "${PROJECT_PATH}" \
-    -scheme "${scheme}" \
-    -destination "${DESTINATION}" \
-    -derivedDataPath "${DERIVED_DATA_PATH}" \
-    -enumerate-tests \
-    -test-enumeration-style flat \
-    -test-enumeration-format json \
-    -test-enumeration-output-path "${enumeration}" \
-    test-without-building >/dev/null || status=$?
-  if [[ "${status}" -eq 0 ]]; then
-    python3 "$(dirname "${BASH_SOURCE[0]}")/ios_test_slice.py" "${enumeration}" "${slice}" || status=$?
-  fi
-  rm -f "${enumeration}"
-  rmdir "${directory}"
-  return "${status}"
+# One -only-testing / -skip-testing argument per line for the entries of $1.
+filter_arguments() {
+  local scheme="$1" entry rest
+  for entry in ${IOS_TEST_FILTER}; do
+    if [[ "${entry%%:*}" != "${scheme}" ]]; then
+      continue
+    fi
+    rest="${entry#*:}"
+    if [[ "${rest%%:*}" == "only" ]]; then
+      printf '%s\n' "-only-testing:${rest#*:}"
+    else
+      printf '%s\n' "-skip-testing:${rest#*:}"
+    fi
+  done
 }
 
 run_scheme() {
   local scheme="$1"
   local result_bundle=""
-  local only_testing=()
-  local slice slice_output
+  local filters=()
+  local argument
 
   if [[ -n "${RESULTS_DIR}" ]]; then
     mkdir -p "${RESULTS_DIR}"
     result_bundle="${RESULTS_DIR}/${scheme}.xcresult"
     rm -rf "${result_bundle}"
   fi
+
+  while IFS= read -r argument; do
+    if [[ -n "${argument}" ]]; then
+      filters+=("${argument}")
+    fi
+  done < <(filter_arguments "${scheme}")
 
   stage "${scheme}: build-for-testing"
   xcodebuild \
@@ -91,23 +95,7 @@ run_scheme() {
     -disableAutomaticPackageResolution \
     build-for-testing
 
-  slice="$(python3 "$(dirname "${BASH_SOURCE[0]}")/ios_test_slice.py" --applies "${scheme}" "${IOS_TEST_SLICE}")"
-  if [[ -n "${slice}" ]]; then
-    stage "${scheme}: choosing the tests of slice ${slice}"
-    slice_output="$(slice_arguments "${scheme}" "${slice}")"
-    while IFS= read -r argument; do
-      if [[ -n "${argument}" ]]; then
-        only_testing+=("${argument}")
-      fi
-    done <<<"${slice_output}"
-    if [[ ${#only_testing[@]} -eq 0 ]]; then
-      stage "${scheme}: slice ${slice} owns no tests"
-      return 0
-    fi
-    stage "${scheme}: slice ${slice} runs ${#only_testing[@]} tests"
-  fi
-
-  stage "${scheme}: test-without-building"
+  stage "${scheme}: test-without-building ${filters[*]-}"
   if [[ -n "${result_bundle}" ]]; then
     xcodebuild \
       -project "${PROJECT_PATH}" \
@@ -115,7 +103,7 @@ run_scheme() {
       -destination "${DESTINATION}" \
       -derivedDataPath "${DERIVED_DATA_PATH}" \
       -resultBundlePath "${result_bundle}" \
-      ${only_testing[@]+"${only_testing[@]}"} \
+      ${filters[@]+"${filters[@]}"} \
       test-without-building
   else
     xcodebuild \
@@ -123,7 +111,7 @@ run_scheme() {
       -scheme "${scheme}" \
       -destination "${DESTINATION}" \
       -derivedDataPath "${DERIVED_DATA_PATH}" \
-      ${only_testing[@]+"${only_testing[@]}"} \
+      ${filters[@]+"${filters[@]}"} \
       test-without-building
   fi
 }

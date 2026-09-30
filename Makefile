@@ -13,7 +13,7 @@ endif
 endif
 
 ifeq ($(LONGHOUSE_TEST_DISPATCH),1)
-export ARGS TEST MODE FILES SCENARIOS CARGO_PROFILE LIFECYCLE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES IOS_TEST_SLICE PROJECT UNIVERSAL_PROVIDER PROVIDER PRODUCER_CLASS INVOCATION_ID RUN_REFERENCE LONGHOUSE_GIT_SHA PROVIDER_VERSION PROVIDER_EXECUTABLE_IDENTITY STORE_ROOT BUNDLE_OUTPUT ARTIFACT EVIDENCE_ROOT LONGHOUSE_NATIVE_SMOKE_REMOTE LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG
+export ARGS TEST MODE FILES SCENARIOS CARGO_PROFILE LIFECYCLE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES IOS_TEST_FILTER PROJECT UNIVERSAL_PROVIDER PROVIDER PRODUCER_CLASS INVOCATION_ID RUN_REFERENCE LONGHOUSE_GIT_SHA PROVIDER_VERSION PROVIDER_EXECUTABLE_IDENTITY STORE_ROOT BUNDLE_OUTPUT ARTIFACT EVIDENCE_ROOT LONGHOUSE_NATIVE_SMOKE_REMOTE LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG
 .PHONY: $(ISOLATED_GOALS)
 $(ISOLATED_GOALS):
 	@python3 scripts/qa/test-isolation.py --target "$@"
@@ -168,8 +168,8 @@ test-session-state: ## @internal Focused canonical session-state and Phase 7 fau
 # rather than setting IOS_TEST_SCHEMES itself, so `make test-ios` and the merge
 # gate cannot drift apart — they did, and every local run was green against a
 # scheme set CI never ran. The one thing CI may set is how to split that set over
-# VMs (IOS_TEST_SCHEMES and IOS_TEST_SLICE=i/n in the workflow matrix), and
-# scripts/tests/ios-test-slice.test.py fails if the lanes stop covering it.
+# VMs (IOS_TEST_SCHEMES and IOS_TEST_FILTER in the workflow matrix), and
+# scripts/tests/ios-test-lanes.test.py fails if the lanes stop covering it.
 IOS_MERGE_TEST_SCHEMES ?= Longhouse LonghouseSmoke
 IOS_PERF_TEST_SCHEMES ?= LonghouseChatStress
 
@@ -195,10 +195,10 @@ ios-project-check: ## Regenerate and verify Xcode source membership
 	@$(MAKE) ios-project
 	@scripts/build/check_ios_project_fresh.sh
 
-test-ios: ## iOS unit + smoke tests (simulator) — the merge gate (IOS_TEST_SCHEMES / IOS_TEST_SLICE=i/n run part of it)
+test-ios: ## iOS unit + smoke tests (simulator) — the merge gate (IOS_TEST_SCHEMES / IOS_TEST_FILTER run part of it)
 	@$(MAKE) ios-project
 	@DESTINATION="$${IOS_DESTINATION:-$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)}"; \
-	if [ -n "$(IOS_TEST_SCHEMES)$(IOS_TEST_SLICE)" ]; then echo "test-ios: PARTIAL run (schemes '$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))', slice '$(IOS_TEST_SLICE)'); the merge gate is '$(IOS_MERGE_TEST_SCHEMES)'"; fi; \
+	if [ -n "$(IOS_TEST_SCHEMES)$(IOS_TEST_FILTER)" ]; then echo "test-ios: PARTIAL run (schemes '$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))', filter '$(IOS_TEST_FILTER)'); the merge gate is '$(IOS_MERGE_TEST_SCHEMES)'"; fi; \
 	IOS_TEST_SCHEMES="$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChatUITests/testName)
@@ -212,7 +212,7 @@ ios-previews: ## Render every SwiftUI #Preview to PNG under artifacts/ios-previe
 test-ios-perf: ## iOS wall-clock benchmarks (simulator) — never gates a merge
 	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
-	IOS_TEST_SCHEMES="$(IOS_PERF_TEST_SCHEMES)" IOS_TEST_SLICE="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="$(IOS_PERF_TEST_SCHEMES)" IOS_TEST_FILTER="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
 	@$(MAKE) ios-project
@@ -369,7 +369,7 @@ test-mobile-chat-stress: ## Holistic iOS mobile chat fixture stress test
 	@$(MAKE) ios-project
 	@rm -f /tmp/longhouse-chat-replay.json
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
-	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_SLICE="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_FILTER="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mobile chat stress test
 	@$(MAKE) ios-project
@@ -384,14 +384,14 @@ test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mob
 		--output "$$REPLAY_PATH"; \
 	DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
 	LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH="$$REPLAY_PATH" \
-	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_SLICE="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_FILTER="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-ios-helper: ## iOS simulator and native-dispatch helper script tests
 	@bash scripts/tests/select-ios-simulator.test.sh
 	@python3 scripts/tests/simlab.test.py
 	@python3 scripts/tests/simlab-proxy.test.py
 	@python3 scripts/tests/native-test-isolation.test.py
-	@python3 scripts/tests/ios-test-slice.test.py
+	@python3 scripts/tests/ios-test-lanes.test.py
 
 testflight: ## Ship a main revision to TestFlight via CI (SHA=<sha>, default HEAD; WHATS_NEW="tester note")
 	@scripts/ops/testflight-ship.sh $(SHA)
