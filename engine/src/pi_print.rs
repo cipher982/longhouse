@@ -1595,6 +1595,11 @@ mod tests {
             path,
             format!(
                 r#"#!/usr/bin/env python3
+import signal
+# Die on SIGINT the way Pi does, from whichever thread takes it. CPython's own
+# KeyboardInterrupt handling loses a SIGINT that lands while the interpreter starts
+# or that another thread takes while the main one is blocked reading stdin.
+signal.signal(signal.SIGINT, signal.SIG_DFL)
 import json, os, sys, threading, time, uuid
 if "--version" in sys.argv:
     print("0.84.1")
@@ -1895,8 +1900,31 @@ if args[:2] == ["--mode", "rpc"]:
         );
         config.turn_id = Some(turn_id.clone());
         let summary = start_pi_print_turn(config).await.unwrap();
+        // Interrupt a turn that is running, not one still starting. This test hung
+        // in CI with no Longhouse code involved: the fake is a Python script, and
+        // CPython loses a SIGINT sent while its interpreter starts. On the CI
+        // image under load, interrupting at the first frame lost 20 of 8000
+        // launches and interrupting within 80 ms of spawn lost 64 of 8000; a lost
+        // SIGINT leaves the fake asleep for its whole 60 s turn. The fake now
+        // restores the kernel's default SIGINT action on its first line, and
+        // `agent_start` (printed after it, once the prompt is read) proves that
+        // line ran, so the interrupt cannot land in the lossy window: 0 of 16000.
+        let started = tokio::time::Instant::now() + Duration::from_secs(30);
+        while !std::fs::read_to_string(&summary.stdout_path)
+            .unwrap_or_default()
+            .contains("\"agent_start\"")
+        {
+            assert!(
+                tokio::time::Instant::now() < started,
+                "the fake Pi never acknowledged its prompt"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         interrupt_pi_print_turn(&run_id, &session_id, &thread_id, &turn_id).unwrap();
 
+        // A healthy settle takes a fraction of a second; the wait below is the
+        // fake's own turn length, so a run that never settles fails at the
+        // moment the fake would have finished anyway.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         loop {
             let claim = crate::turn_claims::default_registry()

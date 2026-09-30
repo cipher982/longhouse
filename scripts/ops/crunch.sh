@@ -32,6 +32,14 @@
 # included), so a goal that stamps git identity or dirtiness (release, validate-build-identity) would record that
 # synthetic commit. The test lanes never see it (their container gets no .git). Keep those goals on the laptop.
 #
+# Rust: there is no `cargo` on the guest's PATH, on purpose. The toolchain is pinned in the test image and the guest
+# keeps no second one to drift. `make test-engine` and `make test-engine-single TEST=mod::tests::name` use the image.
+# For any other cargo command (a loop, a filter, nextest flags) run it in that image through test-isolation's ad-hoc
+# mode; the image carries the dependencies warm, so only the engine crate builds (~30 s):
+#   scripts/ops/crunch.sh run "python3 scripts/qa/test-isolation.py --target test-engine-single --command bash -c \
+#       'python3 scripts/build/generate_build_identity.py && python3 scripts/build/cargo.py exec -- nextest run \
+#        --manifest-path engine/Cargo.toml --cargo-profile ci-test --bins -E \"test(pi_print)\"'"
+#
 # Up to CRUNCH_SLOTS runs (default 3) execute at once; a fourth waits for a free slot. Each run has its own
 # directory in the guest's tmpfs; the container image, Cargo dependencies and uv cache live in the image and
 # are shared, so runs are warm. The guest is reached through the hosted machine's ssh alias, then AF_VSOCK
