@@ -37,6 +37,17 @@ approve this machine, and starts the Machine Agent. On macOS it also drops
 its own address filled in. Runtime Host operators install `longhouse-server`
 in that server environment.
 
+**No Longhouse address yet?** Run one on this machine (Linux or macOS, about a minute):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if you already have uv
+uv tool install longhouse                          # the Runtime Host: longhouse-server
+longhouse-server onboard                           # starts it, installs the Machine Agent, asks what history to import
+```
+
+It serves `http://127.0.0.1:8080` and stops when the machine does; a trial. Use the
+self-host steps below for one that stays up, or hosted (invited addresses only for now).
+
 ### What gets imported
 
 Old transcripts can hold code and secrets from any project you ever ran an
@@ -68,17 +79,6 @@ longhouse uninstall             # revoke this machine's token, stop the service,
 Runtime Host and deletes the stored credentials. Sessions already uploaded stay
 in your Runtime Host's archive until you delete them there. To cut off a
 machine you cannot reach, revoke it under Settings, Devices on the Runtime Host.
-
-**No Longhouse address yet?** Run one on this machine (Linux or macOS, about a minute):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if you already have uv
-uv tool install longhouse                          # the Runtime Host: longhouse-server
-longhouse-server onboard                           # starts it, installs the Machine Agent, imports your sessions
-```
-
-It serves `http://127.0.0.1:8080` and stops when the machine does; a trial. Use the
-self-host steps below for one that stays up, or hosted (invited addresses only for now).
 
 ## First Session
 

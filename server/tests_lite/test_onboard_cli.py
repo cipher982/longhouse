@@ -69,13 +69,13 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
     result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
-    assert "Install Longhouse, open it, and find one prior session." in result.output
+    assert "Install Longhouse, open it, and find a session." in result.output
     assert "Step 3: Bring in your existing sessions" in result.output
-    assert "Importing your existing sessions now..." in result.output
-    assert "[OK] Existing sessions are ready to look for in Longhouse" in result.output
+    assert "Importing the sessions your import scope allows now..." in result.output
+    assert "[OK] Import finished" in result.output
     assert "Step 4: Saving configuration" in result.output
     assert "Step 5: PATH verification" in result.output
-    assert "Find one prior session in the timeline" in result.output
+    assert "Find a session in the timeline" in result.output
     assert "longhouse claude" in result.output
     assert install_calls == [
         {
@@ -466,3 +466,46 @@ def test_local_health_probe_ignores_proxy_settings(monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _scope_calls(monkeypatch, *, facade: str | None, help_returncode: int = 0, interactive: bool = False):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(onboard_cli.shutil, "which", lambda name: facade if name == "longhouse" else None)
+    monkeypatch.setattr(onboard_cli.sys.stdin, "isatty", lambda: interactive, raising=False)
+    monkeypatch.setattr(onboard_cli.sys.stdout, "isatty", lambda: interactive, raising=False)
+
+    def _fake_run(args: list[str], **kwargs):
+        calls.append(args)
+        returncode = help_returncode if args[-1] == "--help" else 0
+        return SimpleNamespace(returncode=returncode, stderr="", stdout="")
+
+    monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
+    return calls
+
+
+def test_onboard_asks_what_to_import_before_importing_and_defaults_to_new_sessions(monkeypatch):
+    calls = _scope_calls(monkeypatch, facade="/x/longhouse")
+    onboard_cli._choose_import_scope()
+    assert calls == [
+        ["/x/longhouse", "machine", "scope", "--help"],
+        ["/x/longhouse", "machine", "scope", "--since", "now"],
+    ]
+
+
+def test_onboard_prompts_when_there_is_a_terminal(monkeypatch):
+    calls = _scope_calls(monkeypatch, facade="/x/longhouse", interactive=True)
+    onboard_cli._choose_import_scope()
+    assert calls[-1] == ["/x/longhouse", "machine", "scope", "--prompt"]
+
+
+def test_onboard_says_so_when_the_native_cli_predates_import_scopes(monkeypatch, capsys):
+    calls = _scope_calls(monkeypatch, facade="/x/longhouse", help_returncode=2)
+    onboard_cli._choose_import_scope()
+    assert calls == [["/x/longhouse", "machine", "scope", "--help"]]
+    assert "predates import scopes and imports ALL existing history" in _strip_ansi(capsys.readouterr().out)
+
+
+def test_onboard_without_a_native_cli_runs_nothing(monkeypatch):
+    calls = _scope_calls(monkeypatch, facade=None)
+    onboard_cli._choose_import_scope()
+    assert calls == []

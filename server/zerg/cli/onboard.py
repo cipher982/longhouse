@@ -366,6 +366,37 @@ def _runtime_host_command() -> list[str]:
     return [sys.executable, "-m", "zerg.cli.main"]
 
 
+def _choose_import_scope() -> None:
+    """Ask what history the Machine Agent may import, before anything is imported.
+
+    Old transcripts can hold code and secrets from any project, so a machine
+    imports only sessions that start from now on unless the person says
+    otherwise. A native `longhouse` that predates import scopes (or none at all)
+    is reported, never silently skipped: it will import everything.
+    """
+    facade = shutil.which("longhouse")
+    if not facade:
+        return
+    try:
+        supported = subprocess.run([facade, "machine", "scope", "--help"], capture_output=True, text=True).returncode == 0
+    except OSError:
+        supported = False
+    if not supported:
+        typer.secho(
+            "  [WARN] This longhouse release predates import scopes and imports ALL existing history.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    args = [facade, "machine", "scope", "--prompt" if interactive else "--since"]
+    if not interactive:
+        args.append("now")
+    try:
+        subprocess.run(args, check=False)
+    except OSError as error:
+        typer.secho(f"  [WARN] Could not record an import choice ({error}); only new sessions will be imported.", fg=typer.colors.YELLOW)
+
+
 def _run_initial_import(api_url: str) -> tuple[bool, str]:
     """Run a one-shot import so existing sessions become visible immediately."""
     try:
@@ -473,7 +504,7 @@ def onboard(
             skip_local_server = False
 
     typer.echo("")
-    typer.echo("Install Longhouse, open it, and find one prior session. Start Longhouse sessions later when you want control.")
+    typer.echo("Install Longhouse, open it, and find a session. Start Longhouse sessions later when you want control.")
     typer.echo("")
 
     # Step 1: Check dependencies
@@ -601,10 +632,11 @@ def onboard(
             typer.echo("       Or import once with: longhouse-server ship")
 
         if has_any_cli and server_healthy:
-            typer.echo("  Importing your existing sessions now...")
+            _choose_import_scope()
+            typer.echo("  Importing the sessions your import scope allows now...")
             imported, detail = _run_initial_import(api_url)
             if imported:
-                typer.secho("  [OK] Existing sessions are ready to look for in Longhouse", fg=typer.colors.GREEN)
+                typer.secho("  [OK] Import finished (older history only if you chose it: longhouse machine scope)", fg=typer.colors.GREEN)
             else:
                 typer.secho("  [WARN] Initial import failed", fg=typer.colors.YELLOW)
                 if detail:
@@ -662,7 +694,7 @@ def onboard(
             f"     (No display here. From your own machine: ssh -L {port}:127.0.0.1:{port} <this machine>, then open http://127.0.0.1:{port})"
         )
     if has_any_cli:
-        typer.echo("  2. Find one prior session in the timeline")
+        typer.echo("  2. Find a session in the timeline (only what your import scope allows is imported)")
     else:
         typer.echo("  2. Install a supported agent CLI when you want real imports")
     if installed_desktop_app:

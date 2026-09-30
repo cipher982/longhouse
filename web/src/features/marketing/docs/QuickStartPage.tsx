@@ -12,8 +12,8 @@ export default function QuickStartPage() {
     <>
       <h1>Quick Start</h1>
       <p className="docs-subtitle">
-        Install Longhouse, open it, and find one prior session. That is the
-        first proof it is already useful on this machine.
+        Install Longhouse, open it, and find one of your own sessions. That is
+        the first proof it is already useful on this machine.
       </p>
 
       <h2>0. Get a Longhouse address</h2>
