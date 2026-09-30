@@ -979,6 +979,8 @@ connect_this_machine() {
         error "Fix that, then run: longhouse machine repair --repair-service"
         return 1
     fi
+    local repair_pending=0
+    grep -Eq '\(recovery_pending\)[[:space:]]*$' "$repair_log" && repair_pending=1
     rm -f "$repair_log"
     if has_command claude; then
         "$longhouse_bin" claude configure >/dev/null 2>&1 || warn "Could not configure Claude hooks; run: longhouse claude configure"
@@ -990,7 +992,14 @@ connect_this_machine() {
     # The name auth stored is the token's own; report that one.
     local stored_name
     stored_name="$(sed -n 's/^ *"machine_name": *"\([^"]*\)".*/\1/p' "${LONGHOUSE_HOME:-$HOME/.longhouse}/machine/state.json" 2>/dev/null | head -n 1 || true)"
-    success "Connected as ${stored_name:-$machine_name}; its sessions will appear in the timeline"
+    if [[ "$repair_pending" == "1" ]]; then
+        # The service started but produced no fresh health evidence in the repair's wait
+        # (a slow first start, or the engine refused to start): not proof that anything ships.
+        warn "Connected as ${stored_name:-$machine_name}, but the Machine Agent has not confirmed it is healthy yet."
+        warn "  Check in a minute: longhouse local-health --json"
+    else
+        success "Connected as ${stored_name:-$machine_name}; its sessions will appear in the timeline"
+    fi
 }
 
 # Main installation flow

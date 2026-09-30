@@ -15,6 +15,12 @@ from zerg.cli import serve as serve_cli
 
 
 class _FakeSocket:
+    def settimeout(self, *_args) -> None:
+        return None
+
+    def connect_ex(self, _addr) -> int:
+        return 111  # nothing listening
+
     def setsockopt(self, *_args) -> None:
         return None
 

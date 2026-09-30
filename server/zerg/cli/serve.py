@@ -231,10 +231,23 @@ def _port_is_free(host: str, port: int) -> bool:
     `serve --stop` followed by `serve` (the README's own trial-to-self-host step)
     failed that way.
     """
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+
+    # A listener answers a connect on every platform. SO_REUSEADDR alone is not enough to
+    # see one: BSD/macOS let a second reuseaddr socket bind beside a wildcard or specific
+    # listener that Linux would refuse.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.5)
+        if probe.connect_ex((probe_host, port)) == 0:
+            return False
+    finally:
+        probe.close()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("127.0.0.1" if host in ("0.0.0.0", "::", "") else host, port))
+        sock.bind((probe_host, port))
         return True
     except OSError:
         return False
@@ -332,10 +345,10 @@ def _await_daemon_ready(host: str, port: int, *, timeout: float = 45.0) -> tuple
         if pid_file.exists():
             try:
                 os.kill(int(pid_file.read_text().strip()), 0)
-            except (ValueError, ProcessLookupError):
+            except ProcessLookupError:
                 return False, "the server process exited during startup"
-            except OSError:
-                pass  # exists but not ours to signal: still running
+            except (ValueError, OSError):
+                pass  # empty or half-written pid file, or not ours to signal: still coming up
         time.sleep(0.4)
     return False, f"the server did not answer on port {port} within {int(timeout)}s"
 

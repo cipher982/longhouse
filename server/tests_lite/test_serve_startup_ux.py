@@ -93,6 +93,29 @@ def test_daemon_not_ready_when_its_process_is_gone(tmp_path, monkeypatch):
     assert "exited during startup" in detail
 
 
+def test_daemon_wait_survives_a_half_written_pid_file(tmp_path, monkeypatch):
+    pid_file = tmp_path / "server.pid"
+    pid_file.write_text("")  # the daemon has created the file but not written its pid yet
+    monkeypatch.setattr(serve_cli, "_get_pid_file", lambda: pid_file)
+    port = _free_port()
+
+    def start_late():
+        threading.Event().wait(0.8)
+        server = HTTPServer(("127.0.0.1", port), _Health)
+        started.append(server)
+        server.serve_forever()
+
+    started: list[HTTPServer] = []
+    threading.Thread(target=start_late, daemon=True).start()
+    try:
+        ok, detail = serve_cli._await_daemon_ready("127.0.0.1", port, timeout=10)
+    finally:
+        for server in started:
+            server.shutdown()
+            server.server_close()
+    assert (ok, detail) == (True, "")
+
+
 class _RejectingMain(ModuleType):
     """zerg.main as it behaves when the environment fails validation on import."""
 

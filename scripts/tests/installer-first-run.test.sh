@@ -70,6 +70,14 @@ run_installer repair-rejected LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_U
     LONGHOUSE_TEST_REPAIR_VERDICT="Longhouse needs complete machine state before native service repair can run (rejected_machine_state_incomplete)"
 [[ "$STATUS" != 0 ]] || fail "installer reported success although repair was rejected" repair-rejected
 
+# 2b'. a start that produced no fresh health evidence installs, but does not claim sessions will appear
+run_installer repair-pending LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_URL=http://127.0.0.1:1 \
+    LONGHOUSE_DEVICE_TOKEN=test-token \
+    LONGHOUSE_TEST_REPAIR_VERDICT="Repair ran, but useful Machine Agent service is not yet verified (recovery_pending)"
+[[ "$STATUS" == 0 ]] || fail "an unverified start must not fail the install" repair-pending
+grep -q "has not confirmed it is healthy" "$TEST_ROOT/repair-pending.log" || fail "no warning for an unverified start" repair-pending
+! grep -q "sessions will appear" "$TEST_ROOT/repair-pending.log" || fail "installer promised sessions after an unverified start" repair-pending
+
 # 2c. a recovered service still connects
 run_installer repair-ok LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_URL=http://127.0.0.1:1 \
     LONGHOUSE_DEVICE_TOKEN=test-token \
