@@ -441,8 +441,12 @@ export function SessionLedger({
                       <>
                         {state.backgroundInspector.count} task
                         {state.backgroundInspector.count === 1 ? "" : "s"} ·{" "}
-                        {state.backgroundInspector.subagentCount} agent
-                        {state.backgroundInspector.subagentCount === 1 ? "" : "s"}
+                        {state.backgroundInspector.subagentCount == null ? "types not reported" : (
+                          <>
+                            {state.backgroundInspector.subagentCount} agent
+                            {state.backgroundInspector.subagentCount === 1 ? "" : "s"}
+                          </>
+                        )}
                       </>
                     )}
                   </span>

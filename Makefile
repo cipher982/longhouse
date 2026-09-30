@@ -423,11 +423,11 @@ ios-unit: ## Hermetic iOS unit tests on this machine (TEST=LonghouseIOSTests/Sui
 		-only-testing:$(or $(TEST),LonghouseIOSTests) \
 		test
 
-test-frontend: ## Frontend unit tests + type-check (~1min)
+test-frontend: ## Frontend unit tests + type-check (ARGS="src/path.test.ts" selects a focused run)
 	@# One vitest worker per CPU the guest actually has (Node's
 	@# availableParallelism honours the container's cgroup quota). --runInBand
 	@# pinned the suite to one worker: 44s against 15s on a 4-CPU guest.
-	@cd web && bun run validate:types && bun run test -- --run --maxWorkers=100%
+	@cd web && bun run validate:types && bun run test -- --run --maxWorkers=100% $(ARGS)
 
 test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
 	@python3 scripts/build/generate_build_identity.py

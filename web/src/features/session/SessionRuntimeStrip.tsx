@@ -73,9 +73,11 @@ function buildBackgroundInspector(
     };
   });
   const subagentCount = delegation.kinds?.subagent;
+  let typedCount = 0;
+  for (const kind in delegation.kinds) typedCount += delegation.kinds[kind];
   return {
     count: state === "unknown" ? null : delegation.count,
-    subagentCount: state === "unknown" ? null : (subagentCount ?? 0),
+    subagentCount: state === "unknown" ? null : (subagentCount ?? (typedCount === delegation.count ? 0 : null)),
     source: delegation.source ?? null,
     observedAt: delegation.observed_at ?? null,
     validUntil: delegation.valid_until ?? null,

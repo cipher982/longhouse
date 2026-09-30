@@ -528,6 +528,10 @@ describe("SessionRuntimeStrip background registry", () => {
     const fresh = buildSessionLedgerState(current, interaction, start + 10_000, true).backgroundInspector!;
     expect(fresh.count).toBe(1);
     expect(fresh.tasks[0].latestActivityAt).toBeNull();
+    current.session_state.delegation.kinds = {};
+    expect(buildSessionLedgerState(current, interaction, start + 10_000, true).backgroundInspector!.subagentCount).toBeNull();
+    current.session_state.delegation.kinds = { shell: 1 };
+    expect(buildSessionLedgerState(current, interaction, start + 10_000, true).backgroundInspector!.subagentCount).toBe(0);
     const expired = buildSessionLedgerState(current, interaction, start + 21_000, true).backgroundInspector!;
     expect(expired.count).toBeNull();
     expect(expired.subagentCount).toBeNull();
