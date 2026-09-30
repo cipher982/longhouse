@@ -83,11 +83,11 @@ export default function PrivacyPage() {
             If you were invited as a tester and agreed on the launch screen, your hosted instance
             keeps counts and dates that the person running the alpha can read: when your first
             machine connected, how many sessions came from each provider and when the first one
-            arrived, when you first searched, opened your instance from the iPhone app, and sent
-            an instruction to an agent, and which days you used it. Never transcripts, prompts,
-            file names, search text or code. Nothing is pushed anywhere: the control plane asks
-            your instance. Tell us to stop and we delete the instance and everything in it. A
-            self-hosted instance records none of this.
+            arrived, when you first searched, first opened a session in the iPhone app, and first
+            sent an instruction to an agent, and which days you did any of those in the web app or
+            the iPhone app. Never transcripts, prompts, file names, search text or code. Nothing is
+            pushed anywhere: the control plane asks your instance. Tell us to stop and we delete the
+            instance and everything in it. A self-hosted instance records none of this.
           </p>
 
           <h2>What We Don't Do</h2>

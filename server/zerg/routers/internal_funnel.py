@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 
 from fastapi import APIRouter
 from fastapi import Header
@@ -22,6 +23,8 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.services import funnel_facts
 from zerg.services.catalogd_supervisor import get_catalogd_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal", tags=["internal-funnel"])
 
@@ -47,5 +50,9 @@ async def tenant_funnel(x_internal_token: str | None = Header(None, alias="X-Int
     except (CatalogUnavailable, CatalogRemoteError) as exc:
         raise HTTPException(status_code=503, detail="catalog unavailable") from exc
     store = funnel_facts.get_store()
-    side_facts = await asyncio.to_thread(store.snapshot) if store is not None else {}
+    try:
+        side_facts = await asyncio.to_thread(store.snapshot) if store is not None else {}
+    except Exception:  # noqa: BLE001 - an unreadable side file means no milestones, not a broken route
+        logger.warning("funnel facts side file is unreadable", exc_info=True)
+        side_facts = {}
     return funnel_facts.build_document(catalog_facts, side_facts)

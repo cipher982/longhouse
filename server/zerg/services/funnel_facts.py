@@ -62,6 +62,8 @@ _IOS_USER_AGENT = re.compile(r"^(Longhouse-iOS\b|Longhouse/[^\s]+ CFNetwork/)")
 # Wire paths, as the outermost middleware sees them (the API is mounted at /api).
 _SEARCH_PATHS = frozenset({"/api/timeline/sessions", "/api/timeline/sessions/semantic", "/api/timeline/recall"})
 _STEER_PATH = re.compile(r"^/api/sessions/[^/]+/(input|inputs-multipart|send-live)$")
+# Opening one session (detail, tail, events...). `stream`, `semantic` and `summary` are not sessions.
+_OPEN_SESSION_PATH = re.compile(r"^/api/timeline/sessions/(?!stream$|semantic$|summary$)[^/]+(/(?!stream$)[^/]+)*$")
 
 _SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS milestones (name TEXT PRIMARY KEY, first_at TEXT NOT NULL)",
@@ -189,15 +191,28 @@ def _headers(scope: Scope) -> dict[str, str]:
 def classify(scope: Scope, status_code: int) -> tuple[str | None, list[str]]:
     """Decide what one finished request means: (surface, milestones).
 
-    Only a signed-in person's successful request counts. A machine agent shipping
-    in the background (`device:` principal), an agent (`session:`), a probe and a
-    rejected request are all ignored, so background traffic can never look like a
-    tester coming back.
+    Only a signed-in person's *deliberate* act counts: opening a session, searching,
+    or sending an instruction. A machine agent shipping (`device:` principal), an
+    agent (`session:`), a rejected request, token refresh, a stream, and a plain
+    timeline list all count for nothing. The list is excluded because the iPhone app
+    also fetches it on its own, from a silent push, without the person opening it;
+    opening a session is what a person does.
     """
     if scope.get("type") != "http" or not 200 <= status_code < 300:
         return None, []
     state = scope.get("state") or {}
     if not str(state.get("principal") or "").startswith("user:"):
+        return None, []
+
+    path, method = str(scope.get("path", "")), scope.get("method", "")
+    milestones: list[str] = []
+    if method == "GET" and path in _SEARCH_PATHS:
+        query = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("query", [""])[0]
+        if query.strip():
+            milestones.append("search")
+    elif method == "POST" and _STEER_PATH.match(path):
+        milestones.append("steer")
+    if not (milestones or (method == "GET" and _OPEN_SESSION_PATH.match(path))):
         return None, []
 
     headers = _headers(scope)
@@ -209,20 +224,7 @@ def classify(scope: Scope, status_code: int) -> tuple[str | None, list[str]]:
         surface = "web" if headers.get("cookie") and "mozilla" in user_agent.lower() else None
     if surface is None:
         return None, []
-
-    milestones = ["phone_view" if surface == "ios" else "web_view"]
-    path, method = str(scope.get("path", "")), scope.get("method", "")
-    # Token refresh and long-lived streams are what an open-but-unused tab or a
-    # backgrounded app does on its own; they are not a person coming back.
-    if path.startswith("/api/auth/") or path.endswith("/stream"):
-        return None, []
-    if method == "GET" and path in _SEARCH_PATHS:
-        query = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("query", [""])[0]
-        if query.strip():
-            milestones.append("search")
-    elif method == "POST" and _STEER_PATH.match(path):
-        milestones.append("steer")
-    return surface, milestones
+    return surface, ["phone_view" if surface == "ios" else "web_view", *milestones]
 
 
 def _record(store: FunnelFactsStore, surface: str, milestones: list[str]) -> None:

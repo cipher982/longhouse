@@ -55,50 +55,61 @@ def _scope(
 # ---------------------------------------------------------------------------
 
 
+OPEN = "/api/timeline/sessions/0b6d3c7e-1f4a-4a51-9d0c-3f4e5a6b7c8d"
+
+
 class TestClassify:
-    def test_the_iphone_app_is_a_phone_view(self):
-        assert funnel_facts.classify(_scope(), 200) == ("ios", ["phone_view"])
+    def test_opening_a_session_in_the_iphone_app_is_a_phone_view(self):
+        assert funnel_facts.classify(_scope(path=OPEN), 200) == ("ios", ["phone_view"])
+        assert funnel_facts.classify(_scope(path=OPEN + "/mobile-tail"), 200) == ("ios", ["phone_view"])
 
     def test_the_explicit_ios_agent_string_counts_too(self):
-        assert funnel_facts.classify(_scope(user_agent="Longhouse-iOS"), 200)[0] == "ios"
+        assert funnel_facts.classify(_scope(path=OPEN, user_agent="Longhouse-iOS"), 200)[0] == "ios"
 
-    def test_a_browser_with_a_session_cookie_is_a_web_view(self):
-        scope = _scope(user_agent=CHROME_UA, authorization=None, cookie="longhouse_session=abc")
+    def test_opening_a_session_in_a_browser_with_a_session_cookie_is_a_web_view(self):
+        scope = _scope(path=OPEN, user_agent=CHROME_UA, authorization=None, cookie="longhouse_session=abc")
         assert funnel_facts.classify(scope, 200) == ("web", ["web_view"])
+
+    def test_the_plain_timeline_list_is_not_a_view(self):
+        """The app fetches it on its own from a silent push, without the person opening it."""
+        assert funnel_facts.classify(_scope(path="/api/timeline/sessions"), 200) == (None, [])
+        assert funnel_facts.classify(_scope(path="/api/timeline/sessions/summary"), 200) == (None, [])
+        assert funnel_facts.classify(_scope(path="/api/timeline/filters"), 200) == (None, [])
 
     @pytest.mark.parametrize(
         "principal",
         ["device:machine-1", "session:abc", "unattributed", None],
     )
     def test_machines_agents_and_anonymous_callers_are_not_people(self, principal):
-        assert funnel_facts.classify(_scope(principal=principal), 200) == (None, [])
+        assert funnel_facts.classify(_scope(path=OPEN, principal=principal), 200) == (None, [])
 
     def test_the_widget_and_scripts_are_not_the_app(self):
-        widget = _scope(user_agent="LonghouseWidget/12339 CFNetwork/3860.100.1 Darwin/25.0.0")
-        script = _scope(user_agent="python-httpx/0.27")
+        widget = _scope(path=OPEN, user_agent="LonghouseWidget/12339 CFNetwork/3860.100.1 Darwin/25.0.0")
+        script = _scope(path=OPEN, user_agent="python-httpx/0.27")
         assert funnel_facts.classify(widget, 200) == (None, [])
         assert funnel_facts.classify(script, 200) == (None, [])
 
     @pytest.mark.parametrize("status", [199, 301, 401, 404, 500])
     def test_only_a_successful_response_counts(self, status):
-        assert funnel_facts.classify(_scope(), status) == (None, [])
+        assert funnel_facts.classify(_scope(path=OPEN), status) == (None, [])
 
     def test_background_refresh_and_streams_are_not_a_return(self):
         assert funnel_facts.classify(_scope(path="/api/auth/refresh-native"), 200) == (None, [])
         assert funnel_facts.classify(_scope(path="/api/timeline/sessions/stream"), 200) == (None, [])
+        assert funnel_facts.classify(_scope(path=OPEN + "/workspace/stream"), 200) == (None, [])
 
     def test_websockets_are_ignored(self):
-        assert funnel_facts.classify(_scope(scope_type="websocket"), 200) == (None, [])
+        assert funnel_facts.classify(_scope(path=OPEN, scope_type="websocket"), 200) == (None, [])
 
     def test_a_search_needs_query_text_on_a_search_route(self):
-        assert funnel_facts.classify(_scope(query="query=refresh+token"), 200)[1] == ["phone_view", "search"]
+        assert funnel_facts.classify(_scope(query="query=refresh+token"), 200) == ("ios", ["phone_view", "search"])
         assert funnel_facts.classify(_scope(path="/api/timeline/recall", query="query=x"), 200)[1] == [
             "phone_view",
             "search",
         ]
-        assert funnel_facts.classify(_scope(query=""), 200)[1] == ["phone_view"]  # just opening the timeline
-        assert funnel_facts.classify(_scope(query="query=%20"), 200)[1] == ["phone_view"]
-        assert funnel_facts.classify(_scope(query="query=x", method="POST"), 200)[1] == ["phone_view"]
+        assert funnel_facts.classify(_scope(query=""), 200) == (None, [])  # just listing
+        assert funnel_facts.classify(_scope(query="query=%20"), 200) == (None, [])
+        assert funnel_facts.classify(_scope(query="query=x", method="POST"), 200) == (None, [])
 
     @pytest.mark.parametrize("route", ["input", "inputs-multipart", "send-live"])
     def test_sending_an_instruction_is_a_steer(self, route):
@@ -106,8 +117,11 @@ class TestClassify:
         assert funnel_facts.classify(scope, 200)[1] == ["phone_view", "steer"]
 
     def test_reading_or_interrupting_is_not_a_steer(self):
-        assert funnel_facts.classify(_scope(method="GET", path="/api/sessions/abc123/inputs"), 200)[1] == ["phone_view"]
-        assert funnel_facts.classify(_scope(method="POST", path="/api/sessions/abc123/interrupt-live"), 200)[1] == ["phone_view"]
+        assert funnel_facts.classify(_scope(method="GET", path="/api/sessions/abc123/inputs"), 200) == (None, [])
+        assert funnel_facts.classify(_scope(method="POST", path="/api/sessions/abc123/interrupt-live"), 200) == (
+            None,
+            [],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +241,7 @@ async def test_enabled_records_the_observation_beside_the_live_catalog(facts_run
 async def test_a_machine_agent_shipping_leaves_no_trace(facts_runtime):
     path = facts_runtime(True)
 
-    funnel_facts.observe_request(_scope(principal="device:laptop", authorization="X"), 200)
+    funnel_facts.observe_request(_scope(path=OPEN, principal="device:laptop", authorization="X"), 200)
     await _drain_executor()
 
     assert not path.exists()
@@ -238,13 +252,13 @@ async def test_a_broken_side_file_never_reaches_the_request(facts_runtime, tmp_p
     path = facts_runtime(True)
     path.mkdir()  # a directory where the file should be: every open fails
 
-    funnel_facts.observe_request(_scope(), 200)  # must not raise
+    funnel_facts.observe_request(_scope(path=OPEN), 200)  # must not raise
     await _drain_executor()
 
 
 def test_observing_outside_an_event_loop_is_harmless(facts_runtime):
     facts_runtime(True)
-    funnel_facts.observe_request(_scope(), 200)  # no running loop: swallowed, not raised
+    funnel_facts.observe_request(_scope(path=OPEN), 200)  # no running loop: swallowed, not raised
 
 
 def test_the_document_merges_catalog_and_side_facts():
@@ -254,7 +268,7 @@ def test_the_document_merges_catalog_and_side_facts():
                 {"provider": "claude", "sessions": 40, "first_shipped_at": "2026-10-01T09:05:00+00:00"},
                 {"provider": "codex", "sessions": 2, "first_shipped_at": "2026-10-01T09:06:00+00:00"},
             ],
-            "devices": {"count": 2, "first_created_at": "2026-10-01T09:00:00+00:00", "last_used_at": None},
+            "devices": {"first_created_at": "2026-10-01T09:00:00+00:00"},
         },
         {"milestones": {"search": {"first_at": "a"}}, "active_days": {"ios": ["2026-10-01"]}},
     )
@@ -282,7 +296,7 @@ class _Catalog:
         assert method == "tenant.funnel.facts.read.v2"
         return {
             "providers": [{"provider": "claude", "sessions": 3, "first_shipped_at": "2026-10-01T09:05:00+00:00"}],
-            "devices": {"count": 1, "first_created_at": "2026-10-01T09:00:00+00:00", "last_used_at": None},
+            "devices": {"first_created_at": "2026-10-01T09:00:00+00:00"},
         }
 
 
@@ -343,6 +357,16 @@ def test_the_route_answers_the_document(funnel_route, tmp_path):
     assert body["machines"]["first_connected_at"] == "2026-10-01T09:00:00+00:00"
     assert body["active_days"]["ios"] == ["2026-10-01"]
     assert catalog.calls[1] == ("tenant.funnel.facts.read.v2", {"owner_id": "7"})
+
+
+def test_an_unreadable_side_file_costs_the_milestones_not_the_route(funnel_route, tmp_path):
+    client, _catalog = funnel_route(True)
+    (tmp_path / "funnel-facts.sqlite3").mkdir()  # a directory where the file should be
+
+    response = client.get("/internal/funnel", headers={"X-Internal-Token": "funnel-test-only"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["milestones"] == {} and response.json()["providers"]["claude"]["sessions"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -427,12 +451,11 @@ async def test_the_catalog_reports_machines_and_sessions_per_provider(daemon_pat
 
         providers = {row["provider"]: row for row in facts["providers"]}
         assert providers["claude"]["sessions"] == 2 and providers["codex"]["sessions"] == 1
-        assert facts["devices"]["count"] == 2  # the revoked one is not connected now
-        assert facts["devices"]["first_created_at"] == _at(1, 5).isoformat()  # but it did connect first
-        assert facts["devices"]["last_used_at"] == later.isoformat()
+        # History, not state: the revoked machine still connected first.
+        assert facts["devices"] == {"first_created_at": _at(1, 5).isoformat()}
 
         nobody = await client.call("tenant.funnel.facts.read.v2", {"owner_id": "9"})
-        assert nobody["providers"] == [] and nobody["devices"]["count"] == 0
+        assert nobody["providers"] == [] and nobody["devices"] == {"first_created_at": None}
 
         for bad in ("not-a-number", "9" * 19, ""):
             with pytest.raises(CatalogRemoteError):
