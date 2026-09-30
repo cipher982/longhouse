@@ -259,11 +259,8 @@ def build_document(catalog_facts: dict[str, Any], side_facts: dict[str, Any]) ->
     return {
         "schema": SCHEMA,
         "generated_at": _stamp(_now()),
-        "machines": {
-            "count": int(devices.get("count") or 0),
-            "first_connected_at": devices.get("first_created_at"),
-            "last_seen_at": devices.get("last_used_at"),
-        },
+        # Only what the tester's consent card lists: when the first machine connected.
+        "machines": {"first_connected_at": devices.get("first_created_at")},
         "providers": {
             row["provider"]: {"sessions": int(row["sessions"]), "first_shipped_at": row.get("first_shipped_at")}
             for row in catalog_facts.get("providers") or []

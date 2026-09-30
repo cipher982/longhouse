@@ -260,11 +260,7 @@ def test_the_document_merges_catalog_and_side_facts():
     )
 
     assert document["schema"] == "longhouse.tenant-funnel.v1"
-    assert document["machines"] == {
-        "count": 2,
-        "first_connected_at": "2026-10-01T09:00:00+00:00",
-        "last_seen_at": None,
-    }
+    assert document["machines"] == {"first_connected_at": "2026-10-01T09:00:00+00:00"}
     assert document["providers"]["claude"] == {"sessions": 40, "first_shipped_at": "2026-10-01T09:05:00+00:00"}
     assert document["milestones"]["search"]["first_at"] == "a"
     assert document["active_days"] == {"ios": ["2026-10-01"]}
