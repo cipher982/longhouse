@@ -122,6 +122,7 @@ class ImportGraph(unittest.TestCase):
             "server/zerg/services/proof.py": "",
             "server/zerg/services/paths.py": "",
             "server/zerg/services/other.py": "",
+            "server/zerg/services/late.py": "",
             "server/zerg/qa/embedded.py": (
                 "import textwrap\n"
                 "code = textwrap.dedent(\n"
@@ -140,11 +141,15 @@ class ImportGraph(unittest.TestCase):
                 "    from zerg.services.other import (\n"
                 "        thing,\n"
                 "    )\n"
+                "    from zerg.services.late import (Named,\n"
+                "        {more})\n"
                 '    """\n'
             ),
             "server/zerg/qa/aliased.py": (
+                "import builtins\n"
                 "from importlib import import_module as load\n"
                 'load("zerg.services.other")\n'
+                'builtins.__import__("zerg.services.paths")\n'
                 'unrelated("zerg.services.proof")\n'
             ),
         }
@@ -156,7 +161,9 @@ class ImportGraph(unittest.TestCase):
                 ("qa/embedded.py", "services/proof.py"),
                 ("qa/embedded.py", "services/__init__.py"),  # `from zerg.services import {symbol}`
                 ("qa/embedded.py", "services/other.py"),  # a parenthesized list
+                ("qa/embedded.py", "services/late.py"),  # names on the opener line
                 ("qa/aliased.py", "services/other.py"),
+                ("qa/aliased.py", "services/paths.py"),
             },
         )
 

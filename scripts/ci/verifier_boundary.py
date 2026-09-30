@@ -114,10 +114,11 @@ def _import_nodes(tree: ast.AST) -> Iterator[ast.AST]:
                 try:
                     yield from ast.walk(ast.parse(line))
                 except SyntaxError:
-                    # A chunk that stops at its placeholder (`from zerg.x import ` + {names}) or opens a parenthesized list.
-                    dangling = re.fullmatch(r"from[ \t]+(zerg[\w.]*)[ \t]+import[ \t]*\(?", line)
-                    if dangling:
-                        yield ast.ImportFrom(module=dangling.group(1), names=[ast.alias(name="*")], level=0)
+                    # A line that does not parse alone (`from zerg.x import ` + {names}, or the first line of a
+                    # parenthesized list) still names its module.
+                    partial = re.match(r"from[ \t]+(zerg[\w.]*)[ \t]+import\b", line)
+                    if partial:
+                        yield ast.ImportFrom(module=partial.group(1), names=[ast.alias(name="*")], level=0)
 
 
 def import_edges(sources: Mapping[str, str]) -> set[Edge]:
@@ -181,7 +182,7 @@ def import_edges(sources: Mapping[str, str]) -> set[Edge]:
 def _is_dynamic_import(func: ast.expr, loaders: set[str | None]) -> bool:
     if isinstance(func, ast.Name):
         return func.id in loaders
-    return isinstance(func, ast.Attribute) and func.attr == "import_module"
+    return isinstance(func, ast.Attribute) and func.attr in ("import_module", "__import__")
 
 
 def crossing_edges(edges: Iterable[Edge]) -> set[Edge]:
