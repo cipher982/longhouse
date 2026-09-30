@@ -18,16 +18,18 @@
 //! choosing "from now on" never hides new work. The engine enforces the scope
 //! at the seams where a source enters shipping (discovery, watcher events, the
 //! OpenCode session walk, Claude presence hooks); the `longhouse` facade
-//! writes it. This module is shared by both binaries and has no dependency on
-//! either.
+//! writes it. Providers that keep a conversation's start and folder in their own
+//! metadata (Cursor) are judged by that metadata, not by the age of their files.
+//! This module is shared by both binaries and has no dependency on either.
 //!
 //! An absent file means nobody ever chose. The engine resolves that once at
 //! startup (`config::resolve_import_scope`): a machine whose shipper state
 //! already holds history keeps shipping all of it, a machine connected to a
 //! Runtime Host with no history starts "from now on", and an engine run by hand
-//! with no machine state is unrestricted. Everything that runs before that
-//! resolution sees an absent file as unrestricted, which is what every install
-//! did before scopes existed.
+//! with no machine state is unrestricted. A process that never ran that
+//! resolution (the Claude presence hook) settles the same answer without
+//! writing it (`config::import_scope_in`), so an absent file is never read as
+//! "everything" on a machine that could be protected.
 
 #![allow(dead_code)] // The facade and the engine each use a different half.
 
@@ -179,6 +181,45 @@ impl ImportScope {
             return false;
         }
         file_cwd(&anchor).is_some_and(|cwd| self.project_contains(&cwd))
+    }
+
+    /// Whether a source whose start and folder live in the provider's own
+    /// metadata rather than in its first records is in scope: a SQLite store, or
+    /// a projection of one.
+    ///
+    /// The file system decides "old" first, exactly as in `admits_file`. A file
+    /// that looks new is then checked against `recorded_start`, the conversation's
+    /// own creation time, because the file system is wrong in the direction that
+    /// leaks: a provider can write a conversation's file long after the
+    /// conversation began, and a copy or a rewrite gives an old conversation a
+    /// fresh file. A source with no recorded start is left to the file system.
+    pub fn admits_recorded(
+        &self,
+        path: &Path,
+        recorded_start: impl FnOnce() -> Option<DateTime<Utc>>,
+        cwd: impl FnOnce() -> Option<String>,
+    ) -> bool {
+        let Some(since) = self.since else {
+            return true;
+        };
+        let Some(file_time) = file_time(path) else {
+            return true;
+        };
+        let started = if file_time >= since {
+            recorded_start().map_or(file_time, |recorded| recorded.min(file_time))
+        } else {
+            file_time
+        };
+        self.admits(Some(started), cwd)
+    }
+
+    /// Whether the file system alone says this source began before the scope:
+    /// the cheap first question, asked before anything is looked up.
+    pub fn file_is_older(&self, path: &Path) -> bool {
+        match (self.since, file_time(path)) {
+            (Some(since), Some(file_time)) => file_time < since,
+            _ => false,
+        }
     }
 
     fn project_contains(&self, cwd: &str) -> bool {
@@ -835,6 +876,57 @@ mod tests {
             !scope.admits_file(&child),
             "an old session's subagent is old"
         );
+    }
+
+    /// A source whose start lives in the provider's own metadata: the file
+    /// system says "old" on its own, and a file that looks new is checked against
+    /// the recorded start before it is believed.
+    #[test]
+    fn a_source_is_dated_by_its_recorded_start_when_the_file_looks_newer() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_file = dir.path().join("old.db");
+        fs::write(&old_file, "x").unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        let since = Utc::now();
+        std::thread::sleep(Duration::from_millis(60));
+        let new_file = dir.path().join("new.db");
+        fs::write(&new_file, "x").unwrap();
+        let scope = ImportScope::starting(since, "cli");
+        let long_ago = Some(at("2020-01-01T00:00:00Z"));
+        let later = Some(since + chrono::Duration::seconds(30));
+
+        // The file system alone settles an old file: nothing else is read.
+        assert!(scope.file_is_older(&old_file));
+        assert!(!scope.file_is_older(&new_file));
+        assert!(!scope.file_is_older(&dir.path().join("not-yet.db")));
+        assert!(!ImportScope::all("cli").file_is_older(&old_file));
+        assert!(!scope.admits_recorded(
+            &old_file,
+            || panic!("the recorded start is not needed"),
+            || None
+        ));
+        // A new-looking file that records an older start is old.
+        assert!(!scope.admits_recorded(&new_file, || long_ago, || None));
+        assert!(scope.admits_recorded(&new_file, || later, || panic!("age decides")));
+        // A recorded start later than the file never makes a source look newer.
+        assert!(!scope.admits_recorded(&old_file, || later, || None));
+        // No recorded start: the file system decides, as for any other source.
+        assert!(scope.admits_recorded(&new_file, || None, || None));
+        assert!(scope.admits_recorded(&dir.path().join("not-yet.db"), || long_ago, || None));
+        // Project opt-in brings an old conversation back by its recorded folder.
+        let with_project = ImportScope {
+            projects: vec![PathBuf::from("/work/a")],
+            ..scope.clone()
+        };
+        assert!(with_project.admits_recorded(&new_file, || long_ago, || Some("/work/a".into())));
+        assert!(!with_project.admits_recorded(&new_file, || long_ago, || Some("/work/b".into())));
+        assert!(!with_project.admits_recorded(&new_file, || long_ago, || None));
+        // Unrestricted: everything, reading nothing.
+        assert!(ImportScope::all("cli").admits_recorded(
+            &old_file,
+            || panic!("not needed"),
+            || panic!("not needed")
+        ));
     }
 
     #[test]

@@ -401,6 +401,14 @@ fn import_scope_for(machine_dir: Result<PathBuf>) -> ImportScope {
 /// directory: only sessions that start from then on. The moment is per
 /// directory and fixed, so it does not slide forward on every call.
 fn closed_scope(machine_dir: &Path, via: &str) -> ImportScope {
+    let closed = closed_from_first_moment(machine_dir, via);
+    remember_scope(machine_dir, &closed);
+    closed
+}
+
+/// `closed_scope` without remembering it, for an answer that should be asked
+/// again next time (a state database that was unreadable this once).
+fn closed_from_first_moment(machine_dir: &Path, via: &str) -> ImportScope {
     static SINCE: std::sync::LazyLock<
         std::sync::Mutex<HashMap<PathBuf, chrono::DateTime<chrono::Utc>>>,
     > = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
@@ -412,9 +420,7 @@ fn closed_scope(machine_dir: &Path, via: &str) -> ImportScope {
                 .or_insert_with(chrono::Utc::now)
         })
         .unwrap_or_else(|_| chrono::Utc::now());
-    let closed = ImportScope::starting(since, via);
-    remember_scope(machine_dir, &closed);
-    closed
+    ImportScope::starting(since, via)
 }
 
 /// The scope each machine directory last resolved to in this process. A daemon
@@ -435,20 +441,20 @@ fn last_known_scope(machine_dir: &Path) -> Option<ImportScope> {
 
 /// `import_scope` for an explicit machine directory.
 ///
-/// No stored scope and nothing resolved yet means nobody ever chose, which is
-/// what every install did before scopes existed: unrestricted.
 /// `resolve_import_scope` writes the first-run answer when the daemon starts, so
-/// a running daemon always has one. A stored scope that cannot be read is not
-/// guessed at: history stays closed from the moment this process first noticed,
-/// and the error is logged. A corrupt file can hide history that should ship; it
-/// can never leak history that should not.
+/// a running daemon always has one. A process that never resolved (the Claude
+/// presence hook, a command run beside the daemon) settles it the way the daemon
+/// would (`unsettled_scope`). A stored scope that cannot be read is not guessed
+/// at: history stays closed from the moment this process first noticed, and the
+/// error is logged. A corrupt file can hide history that should ship; it can
+/// never leak history that should not.
 pub fn import_scope_in(machine_dir: &Path) -> ImportScope {
     match ImportScope::load(machine_dir) {
         Ok(Some(scope)) => {
             remember_scope(machine_dir, &scope);
             scope
         }
-        Ok(None) => last_known_scope(machine_dir).unwrap_or_else(|| ImportScope::all("unset")),
+        Ok(None) => last_known_scope(machine_dir).unwrap_or_else(|| unsettled_scope(machine_dir)),
         Err(error) => {
             if !matches!(last_known_scope(machine_dir), Some(known) if known.chosen_via == "invalid")
             {
@@ -461,6 +467,46 @@ pub fn import_scope_in(machine_dir: &Path) -> ImportScope {
             closed_scope(machine_dir, "invalid")
         }
     }
+}
+
+/// No file and nothing remembered: nobody chose and this process has not run the
+/// daemon's first-run resolution. Answer as the daemon would, without writing,
+/// and never "everything" by default.
+///
+/// - A recorded choice stands.
+/// - A machine that shipped before scopes existed keeps its history: silently
+///   narrowing it would strand what it already sent.
+/// - A machine connected to a Runtime Host with no history starts from now on.
+/// - A machine with no Runtime Host at all has nothing that could receive a
+///   session and nobody to protect: it is an engine run by hand, as tests and
+///   benchmarks do, and stays unrestricted.
+///
+/// A state database that cannot be read decides nothing: history stays closed,
+/// and the question is asked again next time rather than remembered.
+fn unsettled_scope(machine_dir: &Path) -> ImportScope {
+    let history = match machine_history(machine_dir, None) {
+        Ok(history) => history,
+        Err(error) => {
+            tracing::error!(
+                error = %format!("{error:#}"),
+                "Cannot tell whether this machine has shipped before; importing only sessions that start from now until it can"
+            );
+            return closed_from_first_moment(machine_dir, "unreadable");
+        }
+    };
+    if let Some(recorded) = history.recorded {
+        remember_scope(machine_dir, &recorded);
+        return recorded;
+    }
+    if history.has_history {
+        let legacy = ImportScope::all("legacy");
+        remember_scope(machine_dir, &legacy);
+        return legacy;
+    }
+    if machine_is_connected(machine_dir) {
+        return closed_scope(machine_dir, "default");
+    }
+    ImportScope::all("unset")
 }
 
 /// Write the scope this process last knew back to disk if its file is gone.
@@ -907,6 +953,89 @@ mod import_scope_tests {
             closed,
             "still closed, not 'unset'"
         );
+    }
+
+    /// A process that never ran the daemon's first-run resolution (the Claude
+    /// presence hook runs as its own process) reads "no file" the way the daemon
+    /// would answer it, never as "import everything".
+    #[test]
+    fn a_process_that_never_resolved_does_not_read_a_missing_file_as_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        let scope = import_scope_in(&machine);
+        assert!(!scope.is_unrestricted());
+        assert_eq!(scope.chosen_via, "default");
+        assert!(
+            !machine.join("import-scope.json").exists(),
+            "asking writes nothing; the daemon owns the first-run file"
+        );
+        // A fixed moment, not one that slides forward on every call.
+        assert_eq!(import_scope_in(&machine).since, scope.since);
+    }
+
+    /// The promise to machines that already ship: for them a missing file still
+    /// means "everything they always sent", whichever process asks.
+    #[test]
+    fn a_machine_that_shipped_before_scopes_stays_unrestricted_for_a_process_that_never_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        std::fs::create_dir_all(dir.path().join("agent")).unwrap();
+        let real = crate::state::db::open_db(Some(&dir.path().join("agent/longhouse-shipper.db")))
+            .unwrap();
+        track_a_source(&real);
+        drop(real);
+        let scope = import_scope_in(&machine);
+        assert!(scope.is_unrestricted());
+        assert_eq!(scope.chosen_via, "legacy");
+        assert!(!machine.join("import-scope.json").exists());
+    }
+
+    #[test]
+    fn a_recorded_choice_answers_for_a_process_that_never_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        std::fs::create_dir_all(dir.path().join("agent")).unwrap();
+        let real = crate::state::db::open_db(Some(&dir.path().join("agent/longhouse-shipper.db")))
+            .unwrap();
+        let recorded = crate::import_scope::ImportScope::starting(chrono::Utc::now(), "prompt");
+        record_import_scope(&real, &recorded);
+        track_a_source(&real);
+        drop(real);
+        // The file is gone but the choice was not: still "from now on".
+        assert_eq!(import_scope_in(&machine), recorded);
+    }
+
+    #[test]
+    fn a_hand_run_engine_with_no_machine_state_stays_unrestricted_for_every_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let scope = import_scope_in(&dir.path().join("machine"));
+        assert!(scope.is_unrestricted());
+        assert_eq!(scope.chosen_via, "unset");
+    }
+
+    /// Neither guess is safe, so history stays closed, and the question is asked
+    /// again rather than remembered: a database that was unreadable once does not
+    /// narrow a machine that already shipped, for ever.
+    #[test]
+    fn an_unreadable_machine_database_closes_history_until_it_can_be_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        connect_machine(&machine);
+        std::fs::create_dir_all(dir.path().join("agent")).unwrap();
+        let state = dir.path().join("agent/longhouse-shipper.db");
+        std::fs::write(&state, "not a database at all").unwrap();
+        let closed = import_scope_in(&machine);
+        assert!(!closed.is_unrestricted());
+        assert_eq!(closed.chosen_via, "unreadable");
+
+        std::fs::remove_file(&state).unwrap();
+        let real = crate::state::db::open_db(Some(&state)).unwrap();
+        track_a_source(&real);
+        drop(real);
+        assert_eq!(import_scope_in(&machine).chosen_via, "legacy");
     }
 
     #[test]

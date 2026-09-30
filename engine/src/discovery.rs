@@ -200,13 +200,21 @@ pub struct DiscoveryScan {
 /// Whether a transcript source is inside the machine's import scope.
 ///
 /// OpenCode keeps every session in one database, so the database is always a
-/// source and the scope is applied to each session where it is read.
+/// source and the scope is applied to each session where it is read. Cursor
+/// keeps one database per conversation and judges it, and the projection of the
+/// same conversation, by the conversation's own start and folder. Every other
+/// provider writes one transcript file per session, judged by the file and its
+/// own first records.
 pub fn source_in_import_scope(
     scope: &crate::import_scope::ImportScope,
     provider: &str,
     path: &Path,
 ) -> bool {
-    provider == "opencode" || scope.admits_file(path)
+    match provider {
+        "opencode" => true,
+        "cursor" => crate::cursor_store::source_in_import_scope(scope, path),
+        _ => scope.admits_file(path),
+    }
 }
 
 /// Discover sources and build a path-free provider inventory in one traversal.
@@ -1667,5 +1675,213 @@ mod tests {
             Some((db.clone(), "cursor"))
         );
         assert_eq!(session_path_for_watcher_event(&shm, &providers), None);
+    }
+
+    /// One source per provider lane, in the layout the provider writes it.
+    /// Returned as `(lane, provider, path)`.
+    fn write_lane_sources(
+        home: &Path,
+        tag: &str,
+        created_ms: i64,
+    ) -> Vec<(&'static str, &'static str, PathBuf)> {
+        let mut written = Vec::new();
+        let mut put = |lane: &'static str, provider: &'static str, path: PathBuf, body: String| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, body).unwrap();
+            written.push((lane, provider, path));
+        };
+        let cwd = format!("/work/{tag}");
+        let claude_line = format!("{{\"cwd\":\"{cwd}\",\"type\":\"user\"}}\n");
+        put(
+            "claude",
+            "claude",
+            home.join(".claude/projects")
+                .join(format!("-work-{tag}"))
+                .join(format!("{tag}.jsonl")),
+            claude_line,
+        );
+        put(
+            "codex",
+            "codex",
+            home.join(".codex/sessions/2026/09/30")
+                .join(format!("rollout-{tag}.jsonl")),
+            format!("{{\"type\":\"session_meta\",\"payload\":{{\"cwd\":\"{cwd}\"}}}}\n"),
+        );
+        for (lane, brain) in [
+            ("antigravity-cli", ".gemini/antigravity-cli/brain"),
+            ("antigravity", ".gemini/antigravity/brain"),
+        ] {
+            put(
+                lane,
+                "antigravity",
+                home.join(brain)
+                    .join(tag)
+                    .join(".system_generated/logs/transcript_full.jsonl"),
+                "{\"step\":1}\n".to_string(),
+            );
+        }
+        put(
+            "gemini",
+            "antigravity",
+            home.join(".gemini/tmp").join(tag).join("logs.json"),
+            "[{\"sessionId\":\"s\",\"message\":\"hi\"}]".to_string(),
+        );
+        put(
+            "pi-console",
+            "pi",
+            home.join(".longhouse/agent/pi-console")
+                .join(format!("{tag}.jsonl")),
+            format!("{{\"type\":\"session\",\"version\":3,\"id\":\"pi-console-{tag}\",\"cwd\":\"{cwd}\"}}\n"),
+        );
+        put(
+            "pi-native",
+            "pi",
+            home.join(".pi/agent/sessions/--work--")
+                .join(format!("{tag}.jsonl")),
+            format!("{{\"type\":\"session\",\"version\":3,\"id\":\"pi-native-{tag}\",\"cwd\":\"{cwd}\"}}\n"),
+        );
+        put(
+            "omp",
+            "omp",
+            home.join(".omp/agent/sessions")
+                .join(format!("{tag}.jsonl")),
+            format!(
+                "{{\"type\":\"session\",\"version\":3,\"id\":\"omp-{tag}\",\"cwd\":\"{cwd}\"}}\n"
+            ),
+        );
+        put(
+            "cursor-acp",
+            "cursor_acp",
+            home.join(".longhouse/agent/cursor-acp-source")
+                .join(format!("{tag}.jsonl")),
+            "{\"role\":\"user\"}\n".to_string(),
+        );
+        let id = format!(
+            "{}-0000-4000-8000-000000000000",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
+        let conversation = crate::cursor_store::scope_fixtures::conversation(
+            &home.join(".cursor"),
+            "ws",
+            &id,
+            created_ms,
+            Some(&cwd),
+        );
+        written.push(("cursor-store", "cursor", conversation.store));
+        written.push(("cursor-projection", "cursor", conversation.projection));
+        written
+    }
+
+    /// The import scope is enforced for every lane the engine ships: at
+    /// discovery (first scan, reconciliation, one-shot `ship`) and at the gate a
+    /// live watcher event passes. A lane that stops honouring it fails here by
+    /// name. OpenCode keeps all its sessions in one database and is gated per
+    /// session (`opencode_db::tests::opencode_sessions_are_gated_one_by_one` and
+    /// `storage_v2_shipper::tests::the_opencode_walk_ships_only_sessions_inside_the_import_scope`).
+    #[test]
+    fn every_provider_lane_honours_the_import_scope() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let home = home_dir.path().canonicalize().unwrap();
+        let long_ago = chrono::Utc::now().timestamp_millis() - 30 * 24 * 3600 * 1000;
+        let old = write_lane_sources(&home, "old", long_ago);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let since = chrono::Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let after = since.timestamp_millis() + 30_000;
+        let new = write_lane_sources(&home, "new", after);
+
+        let mut providers = existing_provider_roots(provider_candidates(
+            &home,
+            &home.join(".claude"),
+            &home.join(".config"),
+        ));
+        for (name, root) in [
+            ("pi", home.join(".pi/agent/sessions")),
+            ("omp", home.join(".omp/agent/sessions")),
+        ] {
+            providers.push(ProviderConfig {
+                name,
+                root,
+                extension: "jsonl",
+            });
+        }
+
+        // Every source is a real source: with no restriction all of them are found.
+        let everything = discover_files_in_scope(&providers, &ImportScope::all("cli"));
+        let found: BTreeSet<&Path> = everything.files.iter().map(|f| f.path.as_path()).collect();
+        for (lane, _, path) in old.iter().chain(&new) {
+            assert!(
+                found.contains(path.as_path()),
+                "{lane}: {path:?} is not discoverable at all"
+            );
+        }
+
+        // From now on: discovery lists the new sources and only those.
+        let scope = ImportScope::starting(since, "cli");
+        let scan = discover_files_in_scope(&providers, &scope);
+        let listed: BTreeSet<&Path> = scan.files.iter().map(|f| f.path.as_path()).collect();
+        for (lane, _, path) in &old {
+            assert!(
+                !listed.contains(path.as_path()),
+                "{lane}: an old source was discovered: {path:?}"
+            );
+        }
+        for (lane, _, path) in &new {
+            assert!(
+                listed.contains(path.as_path()),
+                "{lane}: a new source was left out: {path:?}"
+            );
+        }
+
+        // And the gate a live watcher event passes agrees, path by path.
+        for (lane, provider, path) in &old {
+            let routed = session_path_for_watcher_event(path, &providers)
+                .unwrap_or_else(|| panic!("{lane}: no provider routes {path:?}"));
+            assert!(
+                !source_in_import_scope(&scope, routed.1, &routed.0),
+                "{lane} ({provider}): a live event for an old source would ship it"
+            );
+        }
+        for (lane, provider, path) in &new {
+            let routed = session_path_for_watcher_event(path, &providers)
+                .unwrap_or_else(|| panic!("{lane}: no provider routes {path:?}"));
+            assert!(
+                source_in_import_scope(&scope, routed.1, &routed.0),
+                "{lane} ({provider}): a live event for a new source is dropped"
+            );
+        }
+
+        // One project brought back: only its old sources, in every lane.
+        let with_project = ImportScope {
+            projects: vec![PathBuf::from("/work/old")],
+            ..scope
+        };
+        let scan = discover_files_in_scope(&providers, &with_project);
+        let listed: BTreeSet<&Path> = scan.files.iter().map(|f| f.path.as_path()).collect();
+        for (lane, _, path) in &new {
+            assert!(
+                listed.contains(path.as_path()),
+                "{lane}: project opt-in hid a new source"
+            );
+        }
+        // Lanes that record a folder in the source can be opted in by it. Claude
+        // and Codex name it in their first records, Pi and OMP in the header,
+        // Cursor in the sidecar beside the store; the others record none.
+        let by_folder = [
+            "claude",
+            "codex",
+            "pi-console",
+            "pi-native",
+            "omp",
+            "cursor-store",
+            "cursor-projection",
+        ];
+        for (lane, _, path) in &old {
+            assert_eq!(
+                listed.contains(path.as_path()),
+                by_folder.contains(lane),
+                "{lane}: project opt-in for {path:?}"
+            );
+        }
     }
 }

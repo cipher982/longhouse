@@ -3014,6 +3014,59 @@ mod tests {
         assert!(page[0].fingerprint.is_empty());
     }
 
+    /// One database holds every session the machine ever ran, so the scope is
+    /// applied per session, by the session's own creation time and folder.
+    #[test]
+    fn opencode_sessions_are_gated_one_by_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        // The fixture's session was created in May 2026 in the Longhouse folder.
+        create_fixture_db(&db_path);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO session (id, project_id, parent_id, directory, path, title, version, time_created, time_updated)
+             VALUES ('ses_new', 'proj_longhouse', NULL, '/work/new', NULL, 'new', '1', ?1, ?1)",
+            params![now_ms + 60_000],
+        )
+        .unwrap();
+        drop(conn);
+        let sessions = list_opencode_sessions_page(&db_path, 64, 0).unwrap();
+        let since = chrono::Utc::now();
+        let scope = crate::import_scope::ImportScope::starting(since, "cli");
+        let admitted: Vec<&str> = sessions
+            .iter()
+            .filter(|session| session.in_import_scope(&scope))
+            .map(|session| session.provider_session_id.as_str())
+            .collect();
+        assert_eq!(admitted, vec!["ses_new"]);
+
+        // A project opts the old session back in by the folder it ran in.
+        let with_project = crate::import_scope::ImportScope {
+            projects: vec![std::path::PathBuf::from("/Users/davidrose/git/zerg")],
+            ..scope.clone()
+        };
+        let mut admitted: Vec<&str> = sessions
+            .iter()
+            .filter(|session| session.in_import_scope(&with_project))
+            .map(|session| session.provider_session_id.as_str())
+            .collect();
+        admitted.sort();
+        assert_eq!(admitted, vec!["ses_new", "ses_test"]);
+
+        // Nothing restricted: both.
+        let all = crate::import_scope::ImportScope::all("cli");
+        assert!(sessions.iter().all(|session| session.in_import_scope(&all)));
+
+        // A row with no creation time is not known to be new.
+        let undated = OpenCodeSessionCandidate {
+            created_ms: None,
+            directory: None,
+            ..sessions[0].clone()
+        };
+        assert!(!undated.in_import_scope(&scope));
+    }
+
     #[test]
     fn session_watermarks_do_not_hash_lifetime_content() {
         let temp = tempfile::tempdir().unwrap();

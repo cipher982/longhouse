@@ -12373,6 +12373,88 @@ mod tests {
         });
     }
 
+    /// OpenCode keeps every session in one database, so the import scope is
+    /// applied where the walk reads each session: a session outside it is never
+    /// read or shipped, and widening the scope makes the next walk pick it up.
+    #[test]
+    fn the_opencode_walk_ships_only_sessions_inside_the_import_scope() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("state-root");
+        with_opencode_state_root(&root, || {
+            let machine = root.join("home").join("machine");
+            let db_path = dir.path().join("opencode.db");
+            // The fixture session was created long before any scope chosen today.
+            opencode_db_with_session(&db_path, "scoped-session", "/tmp/scoped-workspace");
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            rest_cursor_store(&db_path);
+
+            let from_now = crate::import_scope::ImportScope::starting(chrono::Utc::now(), "cli");
+            from_now.save(&machine).unwrap();
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none(),
+                "a session that began before the scope was shipped"
+            );
+
+            // Another project opted in does not bring it back; its own folder does.
+            crate::import_scope::ImportScope {
+                projects: vec![PathBuf::from("/tmp/elsewhere")],
+                ..from_now.clone()
+            }
+            .save(&machine)
+            .unwrap();
+            assert!(
+                prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                    .unwrap()
+                    .is_none()
+            );
+            crate::import_scope::ImportScope {
+                projects: vec![PathBuf::from("/tmp/scoped-workspace")],
+                ..from_now
+            }
+            .save(&machine)
+            .unwrap();
+            let shipped = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("an opted-in project's old session ships");
+            acknowledge_prepared(&mut conn, &shipped);
+        });
+    }
+
+    #[test]
+    fn widening_the_import_scope_makes_the_opencode_walk_pick_up_what_it_skipped() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("state-root");
+        with_opencode_state_root(&root, || {
+            let machine = root.join("home").join("machine");
+            let db_path = dir.path().join("opencode.db");
+            opencode_db_with_session(&db_path, "widened-session", "/tmp/widened-workspace");
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            rest_cursor_store(&db_path);
+            crate::import_scope::ImportScope::starting(chrono::Utc::now(), "cli")
+                .save(&machine)
+                .unwrap();
+            // The walk that skipped it settles, as a scan over an idle database does.
+            for _ in 0..2 {
+                assert!(
+                    prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            crate::import_scope::ImportScope::all("cli")
+                .save(&machine)
+                .unwrap();
+            let shipped = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("widening the scope ends the rest: the skipped session ships");
+            acknowledge_prepared(&mut conn, &shipped);
+        });
+    }
+
     #[test]
     fn an_opencode_database_that_changed_is_walked_again_and_ships() {
         let _guard = crate::console_adapter::agent_state_guard();

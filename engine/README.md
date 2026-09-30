@@ -12,7 +12,8 @@ system: the Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
 - `src/import_scope.rs` is what local history the machine may ship (a start
   time plus optional project folders, `machine/import-scope.json`). The engine
   enforces it where a source enters shipping (`discovery.rs`, the OpenCode
-  session walk, the Claude presence hook); `machine_scope.rs` is the
+  session walk, the Claude presence hook; Cursor conversations are judged by
+  their own start and folder in `cursor_store.rs`); `machine_scope.rs` is the
   `longhouse machine scope` command that writes it and `machine_uninstall.rs`
   is `longhouse uninstall` and the device-token revocation `auth --clear` uses.
 - Provider modules are named by provider (`codex_*`, `claude_*`, `cursor_*`,

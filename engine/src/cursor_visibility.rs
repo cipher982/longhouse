@@ -330,6 +330,31 @@ fn cursor_projection_candidates(cursor_home: &Path, conversation_id: &str) -> Ve
 }
 
 fn cursor_store_candidates(conversation_id: &str) -> Vec<PathBuf> {
+    cursor_store_candidates_in(&cursor_chat_roots(), conversation_id)
+}
+
+/// The stores of one conversation under the first of `chat_roots` that holds any:
+/// `<root>/<workspace>/<conversation>/store.db`.
+pub(crate) fn cursor_store_candidates_in(
+    chat_roots: &[PathBuf],
+    conversation_id: &str,
+) -> Vec<PathBuf> {
+    chat_roots
+        .iter()
+        .find_map(|root| {
+            let stores = fs::read_dir(root)
+                .ok()?
+                .flatten()
+                .map(|entry| entry.path().join(conversation_id).join("store.db"))
+                .filter(|path| path.is_file())
+                .collect::<Vec<_>>();
+            (!stores.is_empty()).then_some(stores)
+        })
+        .unwrap_or_default()
+}
+
+/// The places Cursor keeps conversation stores for this machine.
+pub(crate) fn cursor_chat_roots() -> Vec<PathBuf> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let cursor_home = std::env::var_os("CURSOR_HOME")
         .map(PathBuf::from)
@@ -337,21 +362,10 @@ fn cursor_store_candidates(conversation_id: &str) -> Vec<PathBuf> {
     let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config"));
-    [
+    vec![
         xdg_config_home.join("cursor/chats"),
         cursor_home.join("chats"),
     ]
-    .into_iter()
-    .find_map(|root| {
-        let stores = fs::read_dir(root)
-            .ok()?
-            .flatten()
-            .map(|entry| entry.path().join(conversation_id).join("store.db"))
-            .filter(|path| path.is_file())
-            .collect::<Vec<_>>();
-        (!stores.is_empty()).then_some(stores)
-    })
-    .unwrap_or_default()
 }
 
 #[cfg(unix)]

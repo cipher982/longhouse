@@ -1389,4 +1389,102 @@ mod tests {
             "a subagent tool event must not add a second presence observation"
         );
     }
+
+    fn write_transcript(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, "{\"cwd\":\"/tmp\",\"type\":\"user\"}\n").unwrap();
+        path
+    }
+
+    fn presence_for(transcript: &std::path::Path) {
+        // Distinct session ids keep one test's presence from deduplicating another's.
+        let session = format!("sess-{}", uuid::Uuid::new_v4());
+        handle_input(&tool_use_payload(json!({
+            "session_id": session,
+            "transcript_path": transcript,
+        })))
+        .unwrap();
+    }
+
+    /// A bare Claude session that began before the machine's import scope is not
+    /// announced: presence carries its folder and tool names.
+    #[test]
+    fn a_bare_claude_session_older_than_the_import_scope_is_not_announced() {
+        let home = tempfile::tempdir().unwrap();
+        let old = write_transcript(home.path(), "old.jsonl");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let since = chrono::Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let new = write_transcript(home.path(), "new.jsonl");
+        crate::import_scope::ImportScope::starting(since, "cli")
+            .save(&home.path().join("machine"))
+            .unwrap();
+        with_home(home.path(), || {
+            presence_for(&old);
+            assert!(
+                outbox_files(home.path()).is_empty(),
+                "an old session was announced"
+            );
+            presence_for(&new);
+            assert_eq!(
+                outbox_files(home.path()).len(),
+                1,
+                "a new session is announced"
+            );
+        });
+    }
+
+    /// The hook is its own process and never ran the daemon's first-run
+    /// resolution. With no scope file on a connected machine that never shipped,
+    /// it must not read the missing file as "everything".
+    #[test]
+    fn with_no_scope_file_a_connected_new_machine_announces_no_old_session() {
+        let home = tempfile::tempdir().unwrap();
+        let machine = home.path().join("machine");
+        std::fs::create_dir_all(&machine).unwrap();
+        std::fs::write(
+            machine.join("state.json"),
+            "{\"runtime_url\":\"https://you.longhouse.ai\",\"machine_name\":\"laptop\"}",
+        )
+        .unwrap();
+        let old = write_transcript(home.path(), "old.jsonl");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        with_home(home.path(), || {
+            presence_for(&old);
+            assert!(outbox_files(home.path()).is_empty());
+        });
+    }
+
+    /// Machines that already ship keep announcing everything they always did,
+    /// scope file or not.
+    #[test]
+    fn a_machine_that_shipped_before_scopes_still_announces_with_no_scope_file() {
+        let home = tempfile::tempdir().unwrap();
+        let machine = home.path().join("machine");
+        std::fs::create_dir_all(&machine).unwrap();
+        std::fs::write(
+            machine.join("state.json"),
+            "{\"runtime_url\":\"https://you.longhouse.ai\",\"machine_name\":\"laptop\"}",
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.path().join("agent")).unwrap();
+        let state = crate::state::db::open_db(Some(
+            &home.path().join("agent").join("longhouse-shipper.db"),
+        ))
+        .unwrap();
+        state
+            .execute(
+                "INSERT INTO file_state (path, provider, queued_offset, acked_offset, last_updated)
+                 VALUES ('/x.jsonl', 'claude', 10, 10, '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        drop(state);
+        let old = write_transcript(home.path(), "old.jsonl");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        with_home(home.path(), || {
+            presence_for(&old);
+            assert_eq!(outbox_files(home.path()).len(), 1);
+        });
+    }
 }

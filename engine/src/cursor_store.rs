@@ -8,7 +8,7 @@
 
 #![allow(dead_code)] // Foundation is wired into storage-v2 shipping in the next slice.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -22,6 +22,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::import_scope::ImportScope;
 use crate::state::file_identity::identity_from_metadata;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -560,6 +561,109 @@ pub fn cursor_workspace_facts(db_path: &Path) -> Option<(String, Option<String>,
     Some((cwd.to_string(), project, git_repo))
 }
 
+/// Whether a Cursor source is inside the machine's import scope.
+///
+/// Cursor keeps one `store.db` per conversation, with a `meta.json` beside it,
+/// and writes a projection of the same conversation to
+/// `projects/<workspace>/agent-transcripts/<id>/<id>.jsonl`. Neither file's age
+/// is the conversation's age: the projection is first written some time after
+/// the conversation begins, and a copied archive gives both a fresh file. So both
+/// are judged by the conversation's own start and folder, which the store and
+/// its sidecar record. A projection whose store is gone has only its file.
+pub(crate) fn source_in_import_scope(scope: &ImportScope, path: &Path) -> bool {
+    if scope.is_unrestricted() {
+        return true;
+    }
+    // The file system can only say "old". When it does and no project could bring
+    // the conversation back, nothing is looked up: a machine with thousands of
+    // old conversations pays one stat each.
+    if scope.projects.is_empty() && scope.file_is_older(path) {
+        return false;
+    }
+    let conversations = conversation_dirs(path);
+    if conversations.is_empty() {
+        return scope.admits_file(path);
+    }
+    // An identity held by more than one store is never read in the direction
+    // that leaks: every store has to admit it.
+    conversations.iter().all(|dir| {
+        scope.admits_recorded(
+            path,
+            || conversation_started_at(dir),
+            || conversation_cwd(dir),
+        )
+    })
+}
+
+/// The directories (`store.db` and `meta.json`) of the conversation a source
+/// belongs to.
+fn conversation_dirs(path: &Path) -> Vec<PathBuf> {
+    if is_cursor_store_database_path(path) {
+        return path
+            .parent()
+            .map(|dir| vec![dir.to_path_buf()])
+            .unwrap_or_default();
+    }
+    let Some(conversation_id) = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| Uuid::parse_str(stem).ok())
+        .map(|id| id.to_string())
+    else {
+        return Vec::new();
+    };
+    // `<cursor home>/projects/<workspace>/agent-transcripts/...`: the chats sit
+    // beside `projects`. Machine-wide roots cover an XDG layout.
+    let mut roots: Vec<PathBuf> = path
+        .ancestors()
+        .find(|ancestor| {
+            ancestor
+                .file_name()
+                .is_some_and(|name| name == "agent-transcripts")
+        })
+        .and_then(|transcripts| transcripts.parent()?.parent()?.parent())
+        .map(|cursor_home| cursor_home.join("chats"))
+        .into_iter()
+        .collect();
+    roots.extend(crate::cursor_visibility::cursor_chat_roots());
+    crate::cursor_visibility::cursor_store_candidates_in(&roots, &conversation_id)
+        .into_iter()
+        .filter_map(|store| store.parent().map(Path::to_path_buf))
+        .collect()
+}
+
+fn read_sidecar(dir: &Path) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()
+}
+
+/// When the conversation began: the sidecar's creation time, else the store's own.
+fn conversation_started_at(dir: &Path) -> Option<DateTime<Utc>> {
+    read_sidecar(dir)
+        .and_then(|sidecar| sidecar.get("createdAtMs")?.as_i64())
+        .and_then(DateTime::from_timestamp_millis)
+        .or_else(|| store_created_at(&dir.join("store.db")))
+}
+
+fn store_created_at(store: &Path) -> Option<DateTime<Utc>> {
+    let conn = open_readonly(store).ok()?;
+    let value = conn
+        .query_row("SELECT value FROM meta WHERE key = '0'", [], |row| {
+            sqlite_bytes(row.get_ref(0)?).map(|(bytes, _)| bytes)
+        })
+        .ok()?;
+    decode_root_metadata(&value)
+        .ok()?
+        .get("createdAt")?
+        .as_i64()
+        .and_then(DateTime::from_timestamp_millis)
+}
+
+fn conversation_cwd(dir: &Path) -> Option<String> {
+    let sidecar = read_sidecar(dir)?;
+    let cwd = sidecar.get("cwd")?.as_str()?.trim();
+    (!cwd.is_empty()).then(|| cwd.to_string())
+}
+
 pub fn longhouse_session_id_for_cursor(conversation_uuid: &str) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
@@ -1083,5 +1187,269 @@ mod tests {
         assert_eq!(second_ids.len(), 47);
         assert!(second_ids.contains(&"page-254-new".to_string()));
         assert!(first_ids.iter().all(|id| !second_ids.contains(id)));
+    }
+}
+
+/// Fixtures for the import-scope tests here and in `discovery`.
+#[cfg(test)]
+pub(crate) mod scope_fixtures {
+    use super::*;
+    use std::fs;
+
+    /// One Cursor conversation on disk: `chats/<workspace>/<id>/store.db` (whose
+    /// own metadata records `created_ms`), its `meta.json` sidecar when `sidecar`
+    /// names a folder, and the projection Cursor writes under `projects`.
+    pub(crate) struct Conversation {
+        pub(crate) store: PathBuf,
+        pub(crate) projection: PathBuf,
+    }
+
+    pub(crate) fn conversation(
+        home: &Path,
+        workspace: &str,
+        id: &str,
+        created_ms: i64,
+        sidecar: Option<&str>,
+    ) -> Conversation {
+        let dir = home.join("chats").join(workspace).join(id);
+        fs::create_dir_all(&dir).unwrap();
+        let store = dir.join("store.db");
+        let conn = Connection::open(&store).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB);
+             CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);",
+        )
+        .unwrap();
+        let root = format!(r#"{{"agentId":"{id}","createdAt":{created_ms}}}"#);
+        let encoded: String = root.bytes().map(|byte| format!("{byte:02x}")).collect();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('0', ?1)",
+            rusqlite::params![encoded],
+        )
+        .unwrap();
+        drop(conn);
+        if let Some(cwd) = sidecar {
+            fs::write(
+                dir.join("meta.json"),
+                format!(
+                    r#"{{"schemaVersion":1,"createdAtMs":{created_ms},"hasConversation":true,"cwd":"{cwd}"}}"#
+                ),
+            )
+            .unwrap();
+        }
+        let transcripts = home
+            .join("projects")
+            .join(workspace)
+            .join("agent-transcripts")
+            .join(id);
+        fs::create_dir_all(&transcripts).unwrap();
+        let projection = transcripts.join(format!("{id}.jsonl"));
+        fs::write(&projection, "{\"role\":\"user\"}\n").unwrap();
+        Conversation { store, projection }
+    }
+}
+
+#[cfg(test)]
+mod import_scope_tests {
+    use super::scope_fixtures::conversation;
+    use super::*;
+    use std::fs;
+    use std::time::Duration;
+
+    fn ms(time: DateTime<Utc>) -> i64 {
+        time.timestamp_millis()
+    }
+
+    fn pause() {
+        std::thread::sleep(Duration::from_millis(60));
+    }
+
+    /// Both files of a conversation are judged by when the conversation began,
+    /// not by when either file was written: here the files are created after the
+    /// scope, as a copied archive or a late-written projection is.
+    #[test]
+    fn a_conversation_is_dated_by_its_own_start_not_by_its_files() {
+        let home = tempfile::tempdir().unwrap();
+        let since = Utc::now();
+        pause();
+        let old_id = "11111111-1111-4111-8111-111111111111";
+        let new_id = "22222222-2222-4222-8222-222222222222";
+        let began_before = since - chrono::Duration::days(30);
+        let began_after = since + chrono::Duration::seconds(30);
+        let old = conversation(home.path(), "ws", old_id, ms(began_before), Some("/work/a"));
+        let new = conversation(home.path(), "ws", new_id, ms(began_after), Some("/work/a"));
+
+        let scope = ImportScope::starting(since, "cli");
+        assert!(!source_in_import_scope(&scope, &old.store));
+        assert!(
+            !source_in_import_scope(&scope, &old.projection),
+            "the projection of an old conversation is old however recently it was written"
+        );
+        assert!(source_in_import_scope(&scope, &new.store));
+        assert!(source_in_import_scope(&scope, &new.projection));
+        // Widened to all history: everything, reading nothing.
+        assert!(source_in_import_scope(&ImportScope::all("cli"), &old.store));
+        assert!(source_in_import_scope(
+            &ImportScope::all("cli"),
+            &old.projection
+        ));
+    }
+
+    #[test]
+    fn a_store_with_no_sidecar_is_dated_by_its_own_metadata() {
+        let home = tempfile::tempdir().unwrap();
+        let since = Utc::now();
+        pause();
+        let old = conversation(
+            home.path(),
+            "ws",
+            "33333333-3333-4333-8333-333333333333",
+            ms(since - chrono::Duration::days(3)),
+            None,
+        );
+        let new = conversation(
+            home.path(),
+            "ws",
+            "44444444-4444-4444-8444-444444444444",
+            ms(since + chrono::Duration::seconds(30)),
+            None,
+        );
+        let scope = ImportScope::starting(since, "cli");
+        assert!(!source_in_import_scope(&scope, &old.store));
+        assert!(!source_in_import_scope(&scope, &old.projection));
+        assert!(source_in_import_scope(&scope, &new.store));
+        assert!(source_in_import_scope(&scope, &new.projection));
+    }
+
+    /// A conversation older than the scope is brought back by its folder, which
+    /// Cursor records in the sidecar, for the store and its projection alike.
+    #[test]
+    fn a_project_opts_an_old_conversation_in_through_the_sidecar_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let in_project = conversation(
+            home.path(),
+            "ws-a",
+            "55555555-5555-4555-8555-555555555555",
+            ms(Utc::now() - chrono::Duration::days(9)),
+            Some("/work/a/sub"),
+        );
+        let elsewhere = conversation(
+            home.path(),
+            "ws-b",
+            "66666666-6666-4666-8666-666666666666",
+            ms(Utc::now() - chrono::Duration::days(9)),
+            Some("/work/b"),
+        );
+        let no_folder = conversation(
+            home.path(),
+            "ws-c",
+            "77777777-7777-4777-8777-777777777777",
+            ms(Utc::now() - chrono::Duration::days(9)),
+            None,
+        );
+        pause();
+        let scope = ImportScope {
+            projects: vec![PathBuf::from("/work/a")],
+            ..ImportScope::starting(Utc::now(), "cli")
+        };
+        for source in [&in_project.store, &in_project.projection] {
+            assert!(source_in_import_scope(&scope, source), "{source:?}");
+        }
+        for source in [
+            &elsewhere.store,
+            &elsewhere.projection,
+            &no_folder.store,
+            &no_folder.projection,
+        ] {
+            assert!(!source_in_import_scope(&scope, source), "{source:?}");
+        }
+    }
+
+    /// The store is judged by its conversation even when the store and the
+    /// projection disagree about how old the files are.
+    #[test]
+    fn a_projection_written_after_the_scope_for_an_older_conversation_stays_out() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "88888888-8888-4888-8888-888888888888";
+        let old = conversation(
+            home.path(),
+            "ws",
+            id,
+            ms(Utc::now() - chrono::Duration::hours(2)),
+            Some("/work/a"),
+        );
+        pause();
+        let since = Utc::now();
+        pause();
+        // Cursor resumes the conversation and writes its projection afresh.
+        fs::remove_file(&old.projection).unwrap();
+        fs::write(&old.projection, "{\"role\":\"user\"}\n").unwrap();
+        let scope = ImportScope::starting(since, "cli");
+        assert!(!source_in_import_scope(&scope, &old.store));
+        assert!(!source_in_import_scope(&scope, &old.projection));
+    }
+
+    #[test]
+    fn a_projection_whose_store_is_gone_has_only_its_own_file_to_go_on() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "99999999-9999-4999-8999-999999999999";
+        let transcripts = home.path().join("projects/ws/agent-transcripts").join(id);
+        fs::create_dir_all(&transcripts).unwrap();
+        let old = transcripts.join(format!("{id}.jsonl"));
+        fs::write(&old, "{\"role\":\"user\"}\n").unwrap();
+        pause();
+        let since = Utc::now();
+        pause();
+        let new_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let new_dir = home
+            .path()
+            .join("projects/ws/agent-transcripts")
+            .join(new_id);
+        fs::create_dir_all(&new_dir).unwrap();
+        let new = new_dir.join(format!("{new_id}.jsonl"));
+        fs::write(&new, "{\"role\":\"user\"}\n").unwrap();
+        let scope = ImportScope::starting(since, "cli");
+        assert!(!source_in_import_scope(&scope, &old));
+        assert!(source_in_import_scope(&scope, &new));
+    }
+
+    /// One conversation id held by two workspaces: neither may leak.
+    #[test]
+    fn a_conversation_held_by_two_stores_needs_both_to_be_in_scope() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let since = Utc::now();
+        pause();
+        let old = conversation(
+            home.path(),
+            "ws-one",
+            id,
+            ms(since - chrono::Duration::days(1)),
+            Some("/work/a"),
+        );
+        let new = conversation(
+            home.path(),
+            "ws-two",
+            id,
+            ms(since + chrono::Duration::seconds(30)),
+            Some("/work/a"),
+        );
+        let scope = ImportScope::starting(since, "cli");
+        assert!(!source_in_import_scope(&scope, &old.store));
+        assert!(source_in_import_scope(&scope, &new.store));
+        // The projection is shared by both stores, so it follows the older one.
+        assert!(!source_in_import_scope(&scope, &old.projection));
+        assert_eq!(conversation_dirs(&old.projection).len(), 2);
+    }
+
+    #[test]
+    fn a_source_that_is_not_a_cursor_source_falls_back_to_its_file() {
+        let home = tempfile::tempdir().unwrap();
+        let stray = home.path().join("notes.jsonl");
+        fs::write(&stray, "{}\n").unwrap();
+        pause();
+        let scope = ImportScope::starting(Utc::now(), "cli");
+        assert!(conversation_dirs(&stray).is_empty());
+        assert!(!source_in_import_scope(&scope, &stray));
     }
 }
