@@ -80,6 +80,16 @@ impl ShipperConfig {
         Ok(config)
     }
 
+    /// Apply the plaintext-http rule to this config's Runtime Host address:
+    /// `https://`, loopback and Tailscale pass, a LAN address needs the opt-in
+    /// (environment or the one `longhouse auth` stored), anything else is an
+    /// error. An opted-in LAN address prints the warning.
+    pub fn enforce_transport(&self) -> Result<()> {
+        let allow = crate::plaintext_http::opt_in_enabled(&get_machine_dir()?);
+        crate::plaintext_http::enforce(&self.api_url, allow)?;
+        Ok(())
+    }
+
     /// Override fields from CLI args (only override if non-default).
     pub fn with_overrides(
         mut self,

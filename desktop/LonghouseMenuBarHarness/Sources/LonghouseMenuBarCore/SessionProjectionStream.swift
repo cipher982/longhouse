@@ -64,6 +64,13 @@ struct SessionProjection: Sendable {
     }
 }
 
+/// A Runtime Host address the plaintext-http rule refuses. Its description is
+/// the refusal, because that is what the stream reports as its failure.
+struct PlaintextHTTPRefusal: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+}
+
 enum SessionProjectionEvent: Sendable {
     case delta(SessionProjection)
     case remove(sessionId: String)
@@ -316,6 +323,18 @@ enum SessionProjectionStream {
               let baseURL = URL(string: rawURL),
               let tokenPath = connection.tokenPath
         else { throw URLError(.badURL) }
+        // The token rides this request as a header, so a plain-http address is
+        // judged by the same rule as every other native client. (https needs
+        // no judgement; any other scheme is a test URLProtocol.)
+        if baseURL.scheme?.lowercased() == "http" {
+            let transport = PlaintextHTTP.check(rawURL, allowInsecureHTTP: connection.allowInsecureHttp == true)
+            guard transport.isUsable else {
+                throw PlaintextHTTPRefusal(message: PlaintextHTTP.refusalMessage(rawURL, outcome: transport))
+            }
+            if transport == .allowedWarn {
+                logger.warning("\(PlaintextHTTP.insecureWarning(rawURL), privacy: .public)")
+            }
+        }
         let token = try String(contentsOfFile: tokenPath, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }

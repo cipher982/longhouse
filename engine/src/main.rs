@@ -86,6 +86,7 @@ mod pi_helm_launcher;
 mod pi_print;
 mod pi_session;
 mod pipeline;
+mod plaintext_http;
 mod process_group;
 mod process_identity;
 mod provider_readiness;
@@ -1648,6 +1649,10 @@ fn main() -> anyhow::Result<()> {
                 machine_name.as_deref(),
                 max_batch_bytes,
             );
+            // The stored address is judged by the same plaintext-http rule
+            // `longhouse auth` applied when it was stored: a hand-edited or
+            // older state file does not get to send the token in the clear.
+            shipper_config.enforce_transport()?;
             pipeline::compressor::set_machine_name(&shipper_config.machine_name);
 
             let connect_config = daemon::ConnectConfig {

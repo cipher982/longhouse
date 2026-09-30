@@ -100,6 +100,14 @@ struct LoginView: View {
                         }
                     }
 
+                    if let notice = insecureTransportNotice {
+                        Text(notice)
+                            .font(.caption)
+                            .foregroundStyle(LoginInk.clay)
+                            .multilineTextAlignment(.center)
+                            .accessibilityIdentifier("login.insecureTransportNotice")
+                    }
+
                     if let errorMessage = displayedErrorMessage {
                         Text(errorMessage)
                             .font(.caption)
@@ -256,6 +264,28 @@ struct LoginView: View {
         localErrorMessage ?? appState.authError
     }
 
+    /// Shown for as long as the sign-in screen is talking plain http to a LAN
+    /// address the user opted into.
+    private var insecureTransportNotice: String? {
+        guard hasConfiguredServer,
+              PlaintextHTTP.check(appState.serverURL, allowInsecureHTTP: appState.allowsInsecureHTTP) == .allowedWarn
+        else { return nil }
+        return "Plain http on your local network: your password and everything this app sends cross it unencrypted."
+    }
+
+    /// The iOS form of `PlaintextHTTP.refusalMessage`: the opt-in here is a
+    /// switch in the server settings, not a command-line flag.
+    nonisolated static func transportRefusal(_ outcome: PlaintextHTTP.Outcome) -> String {
+        switch outcome {
+        case .refusedLAN:
+            return "This address is on a local network and uses plain http. Turn on \"Allow plain http on my local network\" in the server settings to use it, or use https or Tailscale."
+        case .refusedPublic:
+            return "Server URL must use HTTPS. Plain http works only over Tailscale or on this device."
+        case .allowed, .allowedWarn, .invalid:
+            return "Invalid server URL"
+        }
+    }
+
     private func loadAuthMethods() async {
         guard hasConfiguredServer else {
             await MainActor.run {
@@ -268,12 +298,14 @@ struct LoginView: View {
             return
         }
 
-        guard let baseURL = URL(string: appState.serverURL),
-              baseURL.scheme?.lowercased() == "https" || baseURL.host == "localhost" || baseURL.host == "127.0.0.1" else {
+        // Plain http follows the rule every native client shares (PlaintextHTTP):
+        // loopback and Tailscale, plus a LAN address the user opted into.
+        let transport = PlaintextHTTP.check(appState.serverURL, allowInsecureHTTP: appState.allowsInsecureHTTP)
+        guard transport.isUsable else {
             await MainActor.run {
                 isLoadingAuthMethods = false
                 authMethods = nil
-                localErrorMessage = "Server URL must use HTTPS"
+                localErrorMessage = Self.transportRefusal(transport)
             }
             return
         }

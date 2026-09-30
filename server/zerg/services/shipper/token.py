@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from urllib.parse import urlparse
 
 from zerg.services.longhouse_paths import get_machine_token_path
 from zerg.services.machine_state import clear_machine_runtime_url
 from zerg.services.machine_state import load_machine_state
+from zerg.services.plaintext_http import Outcome
+from zerg.services.plaintext_http import check_runtime_url
+from zerg.services.plaintext_http import env_opt_in
+from zerg.services.plaintext_http import refusal_message
 
 
 def get_token_path(config_dir: Path | None = None) -> Path:
@@ -135,18 +138,16 @@ def get_zerg_url(config_dir: Path | None = None) -> str | None:
     return state.runtime_url if state else None
 
 
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
-
-
-def normalize_zerg_url(url: object | None) -> str | None:
+def normalize_zerg_url(url: object | None, *, allow_insecure_http: bool = False) -> str | None:
     """Return a valid Longhouse URL or None.
 
     This guards against poisoned config like Typer OptionInfo objects being
-    stringified into the persisted url file, and against plaintext `http://`
-    to anything but loopback: the engine maps the stored URL to `ws://`, so a
-    non-loopback `http://` ships the device token as a cleartext header and
-    every transcript over the same unencrypted socket. Remote Runtime Hosts
-    must terminate TLS.
+    stringified into the persisted url file, and applies the plaintext-http
+    rule (``zerg.services.plaintext_http``): the engine maps the stored URL to
+    ``ws://``, so a plain ``http://`` address ships the device token as a
+    cleartext header and every transcript over the same unencrypted socket.
+    Only loopback and Tailscale addresses are accepted over http, plus a LAN
+    address the user opted into.
     """
     if not isinstance(url, str):
         return None
@@ -157,19 +158,31 @@ def normalize_zerg_url(url: object | None) -> str | None:
     if "typer.models.OptionInfo" in normalized or "<" in normalized or ">" in normalized:
         return None
 
-    parsed = urlparse(normalized)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.hostname is None:
-        return None
-    if parsed.scheme == "http" and parsed.hostname.lower() not in LOOPBACK_HOSTS:
+    if not check_runtime_url(normalized, allow_insecure_http=allow_insecure_http).usable:
         return None
 
     return normalized
 
 
-def save_zerg_url(url: str, config_dir: Path | None = None) -> None:
-    """Save the Longhouse API URL to canonical machine state."""
-    normalized_url = normalize_zerg_url(url)
+def get_allow_insecure_http(config_dir: Path | None = None) -> bool:
+    """Whether plain http to a LAN address is opted into: the environment or machine state."""
+    if env_opt_in():
+        return True
+    state = load_machine_state(config_dir)
+    return bool(state and state.allow_insecure_http)
+
+
+def save_zerg_url(url: str, config_dir: Path | None = None, *, allow_insecure_http: bool = False) -> None:
+    """Save the Longhouse API URL to canonical machine state.
+
+    A LAN ``http://`` address is saved only with ``allow_insecure_http``, and the
+    opt-in is stored beside it so every later reader applies the same rule.
+    """
+    normalized_url = normalize_zerg_url(url, allow_insecure_http=allow_insecure_http)
     if normalized_url is None:
+        outcome = check_runtime_url(url, allow_insecure_http=allow_insecure_http)
+        if outcome in (Outcome.REFUSED_LAN, Outcome.REFUSED_PUBLIC):
+            raise ValueError(refusal_message(url, outcome))
         raise ValueError(f"Invalid Longhouse URL: {url!r}")
 
     # Route durable machine config changes through the safe apply seam so
@@ -181,6 +194,9 @@ def save_zerg_url(url: str, config_dir: Path | None = None) -> None:
         base_dir=config_dir,
         written_by="shipper-save-url",
         runtime_url=normalized_url,
+        # Stored only while it is needed, so a later https address does not
+        # inherit a LAN opt-in.
+        allow_insecure_http=check_runtime_url(normalized_url, allow_insecure_http=allow_insecure_http) is Outcome.ALLOWED_WARN,
     )
 
 

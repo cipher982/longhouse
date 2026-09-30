@@ -92,6 +92,17 @@ targets:
         # HTTPS/TLS only: exempt encryption, so App Store Connect never stops
         # each build at the export-compliance question.
         ITSAppUsesNonExemptEncryption: false
+        # Plain http is judged by the app's own rule (PlaintextHTTP.swift):
+        # loopback, Tailscale, and a LAN address the user opted into. ATS has to
+        # let those through: a MagicDNS name (.ts.net) and a LAN name (.local)
+        # are names, not the IP literals ATS already leaves alone.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+        NSLocalNetworkUsageDescription: Longhouse connects to a Longhouse server on your local network when you turn that on.
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - ai.longhouse.ios
@@ -138,6 +149,16 @@ targets:
         # App Store Connect rejects an extension without a display name.
         CFBundleDisplayName: Longhouse
         NSSupportsLiveActivities: true
+        # Plain http is judged by the app's own rule (PlaintextHTTP.swift):
+        # loopback, Tailscale, and a LAN address the user opted into. ATS has to
+        # let those through: a MagicDNS name (.ts.net) and a LAN name (.local)
+        # are names, not the IP literals ATS already leaves alone.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 

@@ -32,6 +32,9 @@ class MachineState:
     desktop_app_enabled: bool | None = None
     runner_enabled: bool | None = None
     desired_bundle_version: str | None = None
+    # Opted into plain http to a LAN address (`longhouse auth --allow-insecure-http`).
+    # Kept only while the stored runtime_url needs it.
+    allow_insecure_http: bool | None = None
     written_by: str | None = None
     written_at: str | None = None
 
@@ -45,6 +48,7 @@ class MachineState:
             "desktop_app_enabled": self.desktop_app_enabled,
             "runner_enabled": self.runner_enabled,
             "desired_bundle_version": self.desired_bundle_version,
+            "allow_insecure_http": self.allow_insecure_http,
             "written_by": self.written_by,
             "written_at": self.written_at,
         }
@@ -120,6 +124,7 @@ def write_machine_state(
     desktop_app_enabled: object = _MISSING,
     runner_enabled: object = _MISSING,
     desired_bundle_version: object = _MISSING,
+    allow_insecure_http: object = _MISSING,
 ) -> MachineState:
     """Persist canonical machine state and append a provenance journal entry."""
     if not str(written_by or "").strip():
@@ -142,6 +147,7 @@ def write_machine_state(
             desired_bundle_version,
             current_state.desired_bundle_version if current_state else None,
         ),
+        allow_insecure_http=_resolve_bool(allow_insecure_http, current_state.allow_insecure_http if current_state else None),
         written_by=str(written_by).strip(),
         written_at=written_at,
     )
@@ -162,6 +168,7 @@ def write_machine_state(
         desktop_app_enabled=draft_state.desktop_app_enabled,
         runner_enabled=draft_state.runner_enabled,
         desired_bundle_version=draft_state.desired_bundle_version,
+        allow_insecure_http=draft_state.allow_insecure_http,
         written_by=draft_state.written_by,
         written_at=draft_state.written_at,
     )
@@ -235,6 +242,7 @@ def _machine_state_from_payload(payload: dict[str, object]) -> MachineState:
         desktop_app_enabled=payload.get("desktop_app_enabled") if isinstance(payload.get("desktop_app_enabled"), bool) else None,
         runner_enabled=payload.get("runner_enabled") if isinstance(payload.get("runner_enabled"), bool) else None,
         desired_bundle_version=_normalize_text(payload.get("desired_bundle_version")),
+        allow_insecure_http=payload.get("allow_insecure_http") if isinstance(payload.get("allow_insecure_http"), bool) else None,
         written_by=_normalize_text(payload.get("written_by")),
         written_at=_normalize_text(payload.get("written_at")),
     )

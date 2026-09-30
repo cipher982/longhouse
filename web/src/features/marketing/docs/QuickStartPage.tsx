@@ -33,6 +33,34 @@ longhouse-server onboard`}
         running, see <Link to="/docs/configuration">Configuration</Link>.
       </p>
 
+      <h3>Your own always-on box, over Tailscale</h3>
+      <p>
+        If the box and your laptop share a tailnet, you do not need a domain or
+        https. Tailscale already encrypts the link, so native clients accept
+        plain <code>http://</code> to a Tailscale address (<code>100.x.y.z</code>,
+        an <code>fd7a:115c:a1e0::</code> address, or a <code>*.ts.net</code>{" "}
+        name). Start the Runtime Host on the box; it prints a{" "}
+        <code>Tailscale:</code> address:
+      </p>
+      <CodeBlock title="on the always-on box">
+        {`longhouse-server serve --host 0.0.0.0`}
+      </CodeBlock>
+      <CodeBlock title="on each dev machine">
+        {`longhouse auth --url http://100.x.y.z:8080     # or http://my-box.your-tailnet.ts.net:8080
+longhouse machine repair --repair-service`}
+      </CodeBlock>
+      <p>
+        The macOS app and the iPhone app follow the same rule. A plain LAN
+        address (<code>192.168.x</code>, <code>10.x</code>, <code>172.16-31.x</code>,{" "}
+        <code>*.local</code>) is refused unless you opt in with{" "}
+        <code>--allow-insecure-http</code> (or{" "}
+        <code>LONGHOUSE_ALLOW_INSECURE_HTTP=1</code>; in the iPhone app, the
+        switch in the server settings). The choice is remembered with the
+        address and every use warns, because the device token and every
+        transcript then cross that network unencrypted. Any other address needs{" "}
+        <code>https://</code>.
+      </p>
+
       <h2>1. Connect a machine</h2>
       <p>
         Run this on the machine where you use Claude Code, Codex, or another

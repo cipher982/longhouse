@@ -832,7 +832,10 @@ async fn run_once(
     completed_commands: &mut CompletedCommandCache,
     status: &ControlChannelStatus,
 ) -> Result<()> {
-    let ws_url = control_ws_url(&config.api_url)?;
+    let ws_url = control_ws_url(
+        &config.api_url,
+        crate::plaintext_http::opt_in_enabled(&crate::config::get_machine_dir()?),
+    )?;
     status.set_disconnected(Some(&ws_url), None, None, None);
     let mut request = ws_url
         .as_str()
@@ -3574,41 +3577,25 @@ fn run_once_provider_prompt(user_prompt: &str, is_resume: bool) -> String {
     }
 }
 
-/// Is this authority a loopback address, the only place plaintext is allowed?
+/// The websocket URL for the control channel.
 ///
-/// `rest` is everything after the scheme, so authority plus path.
-fn is_loopback_authority(rest: &str) -> bool {
-    use std::net::IpAddr;
-
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let authority = authority.rsplit('@').next().unwrap_or_default();
-    let host = match authority.strip_prefix('[') {
-        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
-        None => authority.split(':').next().unwrap_or_default(),
-    };
-    let host = host.to_ascii_lowercase();
-    host == "localhost"
-        || host
-            .parse::<IpAddr>()
-            .map(|address| address.is_loopback())
-            .unwrap_or(false)
-}
-
-fn control_ws_url(api_url: &str) -> Result<String> {
+/// Plaintext is judged by the shared rule (`plaintext_http`): everything on
+/// this channel is sensitive (the never-expiring device token rides as a
+/// header and every transcript ships through it), and the engine authenticates
+/// to the server but the server never authenticates back, so whoever answers
+/// the handshake can start turns on this machine. `ws://` is therefore allowed
+/// only to loopback, to a Tailscale address (WireGuard encrypts it), or to a
+/// LAN address the user opted into.
+fn control_ws_url(api_url: &str, allow_insecure_http: bool) -> Result<String> {
     let base = api_url.trim().trim_end_matches('/');
+    let outcome = crate::plaintext_http::check(base, allow_insecure_http);
+    if !outcome.usable() {
+        bail!(
+            "{}",
+            crate::plaintext_http::refusal_message(api_url, outcome)
+        );
+    }
     if let Some(rest) = base.strip_prefix("http://") {
-        // Plaintext is loopback-only. Everything on this channel is sensitive:
-        // the never-expiring device token rides as a header and every
-        // transcript ships through it, so `ws://` to a remote host hands a LAN
-        // sniffer the credential. Worse, the engine authenticates to the server
-        // and the server never authenticates back, so whoever answers the
-        // handshake can start turns on this machine.
-        if !is_loopback_authority(rest) {
-            bail!(
-                "refusing plaintext api_url {api_url}: http:// is allowed only for loopback \
-                 (localhost, 127.0.0.1, ::1) — use https://"
-            );
-        }
         return Ok(format!("ws://{rest}/api/agents/control/ws"));
     }
     if let Some(rest) = base.strip_prefix("https://") {
@@ -4273,39 +4260,68 @@ mod tests {
     #[test]
     fn control_ws_url_converts_http_and_https() {
         assert_eq!(
-            control_ws_url("http://localhost:8000").unwrap(),
+            control_ws_url("http://localhost:8000", false).unwrap(),
             "ws://localhost:8000/api/agents/control/ws"
         );
         assert_eq!(
-            control_ws_url("https://demo.longhouse.ai/").unwrap(),
+            control_ws_url("https://demo.longhouse.ai/", false).unwrap(),
             "wss://demo.longhouse.ai/api/agents/control/ws"
         );
     }
 
     #[test]
-    fn control_ws_url_allows_plaintext_only_for_loopback() {
-        for allowed in [
-            "http://127.0.0.1:8000",
-            "http://localhost:8000",
-            "http://[::1]:8000",
+    fn control_ws_url_allows_plaintext_to_loopback_and_tailscale_only() {
+        for (allowed, ws) in [
+            ("http://127.0.0.1:8000", "ws://127.0.0.1:8000"),
+            ("http://localhost:8000", "ws://localhost:8000"),
+            ("http://[::1]:8000", "ws://[::1]:8000"),
+            ("http://100.64.0.1:8000/", "ws://100.64.0.1:8000"),
+            (
+                "http://box.tail1234.ts.net:8000",
+                "ws://box.tail1234.ts.net:8000",
+            ),
+            (
+                "http://[fd7a:115c:a1e0::1]:8000",
+                "ws://[fd7a:115c:a1e0::1]:8000",
+            ),
         ] {
-            assert!(
-                control_ws_url(allowed).is_ok(),
+            assert_eq!(
+                control_ws_url(allowed, false).unwrap(),
+                format!("{ws}/api/agents/control/ws"),
                 "{allowed} should be allowed"
             );
         }
         for refused in [
             "http://demo.longhouse.ai",
-            "http://192.168.1.20:8000",
+            "http://100.63.255.255:8000",
+            "http://100.128.0.0:8000",
             "http://localhost.attacker.example:8000",
             "http://user@evil.example/",
         ] {
-            let err = control_ws_url(refused).unwrap_err().to_string();
-            assert!(
-                err.contains("refusing plaintext api_url"),
-                "{refused} should be refused, got: {err}"
-            );
+            // Not even the LAN opt-in opens a public address.
+            for allow in [false, true] {
+                let err = control_ws_url(refused, allow).unwrap_err().to_string();
+                assert!(
+                    err.contains("Refusing plaintext"),
+                    "{refused} should be refused, got: {err}"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn control_ws_url_keeps_a_lan_address_behind_the_opt_in() {
+        let refused = control_ws_url("http://192.168.1.20:8000", false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("--allow-insecure-http"),
+            "the refusal must name the opt-in, got: {refused}"
+        );
+        assert_eq!(
+            control_ws_url("http://192.168.1.20:8000", true).unwrap(),
+            "ws://192.168.1.20:8000/api/agents/control/ws"
+        );
     }
 
     #[test]

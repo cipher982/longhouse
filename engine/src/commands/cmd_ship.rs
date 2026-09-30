@@ -142,6 +142,7 @@ pub async fn cmd_ship(
         machine_name,
         max_batch_bytes,
     );
+    config.enforce_transport()?;
     crate::pipeline::compressor::set_machine_name(&config.machine_name);
 
     if !json_output {
@@ -273,6 +274,7 @@ pub async fn cmd_ship_file(
         machine_name,
         max_batch_bytes,
     );
+    config.enforce_transport()?;
     crate::pipeline::compressor::set_machine_name(&config.machine_name);
 
     if !json_output {

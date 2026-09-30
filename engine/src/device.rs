@@ -260,6 +260,10 @@ struct NativeDesktopRealtime {
     runtime_url: String,
     machine_name: String,
     token_path: String,
+    /// The user opted into plain http to a LAN address; the app applies the
+    /// same plaintext-http rule the engine does. Emitted only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    allow_insecure_http: bool,
 }
 
 /// Counts are emitted only when session evidence was actually read.
@@ -2096,6 +2100,10 @@ fn native_desktop_health_from_parts(
             runtime_url: runtime_url.to_string(),
             machine_name: machine_name.to_string(),
             token_path,
+            allow_insecure_http: state
+                .get("allow_insecure_http")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     });
 
@@ -6325,6 +6333,42 @@ mod tests {
         assert!(value["managed_summary"]
             .get("orphan_bridge_count")
             .is_none());
+    }
+
+    #[test]
+    fn desktop_envelope_carries_the_lan_opt_in_only_when_it_is_set() {
+        let realtime_for = |opt_in: Option<bool>| {
+            let mut machine_state = serde_json::json!({
+                "runtime_url": "http://192.168.1.20:8080",
+                "machine_name": "cinder",
+            });
+            if let Some(value) = opt_in {
+                machine_state["allow_insecure_http"] = serde_json::json!(value);
+            }
+            let health = native_health_from_parts(
+                Path::new("/tmp/engine-status.json"),
+                false,
+                None,
+                None,
+                None,
+            );
+            let envelope = native_desktop_health_from_parts(
+                health,
+                None,
+                Some(&machine_state),
+                Some("/example/.longhouse/machine/device-token".to_string()),
+                "2026-08-03T16:00:00Z".to_string(),
+            );
+            serde_json::to_value(&envelope).unwrap()["realtime"].clone()
+        };
+
+        // The Desktop app applies the same plaintext-http rule the engine does,
+        // so it is told about the opt-in; everyone else sees no new field.
+        assert_eq!(realtime_for(Some(true))["allow_insecure_http"], true);
+        assert!(realtime_for(Some(false))
+            .get("allow_insecure_http")
+            .is_none());
+        assert!(realtime_for(None).get("allow_insecure_http").is_none());
     }
 
     #[test]

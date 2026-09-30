@@ -250,6 +250,25 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
   <true/>
   <key>NSAppleEventsUsageDescription</key>
   <string>Longhouse opens Terminal so you can sign in and connect this Mac.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <!-- Plain http is judged by the app's own rule (PlaintextHTTP.swift):
+         loopback, Tailscale, and a LAN address the user opted into. ATS has to
+         let those through: LAN names (.local) and MagicDNS names (.ts.net), which
+         are names, not the IP literals ATS already leaves alone. -->
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>ts.net</key>
+      <dict>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+      </dict>
+    </dict>
+  </dict>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSPrincipalClass</key>

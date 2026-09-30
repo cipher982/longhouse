@@ -82,8 +82,14 @@ struct ServerConfigSheet: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var urlText = ""
+    @State private var allowInsecureHTTP = false
     @State private var widgetProbeResult: WidgetLoadResult?
     @State private var isRunningWidgetProbe = false
+
+    /// Plain http to a LAN address is the one case the user can opt into.
+    private var offersInsecureHTTPOptIn: Bool {
+        PlaintextHTTP.check(urlText, allowInsecureHTTP: false) == .refusedLAN
+    }
 
     var body: some View {
         NavigationStack {
@@ -97,11 +103,20 @@ struct ServerConfigSheet: View {
                 }
                 .listRowBackground(Ember.card)
                 Section {
-                    Text("Enter the URL of your Longhouse instance.")
+                    Text("Enter the URL of your Longhouse instance. Plain http works over Tailscale (a 100.x address or a .ts.net name); anything else needs https.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .listRowBackground(Ember.card)
+                if offersInsecureHTTPOptIn {
+                    Section {
+                        Toggle("Allow plain http on my local network", isOn: $allowInsecureHTTP)
+                            .accessibilityIdentifier("server.allowInsecureHTTP")
+                    } footer: {
+                        Text("Your password and everything this app sends to this address cross the network unencrypted. Turn it on only for a network you trust.")
+                    }
+                    .listRowBackground(Ember.card)
+                }
 #if DEBUG
                 widgetDebugSection
 #endif
@@ -117,7 +132,7 @@ struct ServerConfigSheet: View {
                     Button("Save") {
                         let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            appState.setServer(trimmed)
+                            appState.setServer(trimmed, allowInsecureHTTP: offersInsecureHTTPOptIn && allowInsecureHTTP)
                         }
                         dismiss()
                     }
@@ -125,9 +140,10 @@ struct ServerConfigSheet: View {
             }
             .onAppear {
                 urlText = appState.serverURL
+                allowInsecureHTTP = appState.allowsInsecureHTTP
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
 #if DEBUG

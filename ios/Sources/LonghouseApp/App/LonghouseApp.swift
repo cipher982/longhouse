@@ -639,7 +639,13 @@ final class AppState: ObservableObject {
         hostedAuthAttemptURL = url.absoluteString
     }
 
-    func setServer(_ url: String) {
+    /// Whether the user opted into plain http to the current server, a LAN
+    /// address (see `PlaintextHTTP`). Stored with the address.
+    var allowsInsecureHTTP: Bool {
+        SharedAuthStore.hasInsecureHTTPOptIn(for: serverURL)
+    }
+
+    func setServer(_ url: String, allowInsecureHTTP: Bool = false) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return
@@ -652,6 +658,7 @@ final class AppState: ObservableObject {
         serverURL = trimmed
         SharedAuthStore.advanceAuthGeneration(for: trimmed)
         KeychainHelper.saveServerURL(trimmed)
+        SharedAuthStore.saveInsecureHTTPOptIn(for: allowInsecureHTTP ? trimmed : nil)
         isAuthenticated = false
         hasLocalSessionCandidate = false
         authError = nil

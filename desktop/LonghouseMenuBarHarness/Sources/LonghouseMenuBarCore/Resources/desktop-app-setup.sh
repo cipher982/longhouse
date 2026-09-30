@@ -33,6 +33,7 @@ prompt_runtime_url() {
   log ""
   log "Connect this Mac to your Longhouse."
   log "Enter the address you sign in to, for example https://yourname.longhouse.ai"
+  log "(Your own box over Tailscale works with plain http, for example http://100.x.y.z:8080.)"
   while true; do
     read -r "url?Longhouse URL: "
     [[ -n "$url" && "$url" != *://* ]] && url="https://$url"

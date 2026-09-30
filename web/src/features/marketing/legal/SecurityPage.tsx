@@ -76,10 +76,12 @@ export default function SecurityPage() {
             tokens, transcripts, control commands — travels over that TLS connection.
           </p>
           <p>
-            Self-hosting is your call, and Longhouse will not add TLS for you. If you point a machine
-            at a plain http:// address that isn't loopback, its device token and its transcripts
-            cross your network in the clear. Put the instance behind TLS, or keep it on a private
-            overlay network you trust.
+            Self-hosting is your call, and Longhouse will not add TLS for you. Native clients
+            (the CLI, the Machine Agent, the macOS and iPhone apps) accept a plain http:// address
+            only for loopback and for Tailscale addresses, because WireGuard already encrypts that
+            link. A plain http:// address on your local network is refused unless you opt in
+            explicitly, and then its device token and transcripts cross your network in the clear.
+            Anything else needs https://. Put the instance behind TLS, or keep it on your tailnet.
           </p>
 
           <h2>Authentication</h2>

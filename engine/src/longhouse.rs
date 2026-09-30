@@ -25,6 +25,8 @@ use managed_launch_lifecycle::DeferredNotices;
 mod managed_launch_payload;
 #[path = "managed_terminal.rs"]
 mod managed_terminal;
+#[path = "plaintext_http.rs"]
+mod plaintext_http;
 #[path = "warp_cli_agent.rs"]
 mod warp_cli_agent;
 
@@ -274,6 +276,11 @@ struct AuthArgs {
     /// match the token's own device name, which is what gets stored.
     #[arg(long)]
     device: Option<String>,
+    /// Allow plain http to a LAN address (RFC1918, link-local, .local). Also
+    /// LONGHOUSE_ALLOW_INSECURE_HTTP=1. Stored with the address. Tailscale
+    /// (100.x, .ts.net) and loopback never need it; anything else needs https.
+    #[arg(long)]
+    allow_insecure_http: bool,
 }
 
 #[derive(Subcommand)]
@@ -794,6 +801,31 @@ fn native_shipping(command: ShippingCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The Runtime Host address `longhouse auth` will use, judged by the shared
+/// plaintext-http rule (`plaintext_http`) before the browser opens or a token
+/// is sent anywhere. Tailscale and loopback pass; a LAN address needs the
+/// opt-in (flag, environment, or the one already stored for this same
+/// address); anything else is refused. The bool says whether the opt-in was
+/// what allowed it, which is what gets stored.
+fn resolve_runtime_url(
+    requested: Option<String>,
+    stored_url: Option<&str>,
+    flag: bool,
+    machine_dir: &Path,
+) -> anyhow::Result<(String, bool)> {
+    let url = requested
+        .or_else(|| stored_url.map(str::to_owned))
+        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+        .context("No Longhouse URL configured. Pass --url.")?;
+    let base = url.trim_end_matches('/').to_string();
+    let opted_in = flag
+        || plaintext_http::env_opt_in()
+        || (plaintext_http::stored_opt_in(machine_dir)
+            && stored_url.is_some_and(|stored| stored.trim_end_matches('/') == base));
+    let outcome = plaintext_http::enforce(&base, opted_in)?;
+    Ok((base, outcome == plaintext_http::Outcome::AllowedWarn))
+}
+
 fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
     let machine_dir = longhouse_home()?.join("machine");
     let state_path = machine_dir.join("state.json");
@@ -827,26 +859,31 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
             let mut state: serde_json::Value =
                 serde_json::from_slice(&raw).unwrap_or_else(|_| json!({}));
             state["runtime_url"] = serde_json::Value::Null;
+            if let Some(fields) = state.as_object_mut() {
+                fields.remove(plaintext_http::STATE_FIELD);
+            }
             write_private_json(&state_path, &state)?;
         }
         println!("Cleared stored Longhouse device credentials");
         return Ok(());
     }
-    let existing: serde_json::Value = std::fs::read(&state_path)
+    let mut existing: serde_json::Value = std::fs::read(&state_path)
         .ok()
         .and_then(|raw| serde_json::from_slice(&raw).ok())
         .unwrap_or_else(|| json!({}));
-    let url = args
-        .url
-        .or_else(|| {
-            existing
-                .get("runtime_url")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
-        .context("No Longhouse URL configured. Pass --url.")?;
-    let base = url.trim_end_matches('/').to_string();
+    let stored_url = existing
+        .get("runtime_url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let (base, needs_opt_in) = resolve_runtime_url(
+        args.url,
+        stored_url.as_deref(),
+        args.allow_insecure_http,
+        &machine_dir,
+    )?;
+    // Kept only while this address needs it, so a later https address does not
+    // inherit a LAN opt-in.
+    existing[plaintext_http::STATE_FIELD] = json!(needs_opt_in);
     let store = |token: &str| {
         store_device_credentials(&machine_dir, existing, &base, args.device.as_deref(), token)
     };
@@ -5236,6 +5273,7 @@ mod tests {
                     clear: false,
                     local_only: false,
                     device: device.map(str::to_string),
+                    allow_insecure_http: false,
                 })
             },
         )
@@ -5295,9 +5333,114 @@ mod tests {
                     clear: true,
                     local_only,
                     device: None,
+                    allow_insecure_http: false,
                 })
             },
         )
+    }
+
+    #[test]
+    fn auth_url_follows_the_plaintext_http_rule() {
+        let home = tempfile::tempdir().unwrap();
+        let machine = home.path().join("machine");
+        temp_env::with_var_unset(plaintext_http::OPT_IN_ENV, || {
+            // https and Tailscale need nothing; the opt-in is not stored for them.
+            for allowed in [
+                "https://you.longhouse.ai/",
+                "http://100.64.0.1:8080",
+                "http://box.tail1234.ts.net:8080/",
+                "http://127.0.0.1:8080",
+            ] {
+                let (base, needs_opt_in) =
+                    resolve_runtime_url(Some(allowed.to_string()), None, false, &machine).unwrap();
+                assert_eq!(base, allowed.trim_end_matches('/'));
+                assert!(!needs_opt_in, "{allowed} must not need the opt-in");
+            }
+            // A LAN address is refused with the opt-in named, allowed with it,
+            // and then the opt-in is what gets stored.
+            let refused = resolve_runtime_url(
+                Some("http://192.168.1.20:8080".to_string()),
+                None,
+                false,
+                &machine,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(refused.contains("--allow-insecure-http"), "{refused}");
+            let (_, needs_opt_in) = resolve_runtime_url(
+                Some("http://192.168.1.20:8080".to_string()),
+                None,
+                true,
+                &machine,
+            )
+            .unwrap();
+            assert!(needs_opt_in);
+            // Public http is refused, opt-in or not.
+            for allow in [false, true] {
+                let refused = resolve_runtime_url(
+                    Some("http://demo.longhouse.ai".to_string()),
+                    None,
+                    allow,
+                    &machine,
+                )
+                .unwrap_err()
+                .to_string();
+                assert!(refused.contains("loopback and Tailscale"), "{refused}");
+            }
+        });
+    }
+
+    #[test]
+    fn auth_reuses_a_stored_lan_opt_in_only_for_the_address_it_was_given_for() {
+        let home = tempfile::tempdir().unwrap();
+        let machine = home.path().join("machine");
+        std::fs::create_dir_all(&machine).unwrap();
+        std::fs::write(
+            machine.join("state.json"),
+            json!({"runtime_url": "http://192.168.1.20:8080", "allow_insecure_http": true})
+                .to_string(),
+        )
+        .unwrap();
+        temp_env::with_var_unset(plaintext_http::OPT_IN_ENV, || {
+            // Re-running auth for the stored address (or with no --url) keeps working.
+            for requested in [None, Some("http://192.168.1.20:8080/".to_string())] {
+                let (_, needs_opt_in) = resolve_runtime_url(
+                    requested,
+                    Some("http://192.168.1.20:8080"),
+                    false,
+                    &machine,
+                )
+                .unwrap();
+                assert!(needs_opt_in);
+            }
+            // A different LAN address is a new decision.
+            let refused = resolve_runtime_url(
+                Some("http://192.168.1.99:8080".to_string()),
+                Some("http://192.168.1.20:8080"),
+                false,
+                &machine,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(refused.contains("--allow-insecure-http"), "{refused}");
+        });
+    }
+
+    #[test]
+    fn auth_refuses_a_lan_or_public_address_before_touching_the_network() {
+        let home = tempfile::tempdir().unwrap();
+        temp_env::with_var_unset(plaintext_http::OPT_IN_ENV, || {
+            for url in ["http://192.168.1.20:1", "http://demo.longhouse.ai"] {
+                let error = auth_against(url, None, home.path())
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("Refusing plaintext"), "{url}: {error}");
+            }
+        });
+        assert!(
+            !home.path().join("machine/state.json").exists(),
+            "a refused address must store nothing"
+        );
     }
 
     #[test]

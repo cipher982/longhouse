@@ -1623,6 +1623,10 @@ public struct RealtimeConnectionSnapshot: Codable, Equatable, Sendable {
     public let runtimeUrl: String?
     public let machineName: String?
     public let tokenPath: String?
+    /// The user opted into plain http to a LAN address
+    /// (`longhouse auth --allow-insecure-http`); see `PlaintextHTTP`. Emitted
+    /// only when true.
+    public var allowInsecureHttp: Bool? = nil
 }
 
 public struct NativeTransportSnapshot: Codable, Equatable, Sendable {

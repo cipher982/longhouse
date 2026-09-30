@@ -287,6 +287,7 @@ Python projector, OpenAPI and both clients.
 | Launch | `server/zerg/services/session_launch_lifecycle.py`, `server/zerg/services/managed_local_launcher.py`; engine `engine/src/managed_launch_lifecycle.rs` | `web/src/features/launch/` | `ios/Sources/LonghouseApp/Launch/` |
 | Hearth (row flame) | none: reads served facts | `web/src/shared/instruments/hearth/` (`signals.ts` maps facts to flame) | `ios/Sources/LonghouseApp/DesignSystem/EmberChrome.swift` (background light only) |
 | Provider support | `schemas/managed_providers.yml` | `web/src/generated/provider-capabilities.ts` | none |
+| Plaintext-http rule (which Runtime Host addresses native clients may reach without https: loopback, Tailscale, an opted-in LAN address) | `server/zerg/services/plaintext_http.py`; engine `engine/src/plaintext_http.rs`; Desktop `desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/PlaintextHTTP.swift` (byte-identical to the iOS copy); shared cases `schemas/plaintext-http-vectors.json` | none | `ios/Sources/Shared/Auth/PlaintextHTTP.swift` |
 
 ## Where to read next
 

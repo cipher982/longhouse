@@ -18,9 +18,16 @@ import httpx
 import typer
 
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.plaintext_http import OPT_IN_ENV
+from zerg.services.plaintext_http import OPT_IN_FLAG
+from zerg.services.plaintext_http import Outcome
+from zerg.services.plaintext_http import check_runtime_url
+from zerg.services.plaintext_http import insecure_warning
+from zerg.services.plaintext_http import refusal_message
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.services.shipper.service import get_engine_executable
+from zerg.services.shipper.token import get_allow_insecure_http
 from zerg.services.shipper.token import normalize_zerg_url
 
 logging.basicConfig(
@@ -30,14 +37,30 @@ logging.basicConfig(
 )
 
 
-def _resolve_configured_url(url: object | None, config_dir: Path | None) -> str:
-    explicit_url = normalize_zerg_url(url)
-    if explicit_url:
-        return explicit_url
+def _resolve_configured_url(
+    url: object | None,
+    config_dir: Path | None,
+    *,
+    allow_insecure_http: bool = False,
+    quiet: bool = False,
+) -> str:
+    """The Runtime Host address to ship to: `--url`, else the stored one.
 
-    stored_url = normalize_zerg_url(get_zerg_url(config_dir))
-    if stored_url:
-        return stored_url
+    Plain http follows the shared rule (zerg.services.plaintext_http): loopback
+    and Tailscale are fine, a LAN address needs the opt-in (flag, env, or the
+    one stored with the address), anything else is refused with the reason.
+    """
+    allow = allow_insecure_http is True or get_allow_insecure_http(config_dir)
+    for candidate in (url, get_zerg_url(config_dir)):
+        normalized = normalize_zerg_url(candidate, allow_insecure_http=allow)
+        if normalized:
+            if check_runtime_url(normalized, allow_insecure_http=allow) is Outcome.ALLOWED_WARN and not quiet:
+                typer.secho(insecure_warning(normalized), fg=typer.colors.YELLOW, err=True)
+            return normalized
+        outcome = check_runtime_url(candidate, allow_insecure_http=allow)
+        if outcome in (Outcome.REFUSED_LAN, Outcome.REFUSED_PUBLIC):
+            typer.secho(refusal_message(candidate, outcome), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
 
     typer.secho("No Longhouse URL configured.", fg=typer.colors.RED)
     typer.echo(
@@ -71,6 +94,11 @@ def ship(
         "-d",
         help="Claude config directory (default: ~/.claude)",
     ),
+    allow_insecure_http: bool = typer.Option(
+        False,
+        OPT_IN_FLAG,
+        help="Allow plain http to a LAN address (Tailscale and loopback never need this)",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -93,7 +121,7 @@ def ship(
 
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
 
-    url = _resolve_configured_url(url, config_dir)
+    url = _resolve_configured_url(url, config_dir, allow_insecure_http=allow_insecure_http is True, quiet=quiet is True)
     if not token:
         token = load_token(config_dir)
 
@@ -109,6 +137,9 @@ def ship(
         env["RUST_LOG"] = "longhouse_engine=debug"
     if claude_dir:
         env["CLAUDE_CONFIG_DIR"] = claude_dir
+    if allow_insecure_http is True:
+        # The engine applies the same rule to the address it is handed.
+        env[OPT_IN_ENV] = "1"
 
     # Build base engine args
     engine_args = [engine, "ship"]

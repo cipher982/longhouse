@@ -378,6 +378,7 @@ def apply_machine_state_update(
     machine_name: str | None = None,
     menubar: bool | None = None,
     topology_intent: str | None = None,
+    allow_insecure_http: bool | None = None,
     token: str | None = None,
 ) -> MachineStateApplyResult:
     """Persist durable machine state and reconcile generated launch artifacts when installed.
@@ -403,6 +404,8 @@ def apply_machine_state_update(
         write_kwargs["desktop_app_enabled"] = menubar
     if topology_intent is not None:
         write_kwargs["topology_intent"] = topology_intent
+    if allow_insecure_http is not None:
+        write_kwargs["allow_insecure_http"] = allow_insecure_http
 
     _guard_stable_home_control_plane_target(
         state_root=config_dir,

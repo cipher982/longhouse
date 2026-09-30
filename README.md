@@ -146,6 +146,20 @@ longhouse auth --url https://longhouse.example.com
 longhouse machine repair --repair-service
 ```
 
+**Over Tailscale, no https needed.** If the always-on box and your laptop share a tailnet, skip the domain and the proxy: Tailscale already encrypts the link, so native clients accept plain `http://` to a Tailscale address (`100.x.y.z`, an `fd7a:115c:a1e0::` address, or a `*.ts.net` name).
+
+```bash
+# on the always-on box (it prints its "Tailscale:" address)
+longhouse-server serve --host 0.0.0.0
+
+# on each dev machine
+curl -fsSL https://get.longhouse.ai/install.sh | bash
+longhouse auth --url http://100.x.y.z:8080    # or http://my-box.your-tailnet.ts.net:8080
+longhouse machine repair --repair-service
+```
+
+The same holds for the macOS app and the iPhone app. Anything else over plain `http://` is refused: a LAN address (`192.168.x`, `10.x`, `172.16-31.x`, `*.local`) works only when you opt in (`longhouse auth --url http://192.168.1.20:8080 --allow-insecure-http`, or `LONGHOUSE_ALLOW_INSECURE_HTTP=1`; it is remembered with the address and warns every time it is used), and a public address needs `https://`.
+
 Binding beyond localhost without auth is refused by default — `longhouse-server serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
 
 ## Repair

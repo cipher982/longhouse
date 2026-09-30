@@ -747,6 +747,8 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
             "runtime_url": machine_state.runtime_url if machine_state else None,
             "machine_name": machine_state.machine_name if machine_state else None,
             "token_path": str(get_machine_token_path(resolved_base_dir)),
+            # Only when true: the Desktop app applies the same plaintext-http rule.
+            **({"allow_insecure_http": True} if machine_state and machine_state.allow_insecure_http else {}),
         },
         "unmanaged_processes": unmanaged_processes,
         "orphan_bridges": orphan_bridges,

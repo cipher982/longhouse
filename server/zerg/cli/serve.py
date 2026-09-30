@@ -25,6 +25,9 @@ from urllib.parse import urlparse
 import typer
 
 from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.plaintext_http import OPT_IN_FLAG
+from zerg.services.plaintext_http import HostClass
+from zerg.services.plaintext_http import classify_host
 from zerg.services.shipper.token import normalize_zerg_url
 
 app = typer.Typer(help="Longhouse server commands")
@@ -49,6 +52,20 @@ def _get_lan_ip() -> str | None:
         return None
 
 
+def _get_tailscale_ip() -> str | None:
+    """This machine's Tailscale IPv4 address, if it is on a tailnet."""
+    try:
+        import psutil
+
+        for addresses in psutil.net_if_addrs().values():
+            for address in addresses:
+                if address.family == socket.AF_INET and classify_host(address.address) is HostClass.TAILSCALE:
+                    return address.address
+    except Exception:
+        pass
+    return None
+
+
 def _host_is_public(host: str) -> bool:
     """Return True when binding ``host`` exposes the server beyond this machine.
 
@@ -71,8 +88,10 @@ def warn_plain_http_bind(host: str, public_url: str | None) -> None:
     """Warn when the server is reachable off this machine without https in front.
 
     Browser logins work over plain http (cookies are not ``Secure`` there), but the
-    password and session cookie then cross the network in the clear. Native clients
-    are stricter: ``normalize_zerg_url`` accepts plaintext http only for loopback.
+    password and session cookie then cross the network in the clear, except over
+    Tailscale, which WireGuard encrypts. Native clients follow the shared rule
+    (``zerg.services.plaintext_http``): http to a Tailscale address or loopback is
+    accepted, http to a LAN address needs an explicit opt-in, anything else needs https.
     """
     if public_url and public_url.startswith("https://"):
         # TLS is declared in front of this port. Cookies are Secure only for requests the
@@ -96,7 +115,8 @@ def warn_plain_http_bind(host: str, public_url: str | None) -> None:
         fg=typer.colors.YELLOW,
     )
     typer.secho(
-        "  Native `longhouse auth` accepts only https or loopback: longhouse auth --url https://<your-domain>",
+        "  Native clients (`longhouse auth`, the Machine Agent, the apps) accept http:// to a Tailscale address "
+        f"(100.x or *.ts.net) with no flag. A plain LAN address needs {OPT_IN_FLAG}; anything else needs https.",
         fg=typer.colors.YELLOW,
     )
     typer.echo("")
@@ -742,6 +762,11 @@ def serve(
 
     is_public_interface = host in ("0.0.0.0", "::", "")
     lan_ip = _get_lan_ip() if is_public_interface else None
+    if is_public_interface:
+        tailscale_ip = _get_tailscale_ip()
+    else:
+        # Bound to one address: the Tailscale one, if that is what was asked for.
+        tailscale_ip = host if classify_host(host) is HostClass.TAILSCALE and ":" not in host else None
 
     # Check for bundled frontend (importing zerg.main also validates the environment)
     try:
@@ -774,12 +799,17 @@ def serve(
     typer.secho(f"  Local:    http://127.0.0.1:{port}/", fg=typer.colors.GREEN)
     if lan_ip:
         typer.secho(f"  LAN:      http://{lan_ip}:{port}/", fg=typer.colors.GREEN)
+    if tailscale_ip:
+        typer.secho(f"  Tailscale: http://{tailscale_ip}:{port}/", fg=typer.colors.GREEN)
     if public_url:
         typer.secho(f"  Public:   {public_url}/", fg=typer.colors.CYAN)
     typer.echo("")
 
     typer.echo("  To connect this machine:")
     typer.secho(f"    longhouse auth --url http://127.0.0.1:{port}", fg=typer.colors.BRIGHT_BLACK)
+    if tailscale_ip:
+        typer.echo("  To connect another machine on your tailnet (http is fine, WireGuard encrypts it):")
+        typer.secho(f"    longhouse auth --url http://{tailscale_ip}:{port}", fg=typer.colors.BRIGHT_BLACK)
     if public_url and public_url.startswith("https://"):
         typer.echo("  To connect from any machine (via your domain):")
         typer.secho(f"    longhouse auth --url {public_url}", fg=typer.colors.BRIGHT_BLACK)
