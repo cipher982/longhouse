@@ -46,7 +46,6 @@ function resolveAppMode(): AppMode {
 export interface AppConfig {
   // API Configuration
   apiBaseUrl: string;
-  wsBaseUrl: string;
 
   // Mode
   appMode: AppMode;
@@ -147,14 +146,10 @@ function loadConfig(): AppConfig {
   const runtimeUmamiTag = typeof window !== 'undefined' ? window.__UMAMI_TAG__ : undefined;
 
   // FAIL FAST: No fallbacks, no silent defaults
-  // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
+  // Production MUST have config.js loaded with API_BASE_URL
   let apiBaseUrl = typeof window !== 'undefined' && window.API_BASE_URL
     ? window.API_BASE_URL
     : (import.meta.env.VITE_API_BASE_URL || (isDevelopment ? '/api' : ''));
-
-  let wsBaseUrl = typeof window !== 'undefined' && window.WS_BASE_URL
-    ? window.WS_BASE_URL
-    : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? 'ws://localhost:47300' : ''));
 
   // Single-domain architecture: each user subdomain (alice.longhouse.ai) serves
   // both frontend and API. Nginx proxies /api/* to the backend container.
@@ -164,7 +159,6 @@ function loadConfig(): AppConfig {
     // For any *.longhouse.ai domain, use same-origin /api
     if (host.endsWith('.longhouse.ai') || host === 'longhouse.ai') {
       apiBaseUrl = '/api';
-      wsBaseUrl = `wss://${host}/api/ws`;
     }
   }
 
@@ -178,9 +172,6 @@ function loadConfig(): AppConfig {
     if (!apiBaseUrl) {
       apiBaseUrl = 'http://127.0.0.1:47300';
     }
-    if (!wsBaseUrl) {
-      wsBaseUrl = 'ws://127.0.0.1:47300';
-    }
   }
 
   apiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
@@ -189,18 +180,17 @@ function loadConfig(): AppConfig {
   // runs this module in Node with no window and no config.js; there is no
   // runtime config to be missing there.
   if (typeof window !== 'undefined' && isProduction && appMode === 'production') {
+    // Only the API base is required. No client reads a WebSocket base from here, and a
+    // self-hosted Runtime Host with auth on and no public URL serves it empty: requiring
+    // it turned that server's every page into a blank screen.
     if (!apiBaseUrl) {
       throw new Error('FATAL: API_BASE_URL not configured! Add window.API_BASE_URL in config.js');
-    }
-    if (!wsBaseUrl) {
-      throw new Error('FATAL: WS_BASE_URL not configured! Add window.WS_BASE_URL in config.js');
     }
   }
 
   return {
     // API Configuration
     apiBaseUrl,
-    wsBaseUrl,
 
     // Mode
     appMode,

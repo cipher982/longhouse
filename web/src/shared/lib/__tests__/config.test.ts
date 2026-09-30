@@ -22,6 +22,26 @@ afterEach(() => {
   delete window.__UMAMI_TAG__;
 });
 
+describe("config required runtime values", () => {
+  it("loads in production without WS_BASE_URL (a self-hosted host with no public URL serves it empty)", async () => {
+    vi.stubEnv("MODE", "production");
+    window.API_BASE_URL = "/api";
+    window.WS_BASE_URL = "";
+    window.__APP_MODE__ = "production";
+
+    const { config } = await loadConfigModule();
+
+    expect(config.apiBaseUrl).toBe("/api");
+  });
+
+  it("still refuses to load in production without API_BASE_URL", async () => {
+    vi.stubEnv("MODE", "production");
+    window.__APP_MODE__ = "production";
+
+    await expect(loadConfigModule()).rejects.toThrow(/API_BASE_URL not configured/);
+  });
+});
+
 describe("config analytics runtime overrides", () => {
   it("prefers runtime umami config over legacy Vite env", async () => {
     setRequiredRuntimeConfig();
