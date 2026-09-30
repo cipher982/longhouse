@@ -36,10 +36,25 @@ struct Entry {
     parsed: Arc<dyn Any + Send + Sync>,
 }
 
+#[cfg(test)]
 thread_local! {
     /// Files parsed on this thread, so a test can say a directory was not read
     /// again.
     pub(crate) static FILES_PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    static UNREAD_FILES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many files (or directories) this thread has tried to read and could not,
+/// ever. A caller that concludes something from a pass over these directories
+/// and remembers the conclusion asks before and after: if the count moved, the
+/// conclusion was drawn without something it could not see, and nothing a stat
+/// can observe says when that stops being true (a `chmod` moves neither length,
+/// inode nor mtime).
+pub(crate) fn unread_files() -> u64 {
+    UNREAD_FILES.with(|unread| unread.get())
 }
 
 /// A copy is for one directory read one way: the same files parsed or ordered
@@ -68,7 +83,10 @@ where
         Err(error) if error.kind() == ErrorKind::NotFound => {
             return Ok(Arc::new(Vec::new()));
         }
-        Err(error) => return Err(error),
+        Err(error) => {
+            UNREAD_FILES.with(|unread| unread.set(unread.get() + 1));
+            return Err(error);
+        }
     };
     let key: CacheKey = (
         dir.to_path_buf(),
@@ -98,7 +116,10 @@ where
             #[cfg(test)]
             FILES_PARSED.with(|parsed| parsed.set(parsed.get() + 1));
             let bytes = fs::read(&path);
-            every_file_read &= bytes.is_ok();
+            if bytes.is_err() {
+                every_file_read = false;
+                UNREAD_FILES.with(|unread| unread.set(unread.get() + 1));
+            }
             parse(&path, bytes)
         })
         .collect();
@@ -124,7 +145,9 @@ where
 /// its own conclusion drawn from them: the same signature later means the same
 /// files. `None` when something in the directory was written too recently to
 /// vouch for, or it cannot be read; a directory that does not exist has a
-/// signature of its own.
+/// signature of its own. It is taken from stat alone, so it says nothing about
+/// whether a file could be opened: a conclusion drawn while one could not is not
+/// one to remember (see [`unread_files`]).
 pub(crate) fn rested_signature(dir: &Path) -> Option<String> {
     match list_json(dir) {
         Ok(listing) => {
@@ -330,22 +353,28 @@ mod tests {
     #[test]
     fn a_file_that_could_not_be_read_is_asked_for_again() {
         use std::os::unix::fs::PermissionsExt;
-        // Root reads anything, so there is no unreadable file to make.
-        if unsafe { libc::geteuid() } == 0 {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.json");
         fs::write(&path, "one").unwrap();
         age(&path, 60);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        // A user that reads anything has no unreadable file to make.
+        if fs::read(&path).is_ok() {
+            return;
+        }
 
+        let unread = unread_files();
         for _ in 0..2 {
             assert!(parsed_json_dir(dir.path(), parse, Ord::cmp)
                 .unwrap()
                 .is_empty());
         }
         assert_eq!(files_parsed(), 2, "an unreadable file was cached as absent");
+        assert_eq!(
+            unread_files(),
+            unread + 2,
+            "a caller could not tell that a file was missed"
+        );
 
         // Made readable again, with nothing a stat can see having changed.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
@@ -354,6 +383,11 @@ mod tests {
                 .unwrap()
                 .to_vec(),
             ["one"]
+        );
+        assert_eq!(
+            unread_files(),
+            unread + 2,
+            "a file that was read was counted"
         );
     }
 

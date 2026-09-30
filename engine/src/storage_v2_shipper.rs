@@ -2777,10 +2777,15 @@ pub(crate) fn prepare_next_opencode_envelope(
     }
     let mut waited = false;
     let mut wake_ms = None;
+    let unread_before = crate::dir_cache::unread_files();
     let prepared = walk_opencode_database(conn, capabilities, db_path, &mut waited, &mut wake_ms)?;
     // A session held back for its managed binding is waiting on the clock, not
-    // on the database, so it is not a walk that found nothing to ship.
-    if let (None, false, Some(rest_key)) = (&prepared, waited, rest_key) {
+    // on the database, so it is not a walk that found nothing to ship. Nor is
+    // one that could not read a managed-state file: the key vouches for what a
+    // stat can see, and a file made readable again (a `chmod`) changes none of
+    // it, so a walk that missed the file must be repeated until it does not.
+    let saw_every_binding = crate::dir_cache::unread_files() == unread_before;
+    if let (None, false, true, Some(rest_key)) = (&prepared, waited, saw_every_binding, rest_key) {
         if let Ok(mut rests) = OPENCODE_AT_REST.lock() {
             rests.insert(db_path.to_path_buf(), (rest_key, wake_ms));
         }
@@ -12488,6 +12493,67 @@ mod tests {
             let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
                 .unwrap()
                 .expect("managed state for a settled database must rebind it");
+            assert_eq!(prepared.envelope.session_id, managed_session_id);
+        });
+    }
+
+    /// The managed launch's state file was there all along, but the engine could
+    /// not read it. Making it readable changes no length, inode or mtime, so
+    /// nothing a stat can see tells the settled database that its binding is now
+    /// known: the walk that missed the file must not be the one that settles it.
+    #[cfg(unix)]
+    #[test]
+    fn a_managed_binding_that_becomes_readable_still_rebinds_a_settled_opencode_database() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let state_root = dir.path().join("state-root");
+        with_opencode_state_root(&state_root, || {
+            let managed_session_id = "018f0c3a-7b2d-7f10-8a11-123456789abe";
+            fs::create_dir_all(&state_root).unwrap();
+            let managed = state_root.join("managed.json");
+            fs::write(
+                &managed,
+                serde_json::json!({
+                    "provider": "opencode",
+                    "longhouse_session_id": managed_session_id,
+                    "opencode_session_id": "settled-session",
+                })
+                .to_string(),
+            )
+            .unwrap();
+            // Old enough for a stat to vouch for, then made unreadable.
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&managed)
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+                .unwrap();
+            fs::set_permissions(&managed, fs::Permissions::from_mode(0o000)).unwrap();
+            // A user that reads anything has no unreadable file to make.
+            if fs::read(&managed).is_ok() {
+                return;
+            }
+
+            // Shipped under its own id, since the binding could not be read.
+            let (db_path, mut conn) = settled_opencode_database(dir.path(), "settled-session");
+            for _pass in 0..2 {
+                let opens = opencode_opens();
+                assert!(
+                    prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    opencode_opens() > opens,
+                    "a walk that could not read the binding evidence was called settled"
+                );
+            }
+
+            fs::set_permissions(&managed, fs::Permissions::from_mode(0o600)).unwrap();
+            let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+                .unwrap()
+                .expect("a binding that became readable must rebind the session");
             assert_eq!(prepared.envelope.session_id, managed_session_id);
         });
     }

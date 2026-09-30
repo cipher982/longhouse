@@ -1057,6 +1057,7 @@ pub fn parse_opencode_stream(db_path: &Path, stream: &OpenCodeStream) -> Result<
     )
 }
 
+#[cfg(test)]
 thread_local! {
     /// Times an OpenCode database was opened for reading on this thread, for any
     /// reason: a scan pass over a database that did not move must not open it.
