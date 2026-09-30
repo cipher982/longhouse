@@ -48,10 +48,10 @@ def _resolve_configured_url(
 
     Plain http follows the shared rule (zerg.services.plaintext_http): loopback
     and Tailscale are fine, a LAN address needs the opt-in (flag, env, or the
-    one stored with the address), anything else is refused with the reason.
+    one stored with that same address), anything else is refused with the reason.
     """
-    allow = allow_insecure_http is True or get_allow_insecure_http(config_dir)
     for candidate in (url, get_zerg_url(config_dir)):
+        allow = allow_insecure_http is True or get_allow_insecure_http(config_dir, candidate)
         normalized = normalize_zerg_url(candidate, allow_insecure_http=allow)
         if normalized:
             if check_runtime_url(normalized, allow_insecure_http=allow) is Outcome.ALLOWED_WARN and not quiet:

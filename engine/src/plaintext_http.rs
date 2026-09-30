@@ -215,19 +215,44 @@ pub fn env_opt_in() -> bool {
         .unwrap_or(false)
 }
 
-/// The opt-in stored in `<machine_dir>/state.json` beside the runtime URL.
-pub fn stored_opt_in(machine_dir: &Path) -> bool {
-    std::fs::read(machine_dir.join("state.json"))
+/// The opt-in stored in `<machine_dir>/state.json` beside the runtime URL,
+/// for exactly that address: a different address is a new decision.
+pub fn stored_opt_in_for(machine_dir: &Path, url: &str) -> bool {
+    let Some(state) = std::fs::read(machine_dir.join("state.json"))
         .ok()
         .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
-        .and_then(|state| state.get(STATE_FIELD).and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
+    else {
+        return false;
+    };
+    let same_address = state
+        .get("runtime_url")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|stored| {
+            stored.trim().trim_end_matches('/') == url.trim().trim_end_matches('/')
+        });
+    same_address
+        && state
+            .get(STATE_FIELD)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
 }
 
-/// Whether this process may use a LAN address over plain http: the
-/// environment, or what `longhouse auth` stored with the address.
-pub fn opt_in_enabled(machine_dir: &Path) -> bool {
-    env_opt_in() || stored_opt_in(machine_dir)
+/// Whether this process may use the LAN address `url` over plain http: the
+/// environment, or what `longhouse auth` stored with that same address.
+pub fn opt_in_enabled(machine_dir: &Path, url: &str) -> bool {
+    env_opt_in() || stored_opt_in_for(machine_dir, url)
+}
+
+/// The scheme of `url` lowercased, and the rest after `://`, when it is an
+/// http(s) address. A scheme is case-insensitive, and the shared rule judges
+/// `HTTP://...` like `http://...`.
+pub fn split_http_scheme(url: &str) -> Option<(&'static str, &str)> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    match scheme.to_ascii_lowercase().as_str() {
+        "http" => Some(("http", rest)),
+        "https" => Some(("https", rest)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -330,20 +355,39 @@ mod tests {
     }
 
     #[test]
-    fn the_stored_opt_in_is_read_from_machine_state() {
+    fn the_stored_opt_in_covers_only_the_address_it_was_stored_with() {
+        let lan = "http://192.168.1.20:8080";
         let dir = tempfile::tempdir().unwrap();
-        assert!(!stored_opt_in(dir.path()));
+        assert!(!stored_opt_in_for(dir.path(), lan));
         std::fs::write(
             dir.path().join("state.json"),
-            r#"{"runtime_url":"http://192.168.1.20:8080","allow_insecure_http":true}"#,
+            r#"{"runtime_url":"http://192.168.1.20:8080/","allow_insecure_http":true}"#,
         )
         .unwrap();
-        assert!(stored_opt_in(dir.path()));
+        assert!(stored_opt_in_for(dir.path(), lan));
+        assert!(stored_opt_in_for(dir.path(), " http://192.168.1.20:8080/ "));
+        // A different host, or the same host on another port, is a new decision.
+        assert!(!stored_opt_in_for(dir.path(), "http://192.168.1.99:8080"));
+        assert!(!stored_opt_in_for(dir.path(), "http://192.168.1.20:9090"));
         std::fs::write(
             dir.path().join("state.json"),
-            r#"{"runtime_url":"https://x.longhouse.ai","allow_insecure_http":false}"#,
+            r#"{"runtime_url":"http://192.168.1.20:8080","allow_insecure_http":false}"#,
         )
         .unwrap();
-        assert!(!stored_opt_in(dir.path()));
+        assert!(!stored_opt_in_for(dir.path(), lan));
+    }
+
+    #[test]
+    fn the_scheme_is_case_insensitive() {
+        assert_eq!(
+            split_http_scheme("HTTP://100.64.0.1:8080"),
+            Some(("http", "100.64.0.1:8080"))
+        );
+        assert_eq!(
+            split_http_scheme(" Https://demo.longhouse.ai/ "),
+            Some(("https", "demo.longhouse.ai/"))
+        );
+        assert_eq!(split_http_scheme("ftp://x"), None);
+        assert_eq!(split_http_scheme("100.64.0.1:8080"), None);
     }
 }

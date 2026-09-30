@@ -813,15 +813,18 @@ fn resolve_runtime_url(
     flag: bool,
     machine_dir: &Path,
 ) -> anyhow::Result<(String, bool)> {
-    let url = requested
+    // The scheme is case-insensitive; it is stored lowercase so every reader
+    // (service repair, the control channel) sees the same spelling.
+    let (scheme, rest) = requested
         .or_else(|| stored_url.map(str::to_owned))
-        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+        .as_deref()
+        .and_then(plaintext_http::split_http_scheme)
+        .map(|(scheme, rest)| (scheme, rest.to_string()))
         .context("No Longhouse URL configured. Pass --url.")?;
-    let base = url.trim_end_matches('/').to_string();
+    let base = format!("{scheme}://{}", rest.trim_end_matches('/'));
     let opted_in = flag
         || plaintext_http::env_opt_in()
-        || (plaintext_http::stored_opt_in(machine_dir)
-            && stored_url.is_some_and(|stored| stored.trim_end_matches('/') == base));
+        || plaintext_http::stored_opt_in_for(machine_dir, &base);
     let outcome = plaintext_http::enforce(&base, opted_in)?;
     Ok((base, outcome == plaintext_http::Outcome::AllowedWarn))
 }
@@ -5356,6 +5359,16 @@ mod tests {
                 assert_eq!(base, allowed.trim_end_matches('/'));
                 assert!(!needs_opt_in, "{allowed} must not need the opt-in");
             }
+            // The scheme is case-insensitive and stored lowercase.
+            let (base, needs_opt_in) = resolve_runtime_url(
+                Some("HTTP://100.64.0.1:8080/".to_string()),
+                None,
+                false,
+                &machine,
+            )
+            .unwrap();
+            assert_eq!(base, "http://100.64.0.1:8080");
+            assert!(!needs_opt_in);
             // A LAN address is refused with the opt-in named, allowed with it,
             // and then the opt-in is what gets stored.
             let refused = resolve_runtime_url(

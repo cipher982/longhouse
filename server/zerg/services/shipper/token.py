@@ -164,12 +164,19 @@ def normalize_zerg_url(url: object | None, *, allow_insecure_http: bool = False)
     return normalized
 
 
-def get_allow_insecure_http(config_dir: Path | None = None) -> bool:
-    """Whether plain http to a LAN address is opted into: the environment or machine state."""
+def get_allow_insecure_http(config_dir: Path | None = None, url: object | None = None) -> bool:
+    """Whether plain http to the LAN address ``url`` is opted into.
+
+    The environment opts in everywhere. The opt-in stored in machine state covers
+    only the address it was stored with (`url` is that address): a different LAN
+    address is a new decision.
+    """
     if env_opt_in():
         return True
     state = load_machine_state(config_dir)
-    return bool(state and state.allow_insecure_http)
+    if not (state and state.allow_insecure_http and state.runtime_url and isinstance(url, str)):
+        return False
+    return state.runtime_url.strip().rstrip("/") == url.strip().rstrip("/")
 
 
 def save_zerg_url(url: str, config_dir: Path | None = None, *, allow_insecure_http: bool = False) -> None:

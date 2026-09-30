@@ -169,7 +169,7 @@ def _generate_launchd_plist(
     ]
     for argument in health_arguments[1:]:
         program_arguments.extend(["--health-arg", str(argument)])
-    normalized_ui_url = normalize_zerg_url(ui_url, allow_insecure_http=get_allow_insecure_http())
+    normalized_ui_url = normalize_zerg_url(ui_url, allow_insecure_http=get_allow_insecure_http(url=ui_url))
     if normalized_ui_url:
         program_arguments.extend(["--ui-url", normalized_ui_url])
 

@@ -834,7 +834,7 @@ async fn run_once(
 ) -> Result<()> {
     let ws_url = control_ws_url(
         &config.api_url,
-        crate::plaintext_http::opt_in_enabled(&crate::config::get_machine_dir()?),
+        crate::plaintext_http::opt_in_enabled(&crate::config::get_machine_dir()?, &config.api_url),
     )?;
     status.set_disconnected(Some(&ws_url), None, None, None);
     let mut request = ws_url
@@ -3595,13 +3595,11 @@ fn control_ws_url(api_url: &str, allow_insecure_http: bool) -> Result<String> {
             crate::plaintext_http::refusal_message(api_url, outcome)
         );
     }
-    if let Some(rest) = base.strip_prefix("http://") {
-        return Ok(format!("ws://{rest}/api/agents/control/ws"));
+    match crate::plaintext_http::split_http_scheme(base) {
+        Some(("http", rest)) => Ok(format!("ws://{rest}/api/agents/control/ws")),
+        Some((_, rest)) => Ok(format!("wss://{rest}/api/agents/control/ws")),
+        None => bail!("api_url must start with http:// or https://"),
     }
-    if let Some(rest) = base.strip_prefix("https://") {
-        return Ok(format!("wss://{rest}/api/agents/control/ws"));
-    }
-    bail!("api_url must start with http:// or https://")
 }
 
 fn required_string(frame: &Value, key: &'static str) -> std::result::Result<String, CommandError> {
@@ -4307,6 +4305,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn control_ws_url_reads_the_scheme_case_insensitively() {
+        assert_eq!(
+            control_ws_url("HTTP://100.64.0.1:8000", false).unwrap(),
+            "ws://100.64.0.1:8000/api/agents/control/ws"
+        );
+        assert_eq!(
+            control_ws_url("Https://demo.longhouse.ai", false).unwrap(),
+            "wss://demo.longhouse.ai/api/agents/control/ws"
+        );
+        assert!(control_ws_url("HTTP://demo.longhouse.ai", false)
+            .unwrap_err()
+            .to_string()
+            .contains("Refusing plaintext"));
     }
 
     #[test]

@@ -82,8 +82,14 @@ def test_the_opt_in_is_read_from_the_environment_or_machine_state(tmp_path: Path
     assert get_allow_insecure_http(tmp_path) is True
 
     monkeypatch.delenv(OPT_IN_ENV)
+    assert get_allow_insecure_http(tmp_path) is False
     write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
-    assert get_allow_insecure_http(tmp_path) is True
+    assert get_allow_insecure_http(tmp_path, "http://192.168.1.20:8080") is True
+    assert get_allow_insecure_http(tmp_path, " http://192.168.1.20:8080/ ") is True
+    # The stored opt-in covers the address it was stored with, not any other.
+    assert get_allow_insecure_http(tmp_path, "http://192.168.1.99:8080") is False
+    assert get_allow_insecure_http(tmp_path, "http://192.168.1.20:9090") is False
+    assert get_allow_insecure_http(tmp_path) is False
 
 
 def test_save_zerg_url_accepts_tailscale_with_no_opt_in_and_stores_none(tmp_path: Path):
@@ -178,6 +184,23 @@ def test_ship_refuses_a_lan_address_naming_the_opt_in_then_warns_when_opted_in(m
     # The engine subprocess applies the same rule, so it is told about the opt-in.
     assert calls[0][1]["env"][OPT_IN_ENV] == "1"
     assert "WARNING" in capsys.readouterr().err
+
+
+def test_ship_uses_the_stored_opt_in_only_for_the_address_it_was_stored_with(monkeypatch, tmp_path: Path, capsys):
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
+    monkeypatch.setattr(connect, "resolve_longhouse_home_from_provider_home", lambda claude_dir: tmp_path)
+
+    # The stored address keeps working, with the warning.
+    code, calls = _ship(monkeypatch, tmp_path, claude_dir="/unused")
+    assert code == 0
+    assert calls[0][0][3] == "http://192.168.1.20:8080"
+    assert "WARNING" in capsys.readouterr().err
+
+    # A different LAN address handed to --url is a new decision.
+    code, calls = _ship(monkeypatch, tmp_path, claude_dir="/unused", url="http://192.168.1.99:8080")
+    assert code == 1
+    assert calls == []
+    assert OPT_IN_FLAG in capsys.readouterr().err
 
 
 def test_ship_refuses_public_http_even_with_the_opt_in(monkeypatch, tmp_path: Path, capsys):

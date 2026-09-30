@@ -82,10 +82,10 @@ impl ShipperConfig {
 
     /// Apply the plaintext-http rule to this config's Runtime Host address:
     /// `https://`, loopback and Tailscale pass, a LAN address needs the opt-in
-    /// (environment or the one `longhouse auth` stored), anything else is an
-    /// error. An opted-in LAN address prints the warning.
+    /// (environment, or the one `longhouse auth` stored for that same address),
+    /// anything else is an error. An opted-in LAN address prints the warning.
     pub fn enforce_transport(&self) -> Result<()> {
-        let allow = crate::plaintext_http::opt_in_enabled(&get_machine_dir()?);
+        let allow = crate::plaintext_http::opt_in_enabled(&get_machine_dir()?, &self.api_url);
         crate::plaintext_http::enforce(&self.api_url, allow)?;
         Ok(())
     }
@@ -164,6 +164,37 @@ mod tests {
             }
         }
         config
+    }
+
+    #[test]
+    fn enforce_transport_honours_the_stored_lan_opt_in_only_for_its_own_address() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("machine")).unwrap();
+        fs::write(
+            dir.path().join("machine").join("state.json"),
+            r#"{"runtime_url":"http://192.168.1.20:8080","allow_insecure_http":true}"#,
+        )
+        .unwrap();
+        let home = dir.path().display().to_string();
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(home.as_str())),
+                ("CLAUDE_CONFIG_DIR", None),
+                ("LONGHOUSE_ALLOW_INSECURE_HTTP", None),
+            ],
+            || {
+                let at = |url: &str| {
+                    ShipperConfig::default().with_overrides(Some(url), None, None, None, None, None)
+                };
+                assert!(at("http://192.168.1.20:8080").enforce_transport().is_ok());
+                assert!(at("http://100.64.0.1:8080").enforce_transport().is_ok());
+                let other = at("http://192.168.1.99:8080")
+                    .enforce_transport()
+                    .unwrap_err()
+                    .to_string();
+                assert!(other.contains("--allow-insecure-http"), "{other}");
+            },
+        );
     }
 
     #[test]
