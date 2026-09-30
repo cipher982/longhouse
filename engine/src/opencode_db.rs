@@ -699,9 +699,11 @@ fn parse_rows(
 
 /// A row OpenCode has not written for this long is treated as finished even if
 /// its content says it is still in flight: a crashed run leaves a `running`
-/// tool call behind for good. A row that changes after being shipped anyway is
-/// a rewrite, which rotates the epoch; that is correct, and rare.
-const IN_FLIGHT_STALE_MS: i64 = 30 * 60 * 1000;
+/// tool call behind for good, and waiting longer for it costs nothing (the rest
+/// of the session ships around it). The other side is a real tool call still
+/// running after this long, which ships as it stands and replaces the epoch when
+/// it completes: one replay, so the bound is long.
+const IN_FLIGHT_STALE_MS: i64 = 2 * 60 * 60 * 1000;
 
 /// OpenCode's placeholder project for a directory that is not a git checkout.
 /// Its `worktree` is overwritten with the working directory of whichever
@@ -748,8 +750,11 @@ fn load_session_rows(conn: &Connection, provider_session_id: &str) -> Result<Ope
 ///   assistant message that has a completion time; a user message always);
 /// * rows are ordered by when they settled, so a row that settles later is
 ///   always at the tail;
-/// * the session record leads the stream and is never checked: it is shipped
-///   once and its later changes ride the envelope's session facts;
+/// * the session record leads the stream and only its title is checked: OpenCode
+///   names a session after its first exchange, once, while it is small, and a
+///   later rename is a person's edit. Its other fields (`agent`, which flips
+///   with the mode, `version`, `time_updated`) are shipped once; what the host
+///   needs from them is recomputed into each envelope's session facts;
 /// * a message is checked without its `summary`, which OpenCode recomputes after
 ///   the turn and which is derived from the parts.
 ///
@@ -761,7 +766,7 @@ pub struct OpenCodeStream {
     session_id: String,
     /// The bytes shipped: record 0 is the session, the rest are settled rows.
     pub records: Vec<Vec<u8>>,
-    /// What each record contributes to the revision chain (record 0 none).
+    /// What each record contributes to the revision chain.
     digests: Vec<[u8; 32]>,
     /// Record ordinal of each shipped part, by part id.
     part_ordinals: HashMap<String, u64>,
@@ -800,11 +805,15 @@ fn settle_or_wait(in_flight: bool, time_updated: i64, now_ms: i64) -> Settling {
 /// Whether a part is still being written. Unrecognised shapes are finished:
 /// a part type or status this code has not heard of ships as it always has.
 fn part_is_in_flight(data: &str) -> bool {
-    // Nearly every part is a long-finished tool output, and this runs on every
-    // walk; rule those out without parsing them.
+    // Nearly every byte is a long-finished tool output, and this runs on every
+    // walk: a tool is in flight only if it says so, so rule the rest out without
+    // parsing them. Text and reasoning parts are small, and testing their JSON
+    // for an end time by substring is fooled by any other field of that name, so
+    // they are always parsed.
     let maybe = data.contains("\"running\"")
         || data.contains("\"pending\"")
-        || (data.contains("\"start\"") && !data.contains("\"end\""));
+        || data.contains("\"type\":\"text\"")
+        || data.contains("\"type\":\"reasoning\"");
     if !maybe {
         return false;
     }
@@ -862,6 +871,14 @@ fn message_chain_digest(message: &OpenCodeMessageRow) -> [u8; 32] {
     hasher.update([0]);
     hasher.update(message.time_created.to_be_bytes());
     hasher.update(stable.as_bytes());
+    hasher.finalize().into()
+}
+
+/// What the session record contributes to the revision chain: its title.
+fn session_chain_digest(session: &OpenCodeSessionRow) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"title\0");
+    hasher.update(session.title.as_deref().unwrap_or("").as_bytes());
     hasher.finalize().into()
 }
 
@@ -931,7 +948,7 @@ fn build_stream(
     let mut digests = Vec::with_capacity(settled.len() + 1);
     let mut part_ordinals = HashMap::new();
     records.push(session_record(&rows.session, provider_session_id)?);
-    digests.push([0; 32]);
+    digests.push(session_chain_digest(&rows.session));
     for (_, kind, _, index) in settled {
         if kind == 0 {
             let message = &rows.messages[index];
@@ -993,7 +1010,7 @@ impl OpenCodeStream {
     /// A chain over the settled rows among the first `records` records.
     fn chain_through(&self, records: usize) -> [u8; 32] {
         let mut chain: [u8; 32] = Sha256::digest(STREAM_REVISION_PREFIX.as_bytes()).into();
-        for digest in self.digests.iter().take(records).skip(1) {
+        for digest in self.digests.iter().take(records) {
             let mut hasher = Sha256::new();
             hasher.update(chain);
             hasher.update(digest);
@@ -2204,11 +2221,11 @@ mod tests {
         assert_eq!(before.continuing_revision(None), stored);
 
         let provider = Connection::open(&db_path).unwrap();
-        // Nobody owns these: the session row, the project row and a message's
-        // diff summary or write time.
+        // Nobody owns these: the session row's write time and OpenCode version,
+        // the project row, and a message's diff summary or write time.
         provider
             .execute(
-                "UPDATE session SET title = 'Renamed', time_updated = time_updated + 5",
+                "UPDATE session SET version = '9.9', time_updated = time_updated + 5",
                 [],
             )
             .unwrap();
@@ -2271,6 +2288,26 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_session_ends_its_epoch() {
+        // OpenCode names a session after its first exchange, and the session
+        // record is the only place the archive keeps the name.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let now = stream_now_ms();
+        let before = opencode_session_stream(&db_path, "ses_test", now).unwrap();
+        let stored = before.revision();
+        Connection::open(&db_path)
+            .unwrap()
+            .execute("UPDATE session SET title = 'Fix the shipper'", [])
+            .unwrap();
+        let after = opencode_session_stream(&db_path, "ses_test", now).unwrap();
+        assert_eq!(after.records.len(), before.records.len());
+        assert_ne!(after.continuing_revision(Some(&stored)), stored);
+        assert_eq!(after.continuing_revision(Some(&stored)), after.revision());
+    }
+
+    #[test]
     fn a_shared_project_is_not_a_fact_about_its_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("opencode.db");
@@ -2313,6 +2350,8 @@ mod tests {
             r#"{"type":"tool","tool":"bash","state":{"status":"pending","input":{}}}"#,
             r#"{"type":"text","text":"","time":{"start":5}}"#,
             r#"{"type":"reasoning","text":"","time":{"start":5}}"#,
+            // Another field named "end" is not the part's end time.
+            r#"{"type":"text","text":"x","time":{"start":5},"other":{"end":1}}"#,
         ];
         let finished = [
             r#"{"type":"tool","tool":"bash","state":{"status":"completed","output":"still running"}}"#,

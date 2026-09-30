@@ -13694,7 +13694,7 @@ mod tests {
         fixture
             .provider
             .execute(
-                "UPDATE session SET title = 'Renamed', time_updated = time_updated + 9000",
+                "UPDATE session SET version = '9.9', time_updated = time_updated + 9000",
                 [],
             )
             .unwrap();
@@ -13702,7 +13702,30 @@ mod tests {
     }
 
     #[test]
-    fn opencode_gives_up_on_a_row_still_in_flight_after_half_an_hour() {
+    fn opencode_a_session_named_after_its_first_exchange_replaces_the_epoch_once() {
+        let mut fixture = oc_fixture("ses_named");
+        let base = oc_now_ms() - 60_000;
+        oc_turn(&fixture.provider, "ses_named", 0, base, 500, &mut || {});
+        let first = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert!(!first.is_empty());
+        assert!(first[0].records[0].contains("\"title\":\"Work\""));
+
+        // OpenCode generates the title once the first turn is done, and the
+        // session record is the only place the archive keeps it.
+        fixture
+            .provider
+            .execute("UPDATE session SET title = 'Fix the shipper'", [])
+            .unwrap();
+        let second = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert!(!second.is_empty());
+        assert_ne!(second[0].epoch, first[0].epoch);
+        assert_eq!(second[0].start, 0);
+        assert!(second[0].records[0].contains("Fix the shipper"));
+        assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
+    }
+
+    #[test]
+    fn opencode_gives_up_on_a_row_still_in_flight_after_two_hours() {
         let mut fixture = oc_fixture("ses_orphan");
         let now = oc_now_ms();
         let insert = |id: &str, message: &str, t: i64| {
@@ -13718,10 +13741,10 @@ mod tests {
             .provider
             .execute(
                 "INSERT INTO message VALUES ('ses_orphan-um', 'ses_orphan', ?1, ?1, '{\"role\":\"user\"}')",
-                params![now - 4 * 3_600_000],
+                params![now - 6 * 3_600_000],
             )
             .unwrap();
-        insert("ses_orphan-crashed", "ses_orphan-um", now - 2 * 3_600_000);
+        insert("ses_orphan-crashed", "ses_orphan-um", now - 3 * 3_600_000);
         insert("ses_orphan-running", "ses_orphan-um", now - 1_000);
         let shipped = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
         let records: Vec<&String> = shipped.iter().flat_map(|e| e.records.iter()).collect();
@@ -13751,6 +13774,20 @@ mod tests {
         let second = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
         assert_ne!(second[0].epoch, first[0].epoch);
         assert_eq!(second[0].start, 0);
+        assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
+
+        // An epoch that never recorded a revision cannot vouch for where its
+        // records sit either.
+        fixture
+            .state
+            .execute(
+                "UPDATE source_epoch_registry SET source_revision = NULL WHERE provider = 'opencode' AND ended_at IS NULL",
+                [],
+            )
+            .unwrap();
+        let third = oc_drain_shipped(&mut fixture.state, &fixture.db_path);
+        assert_ne!(third[0].epoch, second[0].epoch);
+        assert_eq!(third[0].start, 0);
         assert!(oc_drain_shipped(&mut fixture.state, &fixture.db_path).is_empty());
     }
 }
