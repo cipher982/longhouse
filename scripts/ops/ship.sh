@@ -110,6 +110,11 @@ if git -C "$ROOT" merge-base --is-ancestor "$SHA" "$REMOTE_REF"; then
 else
   # Landing rule: blocking-list commits need a completed review receipt (scripts/ops/review-policy.toml).
   python3 "$ROOT/scripts/ops/review_gate.py" --repo "$ROOT" push --base "origin/$BRANCH" --head "$SHA" >&2
+  # The verifier/subject import allowlist only shrinks (scripts/ci/verifier_boundary.py). It reads the
+  # working tree, so it can only speak for the commit being pushed when that is the checked-out one.
+  if [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$SHA" ]]; then
+    python3 "$ROOT/scripts/ci/verifier_boundary.py" check --root "$ROOT" --base "origin/$BRANCH" >&2
+  fi
   echo "Pushing exact commit ${SHA:0:10} to ${BRANCH}..." >&2
   git -C "$ROOT" push origin "$SHA:refs/heads/$BRANCH"
 fi

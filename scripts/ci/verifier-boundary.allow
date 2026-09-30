@@ -4,7 +4,8 @@
 # This list is a ratchet and only shrinks:
 #   * a new crossing import fails the check, and adding a line here is not a fix (with --base REV
 #     the check also fails on any entry the base did not carry; CI passes the previous main tip);
-#   * a line whose import is gone fails the check: delete it in the commit that removes the import.
+#   * a line whose import is gone fails the check: delete it in the commit that removes the import;
+#   * entries are keyed by path, so moving or renaming an importer is a new entry: cut the import first.
 #
 # The sides are defined in the script: verifier = server/zerg/qa/** plus the canary script,
 # neutral = server/zerg/provider_contract/** (none yet), subject = the rest of server/zerg/.

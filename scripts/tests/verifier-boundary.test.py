@@ -328,6 +328,29 @@ def fixture_output(tmp: str) -> str:
     ).stdout
 
 
+class Wiring(unittest.TestCase):
+    """The growth half of the ratchet needs git history, which make validate's guest lacks: the host
+    pre-push paths and contract-first CI must run it."""
+
+    def source(self, name: str) -> str:
+        return (ROOT / name).read_text(encoding="utf-8")
+
+    def test_the_host_push_paths_and_ci_run_the_base_comparison(self):
+        for name in ("scripts/ops/check-push-readiness.sh", "scripts/ops/ship.sh"):
+            text = self.source(name)
+            self.assertIn("verifier_boundary.py", text, name)
+            self.assertIn("--base", text[text.index("verifier_boundary.py") :], name)
+        workflow = self.source(".github/workflows/contract-first-ci.yml")
+        self.assertIn("verifier_boundary.py check --base FETCH_HEAD", workflow)
+
+    def test_make_validate_runs_the_exact_check_and_these_tests(self):
+        makefile = self.source("Makefile")
+        self.assertIn("validate-verifier-boundary \\\n", makefile.split("VALIDATE_MEMBERS :=")[1].split("\n\n")[0])
+        target = makefile.split("validate-verifier-boundary: ##")[1].split("\n\n")[0]
+        self.assertIn("scripts/tests/verifier-boundary.test.py", target)
+        self.assertIn("scripts/ci/verifier_boundary.py check", target)
+
+
 class Digest(unittest.TestCase):
     def test_golden_vector(self):
         self.assertEqual(vb.digest_files(GOLDEN_FILES), GOLDEN_DIGEST)
