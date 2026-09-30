@@ -3374,7 +3374,7 @@ class CatalogDaemon:
 
     async def _read_tenant_funnel_facts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         owner_id = request.params.get("owner_id")
-        if set(request.params) != {"owner_id"} or not _is_string(owner_id, maximum=64) or not owner_id.isdigit():
+        if set(request.params) != {"owner_id"} or not _is_string(owner_id, maximum=18) or not owner_id.isdigit():
             return self._error(request, "invalid_request", "tenant.funnel.facts.read.v2 requires a numeric owner_id")
         assert self._store is not None
         result = await self._run_read_store(self._store.read_tenant_funnel_facts, owner_id=owner_id)

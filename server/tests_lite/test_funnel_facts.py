@@ -125,16 +125,21 @@ def _at(day, hour=9):
 
 
 class TestStore:
-    def test_a_milestone_keeps_its_first_and_latest_time(self, store):
+    def test_a_milestone_keeps_only_the_time_it_first_happened(self, store):
         assert store.note_milestone("search", at=_at(1, 9)) is True
-        assert store.note_milestone("search", at=_at(3, 9)) is True
+        assert store.note_milestone("search", at=_at(3, 9)) is False
 
-        assert store.snapshot()["milestones"]["search"] == {
-            "first_at": "2026-10-01T09:00:00Z",
-            "last_at": "2026-10-03T09:00:00Z",
-        }
+        assert store.snapshot()["milestones"]["search"] == {"first_at": "2026-10-01T09:00:00Z"}
 
-    def test_repeats_within_the_hour_do_not_write(self, store):
+    def test_a_restart_never_moves_a_milestone(self, store):
+        store.note_milestone("search", at=_at(1, 9))
+
+        after_restart = FunnelFactsStore(store.path)
+        assert after_restart.note_milestone("search", at=_at(5, 9)) is True  # written again, ignored by the file
+
+        assert after_restart.snapshot()["milestones"]["search"] == {"first_at": "2026-10-01T09:00:00Z"}
+
+    def test_repeats_do_not_write(self, store):
         assert store.note_milestone("steer", at=_at(1, 9)) is True
         assert store.note_milestone("steer", at=_at(1, 9)) is False
         assert store.note_active("ios", at=_at(1, 9)) is True
@@ -164,7 +169,6 @@ class TestStore:
         assert columns == {
             ("milestones", "name"),
             ("milestones", "first_at"),
-            ("milestones", "last_at"),
             ("active_days", "day"),
             ("active_days", "surface"),
         }
@@ -253,7 +257,7 @@ def test_the_document_merges_catalog_and_side_facts():
             ],
             "devices": {"count": 2, "first_created_at": "2026-10-01T09:00:00+00:00", "last_used_at": None},
         },
-        {"milestones": {"search": {"first_at": "a", "last_at": "b"}}, "active_days": {"ios": ["2026-10-01"]}},
+        {"milestones": {"search": {"first_at": "a"}}, "active_days": {"ios": ["2026-10-01"]}},
     )
 
     assert document["schema"] == "longhouse.tenant-funnel.v1"
@@ -392,6 +396,18 @@ async def test_the_catalog_reports_machines_and_sessions_per_provider(daemon_pat
                     last_used_at=used,
                 )
             )
+        # A machine the tester has since disconnected is history, not a connected machine.
+        connection.execute(
+            LiveDeviceToken.__table__.insert().values(
+                id="t3",
+                owner_id=42,
+                device_id="machine-t3",
+                token_hash="3" * 64,
+                created_at=_at(1, 5),
+                last_used_at=_at(1, 6),
+                revoked_at=_at(1, 7),
+            )
+        )
         # Another owner's machine must not leak into this owner's facts.
         connection.execute(
             LiveDeviceToken.__table__.insert().values(id="other", owner_id=7, device_id="theirs", token_hash="o" * 64, created_at=_at(1, 1))
@@ -421,15 +437,16 @@ async def test_the_catalog_reports_machines_and_sessions_per_provider(daemon_pat
 
         providers = {row["provider"]: row for row in facts["providers"]}
         assert providers["claude"]["sessions"] == 2 and providers["codex"]["sessions"] == 1
-        assert facts["devices"]["count"] == 2
-        assert facts["devices"]["first_created_at"] == first.isoformat()
+        assert facts["devices"]["count"] == 2  # the revoked one is not connected now
+        assert facts["devices"]["first_created_at"] == _at(1, 5).isoformat()  # but it did connect first
         assert facts["devices"]["last_used_at"] == later.isoformat()
 
         nobody = await client.call("tenant.funnel.facts.read.v2", {"owner_id": "9"})
         assert nobody["providers"] == [] and nobody["devices"]["count"] == 0
 
-        with pytest.raises(CatalogRemoteError):
-            await client.call("tenant.funnel.facts.read.v2", {"owner_id": "not-a-number"})
+        for bad in ("not-a-number", "9" * 19, ""):
+            with pytest.raises(CatalogRemoteError):
+                await client.call("tenant.funnel.facts.read.v2", {"owner_id": bad})
     finally:
         await client.close()
         await daemon.close()

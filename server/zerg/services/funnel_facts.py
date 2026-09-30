@@ -12,16 +12,17 @@ Ground rules, all enforced here:
   control plane, at the moment an invited tester agrees to it. A self-hosted
   Runtime Host never sets it, so it records nothing and there is no route that
   answers.
-* Pull only. Nothing is sent anywhere; the control plane asks, with the
-  tenant's own derived secret.
-* Content-free. The vocabulary is fixed below: a milestone name with its first
-  and last time, and a (day, surface) pair. No query text, path, session id,
-  user id, prompt or transcript ever reaches this module: `observe_request`
-  looks at the method, the route, the response status, whether the caller was a
-  signed-in person, and which kind of client it was.
+* Pull only. Nothing is sent anywhere; the control plane asks, with this
+  tenant's own internal secret (which a hosted tenant is given by the control
+  plane that operates it).
+* Content-free. The vocabulary is fixed below: a milestone name with the time it
+  first happened, and a (day, surface) pair. `observe_request` reads the method,
+  route and query string of a finished request to decide *whether* it was a
+  search or a steer, then keeps only that fact: no query text, path, session id,
+  user id, prompt or transcript is ever stored or returned.
 * Never in the way. Every failure is swallowed; a request never waits on or
-  fails because of this file. Writes are rare (once per milestone per hour, once
-  per surface per day) and run off the event loop.
+  fails because of this file. Writes are rare (each milestone once ever, each
+  surface once per day) and run off the event loop.
 
 The catalog-derived facts (machines, sessions per provider) are read separately,
 through one catalogd read RPC, and merged into the same document.
@@ -34,6 +35,7 @@ import logging
 import re
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -60,11 +62,8 @@ _IOS_USER_AGENT = re.compile(r"^(Longhouse-iOS\b|Longhouse/[^\s]+ CFNetwork/)")
 _SEARCH_PATHS = frozenset({"/api/timeline/sessions", "/api/timeline/sessions/semantic", "/api/timeline/recall"})
 _STEER_PATH = re.compile(r"^/api/sessions/[^/]+/(input|inputs-multipart|send-live)$")
 
-# One write per milestone per hour keeps the file small and the writer idle.
-_MILESTONE_BUCKET = "%Y-%m-%dT%H"
-
 _SCHEMA_SQL = (
-    "CREATE TABLE IF NOT EXISTS milestones ( name TEXT PRIMARY KEY, first_at TEXT NOT NULL, last_at TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS milestones (name TEXT PRIMARY KEY, first_at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS active_days (day TEXT NOT NULL, surface TEXT NOT NULL, PRIMARY KEY (day, surface))",
 )
 
@@ -97,7 +96,7 @@ class FunnelFactsStore:
 
     @staticmethod
     def _keys(surface: str, milestones: list[str], moment: datetime) -> list[tuple[str, str]]:
-        return [(f"active:{surface}", moment.strftime("%Y-%m-%d"))] + [(name, moment.strftime(_MILESTONE_BUCKET)) for name in milestones]
+        return [(f"active:{surface}", moment.strftime("%Y-%m-%d"))] + [(name, "ever") for name in milestones]
 
     def pending(self, surface: str, milestones: list[str], *, at: datetime | None = None) -> bool:
         """Whether recording this observation would write anything new."""
@@ -109,19 +108,14 @@ class FunnelFactsStore:
             self._seen.add(key)
 
     def note_milestone(self, name: str, *, at: datetime | None = None) -> bool:
-        """Record that `name` just happened. Returns whether a write was due."""
+        """Record that `name` has happened. Only the first time is kept."""
         if name not in MILESTONES:
             raise ValueError(f"unknown milestone {name!r}")
-        moment = at or _now()
-        key = (name, moment.strftime(_MILESTONE_BUCKET))
+        key = (name, "ever")
         if key in self._seen:
             return False
-        with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO milestones (name, first_at, last_at) VALUES (?, ?, ?)"
-                " ON CONFLICT(name) DO UPDATE SET last_at = excluded.last_at",
-                (name, _stamp(moment), _stamp(moment)),
-            )
+        with closing(self._connect()) as connection, connection:
+            connection.execute("INSERT OR IGNORE INTO milestones (name, first_at) VALUES (?, ?)", (name, _stamp(at or _now())))
         self._mark(key)  # only after the write landed: a failure is retried on the next request
         return True
 
@@ -133,7 +127,7 @@ class FunnelFactsStore:
         key = (f"active:{surface}", moment.strftime("%Y-%m-%d"))
         if key in self._seen:
             return False
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute("INSERT OR IGNORE INTO active_days (day, surface) VALUES (?, ?)", (key[1], surface))
         self._mark(key)
         return True
@@ -143,10 +137,7 @@ class FunnelFactsStore:
             return {"milestones": {}, "active_days": {surface: [] for surface in SURFACES}}
         connection = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=1.0)
         try:
-            milestones = {
-                name: {"first_at": first, "last_at": last}
-                for name, first, last in connection.execute("SELECT name, first_at, last_at FROM milestones")
-            }
+            milestones = {name: {"first_at": first} for name, first in connection.execute("SELECT name, first_at FROM milestones")}
             days: dict[str, list[str]] = {surface: [] for surface in SURFACES}
             for day, surface in connection.execute("SELECT day, surface FROM active_days ORDER BY day"):
                 days.setdefault(surface, []).append(day)

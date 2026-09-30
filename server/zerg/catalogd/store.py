@@ -11857,10 +11857,14 @@ class CatalogStore:
                 .group_by(sessions.c.provider)
                 .order_by(sessions.c.provider)
             ).all()
+            # Count what is connected now; first and last are history, so a machine the
+            # tester has since disconnected still counts as having connected.
             device_count, first_created_at, last_used_at = connection.execute(
-                select(func.count(tokens.c.id), func.min(tokens.c.created_at), func.max(tokens.c.last_used_at)).where(
-                    tokens.c.owner_id == int(owner_id)
-                )
+                select(
+                    func.count(tokens.c.id).filter(tokens.c.revoked_at.is_(None)),
+                    func.min(tokens.c.created_at),
+                    func.max(tokens.c.last_used_at),
+                ).where(tokens.c.owner_id == int(owner_id))
             ).one()
             return {
                 "providers": [
