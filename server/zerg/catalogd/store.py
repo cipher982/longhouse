@@ -11830,11 +11830,12 @@ class CatalogStore:
     def read_tenant_funnel_facts(self, *, owner_id: str) -> dict[str, Any]:
         """Return the catalog half of a tester's funnel: machines and sessions per provider.
 
-        Counts and first-arrival times only (docs/specs/first-users-gtm.md, Phase 0).
+        Counts and first-arrival times only.
         "Shipped" is the catalog's own ingest time (`created_at`), not the
         provider's transcript start, so an imported year of history reads as
         arriving when it was imported. System-hidden work (automation, test,
-        subagents) is excluded the way the timeline excludes it.
+        subagents) is excluded the way the timeline excludes it; sessions a user has
+        since hidden or archived still count, because they were shipped.
         """
 
         sessions = StorageSession.__table__

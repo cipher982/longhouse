@@ -1,8 +1,7 @@
 """Content-free usage facts a consenting hosted tester's tenant keeps about itself.
 
-Phase 0 of the first-users plan needs to know, for ~10 known testers, whether
-each reached first backfill, first phone view and a day-7 return. This is the
-tenant's half: a handful of counters and dates, kept in a tiny side file next to
+A hosted alpha needs to know, for a handful of known testers, whether each reached
+first backfill, first phone view and a day-7 return. This is the tenant's half: a handful of counters and dates, kept in a tiny side file next to
 the live catalog and read by the operating control plane through
 `GET /api/internal/funnel` (routers/internal_funnel.py).
 

@@ -2,9 +2,9 @@
 
 `GET /api/internal/funnel` answers one JSON document (`longhouse.tenant-funnel.v1`)
 of counts and dates: when the first machine connected, sessions shipped per
-provider, and the search / steer / phone / web milestones and active days kept
-by services/funnel_facts.py. Authenticated with this tenant's own
-`X-Internal-Token` (a secret only the control plane can derive). A runtime that
+provider, the search / steer / phone-view milestones and the active days kept by
+services/funnel_facts.py. Authenticated with this tenant's own `X-Internal-Token`
+(the internal secret the operating control plane gave it). A runtime that
 was not launched for a consenting tester answers 404.
 """
 

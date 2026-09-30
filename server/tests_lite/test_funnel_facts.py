@@ -2,7 +2,7 @@
 
 Covers services/funnel_facts.py (classification, the side file), the one catalogd
 read RPC behind machines and sessions per provider, and the internal route the
-control plane calls. See docs/specs/first-users-gtm.md, Phase 0.
+control plane calls.
 """
 
 from __future__ import annotations
