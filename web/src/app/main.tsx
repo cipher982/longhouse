@@ -91,7 +91,11 @@ const params = new URLSearchParams(window.location.search);
 const queryUiEffects = parseUiEffects(params.get("uieffects") ?? params.get("effects"));
 // Default: "on" (full visual mode). Use env/query to force "off".
 const uiEffects: "on" | "off" = queryUiEffects ?? envUiEffects ?? "on";
-container.setAttribute("data-ui-effects", uiEffects);
+// A prerendered page already carries its own setting (the blog turns effects
+// off); only an explicit override replaces it.
+if (!container.hasChildNodes() || queryUiEffects !== null || envUiEffects !== null) {
+  container.setAttribute("data-ui-effects", uiEffects);
+}
 
 // Marketing mode toggle - enables vivid styling for screenshots
 // Activated via ?marketing=true

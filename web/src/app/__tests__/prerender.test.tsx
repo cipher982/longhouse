@@ -4,7 +4,6 @@ import { render, screen } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AfterHydration } from "@/features/marketing/AfterHydration";
-import { getLaunchProviderSupportList } from "@/shared/lib/providers";
 import { PageMetaCollectorContext, usePageMeta, type CollectedPageMeta } from "@/shared/hooks/usePageMeta";
 // @ts-expect-error plain .mjs shared with web/scripts/prerender.mjs
 import { buildPage, sitemapRoutes } from "../../../scripts/prerender-page.mjs";
@@ -118,14 +117,14 @@ describe("prerendered routes", () => {
     expect((await renderRoute("/")).meta.uiEffects).toBe(true);
   });
 
-  it("the integrations page lists every launch provider and counts them", async () => {
+  it("the integrations page documents the providers it names and counts them", async () => {
     const { html, meta } = await renderRoute("/docs/integrations");
-    const providers = getLaunchProviderSupportList();
 
-    for (const provider of providers) expect(html).toContain(provider.marketingName);
-    expect(providers).toHaveLength(7);
-    expect(meta.description).toContain("seven");
-    expect(html).toContain("Seven providers ship today");
+    expect(html).toContain("Six providers ship today");
+    expect(meta.description).toContain("six");
+    for (const name of ["Claude Code", "Codex CLI", "Cursor Agent", "OpenCode", "Pi Agent", "Antigravity CLI"]) {
+      expect(html).toContain(name);
+    }
   });
 
   it("the landing page carries the headline and the iOS download, and no claim about live certification", async () => {

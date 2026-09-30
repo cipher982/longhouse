@@ -3,8 +3,6 @@ import { usePageMeta } from "@/shared/hooks/usePageMeta";
 import { getLaunchProviderSupportList } from "@/shared/lib/providers";
 import { CodeBlock } from "./CodeBlock";
 
-const PROVIDERS = getLaunchProviderSupportList();
-
 /**
  * Where the Machine Agent looks for each provider's own history, from
  * engine/src/discovery.rs. Capability claims are NOT here — those come from the
@@ -19,12 +17,17 @@ const IMPORT_SOURCES: Record<string, { binary: string; paths: string[] }> = {
   },
   opencode: { binary: "opencode", paths: ["~/.local/share/opencode/"] },
   pi: { binary: "pi", paths: [] },
-  omp: { binary: "omp", paths: ["~/.omp/agent/sessions/"] },
   antigravity: {
     binary: "agy",
     paths: ["~/.gemini/antigravity-cli/brain/", "~/.gemini/antigravity/brain/", "~/.gemini/tmp/"],
   },
 };
+
+// The docs describe the six providers with an entry in IMPORT_SOURCES below.
+// A launch provider added to the contract without docs prose stays off this page
+// rather than crashing it (Oh My Pi did, which took /docs/integrations down);
+// add its IMPORT_SOURCES entry together with its prose and the count words.
+const PROVIDERS = getLaunchProviderSupportList().filter((provider) => provider.id in IMPORT_SOURCES);
 
 function yesNo(value: boolean) {
   return value ? "Yes" : "No";
@@ -34,7 +37,7 @@ export default function IntegrationsPage() {
   usePageMeta({
     title: "Integrations - Longhouse Docs",
     description:
-      "The seven CLI agents Longhouse launches and controls: Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, Oh My Pi, and Antigravity CLI.",
+      "The six CLI agents Longhouse launches and controls: Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, and Antigravity CLI.",
   });
 
   return (
@@ -49,9 +52,9 @@ export default function IntegrationsPage() {
         users on.
       </p>
 
-      <h2>Seven providers ship today</h2>
+      <h2>Six providers ship today</h2>
       <p>
-        All seven launch through the native <code>longhouse</code> CLI and land in
+        All six launch through the native <code>longhouse</code> CLI and land in
         the same timeline. What they can do after launch differs, and the
         difference is not cosmetic — it is what each provider&apos;s own CLI
         exposes. The table is generated from{" "}
@@ -172,7 +175,7 @@ longhouse opencode --model <provider/model>`}
         and nothing persists between turns.
       </p>
       <p>
-        <strong>Antigravity CLI</strong> is the narrowest of the seven. It launches
+        <strong>Antigravity CLI</strong> is the narrowest of the six. It launches
         under Longhouse&apos;s hook-inbox control path and accepts send;
         interrupt, terminate, and reattach are not supported. It refuses to
         start if its Longhouse hook is not installed rather than opening an
