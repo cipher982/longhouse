@@ -7,11 +7,13 @@
 #   * a line whose import is gone fails the check: delete it in the commit that removes the import;
 #   * entries are keyed by path, so moving or renaming an importer is a new entry: cut the import first.
 #
+# Imports inside code strings that the verifier hands to a subprocess count too.
 # The sides are defined in the script: verifier = server/zerg/qa/** plus the canary script,
 # neutral = server/zerg/provider_contract/** (none yet), subject = the rest of server/zerg/.
 # Seeded from main at 018eca869. Design: control-plane docs/specs/provider-factory-findings-loop.md,
 # 3.2 and 3.3a.
 
+scripts/qa/provider-control-e2e-canary.py -> server/zerg/services/antigravity_hook_inbox.py  # the canary runs subject helpers in an embedded `python -c` script; call the served API or CLI instead
 server/zerg/cli/provider_live.py -> server/zerg/qa/provider_live_canary.py  # subject CLI wraps the live canary; move the wrapper into the verifier or drop it
 server/zerg/cli/provider_live.py -> server/zerg/qa/provider_live_proof_publish.py  # subject CLI wraps the live canary; move the wrapper into the verifier or drop it
 server/zerg/qa/antigravity_hook_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)

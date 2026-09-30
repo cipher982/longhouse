@@ -116,6 +116,40 @@ class ImportGraph(unittest.TestCase):
             },
         )
 
+    def test_imports_inside_code_strings_and_aliased_loaders_count(self):
+        sources = {
+            "server/zerg/services/proof.py": "",
+            "server/zerg/services/paths.py": "",
+            "server/zerg/services/other.py": "",
+            "server/zerg/qa/embedded.py": (
+                "import textwrap\n"
+                "code = textwrap.dedent(\n"
+                '    f"""\n'
+                "    from pathlib import Path\n"
+                "    from zerg.services import paths\n"
+                "    print({str(1)!r})\n"
+                '    """\n'
+                ")\n"
+                'script = "import zerg.services.proof\\nprint(1)"\n'
+                'prose = "you can write from zerg.services import other in a script"\n'
+                'quoted = "    from zerg.not valid python"\n'
+            ),
+            "server/zerg/qa/aliased.py": (
+                "from importlib import import_module as load\n"
+                'load("zerg.services.other")\n'
+                'unrelated("zerg.services.proof")\n'
+            ),
+        }
+        got = {(a.removeprefix("server/zerg/"), b.removeprefix("server/zerg/")) for a, b in edges_of(sources)}
+        self.assertEqual(
+            got,
+            {
+                ("qa/embedded.py", "services/paths.py"),
+                ("qa/embedded.py", "services/proof.py"),
+                ("qa/aliased.py", "services/other.py"),
+            },
+        )
+
     def test_package_init_relative_import_is_inside_the_package(self):
         sources = {
             "server/zerg/qa/__init__.py": "from .helper import x\n",

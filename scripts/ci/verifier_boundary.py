@@ -11,7 +11,8 @@ Sides, by path:
   subject    every other module under server/zerg/
 
 Any import edge from verifier to subject, subject to verifier, or neutral to either,
-must be listed in scripts/ci/verifier-boundary.allow with a reason. The list is a
+(real imports, literal import_module calls, and `from zerg... import` lines inside code
+strings the verifier hands to a subprocess) must be listed in scripts/ci/verifier-boundary.allow with a reason. The list is a
 ratchet: a new edge fails, a listed edge that no longer exists fails (delete the
 line), and with --base REV an entry the base did not already carry fails.
 
@@ -31,12 +32,13 @@ import ast
 import hashlib
 import io
 import json
+import re
 import subprocess
 import sys
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Iterator, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = "scripts/ci/verifier-boundary.allow"
@@ -94,8 +96,28 @@ def read_sources(root: Path) -> dict[str, str]:
     return {path: (root / path).read_text(encoding="utf-8") for path in sorted(paths)}
 
 
+_EMBEDDED_IMPORT = re.compile(
+    r"^[ \t]*(?:from[ \t]+zerg[\w.]*[ \t]+import[ \t]+\S.*|import[ \t]+zerg[\w.]*.*)$", re.MULTILINE
+)
+
+
+def _import_nodes(tree: ast.AST) -> Iterator[ast.AST]:
+    """Every node of a module, plus the import statements inside embedded Python: a string (or f-string
+    chunk) with a line `from zerg... import ...` or `import zerg...` is code the verifier hands to a
+    subprocess, and it depends on the subject as much as a real import does."""
+    for node in ast.walk(tree):
+        yield node
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for line in _EMBEDDED_IMPORT.findall(node.value):
+                try:
+                    yield from ast.walk(ast.parse(line.strip()))
+                except SyntaxError:
+                    continue
+
+
 def import_edges(sources: Mapping[str, str]) -> set[Edge]:
-    """(importer path, imported path) for every import of a zerg module, at any nesting depth."""
+    """(importer path, imported path) for every import of a zerg module, at any nesting depth, in code
+    strings too, and through literal `import_module("zerg...")` calls."""
     modules = {module: path for path in sources if (module := _module_of(path))}
 
     def target(dotted: str) -> str | None:
@@ -111,12 +133,21 @@ def import_edges(sources: Mapping[str, str]) -> set[Edge]:
         own = _module_of(importer)
         package = own.split(".") if own and importer.endswith("/__init__.py") else (own or "").split(".")[:-1]
         found: set[str] = set()
+        tree = ast.parse(source, filename=importer)
+        # `from importlib import import_module as load` still loads modules by name.
+        loaders = {"import_module", "__import__"} | {
+            alias.asname
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "importlib"
+            for alias in node.names
+            if alias.name == "import_module" and alias.asname
+        }
 
         def add(dotted: str) -> None:
             if (dotted == "zerg" or dotted.startswith("zerg.")) and (path := target(dotted)):
                 found.add(path)
 
-        for node in ast.walk(ast.parse(source, filename=importer)):
+        for node in _import_nodes(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     add(alias.name)
@@ -134,7 +165,7 @@ def import_edges(sources: Mapping[str, str]) -> set[Edge]:
                     add(base)
                 for name in submodules:
                     add(f"{base}.{name}")
-            elif isinstance(node, ast.Call) and _is_dynamic_import(node.func):
+            elif isinstance(node, ast.Call) and _is_dynamic_import(node.func, loaders):
                 if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                     add(node.args[0].value)
         found.discard(importer)
@@ -142,9 +173,9 @@ def import_edges(sources: Mapping[str, str]) -> set[Edge]:
     return edges
 
 
-def _is_dynamic_import(func: ast.expr) -> bool:
+def _is_dynamic_import(func: ast.expr, loaders: set[str | None]) -> bool:
     if isinstance(func, ast.Name):
-        return func.id in ("import_module", "__import__")
+        return func.id in loaders
     return isinstance(func, ast.Attribute) and func.attr == "import_module"
 
 

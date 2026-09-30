@@ -309,16 +309,25 @@ jobs:
         # `make validate` proves the allowlist matches the tree, in a guest with no git history.
         # This proves it did not grow: every entry must already be in the allowlist of the commit
         # this push or PR is based on (scripts/ci/verifier_boundary.py; control-plane spec
-        # provider-factory-findings-loop.md, 3.3a). With no base to fetch (a new branch) there is
-        # nothing to compare: a notice, not a failure.
+        # provider-factory-findings-loop.md, 3.3a). A new branch or a manual run has no base, and
+        # there is nothing to compare. A base that exists but cannot be fetched fails the step:
+        # skipping would let an entry and its import land together.
         timeout-minutes: 3
         run: |
           base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          if [[ -n "$base" && ! "$base" =~ ^0+$ ]] && git fetch --quiet --no-tags --depth=1 origin "$base"; then
-            python3 scripts/ci/verifier_boundary.py check --base FETCH_HEAD
-          else
-            echo "::notice::no fetchable base commit; the only-shrinks comparison was skipped"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            echo "::notice::no base commit; the only-shrinks comparison was skipped"
+            exit 0
           fi
+          for attempt in 1 2 3; do
+            if git fetch --quiet --no-tags --depth=1 origin "$base"; then
+              python3 scripts/ci/verifier_boundary.py check --base FETCH_HEAD
+              exit $?
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not fetch base commit $base; the only-shrinks comparison cannot run"
+          exit 1
 
       - name: Isolation wrapper fails when the guest fails
         # Every CI test lane trusts scripts/qa/test-isolation.py to return the
