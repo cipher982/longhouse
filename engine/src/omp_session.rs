@@ -443,10 +443,14 @@ pub fn is_session_path(root: &Path, path: &Path) -> bool {
     let parent = path.parent();
     let direct_source = parent == Some(root);
     // One level down is either an encoded-cwd bucket, which holds sources
-    // whatever they are named, or a generated archive's artifact directory
-    // (`<timestamp>_<id>/`), whose files must prove their parent edge.
-    let bucket_source = parent.and_then(Path::parent) == Some(root)
-        && parent.is_some_and(|dir| native_filename_id(dir).is_none());
+    // whatever they are named, or an archive's artifact directory (`<stem>/`
+    // beside `<stem>.jsonl`, generated or explicitly named), whose files must
+    // prove their parent edge.
+    let one_level_down = parent.and_then(Path::parent) == Some(root);
+    let bucket_source = one_level_down
+        && parent.is_some_and(|dir| {
+            native_filename_id(dir).is_none() && !dir.with_extension("jsonl").is_file()
+        });
     if path.extension().and_then(|value| value.to_str()) != Some("jsonl") || !path.starts_with(root)
     {
         return false;
@@ -469,7 +473,7 @@ pub fn is_session_path(root: &Path, path: &Path) -> bool {
     // OMP accepts arbitrary explicit resume filenames. The timestamp/id suffix
     // is only an additional check for generated direct-child archive names;
     // nested task artifacts are accepted only through their header edge.
-    let generated_name = direct_source || parent.and_then(Path::parent) == Some(root);
+    let generated_name = direct_source || one_level_down;
     !generated_name
         || native_filename_id(path).is_none_or(|filename_id| filename_id == header.native_id)
 }
@@ -1399,5 +1403,34 @@ mod tests {
         )
         .unwrap();
         assert!(!is_session_path(&root, &mismatched));
+    }
+
+    #[test]
+    fn omp_explicitly_named_archives_keep_the_parent_edge_requirement_for_their_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("sessions");
+        let artifact_dir = root.join("explicit-parent");
+        fs::create_dir_all(&artifact_dir).unwrap();
+        fs::write(
+            root.join("explicit-parent.jsonl"),
+            include_str!("../tests/fixtures/golden/omp/task-parent.jsonl"),
+        )
+        .unwrap();
+        let child = artifact_dir.join("task-child.jsonl");
+        fs::write(
+            &child,
+            include_str!("../tests/fixtures/golden/omp/task-child.jsonl"),
+        )
+        .unwrap();
+        let no_edge = artifact_dir.join("no-edge.jsonl");
+        fs::write(
+            &no_edge,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"native-no-edge\",\"cwd\":\"/tmp/omp-task\"}\n",
+        )
+        .unwrap();
+
+        assert!(is_session_path(&root, &root.join("explicit-parent.jsonl")));
+        assert!(is_session_path(&root, &child));
+        assert!(!is_session_path(&root, &no_edge));
     }
 }
