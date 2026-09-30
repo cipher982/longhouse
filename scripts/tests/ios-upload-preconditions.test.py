@@ -31,6 +31,9 @@ def main() -> None:
     info = plistlib.loads((IOS / "XcodeHarness" / "Info.plist").read_bytes())
     assert info.get("ITSAppUsesNonExemptEncryption") is False, "regenerate the project: Info.plist is stale"
 
+    widget = plistlib.loads((IOS / "XcodeHarness" / "WidgetInfo.plist").read_bytes())
+    assert widget.get("CFBundleDisplayName"), "the widget needs a CFBundleDisplayName; regenerate the project"
+
     beta = tomllib.loads((IOS / "testflight" / "beta.toml").read_text())
     for key in ("bundle_id", "locale", "group_name", "public_link_limit"):
         assert beta.get(key), f"beta.toml missing {key}"

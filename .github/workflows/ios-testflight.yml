@@ -28,7 +28,9 @@ concurrency:
 jobs:
   testflight:
     # Standard public-repository runner: no billed larger runner or self-hosted Mac.
-    runs-on: macos-15
+    # macos-26 because App Store Connect requires the iOS 26 SDK (macos-15 defaults to
+    # Xcode 16.4, whose builds it rejects at upload).
+    runs-on: macos-26
     timeout-minutes: 60
     # Secrets are scoped to this environment, which is limited to the main branch.
     environment: testflight

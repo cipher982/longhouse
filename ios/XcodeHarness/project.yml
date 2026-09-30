@@ -135,6 +135,8 @@ targets:
     info:
       path: WidgetInfo.plist
       properties:
+        # App Store Connect rejects an extension without a display name.
+        CFBundleDisplayName: Longhouse
         NSSupportsLiveActivities: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

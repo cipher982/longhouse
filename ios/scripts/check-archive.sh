@@ -16,6 +16,14 @@ fail() { echo "check-archive: $*" >&2; exit 1; }
 [ -f "$widget/PrivacyInfo.xcprivacy" ] || fail "widget bundle has no PrivacyInfo.xcprivacy"
 plutil -lint "$app/PrivacyInfo.xcprivacy" >/dev/null
 
+widget_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$widget/Info.plist" 2>/dev/null || true)"
+[ -n "$widget_name" ] || fail "widget Info.plist has no CFBundleDisplayName (App Store Connect rejects the upload)"
+
+# App Store Connect only accepts builds made with the iOS 26 SDK (Xcode 26) or later.
+sdk="$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$app/Info.plist" 2>/dev/null || true)"
+sdk_major="$(printf '%s' "$sdk" | sed -n 's/^iphoneos\([0-9][0-9]*\).*/\1/p')"
+[ -n "$sdk_major" ] && [ "$sdk_major" -ge 26 ] || fail "built with SDK '${sdk:-unknown}'; App Store Connect requires the iOS 26 SDK or later (Xcode 26+)"
+
 encryption="$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$app/Info.plist" 2>/dev/null || true)"
 [ "$encryption" = "false" ] || fail "ITSAppUsesNonExemptEncryption must be false in the app Info.plist (got '${encryption:-missing}')"
 
