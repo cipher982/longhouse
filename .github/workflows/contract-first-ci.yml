@@ -591,7 +591,7 @@ jobs:
     # One VM ran both merge schemes back to back: 10 to 25 minutes depending on
     # the hosted VM (measured 2026-09-20..29: 106 successes, median 17.7 min, max
     # 24.8). Two lanes: the unit scheme plus the small UI test classes, and
-    # SessionChatUITests (28 of the 35 UI tests, about 75% of their time) by itself.
+    # SessionChatUITests (26 of the 35 enabled UI tests, about 75% of their time) by itself.
     # `skip` and `only` name the same class, so a test added anywhere else runs in
     # the first lane. Any command-line filter replaces the test plan's own skippedTests
     # (run 36653276780 ran the four screenshot-capture tests the plan skips), so each

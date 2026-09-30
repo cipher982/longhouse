@@ -57,6 +57,21 @@ def excludes(skips: list[str], test_id: str) -> bool:
 
 
 class CiCoversTheMergeGateTests(unittest.TestCase):
+    def test_the_smoke_scheme_test_plan_is_found(self):
+        # plan_skipped() reads project.yml with a regex; a reformat must fail here
+        # instead of turning every plan check below into a pass.
+        self.assertEqual(len(plan_skipped("LonghouseSmoke")), 4)
+
+    def test_selected_classes_exist(self):
+        sources = "\n".join(
+            path.read_text() for path in (ROOT / "ios/Tests").rglob("*.swift")
+        )
+        for _, filters in ci_lanes():
+            for _, mode, identifier in filters:
+                if mode == "only":
+                    name = identifier.split("/")[-1]
+                    self.assertRegex(sources, rf"class {name}\b", f"no class {name} to select")
+
     def test_every_merge_scheme_runs_whole_or_as_a_complementary_pair(self):
         lanes = ci_lanes()
         schemes = merge_schemes()
@@ -70,11 +85,12 @@ class CiCoversTheMergeGateTests(unittest.TestCase):
                 for names, filters in lanes
                 if scheme in names
             ]
+            plan = plan_skipped(scheme)
             if len(runs) == 1:
                 # Whole means nothing but the plan's own skips, repeated here.
                 self.assertTrue(
-                    all(mode == "skip" for mode, _ in runs[0]),
-                    f"{scheme}: its only lane selects a subset: {runs[0]}",
+                    all(mode == "skip" and identifier in plan for mode, identifier in runs[0]),
+                    f"{scheme}: its only lane leaves tests out: {runs[0]}",
                 )
                 continue
             self.assertEqual(len(runs), 2, f"{scheme}: run by {len(runs)} lanes")
@@ -91,6 +107,14 @@ class CiCoversTheMergeGateTests(unittest.TestCase):
                 split_points(skip[0], "skip"),
                 f"{scheme}: the `only` and `skip` lanes must name the same classes, or tests drop out",
             )
+            for run in runs:
+                for mode, identifier in run:
+                    if mode == "skip" and identifier.count("/") > 1:
+                        self.assertIn(
+                            identifier,
+                            plan,
+                            f"{scheme}: skipping {identifier} drops a test the plan runs",
+                        )
 
     def test_command_line_filters_replace_the_test_plans_skips_so_every_lane_repeats_them(self):
         """xcodebuild ignores a plan's skippedTests once -only/-skip-testing is given.
