@@ -741,12 +741,23 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
     }
 
-    private func openTerminal(command: String) -> Bool {
-        // Open a visible Terminal window so the user can see upgrade progress and errors.
+    /// `do script` alone opens the window behind the app that is in front, so a
+    /// Mac whose user just clicked "Sign in" saw the Dock icon bounce and no
+    /// Terminal; `activate` brings the window forward.
+    static func terminalScriptSource(command: String) -> String {
         let escaped = command.replacingOccurrences(of: "\\", with: "\\\\")
                              .replacingOccurrences(of: "\"", with: "\\\"")
-        let script = "tell application \"Terminal\" to do script \"\(escaped)\""
-        guard let appleScript = NSAppleScript(source: script) else {
+        return """
+        tell application "Terminal"
+            activate
+            do script "\(escaped)"
+        end tell
+        """
+    }
+
+    private func openTerminal(command: String) -> Bool {
+        // Open a visible Terminal window so the user can see upgrade progress and errors.
+        guard let appleScript = NSAppleScript(source: Self.terminalScriptSource(command: command)) else {
             return false
         }
         var error: NSDictionary?

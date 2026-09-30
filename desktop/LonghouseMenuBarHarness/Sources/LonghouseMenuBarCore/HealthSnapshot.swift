@@ -1269,7 +1269,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
               !host.isEmpty else {
             return "-"
         }
-        if let shortHost = host.split(separator: ".").first, !shortHost.isEmpty {
+        // An address has no short name: "127.0.0.1" must not read as "127".
+        let labels = host.split(separator: ".")
+        if host.contains(":") || labels.allSatisfy({ Int($0) != nil }) {
+            return host
+        }
+        if let shortHost = labels.first, !shortHost.isEmpty {
             return String(shortHost)
         }
         return host

@@ -121,24 +121,51 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
     public let arguments: [String]
     public let commandTimeoutSeconds: TimeInterval
     let currentBundlePath: String?
+    /// Set for the app's own source: where `longhouse` lives is asked again on
+    /// every load. A Mac that installed the app from the DMG has no CLI when
+    /// the app starts, and the first-run setup script installs it while the app
+    /// is running; a path fixed at launch kept asking a login shell (which
+    /// never reads the `~/.zshrc` the installer edits), so the panel said
+    /// "Finish setup" for good after a successful sign-in.
+    let resolveInstalledInvocation: (@Sendable () -> (launchPath: String, arguments: [String]))?
+
+    /// The command this source runs now.
+    var currentInvocation: (launchPath: String, arguments: [String]) {
+        resolveInstalledInvocation?() ?? (launchPath, arguments)
+    }
 
     var usesDefaultInvocation: Bool {
+        let current = currentInvocation
         let invocation = LonghouseCLI.defaultHealthInvocation()
         return currentBundlePath == nil
-            && launchPath == invocation.launchPath
-            && arguments == invocation.arguments
+            && current.launchPath == invocation.launchPath
+            && current.arguments == invocation.arguments
     }
 
     public var describedCommand: String? {
-        ([launchPath] + arguments).joined(separator: " ")
+        let invocation = currentInvocation
+        return ([invocation.launchPath] + invocation.arguments).joined(separator: " ")
     }
 
     public init() {
-        let invocation = LonghouseCLI.defaultHealthInvocation()
+        self.init(
+            followingInstalledCLI: { LonghouseCLI.defaultHealthInvocation() },
+            commandTimeoutSeconds: Self.defaultCommandTimeoutSeconds,
+            currentBundlePath: nil
+        )
+    }
+
+    init(
+        followingInstalledCLI resolve: @escaping @Sendable () -> (launchPath: String, arguments: [String]),
+        commandTimeoutSeconds: TimeInterval = Self.defaultCommandTimeoutSeconds,
+        currentBundlePath: String? = nil
+    ) {
+        let invocation = resolve()
         self.launchPath = invocation.launchPath
         self.arguments = invocation.arguments
-        self.commandTimeoutSeconds = Self.defaultCommandTimeoutSeconds
-        self.currentBundlePath = nil
+        self.commandTimeoutSeconds = commandTimeoutSeconds
+        self.currentBundlePath = currentBundlePath
+        self.resolveInstalledInvocation = resolve
     }
 
     public init(
@@ -151,6 +178,7 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
         self.arguments = arguments
         self.commandTimeoutSeconds = commandTimeoutSeconds
         self.currentBundlePath = currentBundlePath
+        self.resolveInstalledInvocation = nil
     }
 
     public func load() throws -> HealthSnapshot {
@@ -159,13 +187,16 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
             return HealthSnapshot.installLocationBlockedSnapshot(currentPath: unsupportedBundlePath)
         }
 
+        let invocation = currentInvocation
         let result = try runNativeCommand(
-            launchPath: launchPath, arguments: arguments,
+            launchPath: invocation.launchPath, arguments: invocation.arguments,
             timeoutSeconds: commandTimeoutSeconds
         )
         guard result.status == 0 else {
             let message = String(data: result.errorOutput, encoding: .utf8) ?? "Longhouse status snapshot failed"
-            if shouldSynthesizeSetupRequiredSnapshot(message: message, terminationStatus: result.status) {
+            if shouldSynthesizeSetupRequiredSnapshot(
+                message: message, terminationStatus: result.status, invocation: invocation
+            ) {
                 return HealthSnapshot.setupRequiredSnapshot(detail: message)
             }
             throw SnapshotSourceError.commandFailed(message)
@@ -174,12 +205,16 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
     }
 
 
-    private func shouldSynthesizeSetupRequiredSnapshot(message: String, terminationStatus: Int32) -> Bool {
+    private func shouldSynthesizeSetupRequiredSnapshot(
+        message: String,
+        terminationStatus: Int32,
+        invocation: (launchPath: String, arguments: [String])
+    ) -> Bool {
         guard terminationStatus == 127 else {
             return false
         }
 
-        let attemptedCommand = ([launchPath] + arguments).joined(separator: " ").lowercased()
+        let attemptedCommand = ([invocation.launchPath] + invocation.arguments).joined(separator: " ").lowercased()
         guard attemptedCommand.contains("longhouse") else {
             return false
         }

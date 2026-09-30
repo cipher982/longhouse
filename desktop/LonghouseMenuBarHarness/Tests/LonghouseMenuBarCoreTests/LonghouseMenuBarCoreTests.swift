@@ -1737,6 +1737,62 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.launchReadiness?.state == "setup-required")
     }
 
+    /// DMG-only Mac: the app starts before any `longhouse` exists, then its own
+    /// first-run setup script installs one. The app used to keep asking a login
+    /// shell for it (which never reads the ~/.zshrc the installer edits), so it
+    /// reported "Finish setup" after a successful sign-in until it was relaunched.
+    @Test
+    func appHealthSourceFindsTheCLIInstalledAfterTheAppStarted() throws {
+        let homeDirectory = try makeFakeHomeDirectory()
+        let source = CLIHealthSnapshotSource(
+            followingInstalledCLI: {
+                LonghouseCLI.defaultHealthInvocation(homeDirectory: homeDirectory, pathEnvironment: "/usr/bin:/bin")
+            },
+            currentBundlePath: "/Applications/Longhouse.app"
+        )
+        let expectedPath = homeDirectory.appendingPathComponent(".local/bin/longhouse").path
+
+        #expect(source.currentInvocation.launchPath != expectedPath)
+
+        _ = try installFakeLonghouseBinary(
+            homeDirectory: homeDirectory,
+            script: "#!/bin/sh\ncat '\(harnessFixtureURL("healthy").path)'\n"
+        )
+
+        #expect(source.currentInvocation.launchPath == expectedPath)
+        #expect(source.describedCommand == "\(expectedPath) local-health --json")
+        let snapshot = try source.load()
+        #expect(snapshot.isSetupRequired == false)
+    }
+
+    @Test
+    func signInTerminalScriptBringsTerminalForwardAndEscapesTheCommand() {
+        let source = SpyHealthActionSink.terminalScriptSource(command: "echo \"hi\" \\ there")
+
+        #expect(source.contains("activate"))
+        #expect(source.contains("do script \"echo \\\"hi\\\" \\\\ there\""))
+    }
+
+    @Test
+    func hostLabelKeepsAnAddressWholeAndShortensANameToItsFirstLabel() {
+        func label(_ url: String) -> String {
+            HealthSnapshot(
+                schemaVersion: 1, collectedAt: "2026-09-30T20:00:00Z",
+                healthState: "healthy", severity: "green", headline: "Healthy",
+                reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+                outbox: nil, activitySummary: nil, managedSessions: nil,
+                realtime: RealtimeConnectionSnapshot(runtimeUrl: url, machineName: "mac", tokenPath: nil),
+                launchReadiness: nil
+            ).hostValueLabel
+        }
+
+        #expect(label("http://127.0.0.1:18081") == "127.0.0.1")
+        #expect(label("http://192.168.1.20:8080") == "192.168.1.20")
+        #expect(label("http://[::1]:8080") == "::1")
+        #expect(label("http://localhost:8080") == "localhost")
+        #expect(label("https://david010.longhouse.ai") == "david010")
+    }
+
     private func harnessFixtureURL(_ name: String) -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -3280,11 +3336,14 @@ struct LonghouseMenuBarCoreTests {
         return tempDirectory
     }
 
-    private func installFakeLonghouseBinary(homeDirectory: URL) throws -> URL {
+    private func installFakeLonghouseBinary(
+        homeDirectory: URL,
+        script: String = "#!/bin/sh\nexit 0\n"
+    ) throws -> URL {
         let binDirectory = homeDirectory.appendingPathComponent(".local/bin", isDirectory: true)
         try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
         let executableURL = binDirectory.appendingPathComponent("longhouse", isDirectory: false)
-        let contents = Data("#!/bin/sh\nexit 0\n".utf8)
+        let contents = Data(script.utf8)
         FileManager.default.createFile(atPath: executableURL.path, contents: contents)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],

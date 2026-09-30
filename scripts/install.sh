@@ -854,7 +854,7 @@ print_success() {
         echo "Next:"
         echo "  1. Open ${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}/Longhouse.app"
         echo "  2. Choose 'Sign in to connect this Mac'"
-        echo "  3. Find one prior session in the timeline"
+        echo "  3. Start a session in any coding agent; it appears in the timeline (old sessions are not imported unless you choose to: longhouse machine scope)"
         echo "  (No Longhouse address yet? Run a local one on this Mac:"
         echo "   curl -LsSf https://astral.sh/uv/install.sh | sh && uv tool install longhouse && longhouse-server onboard)"
     else
