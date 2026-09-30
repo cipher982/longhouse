@@ -96,6 +96,13 @@ populations. New children and newly known counters establish their own baselines
 without suppressing progress from continuing children. Historical work is not
 replayed as a burst. Fire intensity is qualitative, not token throughput or billing.
 
+Native session-detail material and its local expiry timer use the same
+presentation-owned work claim as the timeline. A quiet parent can therefore
+stay visually working on fresh delegation without inventing parent execution
+time. The primary background headline is one navigable disclosure, not a
+duplicate headline plus summary. Expiry becomes uncertain; explicit interaction
+and closed-session precedence remain independent.
+
 ## Non-goals
 
 - No generic contract DSL, registry, or proof engine.
