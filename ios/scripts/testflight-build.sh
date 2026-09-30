@@ -23,6 +23,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+# The workflow ships an older SHA than the ref it was dispatched from, and CI's
+# GITHUB_SHA names the dispatch ref. The build identity must describe the tree being
+# archived (build number and the freshness guard both read HEAD), so ignore it.
+unset GITHUB_SHA
+
 upload=0
 [ "${1:-}" = "--upload" ] && upload=1
 
