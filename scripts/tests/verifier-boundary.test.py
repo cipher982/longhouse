@@ -137,6 +137,9 @@ class ImportGraph(unittest.TestCase):
                 'names = f"""\n'
                 "    from zerg.services import {symbol}\n"
                 "    import zerg.{module}\n"
+                "    from zerg.services.other import (\n"
+                "        thing,\n"
+                "    )\n"
                 '    """\n'
             ),
             "server/zerg/qa/aliased.py": (
@@ -152,6 +155,7 @@ class ImportGraph(unittest.TestCase):
                 ("qa/embedded.py", "services/paths.py"),
                 ("qa/embedded.py", "services/proof.py"),
                 ("qa/embedded.py", "services/__init__.py"),  # `from zerg.services import {symbol}`
+                ("qa/embedded.py", "services/other.py"),  # a parenthesized list
                 ("qa/aliased.py", "services/other.py"),
             },
         )

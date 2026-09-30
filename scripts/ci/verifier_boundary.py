@@ -114,8 +114,8 @@ def _import_nodes(tree: ast.AST) -> Iterator[ast.AST]:
                 try:
                     yield from ast.walk(ast.parse(line))
                 except SyntaxError:
-                    # An f-string chunk that stops at its placeholder: `from zerg.x import ` + {names}.
-                    dangling = re.fullmatch(r"from[ \t]+(zerg[\w.]*)[ \t]+import", line)
+                    # A chunk that stops at its placeholder (`from zerg.x import ` + {names}) or opens a parenthesized list.
+                    dangling = re.fullmatch(r"from[ \t]+(zerg[\w.]*)[ \t]+import[ \t]*\(?", line)
                     if dangling:
                         yield ast.ImportFrom(module=dangling.group(1), names=[ast.alias(name="*")], level=0)
 
