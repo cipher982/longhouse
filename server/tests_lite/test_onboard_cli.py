@@ -439,3 +439,30 @@ def test_runtime_host_command_falls_back_to_the_running_interpreter(monkeypatch)
     monkeypatch.setattr(onboard_cli.shutil, "which", lambda name: None)
 
     assert onboard_cli._runtime_host_command() == [onboard_cli.sys.executable, "-m", "zerg.cli.main"]
+
+
+def test_local_health_probe_ignores_proxy_settings(monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler
+    from http.server import HTTPServer
+
+    class Health(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args):
+            return
+
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")  # nothing listens: a proxied probe would fail
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    server = HTTPServer(("127.0.0.1", 0), Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert onboard_cli._check_server_health("127.0.0.1", server.server_port) is True
+    finally:
+        server.shutdown()
+        server.server_close()

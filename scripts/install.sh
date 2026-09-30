@@ -974,10 +974,10 @@ connect_this_machine() {
     local repair_log repair_status=0
     repair_log="$(mktemp)"
     "$longhouse_bin" machine repair --repair-service 2>&1 | tee "$repair_log" || repair_status=$?
-    # The verdict is the first line after the "Longhouse repair: …" progress lines.
-    local repair_verdict
-    repair_verdict="$(grep -v '^Longhouse repair:' "$repair_log" | head -n 1)"
-    if [[ "$repair_status" != 0 ]] || grep -Eq '\((failed|rejected_[a-z_]+)\)[[:space:]]*$' <<< "$repair_verdict"; then
+    # The verdict is the first line that ends in "(<state>)"; progress lines before it do not.
+    local repair_state
+    repair_state="$(grep -Eo '\([a-z_]+\)[[:space:]]*$' "$repair_log" | head -n 1 | tr -d '() ' || true)"
+    if [[ "$repair_status" != 0 ]] || [[ "$repair_state" == "failed" || "$repair_state" == rejected_* ]]; then
         rm -f "$repair_log"
         error "Stored credentials, but the Machine Agent service did not start, so nothing will sync yet."
         error "On Linux it needs a systemd user session (log in over SSH or a desktop, not su or sudo -u)."
@@ -985,7 +985,10 @@ connect_this_machine() {
         return 1
     fi
     local repair_pending=0
-    grep -Eq '\(recovery_pending\)[[:space:]]*$' <<< "$repair_verdict" && repair_pending=1
+    # No verdict at all (it printed nothing usable) is not proof either.
+    if [[ -z "$repair_state" || "$repair_state" == "recovery_pending" ]]; then
+        repair_pending=1
+    fi
     rm -f "$repair_log"
     if has_command claude; then
         "$longhouse_bin" claude configure >/dev/null 2>&1 || warn "Could not configure Claude hooks; run: longhouse claude configure"

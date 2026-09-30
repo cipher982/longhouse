@@ -80,6 +80,13 @@ grep -q "has not confirmed it is healthy" "$TEST_ROOT/repair-pending.log" || fai
 ! grep -q "sessions will appear" "$TEST_ROOT/repair-pending.log" || fail "installer promised sessions after an unverified start" repair-pending
 grep -q "First run longhouse local-health" "$TEST_ROOT/repair-pending.log" || fail "closing text does not send the user to local-health" repair-pending
 
+# 2b''. a repair that printed nothing but progress is not proof, and does not abort the installer
+run_installer repair-silent LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_URL=http://127.0.0.1:1 \
+    LONGHOUSE_DEVICE_TOKEN=test-token \
+    LONGHOUSE_TEST_REPAIR_VERDICT="Longhouse repair: still checking"
+[[ "$STATUS" == 0 ]] || fail "a verdict-less repair aborted the installer" repair-silent
+grep -q "has not confirmed it is healthy" "$TEST_ROOT/repair-silent.log" || fail "no warning when repair printed no verdict" repair-silent
+
 # 2c. a recovered service still connects
 run_installer repair-ok LONGHOUSE_NATIVE_BIN_DIR="$SOURCE_DIR" LONGHOUSE_URL=http://127.0.0.1:1 \
     LONGHOUSE_DEVICE_TOKEN=test-token \

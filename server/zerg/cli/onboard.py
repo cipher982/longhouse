@@ -125,8 +125,10 @@ def _open_longhouse_surface(api_url: str) -> None:
 def _check_server_health(host: str = "127.0.0.1", port: int = 8080, timeout: float = 2.0) -> bool:
     """Check if server is responding to health checks."""
     try:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.get(f"http://{host}:{port}/api/health")
+        # trust_env=False: this is a loopback probe of the server we just started; a corporate
+        # http_proxy without a loopback no_proxy entry must not make it look dead.
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
+            response = client.get(f"{_derive_client_url(host, port)}/api/health")
             return response.status_code == 200
     except Exception:
         return False
