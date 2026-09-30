@@ -2,7 +2,7 @@
 """Hosted Live QA runs on its own instance and holds it: the invariants that keep it isolated.
 
 The fix for 19 of 100 runs failing on a canary a newer push redeployed
-(build-compute-pipeline.md, section 2) is a property of the workflow, not of any
+(control-plane repo, docs/specs/build-compute-pipeline.md, section 2) is a property of the workflow, not of any
 script: QA must target a dedicated instance that no push touches, deploy the
 commit under test there itself, and hold the instance for the whole run by
 queueing (never cancelling, never dropping) concurrent runs. A refactor that
@@ -64,6 +64,11 @@ class HostedLiveQaIsolationTests(unittest.TestCase):
         self.assertRegex(WORKFLOW, r"ref: \$\{\{ github\.sha \}\}\n\s+path: \.qa-tools")
         self.assertIn('RUNTIME_SOURCE_ORDER="$(date +%s)"', WORKFLOW)
         self.assertIn('export RUNTIME_SOURCE_SHA="$expected"', WORKFLOW)
+
+    def test_only_a_run_that_deployed_its_own_image_uploads_promotion_evidence(self) -> None:
+        upload = re.search(r"- name: Upload verdict receipt\n\s+if: (.+)\n", WORKFLOW)
+        assert upload, "no verdict receipt upload step"
+        self.assertIn("steps.deploy_qa.outcome == 'success'", upload.group(1))
 
     def test_the_verdict_watches_the_run_s_own_deployment_to_the_qa_instance(self) -> None:
         self.assertIn("OWN_DEPLOYMENT: ${{ steps.deploy_qa.outputs.deployment_id }}", WORKFLOW)

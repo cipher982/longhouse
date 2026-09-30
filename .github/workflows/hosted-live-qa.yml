@@ -43,6 +43,8 @@ concurrency:
   # (`queue: max`, up to 100), so every commit that reaches QA gets its own
   # verdict. Measured on the 107 canary deploys since 09-26 with a 7 to 9.5 min
   # run, 17 to 29% of runs wait and the wait is p90 3 to 7 min, max 6 to 11 min.
+  # `queue` is GitHub's 2026-05 addition (docs.github.com, "Control the
+  # concurrency of workflows and jobs"); actionlint 1.7.12 does not know it yet.
   group: hosted-live-qa-${{ github.repository }}-${{ vars.HOSTED_QA_SUBDOMAIN }}
   queue: max
 
@@ -420,8 +422,13 @@ jobs:
       # run also concludes success. `make promote-production` reads this
       # artifact by name, per commit, and accepts only verdict "passed"
       # (scripts/ops/promotion_gates.py). A re-run of the same commit replaces it.
+      # Only a run that deployed its own image uploads one: the receipt names
+      # the digest it tested, and the promotion compares it with the digest it
+      # promotes. A scheduled run re-measures whatever the instance last served
+      # (drift detection, not qualification) and would replace a digest-bearing
+      # receipt with one that names none.
       - name: Upload verdict receipt
-        if: always() && steps.verdict.outcome != 'skipped'
+        if: always() && steps.verdict.outcome != 'skipped' && steps.deploy_qa.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hosted-live-qa-verdict-${{ steps.runtime_before.outputs.runtime_sha }}
