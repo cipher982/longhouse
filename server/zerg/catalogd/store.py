@@ -16689,7 +16689,9 @@ def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], head
             value = json.loads(head["value_json"])
             if value.get("run_id") != str(run_id):
                 continue
-            items = value.get("items") if head["family"] == "delegation" else [value.get("item")]
+            items = (
+                [*(value.get("items") or []), *(value.get("recent_items") or [])] if head["family"] == "delegation" else [value.get("item")]
+            )
             for item in items or []:
                 if not isinstance(item, Mapping):
                     continue
@@ -16815,6 +16817,9 @@ def _attach_native_delegation_children(connection, *, by_session: Mapping[str, A
 
 def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerFact]:
     """Reduce registry observations independently of the parent's activity clock."""
+    from zerg.services.session_state_contract import SessionDelegationProgress
+    from zerg.services.session_state_contract import SessionDelegationTaskResponse
+
     run_table = LiveSessionRun.__table__
     thread_table = LiveSessionThread.__table__
     head_table = FactHead.__table__
@@ -16971,7 +16976,13 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                     item["registered_at"] = registered_at
                 progress = raw.get("native_progress")
                 if isinstance(progress, Mapping):
-                    item["native_progress"] = dict(progress)
+                    try:
+                        item["native_progress"] = SessionDelegationProgress.model_validate(progress).model_dump(
+                            mode="json", exclude_none=True
+                        )
+                    except ValueError:
+                        invalid = True
+                        break
                 elif previous_item.get("native_progress") is not None:
                     item["native_progress"] = previous_item["native_progress"]
                 items.append(item)
@@ -16987,6 +16998,40 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                         kinds[kind] = amount
             raw_count = snapshot.get("count")
             count = raw_count if type(raw_count) is int and 0 <= raw_count <= _DELEGATION_COUNT_LIMIT else sum(kinds.values())
+        recent_items = None
+        raw_recent = snapshot.get("recent_items")
+        if raw_recent is not None:
+            if not isinstance(raw_recent, list) or len(raw_recent) > _DELEGATION_COUNT_LIMIT:
+                continue
+            recent_items = []
+            invalid_recent = False
+            for raw in raw_recent:
+                if not isinstance(raw, Mapping) or raw.get("status") not in {"completed", "failed", "cancelled", "aborted"}:
+                    invalid_recent = True
+                    break
+                if any(
+                    not isinstance(raw.get(key), str) or not raw[key].strip() or len(raw[key]) > bound
+                    for key, bound in (("id", 256), ("kind", 32))
+                ):
+                    invalid_recent = True
+                    break
+                fields = {
+                    key: raw[key]
+                    for key in ("id", "kind", "status", "description", "registered_at", "ended_at", "native_progress")
+                    if key in raw
+                }
+                try:
+                    terminal = SessionDelegationTaskResponse.model_validate(fields).model_dump(mode="json", exclude_none=True)
+                except ValueError:
+                    invalid_recent = True
+                    break
+                terminal["first_observed_at"] = occurred_at.isoformat()
+                for key, bound in (("parent_tool_call_id", 256), ("native_child_id", 256), ("native_child_source_path", 2048)):
+                    if isinstance(raw.get(key), str) and 0 < len(raw[key]) <= bound:
+                        terminal[key] = raw[key]
+                recent_items.append(terminal)
+            if invalid_recent:
+                continue
         raw_freshness = snapshot.get("freshness_ms")
         freshness_ms = (
             raw_freshness
@@ -17002,6 +17047,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             "count": count,
             "kinds": kinds,
             "items": items,
+            "recent_items": recent_items,
             "source": raw_source,
             "observed_at": occurred_at.isoformat(),
             "valid_until": valid_until.isoformat(),

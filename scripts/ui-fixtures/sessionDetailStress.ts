@@ -196,6 +196,14 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
           user_messages: null,
         },
       ],
+      recent_items: [{
+        id: "detail-finished-command",
+        kind: "shell",
+        status: "failed",
+        description: "Completed provider command",
+        registered_at: "2026-04-15T16:10:00Z",
+        ended_at: "2026-04-15T16:11:50Z",
+      }],
     },
     control: {
       ownership: "owned",

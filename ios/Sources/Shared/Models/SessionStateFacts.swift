@@ -137,6 +137,7 @@ struct SessionDelegationTask: Identifiable, Hashable, Codable, Sendable {
     var toolCalls: Int? = nil
     var registeredAt: String? = nil
     var nativeProgress: SessionDelegationProgress? = nil
+    var endedAt: String? = nil
 }
 
 /// Provider-owned evidence for delegated/background work. `items == nil`
@@ -150,6 +151,7 @@ struct SessionDelegationFacts: Hashable, Codable, Sendable {
     let observedAt: String?
     let validUntil: String?
     let items: [SessionDelegationTask]?
+    var recentItems: [SessionDelegationTask]? = nil
 }
 
 /// Stable presentation buckets for the provider's canonical task kinds.

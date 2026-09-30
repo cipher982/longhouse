@@ -1531,10 +1531,16 @@ impl OmpHelmServer {
             return;
         }
         let mut items = Vec::new();
+        let mut recent_items = Vec::new();
         let mut kinds = serde_json::Map::new();
         for job in jobs {
+            let status = job.get("status").and_then(Value::as_str);
+            let running = status == Some("running");
             if job.get("source").and_then(Value::as_str) != Some("async_job_manager")
-                || job.get("status").and_then(Value::as_str) != Some("running")
+                || !matches!(
+                    status,
+                    Some("running" | "completed" | "failed" | "cancelled" | "aborted")
+                )
             {
                 continue;
             }
@@ -1551,7 +1557,7 @@ impl OmpHelmServer {
             let mut item = json!({
                 "id": id,
                 "kind": kind,
-                "status": if job.get("queued").and_then(Value::as_bool) == Some(true) { "queued" } else { "running" },
+                "status": if running && job.get("queued").and_then(Value::as_bool) == Some(true) { "queued" } else { status.unwrap() },
                 "description": job.get("label").and_then(Value::as_str),
             });
             if let Some(registered) = job
@@ -1560,6 +1566,13 @@ impl OmpHelmServer {
                 .and_then(chrono::DateTime::from_timestamp_millis)
             {
                 item["registered_at"] = json!(registered.to_rfc3339());
+            }
+            if let Some(ended) = job
+                .get("end_time")
+                .and_then(Value::as_i64)
+                .and_then(chrono::DateTime::from_timestamp_millis)
+            {
+                item["ended_at"] = json!(ended.to_rfc3339());
             }
             if let Some(agent_id) = agent_id {
                 let component = Path::new(agent_id);
@@ -1611,9 +1624,13 @@ impl OmpHelmServer {
                     item["native_progress"] = Value::Object(native);
                 }
             }
-            let amount = kinds.get(kind).and_then(Value::as_u64).unwrap_or_default() + 1;
-            kinds.insert(kind.into(), json!(amount));
-            items.push(item);
+            if running {
+                let amount = kinds.get(kind).and_then(Value::as_u64).unwrap_or_default() + 1;
+                kinds.insert(kind.into(), json!(amount));
+                items.push(item);
+            } else {
+                recent_items.push(item);
+            }
         }
         if items.len() > 256 {
             return;
@@ -1622,6 +1639,7 @@ impl OmpHelmServer {
             "count": items.len(),
             "kinds": kinds,
             "items": items,
+            "recent_items": recent_items,
             "observed_at": observed_at,
         });
         let event_value = json!({

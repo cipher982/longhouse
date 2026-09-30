@@ -4379,6 +4379,8 @@ export interface components {
             };
             /** Items */
             items?: components["schemas"]["DelegationTaskIn"][] | null;
+            /** Recent Items */
+            recent_items?: components["schemas"]["DelegationTaskIn"][] | null;
             /** Observed At */
             observed_at?: string | null;
             /** Freshness Ms */
@@ -4403,6 +4405,8 @@ export interface components {
             /** Registered At */
             registered_at?: string | null;
             native_progress?: components["schemas"]["SessionDelegationProgress"] | null;
+            /** Ended At */
+            ended_at?: string | null;
         };
         /**
          * DelegationUpdateIn
@@ -8248,6 +8252,8 @@ export interface components {
             };
             /** Items */
             items?: components["schemas"]["SessionDelegationTaskResponse"][] | null;
+            /** Recent Items */
+            recent_items?: components["schemas"]["SessionDelegationTaskResponse"][] | null;
             /** Source */
             source?: string | null;
             /** Observed At */
@@ -8311,6 +8317,8 @@ export interface components {
             /** Registered At */
             registered_at?: string | null;
             native_progress?: components["schemas"]["SessionDelegationProgress"] | null;
+            /** Ended At */
+            ended_at?: string | null;
         };
         /** SessionDeletionResponse */
         SessionDeletionResponse: {

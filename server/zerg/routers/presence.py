@@ -121,6 +121,7 @@ class DelegationTaskIn(UTCBaseModel):
     native_child_source_path: str | None = Field(default=None, max_length=2048)
     registered_at: datetime | None = None
     native_progress: SessionDelegationProgress | None = None
+    ended_at: datetime | None = None
 
 
 class DelegationSnapshotIn(UTCBaseModel):
@@ -129,6 +130,7 @@ class DelegationSnapshotIn(UTCBaseModel):
     count: int = Field(default=0, ge=0, le=256)
     kinds: dict[str, int] = Field(default_factory=dict)
     items: list[DelegationTaskIn] | None = Field(default=None, max_length=256)
+    recent_items: list[DelegationTaskIn] | None = Field(default=None, max_length=256)
     observed_at: datetime | None = None
     freshness_ms: Optional[int] = None
 

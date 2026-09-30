@@ -29,7 +29,7 @@ struct ChatUITestFixtureView: View {
         }
         let client = ChatUITestWorkspaceClient(fixture: fixture, sessionID: sessionID)
         self.fixtureName = fixtureName
-        _showBackgroundSheet = State(initialValue: fixtureName == "background-tasks-sheet")
+        _showBackgroundSheet = State(initialValue: fixtureName == "background-tasks-sheet" || fixtureName == "background-tasks-recent-sheet")
         self.client = client
         _probe = State(initialValue: ChatUITestProbe(path: UITestHooks.chatFixtureProbePath))
         // Every non-benchmark fixture shares one session ID, and the transcript

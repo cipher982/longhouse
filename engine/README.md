@@ -27,5 +27,9 @@ completion callback can retire its matching task without renewing other work.
 OMP Helm observes the stock owner-scoped async manager and preserves native
 progress separately from child archive counters. Native handles never become
 child session IDs; navigation requires exact provider-authored lineage.
+Recent terminal jobs retain their status and native end time separately from
+the active registry: they never add active work or a flame root. A newer
+complete registry is authoritative over older lifecycle edges; callbacks do
+not become permanent client-side completion tombstones.
 
 Test: `make test-engine`. Install locally: `make install-engine`.

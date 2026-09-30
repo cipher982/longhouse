@@ -83,7 +83,8 @@ private extension APISessionDelegationTaskResponse {
                     contextWindow: $0.contextWindow,
                     durationMs: $0.durationMs
                 )
-            }
+            },
+            endedAt: endedAt
         )
     }
 }
@@ -97,7 +98,8 @@ private extension APISessionDelegationFacts {
             source: source,
             observedAt: observedAt,
             validUntil: validUntil,
-            items: items?.map(\.sessionDelegationTask)
+            items: items?.map(\.sessionDelegationTask),
+            recentItems: recentItems?.map(\.sessionDelegationTask)
         )
     }
 }

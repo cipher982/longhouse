@@ -366,7 +366,7 @@ struct SessionRuntimeDock: View {
 
     private func delegationSummary(for facts: SessionDelegationFacts) -> String? {
         if let items = facts.items {
-            guard !items.isEmpty else { return nil }
+            guard !items.isEmpty else { return facts.recentItems?.isEmpty == false ? "Recently finished background work" : nil }
             return categorySummary(
                 counts: items.reduce(into: [SessionDelegationCategory: Int]()) { counts, task in
                     counts[SessionDelegationCategory(kind: task.kind), default: 0] += 1

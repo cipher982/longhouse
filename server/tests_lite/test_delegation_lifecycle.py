@@ -970,3 +970,97 @@ def test_native_completion_edge_wins_over_same_callback_running_snapshot(live_ca
     assert [item["id"] for item in delegation["items"]] == ["independent-shell"]
     assert datetime.fromisoformat(delegation["observed_at"].replace("Z", "+00:00")) == observed
     assert datetime.fromisoformat(delegation["valid_until"].replace("Z", "+00:00")) == observed + timedelta(milliseconds=120_000)
+    # A newer complete native observation outranks a prior callback. Keeping
+    # the old edge forever would invent an irreversible client-side lifecycle.
+    fresh = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed + timedelta(seconds=2),
+        dedupe_key="fresh-complete-native-registry",
+        items=[_task("finished-agent", "subagent", "running", "Fresh provider observation")],
+    )
+    fresh.update(kind="delegation_signal", phase=None)
+    _post_event(live_catalog_client, token=token, event=fresh)
+    newer = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert newer["delegation"]["count"] == 1
+    assert [item["id"] for item in newer["delegation"]["items"]] == ["finished-agent"]
+
+
+def test_invalid_native_progress_cannot_poison_or_renew_served_registry(live_catalog, live_catalog_client):
+    email = "delegation-progress-validation@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+    original = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed,
+        dedupe_key="valid-native-progress",
+        items=[_task("job-1", "subagent", "running", "Original worker")],
+    )
+    original["payload"]["delegation"]["items"][0]["native_progress"] = {
+        "observed_at": observed.isoformat(),
+        "tool_count": 14,
+        "current_tool": "Read",
+    }
+    original.update(kind="delegation_signal", phase=None)
+    _post_event(live_catalog_client, token=token, event=original)
+    before = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    malformed = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed + timedelta(seconds=5),
+        dedupe_key="invalid-progress-counter-type",
+        items=[_task("job-1", "subagent", "running", "Unvalidated update")],
+    )
+    malformed["payload"]["delegation"]["items"][0]["native_progress"] = {"tool_count": {"not_numeric": True}}
+    malformed.update(kind="delegation_signal", phase=None)
+    _post_event(live_catalog_client, token=token, event=malformed)
+    after = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after["delegation"] == before["delegation"]
+    assert after["activity"] == before["activity"]
+    assert after["delegation"]["items"][0]["native_progress"]["tool_count"] == 14
+
+
+def test_terminal_jobs_remain_visible_without_claiming_active_membership(live_catalog, live_catalog_client):
+    email = "delegation-terminal-history@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=10)
+    before = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    event = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed,
+        dedupe_key="terminal-job-history",
+        items=[],
+    )
+    event.update(kind="delegation_signal", phase=None)
+    event["payload"]["delegation"]["recent_items"] = [
+        {
+            "id": "bg_1",
+            "kind": "shell",
+            "status": "failed",
+            "description": "Provider command",
+            "registered_at": (observed - timedelta(seconds=8)).isoformat(),
+            "ended_at": (observed - timedelta(seconds=1)).isoformat(),
+        }
+    ]
+    _post_event(live_catalog_client, token=token, event=event)
+    served = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert served["activity"] == before["activity"]
+    assert served["delegation"]["state"] == "none"
+    assert served["delegation"]["count"] == 0
+    assert served["delegation"]["kinds"] == {}
+    assert served["delegation"]["items"] == []
+    terminal = served["delegation"]["recent_items"][0]
+    assert terminal["id"] == "bg_1"
+    assert terminal["status"] == "failed"
+    assert terminal["session_id"] is None
+    assert datetime.fromisoformat(terminal["ended_at"].replace("Z", "+00:00")) == observed - timedelta(seconds=1)

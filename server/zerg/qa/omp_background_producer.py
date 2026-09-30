@@ -168,18 +168,24 @@ def _retain_native_extension_artifacts(root: Path) -> list[dict[str, Any]]:
 def _managed_omp_identity(root: Path, result: Mapping[str, Any] | None) -> dict[str, str] | None:
     if not isinstance(result, Mapping) or result.get("provider") != "omp":
         return None
-    receipt_path = root / "omp-helm-receipt.json"
+    receipt_path = root / "omp-background-served-receipt.json"
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(receipt, Mapping) or receipt.get("managed_transport") != "omp_helm_channel":
         return None
-    observation = receipt.get("observation")
+    control = receipt.get("control_identity")
     state = receipt.get("state")
-    if not isinstance(observation, Mapping) or observation.get("runtime_agents_api_controls") is not True:
+    if not helm._control_identity_receipt_is_bound(control):
         return None
     if not isinstance(state, Mapping) or state.get("provider") != "omp":
+        return None
+    if control.get("session_id") != state.get("session_id") or control["owner_identity"][:3] != [
+        state.get("session_id"),
+        state.get("native_session_id"),
+        state.get("session_file"),
+    ]:
         return None
     fields = (
         "machine_name",
@@ -193,6 +199,27 @@ def _managed_omp_identity(root: Path, result: Mapping[str, Any] | None) -> dict[
     if any(not isinstance(state.get(field), str) or not state[field] for field in fields):
         return None
     return {field: str(state[field]) for field in fields}
+
+
+def _served_terminal_pairs(root: Path, identity: Mapping[str, str] | None) -> set[tuple[str, str]]:
+    if identity is None:
+        return set()
+    try:
+        receipt = json.loads((root / "omp-background-served-receipt.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return set()
+    detail = receipt.get("detail") or {}
+    if detail.get("id") != identity["session_id"]:
+        return set()
+    delegation = (detail.get("session_state") or {}).get("delegation") or {}
+    recent = delegation.get("recent_items") or []
+    return {
+        (str(row["id"]), str(row["status"]))
+        for row in recent
+        if isinstance(row, Mapping)
+        and isinstance(row.get("id"), str)
+        and row.get("status") in {"completed", "failed", "cancelled", "aborted"}
+    }
 
 
 def omp_background_assertions(root: Path, result: Mapping[str, Any] | None = None) -> dict[str, bool]:
@@ -232,35 +259,37 @@ def omp_background_assertions(root: Path, result: Mapping[str, Any] | None = Non
     ]
     running_ids = {
         str(row["id"])
-        for frame in complete
-        for row in frame["event"]["async_jobs"]
+        for frame in async_frames
+        for row in frame["event"].get("async_jobs", [])
         if isinstance(row, Mapping) and isinstance(row.get("id"), str) and row["id"] and row.get("status") == "running"
     }
-    owner_scoped = bool(running_ids) and bool(complete)
+    owner_scoped = any(
+        isinstance(row, Mapping) and row.get("status") == "running" for frame in complete for row in frame["event"]["async_jobs"]
+    )
     progress_rows = [row for frame in progress for row in frame["event"]["task_progress"] if isinstance(row, Mapping)]
     progress_scoped = bool(progress_rows) and all(
         isinstance(row.get("agent_id"), str) and bool(row["agent_id"]) and (not row.get("job_id") or row["job_id"] in running_ids)
         for row in progress_rows
     )
-    terminal_ids = {
-        str(row["id"])
+    terminal_pairs = {
+        (str(row["id"]), str(row["status"]))
         for frame in async_frames
         for row in frame["event"].get("async_jobs", [])
         if isinstance(row, Mapping)
         and isinstance(row.get("id"), str)
-        and row["id"]
+        and row["id"] in running_ids
         and row.get("status") in {"completed", "failed", "cancelled", "aborted"}
     }
-    terminal_ids.update(
-        str(row["job_id"])
+    terminal_pairs.update(
+        (str(row["job_id"]), str(row["status"]))
         for frame in async_frames
         for row in frame["event"].get("task_progress", [])
         if isinstance(row, Mapping)
         and isinstance(row.get("job_id"), str)
-        and row["job_id"]
+        and row["job_id"] in running_ids
         and row.get("status") in {"completed", "failed", "cancelled", "aborted"}
     )
-    terminal = bool(running_ids & terminal_ids)
+    terminal = bool(terminal_pairs & _served_terminal_pairs(root, identity))
     return {
         "omp_background_registry_owner_scoped": owner_scoped,
         "omp_background_partial_progress_child_scoped": progress_scoped,

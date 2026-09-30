@@ -196,6 +196,7 @@ class SessionDelegationTaskResponse(_FrozenModel):
     tool_calls: int | None = None
     registered_at: datetime | None = None
     native_progress: SessionDelegationProgress | None = None
+    ended_at: datetime | None = None
 
 
 class SessionDelegationFacts(_FrozenModel):
@@ -218,6 +219,8 @@ class SessionDelegationFacts(_FrozenModel):
     kinds: dict[str, int] = Field(default_factory=dict)
     #: None means aggregate-only evidence, not an empty named registry.
     items: list[SessionDelegationTaskResponse] | None = None
+    #: Provider-reported terminal jobs; never contributes to active count/kinds.
+    recent_items: list[SessionDelegationTaskResponse] | None = None
     source: str | None = None
     observed_at: datetime | None = None
     valid_until: datetime | None = None

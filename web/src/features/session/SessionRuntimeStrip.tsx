@@ -53,27 +53,30 @@ function buildBackgroundInspector(
   const delegation = facts.delegation;
   if (!delegation || !delegation.observed_at) return null;
   const state = delegationEvidenceIsLive(delegation, nowMs) ? delegation.state : "unknown";
-  const tasks: SessionBackgroundTask[] = (state === "unknown" ? [] : delegation.items ?? []).map((task) => {
-    const sessionId = task.session_id?.trim() || null;
-    const toolCalls =
-      sessionId &&
-      typeof task.tool_calls === "number" &&
-      Number.isFinite(task.tool_calls) &&
-      task.tool_calls >= 0
-        ? task.tool_calls
-        : null;
-    return {
-      id: task.id,
-      name: task.description?.trim() || task.id,
-      type: task.kind?.trim() || "unknown",
-      status: task.status?.trim() || "unknown",
-      sessionId,
-      latestActivityAt: task.last_activity_at ?? null,
-      toolCalls,
-      registeredAt: task.registered_at ?? null,
-      nativeProgress: task.native_progress ?? null,
-    };
-  });
+  const tasks: SessionBackgroundTask[] = [];
+  if (state !== "unknown") {
+    for (let section = 0; section < 2; section++) {
+      const rows = section === 0 ? delegation.items : delegation.recent_items;
+      for (const task of rows ?? []) {
+        const sessionId = task.session_id?.trim() || null;
+        const toolCalls = sessionId && typeof task.tool_calls === "number" &&
+          Number.isFinite(task.tool_calls) && task.tool_calls >= 0 ? task.tool_calls : null;
+        tasks.push({
+          id: task.id,
+          name: task.description?.trim() || task.id,
+          type: task.kind?.trim() || "unknown",
+          status: task.status?.trim() || "unknown",
+          sessionId,
+          latestActivityAt: task.last_activity_at ?? null,
+          toolCalls,
+          registeredAt: task.registered_at ?? null,
+          endedAt: task.ended_at ?? null,
+          recent: section === 1,
+          nativeProgress: task.native_progress ?? null,
+        });
+      }
+    }
+  }
   const subagentCount = delegation.kinds?.subagent;
   let typedCount = 0;
   for (const kind in delegation.kinds) typedCount += delegation.kinds[kind];

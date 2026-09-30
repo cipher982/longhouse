@@ -1852,6 +1852,8 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 "LONGHOUSE_OMP_SESSION_DIR": str(provider_home / ".local" / "share" / "omp" / "sessions"),
             }
         )
+        if getattr(args, "background_prompt", None):
+            env["LONGHOUSE_QA_OMP_BACKGROUND_CAPTURE"] = str(root / "omp-background-native-frames.ndjson")
         negative_control = getattr(args, "negative_control", None)
         if negative_control:
             env["LONGHOUSE_QA_FAULT"] = fault_name("omp", negative_control)
@@ -1912,7 +1914,9 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             argv=_launch_argv(
                 args,
                 workspace=workspace,
-                prompt=getattr(args, "background_prompt", None) or _exact_marker_prompt(initial_marker),
+                prompt=f"{args.background_prompt}\nAfter the background job reaches terminal state: {_exact_marker_prompt(initial_marker)}"
+                if getattr(args, "background_prompt", None)
+                else _exact_marker_prompt(initial_marker),
             ),
             cwd=workspace,
             env=env,
@@ -1984,6 +1988,16 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         initial_control_receipt = _control_identity_receipt(initial_control_identity)
         initial_convergence["control_identity"] = initial_control_receipt
+        if getattr(args, "background_prompt", None):
+            lifecycle.write_json(
+                root / "omp-background-served-receipt.json",
+                {
+                    "managed_transport": "omp_helm_channel",
+                    "state": redact_state_for_evidence(initial_channel_state),
+                    "control_identity": initial_control_receipt,
+                    "detail": _runtime_get(str(args.api_url), str(args.agents_token), f"/api/agents/sessions/{current_session_id}"),
+                },
+            )
         runtime_convergence = {"initial": initial_convergence}
         observation["omp_transcript_flush_completed"] = initial_convergence.get("status") == "pass"
         observation["omp_runtime_transcript_converged"] = observation["omp_transcript_flush_completed"]

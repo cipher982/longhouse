@@ -338,6 +338,7 @@ struct APISessionDelegationTaskResponse: Codable, Hashable, Sendable {
     let toolCalls: Int?
     let registeredAt: String?
     let nativeProgress: APISessionDelegationProgress?
+    let endedAt: String?
 }
 
 struct APISessionDelegationFacts: Codable, Hashable, Sendable {
@@ -345,6 +346,7 @@ struct APISessionDelegationFacts: Codable, Hashable, Sendable {
     let count: Int?
     let kinds: [String: Int]?
     let items: [APISessionDelegationTaskResponse]?
+    let recentItems: [APISessionDelegationTaskResponse]?
     let source: String?
     let observedAt: String?
     let validUntil: String?

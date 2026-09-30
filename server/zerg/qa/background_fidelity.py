@@ -495,12 +495,29 @@ def run_claude_lifecycle_hook_replay(
     }
     package.write_json("raw/background-hook-command.json", command)
     package.write_json("events/claude-hook-outbox.json", {"events": emitted})
-    passed = completed.returncode == 0 and bool(emitted)
+    try:
+        source_input = json.loads(source_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        source_input = None
+    callback_produced = False
+    if isinstance(source_input, Mapping):
+        expected_operation = {"SubagentStart": "observe", "SubagentStop": "remove"}.get(source_input.get("hook_event_name"))
+        callback_produced = expected_operation is None or any(
+            isinstance(event.get("delegation_update"), Mapping)
+            and event["delegation_update"].get("operation") == expected_operation
+            and event["delegation_update"].get("source_agent_id") == source_input.get("agent_id")
+            for event in emitted
+        )
+    passed = completed.returncode == 0 and bool(emitted) and callback_produced
     payload = {
         "schema_version": SCHEMA_VERSION,
         "scenario": SCENARIO_ID,
         "status": STATUS_PASS if passed else STATUS_FAIL,
-        "failure_code": None if passed else "background_hook_outbox_missing",
+        "failure_code": None
+        if passed
+        else "background_hook_callback_missing"
+        if not callback_produced
+        else "background_hook_outbox_missing",
         "source": digest,
         "source_relocation": relocation,
         "command": command,
@@ -509,6 +526,7 @@ def run_claude_lifecycle_hook_replay(
         "assertions": {
             "retained_source_available": True,
             "hook_outbox_produced": passed,
+            "hook_callback_edge_produced": callback_produced,
         },
     }
     package.write_json("assertions/background-hook-replay.json", payload)

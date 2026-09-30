@@ -71,6 +71,7 @@ const MAX_LIVE_TEXT_DELTA_LENGTH = 4096;
 const CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id";
 const COORDINATION_MAX_429_RETRIES = 3;
 const COORDINATION_OPERATION_TIMEOUT_MS = 15_000;
+const qaBackgroundCapture = process.env.LONGHOUSE_QA_OMP_BACKGROUND_CAPTURE;
 const COORDINATION_DEFAULT_RETRY_MS = 1_000;
 
 type ToolParams = Record<string, unknown>;
@@ -212,10 +213,7 @@ export function compactAsyncJobEvidence(
   snapshot: unknown,
   observedAt = Date.now(),
 ): Frame {
-  if (qaBackgroundWriterDisabled) {
-    recordQaBackgroundFault();
-    return {};
-  }
+  if (qaBackgroundWriterDisabled) recordQaBackgroundFault();
   const jobsById = new Map<string, Frame>();
   const jobIdByAgentId = new Map<string, string>();
   const snapshotRecord = isRecord(snapshot) ? snapshot : undefined;
@@ -226,6 +224,7 @@ export function compactAsyncJobEvidence(
     snapshotRecord !== undefined &&
     Array.isArray(snapshotRecord.running) &&
     runningJobs.length <= MAX_ASYNC_JOB_ROWS &&
+    !(qaBackgroundWriterDisabled && runningJobs.length > 0) &&
     runningJobs.every(
       (row) =>
         isRecord(row) &&
@@ -901,6 +900,15 @@ export default function (pi: any) {
       return false;
     const bytes = Buffer.from(`${JSON.stringify(frame)}\n`, "utf8");
     if (bytes.byteLength > MAX_FRAME_BYTES) return false;
+    if (qaBackgroundCapture && isRecord(frame.event) &&
+      ("async_jobs" in frame.event || "task_progress" in frame.event)) {
+      const { auth_token: _authToken, ...observation } = frame;
+      try {
+        appendFileSync(qaBackgroundCapture, `${JSON.stringify(observation)}\n`, { mode: 0o600 });
+      } catch {
+        // Missing capture is an inconclusive QA result, never source evidence.
+      }
+    }
     socket.write(bytes);
     return true;
   };

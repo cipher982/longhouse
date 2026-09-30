@@ -54,7 +54,8 @@ def test_omp_background_assertions_require_terminal_job_status(tmp_path) -> None
     }
     capture = tmp_path / "extension.jsonl"
     capture.write_text(json.dumps(frame) + "\n", encoding="utf-8")
-    (tmp_path / "omp-helm-receipt.json").write_text(
+    served_receipt = tmp_path / "omp-background-served-receipt.json"
+    served_receipt.write_text(
         json.dumps(
             {
                 "managed_transport": "omp_helm_channel",
@@ -68,7 +69,15 @@ def test_omp_background_assertions_require_terminal_job_status(tmp_path) -> None
                     "connection_id": "connection-1",
                     "lease_generation": "lease-1",
                 },
-                "observation": {"runtime_agents_api_controls": True},
+                "control_identity": {
+                    "session_id": "session-1",
+                    "expected_subject_key": "run:run-1",
+                    "control_subject_key": "run:run-1",
+                    "served_path": "canonical_session_detail",
+                    "owner_identity": ["session-1", "native-1", "/tmp/session-1.jsonl", 10, "launcher-birth", 11, "provider-birth"],
+                    "actions": {"send_input": "available", "interrupt": "available", "terminate": "available"},
+                },
+                "detail": {"id": "session-1", "session_state": {"delegation": {"count": 1, "recent_items": []}}},
             }
         ),
         encoding="utf-8",
@@ -83,9 +92,16 @@ def test_omp_background_assertions_require_terminal_job_status(tmp_path) -> None
 
     frame["event"]["task_progress"][0]["status"] = "completed"
     capture.write_text(json.dumps(frame) + "\n", encoding="utf-8")
+    assert omp_background_assertions(tmp_path, result)["omp_background_terminal_status_preserved"] is False
+    receipt = json.loads(served_receipt.read_text())
+    receipt["detail"]["session_state"]["delegation"]["recent_items"] = [{"id": "job-1", "kind": "subagent", "status": "completed"}]
+    served_receipt.write_text(json.dumps(receipt), encoding="utf-8")
     assert omp_background_assertions(tmp_path, result)["omp_background_terminal_status_preserved"] is True
     frame["event"]["task_progress"][0]["status"] = "failed"
     capture.write_text(json.dumps(frame) + "\n", encoding="utf-8")
+    assert omp_background_assertions(tmp_path, result)["omp_background_terminal_status_preserved"] is False
+    receipt["detail"]["session_state"]["delegation"]["recent_items"][0]["status"] = "failed"
+    served_receipt.write_text(json.dumps(receipt), encoding="utf-8")
     assert omp_background_assertions(tmp_path, result)["omp_background_terminal_status_preserved"] is True
 
 

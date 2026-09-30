@@ -34,6 +34,8 @@ export interface SessionBackgroundTask {
   latestActivityAt: string | null;
   toolCalls: number | null;
   registeredAt: string | null;
+  endedAt: string | null;
+  recent: boolean;
   nativeProgress: {
     observed_at?: string | null;
     status?: string | null;
@@ -452,7 +454,7 @@ export function SessionLedger({
                   <span>
                     {state.backgroundInspector.count == null ? "Registry status unknown" : (
                       <>
-                        {state.backgroundInspector.count} task
+                        {state.backgroundInspector.count} active task
                         {state.backgroundInspector.count === 1 ? "" : "s"} ·{" "}
                         {state.backgroundInspector.subagentCount == null ? "types not reported" : (
                           <>
@@ -485,7 +487,7 @@ export function SessionLedger({
                 {state.backgroundInspector.tasks.length > 0 ? (
                   <ul className="session-ledger__background-list">
                     {state.backgroundInspector.tasks.map((task) => (
-                      <li key={task.id} className="session-ledger__background-task">
+                      <li key={`${task.recent ? "recent" : "active"}:${task.id}`} className="session-ledger__background-task">
                         <div className="session-ledger__background-task-head">
                           {task.sessionId ? (
                             <Link to={`/timeline/${task.sessionId}`}>{task.name}</Link>
@@ -496,6 +498,7 @@ export function SessionLedger({
                         </div>
                         <div className="session-ledger__background-task-meta">
                           <span>{task.type}</span>
+                          {task.recent ? <span>recently finished</span> : null}
                           <span>
                             latest {observedAgeLabel(task.latestActivityAt, inspectorNowMs)}
                           </span>
@@ -503,9 +506,10 @@ export function SessionLedger({
                             archive tools {task.toolCalls == null ? "—" : task.toolCalls}
                           </span>
                         </div>
-                        {task.registeredAt ? (
+                        {task.registeredAt || task.endedAt ? (
                           <div className="session-ledger__background-task-meta">
-                            <span>registered {observedAgeLabel(task.registeredAt, inspectorNowMs)}</span>
+                            {task.registeredAt ? <span>registered {observedAgeLabel(task.registeredAt, inspectorNowMs)}</span> : null}
+                            {task.endedAt ? <span>ended {observedAgeLabel(task.endedAt, inspectorNowMs)}</span> : null}
                           </div>
                         ) : null}
                         {task.nativeProgress ? (

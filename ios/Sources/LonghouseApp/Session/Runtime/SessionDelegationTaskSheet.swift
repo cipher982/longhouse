@@ -96,6 +96,11 @@ struct SessionDelegationTaskSheet: View {
             } else {
                 aggregateOnlyState(facts)
             }
+            if let recent = facts.recentItems, !recent.isEmpty {
+                Text("Recently finished")
+                    .font(.headline)
+                taskGroups(recent)
+            }
         } else {
             unknownState
         }
@@ -103,9 +108,9 @@ struct SessionDelegationTaskSheet: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("No named background work", systemImage: "checkmark.circle")
+            Label("No active named background work", systemImage: "checkmark.circle")
                 .font(.headline)
-            Text("The provider reported an empty task list for this observation.")
+            Text("The provider reported no active tasks for this observation.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -274,6 +279,11 @@ struct SessionDelegationTaskSheet: View {
 
     private func timingLine(for task: SessionDelegationTask) -> String? {
         var parts: [String] = []
+        if let endedAt = task.endedAt,
+           let date = LonghouseDateParser.parse(endedAt),
+           let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {
+            parts.append("Ended \(age)")
+        }
         if let registeredAt = task.registeredAt,
            let date = LonghouseDateParser.parse(registeredAt),
            let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {

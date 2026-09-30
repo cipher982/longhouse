@@ -898,6 +898,26 @@ def _registry_items_with_lifecycle(
     return result
 
 
+def _project_delegation_task(item: Mapping[str, Any], children: Mapping[str, Any]) -> SessionDelegationTaskResponse:
+    child = _mapping(children.get(item.get("parent_tool_call_id")) or children.get(f"native:{item.get('native_child_id')}"))
+    return SessionDelegationTaskResponse(
+        id=item["id"],
+        kind=item["kind"],
+        status=item["status"],
+        description=item.get("description"),
+        first_observed_at=_optional_wire_datetime(item.get("first_observed_at"), "first_observed_at"),
+        started_at=_optional_wire_datetime(child.get("started_at"), "started_at"),
+        last_activity_at=_optional_wire_datetime(child.get("last_activity_at"), "last_activity_at"),
+        session_id=_text(child.get("session_id")),
+        user_messages=int(child["user_messages"]) if child.get("user_messages") is not None else None,
+        assistant_messages=int(child["assistant_messages"]) if child.get("assistant_messages") is not None else None,
+        tool_calls=int(child["tool_calls"]) if child.get("tool_calls") is not None else None,
+        registered_at=_optional_wire_datetime(item.get("registered_at"), "registered_at"),
+        ended_at=_optional_wire_datetime(item.get("ended_at"), "ended_at"),
+        native_progress=SessionDelegationProgress(**item["native_progress"]) if item.get("native_progress") is not None else None,
+    )
+
+
 def _project_delegation(
     winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
     *,
@@ -942,33 +962,15 @@ def _project_delegation(
         for item in raw_items:
             kind = item["kind"]
             kinds[kind] = kinds.get(kind, 0) + 1
-        items = []
-        for item in raw_items:
-            child = _mapping(children.get(item.get("parent_tool_call_id")) or children.get(f"native:{item.get('native_child_id')}"))
-            items.append(
-                SessionDelegationTaskResponse(
-                    id=item["id"],
-                    kind=item["kind"],
-                    status=item["status"],
-                    description=item.get("description"),
-                    first_observed_at=_optional_wire_datetime(item.get("first_observed_at"), "first_observed_at"),
-                    started_at=_optional_wire_datetime(child.get("started_at"), "started_at"),
-                    last_activity_at=_optional_wire_datetime(child.get("last_activity_at"), "last_activity_at"),
-                    session_id=_text(child.get("session_id")),
-                    user_messages=(int(child["user_messages"]) if child.get("user_messages") is not None else None),
-                    assistant_messages=(int(child["assistant_messages"]) if child.get("assistant_messages") is not None else None),
-                    tool_calls=int(child["tool_calls"]) if child.get("tool_calls") is not None else None,
-                    registered_at=_optional_wire_datetime(item.get("registered_at"), "registered_at"),
-                    native_progress=SessionDelegationProgress(**item["native_progress"])
-                    if item.get("native_progress") is not None
-                    else None,
-                )
-            )
+        items = [_project_delegation_task(item, children) for item in raw_items]
+    raw_recent = value.get("recent_items")
+    recent_items = [_project_delegation_task(item, children) for item in raw_recent] if isinstance(raw_recent, list) else None
     return SessionDelegationFacts(
         state="pending" if count > 0 else "none",
         count=count,
         kinds=kinds,
         items=items,
+        recent_items=recent_items,
         source=source,
         observed_at=observed_at,
         valid_until=valid_until,

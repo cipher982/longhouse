@@ -4702,6 +4702,7 @@ def _delegation_snapshot_from_engine_facts(facts: object) -> dict[str, Any] | No
                 "count": int(payload["count"]),
                 "kinds": dict(payload["kinds"]),
                 "items": list(payload["items"]),
+                **{key: payload[key] for key in ("observed_at", "freshness_ms") if key in payload},
             }
     return None
 
@@ -4757,7 +4758,7 @@ def delegation_projection(
     from zerg.services.session_state_contract import project_transcript_facts
     from zerg.services.session_state_facts_projector import project_served_session_state_facts
 
-    now = datetime.now(UTC).replace(microsecond=0)
+    now = datetime.now(UTC)
     session_id = uuid4()
     thread_id = uuid4()
     run_id = uuid4()
@@ -4808,8 +4809,8 @@ def delegation_projection(
                         run_id=run_id,
                         provider=provider,
                         source="provider_hook",
-                        kind="phase_signal",
-                        phase="idle",
+                        kind="delegation_signal" if "delegation_update" in payload else "phase_signal",
+                        phase=None if "delegation_update" in payload else "idle",
                         occurred_at=occurred_at,
                         freshness_ms=600_000,
                         dedupe_key=key,
@@ -4861,8 +4862,30 @@ def delegation_projection(
                     provider_facts=child_rows,
                 )
                 served_child_facts = store.list_session_provider_facts(session_id=str(session_id)).get("facts", [])
-        expected_count = int(registry.get("count", 0)) if registry is not None else 0
-        expected_kinds = dict(registry.get("kinds", {})) if registry is not None else {}
+        expected_items = list(registry.get("items") or []) if registry is not None else []
+        native_updates = [
+            dict(fact["payload"])
+            for fact in native_facts or []
+            if isinstance(fact, Mapping) and fact.get("kind") == "delegation.lifecycle" and isinstance(fact.get("payload"), Mapping)
+        ]
+        for index, update in enumerate(native_updates):
+            apply(occurred_at=now, payload={"delegation_update": update}, key=f"native-lifecycle-{index}")
+            if update.get("operation") == "remove":
+                edge = update.get("item") or {}
+                expected_items = [item for item in expected_items if item.get("id") != edge.get("id")]
+        expected_count = (
+            len(expected_items)
+            if registry is not None and isinstance(registry.get("items"), list)
+            else int(registry.get("count", 0))
+            if registry is not None
+            else 0
+        )
+        expected_kinds = {}
+        if registry is not None and isinstance(registry.get("items"), list):
+            for item in expected_items:
+                expected_kinds[item["kind"]] = expected_kinds.get(item["kind"], 0) + 1
+        elif registry is not None:
+            expected_kinds = dict(registry.get("kinds", {}))
 
         with engine.connect() as connection:
             _commit_seq, heads = read_session_fact_heads(connection, session_id=str(session_id))
@@ -4895,8 +4918,8 @@ def delegation_projection(
                 now=at,
             )
 
-        live = served(delegation_heads, at=now)
-        expired = served(delegation_heads, at=now + timedelta(seconds=31 * 60))
+        live = served(heads, at=now)
+        expired = served(heads, at=now + timedelta(seconds=31 * 60))
 
         assertions = {
             "registry_promoted_as_its_own_fact": (
@@ -4927,6 +4950,10 @@ def delegation_projection(
             ),
             "expired_evidence_reads_unknown_never_none": expired.delegation.state == "unknown" and expired.working_set != "open",
         }
+        if native_updates:
+            assertions["native_callback_retires_matching_task"] = [item.id for item in live.delegation.items or []] == [
+                item["id"] for item in expected_items
+            ] and live.delegation.count == expected_count
 
         payload_path = package.write_json(
             "longhouse/delegation-projection.json",
@@ -5029,6 +5056,11 @@ def run_background_fidelity_replay(
                         else []
                     )
                     native_facts = [{"kind": "delegation.snapshot", "payload": registry_events[-1]}] if registry_events else []
+                    native_facts.extend(
+                        {"kind": "delegation.lifecycle", "payload": dict(event["delegation_update"])}
+                        for event in emitted or []
+                        if isinstance(event, Mapping) and isinstance(event.get("delegation_update"), Mapping)
+                    )
                     parser_result = dict(hook_result)
                     parser_result["assertions"] = {
                         "engine_facts_produced": hook_result.get("assertions", {}).get("hook_outbox_produced") is True,
