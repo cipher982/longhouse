@@ -28,7 +28,7 @@ boundary_base=()
 if git rev-parse --verify --quiet "$remote/main^{commit}" >/dev/null; then
   boundary_base=(--base "$remote/main")
 fi
-python3 "$(dirname "${BASH_SOURCE[0]}")/../ci/verifier_boundary.py" check ${boundary_base[@]+"${boundary_base[@]}"} || exit 1
+python3 "$(dirname "${BASH_SOURCE[0]}")/../ci/verifier_boundary.py" check --rev HEAD ${boundary_base[@]+"${boundary_base[@]}"} || exit 1
 
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 

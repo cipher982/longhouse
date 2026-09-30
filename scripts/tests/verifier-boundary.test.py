@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -309,6 +310,24 @@ class Cli(unittest.TestCase):
             tree.write("scripts/ci/verifier-boundary.allow", "# empty\n")
             self.assertEqual(tree.run("check", "--base", base).returncode, 0)
 
+    def test_rev_checks_the_committed_tree_not_the_working_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = fixture(tmp)
+            tree.init_git()
+            tree.commit("clean")
+            tree.write("server/zerg/qa/oracle.py", "from zerg.services import proof, paths\n")  # uncommitted
+            self.assertEqual(tree.run("check").returncode, 1)
+            done = tree.run("check", "--rev", "HEAD")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("verifier_digest sha256:", done.stdout)
+            tree.commit("adds a crossing import")
+            tree.write("server/zerg/qa/oracle.py", "from zerg.services import proof\n")  # uncommitted revert
+            self.assertEqual(tree.run("check").returncode, 0)
+            done = tree.run("check", "--rev", "HEAD")
+            self.assertEqual(done.returncode, 1)
+            self.assertIn(f"{QA}oracle.py -> {SVC}paths.py", done.stderr)
+            self.assertNotEqual(tree.run("check", "--rev", "0" * 40).returncode, 0)
+
     def test_base_without_an_allowlist_skips_the_comparison_and_a_bad_base_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = fixture(tmp)
@@ -337,9 +356,12 @@ class Wiring(unittest.TestCase):
 
     def test_the_host_push_paths_and_ci_run_the_base_comparison(self):
         for name in ("scripts/ops/check-push-readiness.sh", "scripts/ops/ship.sh"):
-            text = self.source(name)
-            self.assertIn("verifier_boundary.py", text, name)
-            self.assertIn("--base", text[text.index("verifier_boundary.py") :], name)
+            invocation = re.search(r"^\s*python3 .*verifier_boundary\.py.*$", self.source(name), re.MULTILINE)
+            self.assertIsNotNone(invocation, name)
+            self.assertIn(" check ", invocation.group(0), name)
+            self.assertIn("--rev ", invocation.group(0), name)
+        self.assertIn("--base", self.source("scripts/ops/ship.sh"))
+        self.assertIn("--base", self.source("scripts/ops/check-push-readiness.sh"))
         workflow = self.source(".github/workflows/contract-first-ci.yml")
         self.assertIn("verifier_boundary.py check --base FETCH_HEAD", workflow)
 

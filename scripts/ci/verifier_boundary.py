@@ -19,7 +19,7 @@ line), and with --base REV an entry the base did not already carry fails.
 The provider factory computes the same digest over the files it pins
 (control-plane provider_factory/verifier.py); both sides carry the same golden vector.
 
-  verifier_boundary.py [check] [--root DIR] [--base REV]
+  verifier_boundary.py [check] [--root DIR] [--rev REV] [--base REV]
   verifier_boundary.py digest [--root DIR] [--paths-file FILE]
   verifier_boundary.py replay --since WHEN [--rev REV] [--pinned-file F] [--protected-file F]
 """
@@ -29,9 +29,12 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import io
 import json
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -326,23 +329,45 @@ def _base_allowlist(root: Path, base: str) -> dict[Edge, str] | None:
     return entries
 
 
+def export_tree(root: Path, rev: str, destination: Path) -> None:
+    """Materialize the files the check reads, exactly as commit `rev` has them."""
+    wanted = ["server/zerg", *VERIFIER_FILES, ALLOWLIST]
+    present = [
+        path
+        for path in wanted
+        if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{rev}:{path}"], capture_output=True).returncode
+        == 0
+    ]
+    done = subprocess.run(["git", "-C", str(root), "archive", "--format=tar", rev, "--", *present], capture_output=True)
+    if done.returncode:
+        raise SystemExit(f"--rev {rev}: git archive failed: {done.stderr.decode(errors='replace').strip()[:300]}")
+    options = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+    with tarfile.open(fileobj=io.BytesIO(done.stdout)) as archive:
+        archive.extractall(destination, **options)
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     root = Path(args.root)
-    allowlist = root / ALLOWLIST
-    allowed, problems = parse_allowlist(allowlist.read_text(encoding="utf-8") if allowlist.is_file() else "")
-    base_allowed = _base_allowlist(root, args.base) if args.base else None
-    edges = import_edges(read_sources(root))
-    problems += check_edges(edges, allowed, base_allowed)
-    for problem in problems:
-        print(problem, file=sys.stderr)
-    if problems:
-        print(f"verifier boundary: {len(problems)} problem(s)", file=sys.stderr)
-        return 1
-    kinds: dict[str, int] = {}
-    for edge in crossing_edges(edges):
-        kinds[direction(edge)] = kinds.get(direction(edge), 0) + 1
-    summary = ", ".join(f"{count} {kind}" for kind, count in sorted(kinds.items())) or "none"
-    print(f"verifier boundary: crossing edges {summary}, all allowlisted; verifier_digest {verifier_digest(root)}")
+    with tempfile.TemporaryDirectory() as scratch:
+        tree = root
+        if args.rev:
+            tree = Path(scratch)
+            export_tree(root, args.rev, tree)
+        allowlist = tree / ALLOWLIST
+        allowed, problems = parse_allowlist(allowlist.read_text(encoding="utf-8") if allowlist.is_file() else "")
+        base_allowed = _base_allowlist(root, args.base) if args.base else None
+        edges = import_edges(read_sources(tree))
+        problems += check_edges(edges, allowed, base_allowed)
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        if problems:
+            print(f"verifier boundary: {len(problems)} problem(s)", file=sys.stderr)
+            return 1
+        kinds: dict[str, int] = {}
+        for edge in crossing_edges(edges):
+            kinds[direction(edge)] = kinds.get(direction(edge), 0) + 1
+        summary = ", ".join(f"{count} {kind}" for kind, count in sorted(kinds.items())) or "none"
+        print(f"verifier boundary: crossing edges {summary}, all allowlisted; verifier_digest {verifier_digest(tree)}")
     return 0
 
 
@@ -378,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", parents=[common], help="fail on a boundary edge the allowlist does not carry")
+    check.add_argument("--rev", help="check the tree of this commit instead of the working tree")
     check.add_argument("--base", help="git revision whose allowlist this one must not exceed")
     digest = sub.add_parser("digest", parents=[common], help="print the verifier digest")
     digest.add_argument("--paths-file", help="digest exactly these repo-relative paths (default: the path rule)")
