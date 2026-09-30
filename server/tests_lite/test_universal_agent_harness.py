@@ -1501,8 +1501,6 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
 
 
 
-
-
 def test_orchestration_matrix_status_follows_the_capability_rows(tmp_path: Path, monkeypatch) -> None:
     """Negative control for the gate itself.
 
