@@ -28,6 +28,7 @@ from zerg.cli.config_file import load_config
 from zerg.cli.config_file import save_loaded_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
+from zerg.cli.serve import warn_plain_http_bind
 from zerg.native_device_entrypoints import available_native_managed_launch_commands
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.local_runtime_installer import install_local_runtime
@@ -580,6 +581,8 @@ def onboard(
                 typer.secho(f"  [OK] Local runtime responding at {api_url}", fg=typer.colors.GREEN)
             else:
                 typer.echo("  Starting local runtime...")
+                # `serve` runs captured below, so its own warning never reaches this terminal.
+                warn_plain_http_bind(host, None)
 
                 try:
                     subprocess.run(

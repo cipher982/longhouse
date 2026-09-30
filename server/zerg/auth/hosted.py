@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import time
+from functools import lru_cache
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
@@ -38,19 +39,6 @@ _STATE_SEPARATOR = "-"
 _STATE_SEPARATORS = {"-", "."}
 
 
-def _is_local_cookie_host(host: str | None) -> bool:
-    if not host:
-        return False
-    normalized = host.rstrip(".").lower()
-    if normalized == "localhost" or normalized.endswith(".localhost"):
-        return True
-    try:
-        address = ip_address(normalized)
-    except ValueError:
-        return False
-    return address.is_loopback or address.is_private or address.is_link_local
-
-
 def _is_loopback_cookie_host(host: str | None) -> bool:
     if not host:
         return False
@@ -63,41 +51,66 @@ def _is_loopback_cookie_host(host: str | None) -> bool:
         return False
 
 
-def tenant_cookie_secure(settings=None) -> bool:
-    """Choose cookie generation without weakening hosted tenant isolation.
+@lru_cache(maxsize=1)
+def _process_settings():
+    """Settings for the per-request cookie decision.
 
-    Hosted tenants always use ``Secure``/``__Host-`` cookies. Insecure cookies
-    are only available for auth-disabled/test surfaces or explicitly local
-    self-host URLs, where there is no shared public parent domain to protect.
+    ``get_settings()`` re-reads the environment on every call and this runs on
+    every authenticated request, so resolve it once per process like the
+    strategies do.
+    """
+    return get_settings()
+
+
+def cookie_secure_for_scheme(scheme: str | None, settings=None) -> bool:
+    """Decide whether auth cookies are ``Secure`` for a request arriving over ``scheme``.
+
+    A browser drops a ``Secure`` cookie set over plain http (loopback excepted),
+    so an unconditional flag turns a password login on a LAN or Tailscale IP
+    into a silent login loop. ``scheme`` is the request's effective scheme: the
+    ASGI scope scheme, which uvicorn overrides from ``X-Forwarded-Proto`` only
+    when the immediate peer is in ``FORWARDED_ALLOW_IPS`` (default: loopback, so
+    a same-host Caddy works and a stranger's forged header does not).
+
+    Hosted tenants are https-only and stay ``Secure`` whatever the scheme.
+    ``LONGHOUSE_COOKIE_SECURE=1`` forces ``Secure`` for a TLS proxy the server
+    cannot see through.
     """
     if settings is None:
-        settings = get_settings()
-    hosted = bool(getattr(settings, "control_plane_url", None))
-    if hosted:
-        # Hosted auth must remain secure even when a test/development setting
-        # accidentally accompanies CONTROL_PLANE_URL.
-        if os.getenv("LONGHOUSE_COOKIE_SECURE", "").strip().lower() in {"0", "false", "no", "off"}:
-            logger.warning("ignoring insecure cookie override for hosted tenant")
+        settings = _process_settings()
+    if getattr(settings, "control_plane_url", None):
         return True
-    if bool(getattr(settings, "auth_disabled", False) or getattr(settings, "testing", False)):
-        return False
+    if os.getenv("LONGHOUSE_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return (scheme or "").lower() in {"https", "wss"}
 
-    override = os.getenv("LONGHOUSE_COOKIE_SECURE", "").strip().lower()
-    public_url = getattr(settings, "public_site_url", None) or getattr(settings, "app_public_url", None)
-    parsed_url = urlparse(str(public_url)) if public_url else None
-    host = parsed_url.hostname if parsed_url else None
-    is_local_host = _is_local_cookie_host(host)
 
-    if override in {"1", "true", "yes", "on"}:
-        return True
-    if override in {"0", "false", "no", "off"}:
-        if is_local_host:
-            return False
-        logger.warning("ignoring insecure cookie override for non-local host")
-        return True
-    if parsed_url and parsed_url.scheme.lower() == "http" and is_local_host:
-        return False
+def request_cookie_secure(connection, settings=None) -> bool:
+    """``cookie_secure_for_scheme`` for a Starlette ``Request`` or ``WebSocket``."""
+    return cookie_secure_for_scheme(connection.scope.get("scheme"), settings)
+
+
+def tenant_cookie_secure(settings=None) -> bool:
+    """Secure flag for the control-plane handoff cookies, which only exist on hosted tenants.
+
+    Those flows refuse to run off an https origin (``hosted_cookie_origin_is_secure``),
+    so there is no request scheme to consult.
+    """
     return True
+
+
+def session_cookie_name(secure: bool) -> str:
+    """Browser session cookie. ``__Host-`` needs ``Secure``, so plain http uses the bare name."""
+    return "__Host-lh_session" if secure else "longhouse_session"
+
+
+def refresh_cookie_name(secure: bool) -> str:
+    return "__Host-lh_refresh" if secure else "longhouse_refresh"
+
+
+def refresh_cookie_path(secure: bool) -> str:
+    """``__Host-`` cookies must be ``Path=/``; the bare refresh cookie stays scoped to auth routes."""
+    return "/" if secure else "/api/auth"
 
 
 def hosted_cookie_origin_is_secure(settings=None) -> bool:

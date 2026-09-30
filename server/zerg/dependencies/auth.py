@@ -16,10 +16,10 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 
-from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.auth.strategy import DevAuthStrategy
 from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
+from zerg.auth.strategy import request_session_cookie
 from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.form_post_origin import require_browser_auth_header
@@ -100,7 +100,7 @@ def get_current_user(request: Request, db=Depends(_auth_compat_db)):
     # silently authenticate with a cookie when that credential is malformed or
     # invalid.
     has_authorization = request.headers.get("Authorization") is not None
-    has_cookie = SESSION_COOKIE_NAME in request.cookies
+    has_cookie = request_session_cookie(request, _settings) is not None
 
     if not has_authorization and not has_cookie and not AUTH_DISABLED:
         raise HTTPException(

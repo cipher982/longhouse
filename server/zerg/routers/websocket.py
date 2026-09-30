@@ -20,7 +20,7 @@ from fastapi import HTTPException
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 
-from zerg.auth.strategy import SESSION_COOKIE_NAME
+from zerg.auth.strategy import request_session_cookie
 from zerg.config import get_settings
 from zerg.config import resolve_cors_origins
 from zerg.database import reset_test_worker_id
@@ -114,7 +114,7 @@ async def websocket_endpoint(
     if auth_header and auth_header.lower().startswith("bearer "):
         auth_token = auth_header[7:].strip()
     if not auth_token:
-        auth_token = websocket.cookies.get(SESSION_COOKIE_NAME)
+        auth_token = request_session_cookie(websocket)
 
     try:
         user = await asyncio.to_thread(validate_ws_jwt, auth_token)

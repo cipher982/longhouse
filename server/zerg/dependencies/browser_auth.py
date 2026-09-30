@@ -11,7 +11,7 @@ from fastapi import status
 
 import zerg.dependencies.auth as auth_deps
 from zerg.auth.caller import Caller
-from zerg.auth.session_tokens import SESSION_COOKIE_NAME
+from zerg.auth.strategy import request_session_cookie
 from zerg.config import get_settings
 from zerg.database import catalog_db_session
 from zerg.dependencies.form_post_origin import require_browser_auth_header
@@ -67,7 +67,7 @@ def _get_browser_session_user(request: Request, db=None):
             user = None
         return _stamp_principal(request, user)
 
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    session_token = request_session_cookie(request)
     if session_token:
         user = auth_deps._get_strategy().validate_ws_token(session_token, db)
         if user is not None:

@@ -119,6 +119,39 @@ def test_host_classifier():
     assert _host_is_public("localhost") is False
 
 
+def test_public_bind_warns_plain_http_is_unencrypted_and_names_the_fix():
+    """Browser login works over plain http now, so the risk is named at startup."""
+    result, started = _run_serve(["--host", "0.0.0.0", "--allow-public-no-auth"], {"AUTH_DISABLED": "1"})
+    assert started
+    output = " ".join(result.output.split())
+    assert "plain http" in output
+    assert "unencrypted" in output
+    assert "Tailscale/WireGuard or a trusted LAN" in output
+    assert "put https in front" in output
+
+
+def test_loopback_bind_has_no_plain_http_warning():
+    result, started = _run_serve(["--host", "localhost"], {"AUTH_DISABLED": "1"})
+    assert started
+    assert "plain http" not in result.output
+
+
+def test_plain_http_warning_follows_bind_and_declared_tls(capsys):
+    from zerg.cli.serve import warn_plain_http_bind
+
+    def warned(host, public_url):
+        warn_plain_http_bind(host, public_url)
+        return "plain http" in capsys.readouterr().out
+
+    assert warned("0.0.0.0", None) is True
+    assert warned("192.168.1.50", None) is True
+    assert warned("127.0.0.1", "http://192.168.1.50:8080") is True
+    assert warned("127.0.0.1", None) is False
+    assert warned("localhost", "http://127.0.0.1:8080") is False
+    # An https public URL says TLS is already in front of this port.
+    assert warned("0.0.0.0", "https://longhouse.example.com") is False
+
+
 def test_public_bind_escape_hatch_starts():
     """B1: --allow-public-no-auth lets the operator accept the risk explicitly."""
     result, started = _run_serve(

@@ -41,13 +41,14 @@ from zerg.auth.hosted import hosted_cookie_origin_is_secure
 from zerg.auth.hosted import hosted_instance_id
 from zerg.auth.hosted import is_tenant_login_cookie_name
 from zerg.auth.hosted import new_tenant_login_state
+from zerg.auth.hosted import refresh_cookie_name
+from zerg.auth.hosted import request_cookie_secure
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_handoff_attempt_cookie_name
 from zerg.auth.hosted import tenant_login_attempt_cookie_name
 from zerg.auth.hosted import tenant_login_ready_cookie_name
 from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
-from zerg.auth.session_tokens import REFRESH_COOKIE_NAME
 from zerg.auth.session_tokens import _clear_refresh_cookie
 from zerg.auth.session_tokens import _clear_session_cookie
 from zerg.auth.session_tokens import _issue_access_token
@@ -83,10 +84,10 @@ def _control_plane_url(settings: Any | None = None) -> str | None:
     return getattr(settings, "control_plane_url", None) or None
 
 
-def _refresh_failure_response(*, status_code: int, detail: str | dict[str, str]) -> Response:
+def _refresh_failure_response(*, secure: bool, status_code: int, detail: str | dict[str, str]) -> Response:
     response = JSONResponse(status_code=status_code, content={"detail": detail})
-    _clear_session_cookie(response)
-    _clear_refresh_cookie(response)
+    _clear_session_cookie(response, secure=secure)
+    _clear_refresh_cookie(response, secure=secure)
     _set_no_store(response)
     return response
 
@@ -112,6 +113,7 @@ def _handoff_attempt_count(value: str | None, *, reset: bool = False) -> int:
 
 
 async def _issue_session(
+    request: Request,
     response: Response,
     user,
     *,
@@ -146,8 +148,9 @@ async def _issue_session(
     )
     if not (result.get("created") is True or result.get("exact_replay") is True):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog refresh issuance failed")
-    _set_session_cookie(response, access_token, at_seconds)
-    _set_refresh_cookie(response, raw_rt, _REFRESH_COOKIE_MAX_AGE)
+    secure = request_cookie_secure(request)
+    _set_session_cookie(response, access_token, at_seconds, secure=secure)
+    _set_refresh_cookie(response, raw_rt, _REFRESH_COOKIE_MAX_AGE, secure=secure)
     _set_no_store(response)
 
     return TokenOut(access_token=access_token, expires_in=at_seconds)
@@ -355,7 +358,7 @@ def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
 
 
 @router.post("/dev-login", response_model=TokenOut)
-async def dev_login(response: Response) -> TokenOut:
+async def dev_login(request: Request, response: Response) -> TokenOut:
     settings = get_settings()
     if not settings.auth_disabled:
         raise HTTPException(
@@ -374,7 +377,7 @@ async def dev_login(response: Response) -> TokenOut:
         max_users=None,
         promote_role=True,
     )
-    return await _issue_session(response, user, display_name=user.display_name or "Dev User")
+    return await _issue_session(request, response, user, display_name=user.display_name or "Dev User")
 
 
 @router.post("/service-login", response_model=TokenOut, include_in_schema=False)
@@ -404,7 +407,7 @@ async def service_login(request: Request, response: Response) -> TokenOut:
         max_users=None,
         promote_role=False,
     )
-    return await _issue_session(response, user, display_name=display_name)
+    return await _issue_session(request, response, user, display_name=display_name)
 
 
 @router.post("/google", response_model=TokenOut)
@@ -459,7 +462,7 @@ async def google_sign_in(request: Request, response: Response, body: dict[str, s
             exc.detail = "Sign-ups disabled: user limit reached"
         raise
 
-    return await _issue_session(response, user)
+    return await _issue_session(request, response, user)
 
 
 @router.get("/verify", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
@@ -495,8 +498,9 @@ def auth_status(response: Response, _request: Request, user=Depends(get_optional
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def logout(request: Request, response: Response, everywhere: bool = False):
     require_browser_auth_header(request)
-    raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
     settings = get_settings()
+    cookie_secure = request_cookie_secure(request, settings)
+    raw_rt = request.cookies.get(refresh_cookie_name(cookie_secure))
     revocation_failed = False
     revocation_rejected = False
     authority_missing = False
@@ -546,9 +550,8 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         response.headers["retry-after"] = "5"
 
-    _clear_session_cookie(response)
-    _clear_refresh_cookie(response)
-    cookie_secure = tenant_cookie_secure(settings)
+    _clear_session_cookie(response, secure=cookie_secure)
+    _clear_refresh_cookie(response, secure=cookie_secure)
     # Keep the non-sensitive generation marker so a dashboard-originated
     # handoff can prove it belongs after this logout. Login-state and
     # handoff-attempt cookies are disposable and are cleared here.
@@ -576,10 +579,12 @@ async def refresh_session(request: Request, response: Response) -> RefreshOut | 
     """Rotate the hosted CP refresh family or the local catalog family."""
     require_browser_auth_header(request)
     settings = get_settings()
+    secure = request_cookie_secure(request, settings)
     if _control_plane_url(settings):
-        raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
+        raw_rt = request.cookies.get(refresh_cookie_name(secure))
         if not raw_rt:
             return _refresh_failure_response(
+                secure=secure,
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="No refresh token",
             )
@@ -606,6 +611,7 @@ async def refresh_session(request: Request, response: Response) -> RefreshOut | 
                 ) from exc
             if exc.status_code in {400, 401, 403, 410, 422}:
                 return _refresh_failure_response(
+                    secure=secure,
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Refresh token expired or revoked",
                 )
@@ -621,14 +627,15 @@ async def refresh_session(request: Request, response: Response) -> RefreshOut | 
             status_code=status.HTTP_200_OK,
             content={"expires_in": at_seconds, "token_type": "bearer"},
         )
-        _set_session_cookie(browser_response, payload["runtime_token"], at_seconds)
-        _set_refresh_cookie(browser_response, next_raw, _hosted_refresh_cookie_max_age(payload))
+        _set_session_cookie(browser_response, payload["runtime_token"], at_seconds, secure=secure)
+        _set_refresh_cookie(browser_response, next_raw, _hosted_refresh_cookie_max_age(payload), secure=secure)
         _set_no_store(browser_response)
         return browser_response
 
-    raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
+    raw_rt = request.cookies.get(refresh_cookie_name(secure))
     if not raw_rt:
         return _refresh_failure_response(
+            secure=secure,
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="No refresh token",
         )
@@ -666,6 +673,7 @@ async def refresh_session(request: Request, response: Response) -> RefreshOut | 
             )
     elif result_status not in {"rotated", "exact_replay"}:
         return _refresh_failure_response(
+            secure=secure,
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token expired or revoked",
         )
@@ -678,8 +686,8 @@ async def refresh_session(request: Request, response: Response) -> RefreshOut | 
         display_name=getattr(user, "display_name", None),
         avatar_url=getattr(user, "avatar_url", None),
     )
-    _set_session_cookie(response, access_token, at_seconds)
-    _set_refresh_cookie(response, next_raw, _REFRESH_COOKIE_MAX_AGE)
+    _set_session_cookie(response, access_token, at_seconds, secure=secure)
+    _set_refresh_cookie(response, next_raw, _REFRESH_COOKIE_MAX_AGE, secure=secure)
     _set_no_store(response)
     return RefreshOut(expires_in=at_seconds)
 
@@ -786,7 +794,7 @@ async def password_login(
 
     user = await asyncio.to_thread(_resolve_password_user)
 
-    return await _issue_session(response, user, display_name=user.display_name or "Local User")
+    return await _issue_session(request, response, user, display_name=user.display_name or "Local User")
 
 
 class CLILoginRequest(BaseModel):

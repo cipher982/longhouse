@@ -842,8 +842,8 @@ async def accept_handoff_request(
             tenant_state=tenant_state,
         )
     redirect = RedirectResponse(normalize_local_return_to(return_to) or "/timeline", status_code=303)
-    _set_session_cookie(redirect, runtime_token, expires_in)
-    _set_refresh_cookie(redirect, refresh_token, refresh_cookie_max_age)
+    _set_session_cookie(redirect, runtime_token, expires_in, secure=cookie_secure)
+    _set_refresh_cookie(redirect, refresh_token, refresh_cookie_max_age, secure=cookie_secure)
     login_attempt_marker = request.cookies.get(tenant_login_attempt_cookie_name(secure=cookie_secure)) or "1"
     redirect.set_cookie(
         tenant_login_ready_cookie_name(secure=cookie_secure),

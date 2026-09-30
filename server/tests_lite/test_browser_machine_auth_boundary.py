@@ -16,7 +16,6 @@ os.environ.setdefault("TESTING", "1")
 import zerg.dependencies.agents_auth as agents_auth_deps
 import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import JWT_SECRET
-from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.database import Base
 from zerg.database import get_db

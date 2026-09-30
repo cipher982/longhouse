@@ -34,8 +34,12 @@ pytestmark = pytest.mark.timeout(60)
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
 from zerg.auth.hosted import TENANT_LOGIN_STATE_MAX_AGE
+from zerg.auth.hosted import cookie_secure_for_scheme
 from zerg.auth.hosted import hosted_cookie_origin_is_secure
 from zerg.auth.hosted import new_tenant_login_state
+from zerg.auth.hosted import refresh_cookie_name
+from zerg.auth.hosted import refresh_cookie_path
+from zerg.auth.hosted import session_cookie_name
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_login_cookie_name
 from zerg.auth.hosted import tenant_login_cookie_secret
@@ -119,6 +123,7 @@ def test_hosted_cookie_policy_never_downgrades_public_tenants(monkeypatch):
         app_public_url=None,
     )
 
+    assert cookie_secure_for_scheme("http", settings) is True
     assert tenant_cookie_secure(settings) is True
 
 
@@ -132,6 +137,7 @@ def test_hosted_cookie_policy_stays_secure_when_auth_disabled_is_misconfigured(m
         app_public_url=None,
     )
 
+    assert cookie_secure_for_scheme("http", settings) is True
     assert tenant_cookie_secure(settings) is True
 
 
@@ -155,25 +161,73 @@ def test_hosted_cookie_origin_rejects_private_http_host():
     assert hosted_cookie_origin_is_secure(settings) is False
 
 
-def test_self_host_http_cookie_policy_is_local_only(monkeypatch):
-    monkeypatch.delenv("LONGHOUSE_COOKIE_SECURE", raising=False)
-    local_settings = SimpleNamespace(
+def _self_host_settings(**overrides):
+    values = dict(
         auth_disabled=False,
         testing=False,
         control_plane_url=None,
-        public_site_url="http://127.0.0.1:8000",
+        public_site_url=None,
         app_public_url=None,
     )
-    public_settings = SimpleNamespace(
-        auth_disabled=False,
-        testing=False,
-        control_plane_url=None,
-        public_site_url="http://example.test",
-        app_public_url=None,
-    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
-    assert tenant_cookie_secure(local_settings) is False
-    assert tenant_cookie_secure(public_settings) is True
+
+@pytest.mark.parametrize(
+    ("scheme", "expected"),
+    [("http", False), ("ws", False), (None, False), ("https", True), ("wss", True), ("HTTPS", True)],
+)
+def test_self_host_cookie_secure_follows_request_scheme(monkeypatch, scheme, expected):
+    monkeypatch.delenv("LONGHOUSE_COOKIE_SECURE", raising=False)
+
+    assert cookie_secure_for_scheme(scheme, _self_host_settings()) is expected
+
+
+def test_self_host_cookie_secure_ignores_public_url_host_and_follows_scheme(monkeypatch):
+    # A LAN/Tailscale IP or an undeclared hostname over plain http must get a cookie the
+    # browser keeps; the old policy forced Secure for any non-private host.
+    monkeypatch.delenv("LONGHOUSE_COOKIE_SECURE", raising=False)
+
+    for public_url in ("http://192.168.64.1:18080", "http://100.64.1.2:8080", "http://example.test", "https://example.test"):
+        settings = _self_host_settings(public_site_url=public_url)
+        assert cookie_secure_for_scheme("http", settings) is False
+        assert cookie_secure_for_scheme("https", settings) is True
+
+
+def test_self_host_cookie_secure_can_be_forced_for_an_opaque_tls_proxy(monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_COOKIE_SECURE", "1")
+
+    assert cookie_secure_for_scheme("http", _self_host_settings()) is True
+
+
+def test_self_host_cookie_secure_zero_override_does_not_beat_https(monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_COOKIE_SECURE", "0")
+
+    assert cookie_secure_for_scheme("https", _self_host_settings()) is True
+    assert cookie_secure_for_scheme("http", _self_host_settings()) is False
+
+
+@pytest.mark.parametrize("scheme", ["http", "https", None])
+def test_hosted_cookie_secure_ignores_request_scheme(monkeypatch, scheme):
+    monkeypatch.setenv("LONGHOUSE_COOKIE_SECURE", "0")
+    settings = _self_host_settings(control_plane_url="https://control.longhouse.ai", auth_disabled=True, testing=True)
+
+    assert cookie_secure_for_scheme(scheme, settings) is True
+
+
+def test_cookie_names_pair_with_secure_flag():
+    # __Host- prefixed cookies are rejected by browsers without Secure and Path=/, so the
+    # prefix, the flag and the path must move together.
+    assert (session_cookie_name(True), refresh_cookie_name(True), refresh_cookie_path(True)) == (
+        "__Host-lh_session",
+        "__Host-lh_refresh",
+        "/",
+    )
+    assert (session_cookie_name(False), refresh_cookie_name(False), refresh_cookie_path(False)) == (
+        "longhouse_session",
+        "longhouse_refresh",
+        "/api/auth",
+    )
 
 
 def test_native_handoff_rate_limit_binds_untrusted_attempts_to_ip(monkeypatch):
@@ -573,8 +627,8 @@ async def test_accept_handoff_binds_web_code_to_tenant_cookie(monkeypatch, db_se
 
     assert redirect.status_code == 303
     assert redirect.headers["location"] == "/timeline"
-    assert any("longhouse_session=" in value for value in redirect.headers.getlist("set-cookie"))
-    assert any("longhouse_refresh=" in value for value in redirect.headers.getlist("set-cookie"))
+    assert any("__Host-lh_session=" in value and "Secure" in value for value in redirect.headers.getlist("set-cookie"))
+    assert any("__Host-lh_refresh=" in value and "Secure" in value for value in redirect.headers.getlist("set-cookie"))
     assert calls["control_plane_url"] == "https://control.longhouse.ai"
     assert calls["internal_api_secret"] == "secret"
     assert calls["code"] == "one-use-code"
@@ -1159,14 +1213,14 @@ async def test_hosted_browser_refresh_rotates_cp_session(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_browser._refresh_native_session_payload", refresh)
     response = Response()
 
-    result = await refresh_session(_cookie_request("longhouse_refresh=lhr_old"), response)
+    result = await refresh_session(_cookie_request("__Host-lh_refresh=lhr_old"), response)
 
     assert result.status_code == 200
     assert result.body == b'{"expires_in":3600,"token_type":"bearer"}'
     assert b"cp.next.jwt" not in result.body
     assert calls == {"settings": settings, "refresh_token": "lhr_old"}
-    assert any("longhouse_session=cp.next.jwt" in value for value in result.headers.getlist("set-cookie"))
-    assert any("longhouse_refresh=lhr_next" in value for value in result.headers.getlist("set-cookie"))
+    assert any("__Host-lh_session=cp.next.jwt" in value for value in result.headers.getlist("set-cookie"))
+    assert any("__Host-lh_refresh=lhr_next" in value for value in result.headers.getlist("set-cookie"))
     assert result.headers["cache-control"] == "no-store"
     assert result.headers["pragma"] == "no-cache"
     assert response.headers.get("set-cookie") is None
@@ -1185,11 +1239,11 @@ async def test_hosted_browser_refresh_rejection_clears_cookies(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_browser.get_settings", lambda: settings)
     monkeypatch.setattr("zerg.routers.auth_browser._refresh_native_session_payload", reject)
 
-    result = await refresh_session(_cookie_request("longhouse_refresh=lhr_old"), Response())
+    result = await refresh_session(_cookie_request("__Host-lh_refresh=lhr_old"), Response())
 
     assert result.status_code == 401
-    assert any("longhouse_session=" in value and "Max-Age=0" in value for value in result.headers.getlist("set-cookie"))
-    assert any("longhouse_refresh=" in value and "Max-Age=0" in value for value in result.headers.getlist("set-cookie"))
+    assert any("__Host-lh_session=" in value and "Max-Age=0" in value for value in result.headers.getlist("set-cookie"))
+    assert any("__Host-lh_refresh=" in value and "Max-Age=0" in value for value in result.headers.getlist("set-cookie"))
 
 
 @pytest.mark.asyncio
@@ -1207,7 +1261,7 @@ async def test_hosted_browser_refresh_preserves_cookies_when_cp_is_unavailable(m
     response = Response()
 
     with pytest.raises(HTTPException) as exc:
-        await refresh_session(_cookie_request("longhouse_refresh=lhr_old"), response)
+        await refresh_session(_cookie_request("__Host-lh_refresh=lhr_old"), response)
 
     assert exc.value.status_code == 503
     assert response.headers.get("set-cookie") is None
@@ -1228,10 +1282,10 @@ async def test_hosted_browser_logout_revokes_cp_session(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_browser._revoke_native_session_payload", revoke)
     response = Response()
 
-    await logout(_cookie_request("longhouse_refresh=lhr_old"), response)
+    await logout(_cookie_request("__Host-lh_refresh=lhr_old"), response)
 
     assert calls == {"settings": settings, "refresh_token": "lhr_old"}
-    assert any("longhouse_session=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
+    assert any("__Host-lh_session=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
     assert response.headers["cache-control"] == "no-store"
 
 
@@ -1248,7 +1302,7 @@ async def test_hosted_browser_logout_preserves_login_generation_marker(monkeypat
 
     await logout(
         _cookie_request(
-            "longhouse_refresh=lhr_old; "
+            "__Host-lh_refresh=lhr_old; "
             "__Host-lh_login_attempt=42; "
             "__Host-lh_login_ready=42; "
             "__Host-lh_login_1234567890123_abcdefabcdef=secret"
@@ -1276,12 +1330,12 @@ async def test_hosted_browser_logout_reports_cp_revocation_failure(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_browser._revoke_native_session_payload", unavailable)
 
     response = Response()
-    result = await logout(_cookie_request("longhouse_refresh=lhr_old"), response)
+    result = await logout(_cookie_request("__Host-lh_refresh=lhr_old"), response)
 
     assert result is None
     # Local logout is unconditional even when CP revocation is degraded.
-    assert any("longhouse_session=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
-    assert any("longhouse_refresh=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
+    assert any("__Host-lh_session=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
+    assert any("__Host-lh_refresh=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
 
 
 def test_account_wide_revoke_surfaces_authority_conflict(monkeypatch):
@@ -1333,12 +1387,12 @@ async def test_hosted_browser_account_wide_logout_clears_cookies_on_authority_co
     monkeypatch.setattr("zerg.routers.auth_browser._revoke_native_session_payload", rejected)
     response = Response()
 
-    await logout(_cookie_request("longhouse_refresh=lhr_old"), response, everywhere=True)
+    await logout(_cookie_request("__Host-lh_refresh=lhr_old"), response, everywhere=True)
 
     assert response.status_code == 409
     assert response.headers["x-longhouse-error-code"] == "revocation_not_authorized"
-    assert any("longhouse_session=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
-    assert any("longhouse_refresh=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
+    assert any("__Host-lh_session=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
+    assert any("__Host-lh_refresh=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
 
 
 @pytest.mark.asyncio
@@ -1349,7 +1403,7 @@ async def test_browser_auth_mutations_require_explicit_marker():
             "method": "POST",
             "path": "/api/auth/refresh",
             "headers": [
-                (b"cookie", b"longhouse_refresh=lhr_old"),
+                (b"cookie", b"__Host-lh_refresh=lhr_old"),
                 (b"origin", b"https://david010.longhouse.ai"),
                 (b"sec-fetch-site", b"same-origin"),
             ],
@@ -1371,7 +1425,7 @@ async def test_browser_auth_mutations_reject_cross_origin_even_with_marker():
             "method": "POST",
             "path": "/api/auth/refresh",
             "headers": [
-                (b"cookie", b"longhouse_refresh=lhr_old"),
+                (b"cookie", b"__Host-lh_refresh=lhr_old"),
                 (b"origin", b"https://attacker.example"),
                 (b"sec-fetch-site", b"cross-site"),
                 (b"x-longhouse-auth", b"1"),

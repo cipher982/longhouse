@@ -67,6 +67,30 @@ def _host_is_public(host: str) -> bool:
         return True
 
 
+def warn_plain_http_bind(host: str, public_url: str | None) -> None:
+    """Warn when the server is reachable off this machine without https in front.
+
+    Browser logins work over plain http (cookies are not ``Secure`` there), but the
+    password and session cookie then cross the network in the clear. Native clients
+    are stricter: ``normalize_zerg_url`` accepts plaintext http only for loopback.
+    """
+    if public_url and public_url.startswith("https://"):
+        return  # the operator declared TLS in front of this port
+    if not (_host_is_public(host) or (public_url and normalize_zerg_url(public_url) is None)):
+        return
+    typer.secho(
+        "  WARNING: plain http off this machine sends the password and session cookie unencrypted: "
+        "fine over Tailscale/WireGuard or a trusted LAN, otherwise put https in front "
+        "(Caddy, nginx, or `tailscale serve`).",
+        fg=typer.colors.YELLOW,
+    )
+    typer.secho(
+        "  Native `longhouse auth` accepts only https or loopback: longhouse auth --url https://<your-domain>",
+        fg=typer.colors.YELLOW,
+    )
+    typer.echo("")
+
+
 def _effective_auth_disabled() -> bool:
     """Return True when runtime auth will be OFF, mirroring config resolution.
 
@@ -750,17 +774,7 @@ def serve(
         typer.secho(f"    longhouse auth --url {public_url}", fg=typer.colors.BRIGHT_BLACK)
     typer.echo("")
 
-    # Plaintext http:// is only accepted for loopback (normalize_zerg_url is the
-    # same rule the native `longhouse auth` enforces): device tokens ride as a
-    # plain header and transcripts stream over the same socket, so a LAN or
-    # public http:// URL ships every secret in a transcript in the clear.
-    if _host_is_public(host) or (public_url and normalize_zerg_url(public_url) is None):
-        typer.secho("  This port is reachable off this machine, but Longhouse only accepts", fg=typer.colors.YELLOW)
-        typer.secho("  plaintext http:// over loopback — device tokens and transcripts must", fg=typer.colors.YELLOW)
-        typer.secho("  not cross a network unencrypted. Put TLS in front (Caddy, nginx, or", fg=typer.colors.YELLOW)
-        typer.secho("  `tailscale serve`) and connect other machines with:", fg=typer.colors.YELLOW)
-        typer.secho("    longhouse auth --url https://<your-domain>", fg=typer.colors.BRIGHT_BLACK)
-        typer.echo("")
+    warn_plain_http_bind(host, public_url)
 
     try:
         from zerg.cli.acquisition import emit_acquisition_event_once

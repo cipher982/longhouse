@@ -10,8 +10,9 @@ from typing import Optional
 
 import jwt
 from fastapi import Response
-from zerg.auth.hosted import tenant_cookie_secure
-from zerg.auth.strategy import SESSION_COOKIE_NAME
+from zerg.auth.hosted import refresh_cookie_name
+from zerg.auth.hosted import refresh_cookie_path
+from zerg.auth.hosted import session_cookie_name
 from zerg.auth.strategy import SESSION_TOKEN_KIND
 from zerg.config import get_settings
 
@@ -19,92 +20,88 @@ _settings = get_settings()
 
 JWT_SECRET = _settings.jwt_secret
 SESSION_COOKIE_PATH = "/"
-SESSION_COOKIE_SECURE = tenant_cookie_secure(_settings)
 
-# Refresh token cookie — host-only in secure deployments. In local/test
-# surfaces the legacy name/path remain valid because __Host- cookies require
-# HTTPS and Path=/.
-REFRESH_COOKIE_NAME = "__Host-lh_refresh" if SESSION_COOKIE_SECURE else "longhouse_refresh"
+# Cookie names and the ``Secure`` flag follow the request's scheme (see
+# ``zerg.auth.hosted.cookie_secure_for_scheme``), so every helper takes the
+# ``secure`` decision the caller made for its request.
 LEGACY_SESSION_COOKIE_NAME = "longhouse_session"
 LEGACY_REFRESH_COOKIE_NAME = "longhouse_refresh"
 
 
-def _clear_legacy_cookies(response: Response) -> None:
+def _clear_legacy_cookies(response: Response, *, secure: bool) -> None:
     """Retire pre-__Host cookies when a secure browser touches auth."""
-    if SESSION_COOKIE_NAME != LEGACY_SESSION_COOKIE_NAME:
-        response.delete_cookie(
-            key=LEGACY_SESSION_COOKIE_NAME,
-            path="/",
-            httponly=True,
-            secure=SESSION_COOKIE_SECURE,
-            samesite="lax",
-        )
-    if REFRESH_COOKIE_NAME != LEGACY_REFRESH_COOKIE_NAME:
-        response.delete_cookie(
-            key=LEGACY_REFRESH_COOKIE_NAME,
-            path="/api/auth",
-            httponly=True,
-            secure=SESSION_COOKIE_SECURE,
-            samesite="lax",
-        )
+    if not secure:
+        return  # the bare names are the live ones
+    response.delete_cookie(
+        key=LEGACY_SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key=LEGACY_REFRESH_COOKIE_NAME,
+        path="/api/auth",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
 
-
-REFRESH_COOKIE_PATH = "/" if SESSION_COOKIE_SECURE else "/api/auth"
 
 # Access token lifetime — kept short; refresh tokens handle longevity.
 ACCESS_TOKEN_LIFETIME = timedelta(minutes=10)
 
 
-def _set_session_cookie(response: Response, token: str, max_age: int) -> None:
+def _set_session_cookie(response: Response, token: str, max_age: int, *, secure: bool) -> None:
     """Set the browser session cookie with the standard Longhouse flags."""
     response.set_cookie(
-        key=SESSION_COOKIE_NAME,
+        key=session_cookie_name(secure),
         value=token,
         max_age=max_age,
         path=SESSION_COOKIE_PATH,
         httponly=True,
-        secure=SESSION_COOKIE_SECURE,
+        secure=secure,
         samesite="lax",
     )
-    _clear_legacy_cookies(response)
+    _clear_legacy_cookies(response, secure=secure)
 
 
-def _clear_session_cookie(response: Response) -> None:
+def _clear_session_cookie(response: Response, *, secure: bool) -> None:
     """Clear the browser session cookie."""
     response.delete_cookie(
-        key=SESSION_COOKIE_NAME,
+        key=session_cookie_name(secure),
         path=SESSION_COOKIE_PATH,
         httponly=True,
-        secure=SESSION_COOKIE_SECURE,
+        secure=secure,
         samesite="lax",
     )
-    _clear_legacy_cookies(response)
+    _clear_legacy_cookies(response, secure=secure)
 
 
-def _set_refresh_cookie(response: Response, token: str, max_age: int) -> None:
-    """Set the refresh token cookie (scoped to /api/auth only)."""
+def _set_refresh_cookie(response: Response, token: str, max_age: int, *, secure: bool) -> None:
+    """Set the refresh token cookie (scoped to /api/auth unless ``__Host-`` forces ``/``)."""
     response.set_cookie(
-        key=REFRESH_COOKIE_NAME,
+        key=refresh_cookie_name(secure),
         value=token,
         max_age=max_age,
-        path=REFRESH_COOKIE_PATH,
+        path=refresh_cookie_path(secure),
         httponly=True,
-        secure=SESSION_COOKIE_SECURE,
+        secure=secure,
         samesite="lax",
     )
-    _clear_legacy_cookies(response)
+    _clear_legacy_cookies(response, secure=secure)
 
 
-def _clear_refresh_cookie(response: Response) -> None:
+def _clear_refresh_cookie(response: Response, *, secure: bool) -> None:
     """Clear the refresh token cookie."""
     response.delete_cookie(
-        key=REFRESH_COOKIE_NAME,
-        path=REFRESH_COOKIE_PATH,
+        key=refresh_cookie_name(secure),
+        path=refresh_cookie_path(secure),
         httponly=True,
-        secure=SESSION_COOKIE_SECURE,
+        secure=secure,
         samesite="lax",
     )
-    _clear_legacy_cookies(response)
+    _clear_legacy_cookies(response, secure=secure)
 
 
 def _issue_access_token(
@@ -142,9 +139,6 @@ def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
 __all__ = [
     "ACCESS_TOKEN_LIFETIME",
     "JWT_SECRET",
-    "REFRESH_COOKIE_NAME",
-    "REFRESH_COOKIE_PATH",
-    "SESSION_COOKIE_NAME",
     "SESSION_TOKEN_KIND",
     "_clear_refresh_cookie",
     "_clear_session_cookie",

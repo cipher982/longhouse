@@ -26,7 +26,7 @@ import zerg.routers.timeline as timeline_router
 from tests_lite.live_catalog_harness import LiveCatalog
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
-from zerg.auth.session_tokens import SESSION_COOKIE_NAME
+from zerg.auth.hosted import session_cookie_name
 from zerg.auth.session_tokens import SESSION_TOKEN_KIND
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.catalogd.schema import create_catalog_engine
@@ -67,7 +67,7 @@ def _restore_api_app_dependency_overrides():
 
 
 def _set_browser_cookie(client: TestClient, catalog: LiveCatalog, *, owner_id: int) -> None:
-    client.cookies.set(SESSION_COOKIE_NAME, catalog.browser_cookie(owner_id=owner_id, email=OWNER_EMAIL))
+    client.cookies.set(session_cookie_name(False), catalog.browser_cookie(owner_id=owner_id, email=OWNER_EMAIL))
 
 
 def _seed_catalog_session(*, device_id: str, cwd: str, git_repo: str | None) -> None:
@@ -488,7 +488,7 @@ def test_agents_sessions_reject_browser_cookie_without_agents_token(tmp_path):
 
     try:
         with _force_browser_jwt_mode(), _force_agents_token_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            client.cookies.set(session_cookie_name(False), _issue_session_cookie())
             response = client.get("/agents/sessions")
 
         assert response.status_code == 401

@@ -31,7 +31,8 @@ from zerg.auth.cp_jwks import CPAuthorityUnavailable
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.cp_jwks import CPTokenError
 from zerg.auth.cp_jwks import verify_runtime_token
-from zerg.auth.hosted import tenant_cookie_secure
+from zerg.auth.hosted import request_cookie_secure
+from zerg.auth.hosted import session_cookie_name
 from zerg.config import get_settings
 from zerg.config import normalize_instance_id
 from zerg.crud import count_users
@@ -40,16 +41,21 @@ from zerg.crud import get_user
 from zerg.crud import get_user_by_email
 from zerg.utils.time import utc_now_naive
 
-# Host-only cookies cannot be injected by a sibling subdomain. Keep the
-# unprefixed names only for insecure local/test surfaces where __Host- cookies
-# would be rejected by the browser.
-_COOKIE_SECURE = tenant_cookie_secure(get_settings())
-SESSION_COOKIE_NAME = "__Host-lh_session" if _COOKIE_SECURE else "longhouse_session"
 # ``typ`` stamped on browser session JWTs. Managed-session (``zst_``) tokens are
 # signed with the same ``JWT_SECRET``, so browser auth must require this claim
 # instead of accepting any HS256 token that carries a ``sub``.
 SESSION_TOKEN_KIND = "session"
 logger = logging.getLogger(__name__)
+
+
+def request_session_cookie(connection, settings=None) -> str | None:
+    """Read the browser session cookie under the name this request's scheme would have set.
+
+    Host-only ``__Host-`` names need ``Secure`` and so only exist over https;
+    plain http (a LAN or Tailscale IP) uses the bare name.
+    """
+    return connection.cookies.get(session_cookie_name(request_cookie_secure(connection, settings)))
+
 
 # ---------------------------------------------------------------------------
 # Strategy base-class
@@ -267,7 +273,7 @@ class JWTAuthStrategy(AuthStrategy):
                 return None
             token = token.strip()
             return token or None
-        return request.cookies.get(SESSION_COOKIE_NAME)
+        return request_session_cookie(request)
 
     # Public API --------------------------------------------------------
 
@@ -360,7 +366,7 @@ class HostedCPAuthStrategy(AuthStrategy):
                 return None
             token = token.strip()
             return token or None
-        return request.cookies.get(SESSION_COOKIE_NAME)
+        return request_session_cookie(request, self._settings)
 
     def _resolve_claims_user(self, db: Session, claims: CPTokenClaims):
         from zerg.models.models import User
