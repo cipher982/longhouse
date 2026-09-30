@@ -54,9 +54,9 @@ function buildBackgroundInspector(
   if (!delegation || !delegation.observed_at) return null;
   const state = delegationEvidenceIsLive(delegation, nowMs) ? delegation.state : "unknown";
   const tasks: SessionBackgroundTask[] = [];
-  if (state !== "unknown") {
+  if (state !== "unknown" || (delegation.recent_items?.length ?? 0) > 0) {
     for (let section = 0; section < 2; section++) {
-      const rows = section === 0 ? delegation.items : delegation.recent_items;
+      const rows = section === 0 ? (state === "unknown" ? [] : delegation.items) : delegation.recent_items;
       for (const task of rows ?? []) {
         const sessionId = task.session_id?.trim() || null;
         const toolCalls = sessionId && typeof task.tool_calls === "number" &&

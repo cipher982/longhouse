@@ -1064,3 +1064,46 @@ def test_terminal_jobs_remain_visible_without_claiming_active_membership(live_ca
     assert terminal["status"] == "failed"
     assert terminal["session_id"] is None
     assert datetime.fromisoformat(terminal["ended_at"].replace("Z", "+00:00")) == observed - timedelta(seconds=1)
+    expired = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed + timedelta(seconds=1),
+        dedupe_key="expired-terminal-observation",
+        items=[],
+        freshness_ms=1,
+    )
+    expired.update(kind="delegation_signal", phase=None)
+    expired["payload"]["delegation"]["recent_items"] = event["payload"]["delegation"]["recent_items"]
+    _post_event(live_catalog_client, token=token, event=expired)
+    old = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert old["delegation"]["state"] == "unknown"
+    assert old["delegation"]["recent_items"][0]["status"] == "failed"
+    assert old["activity"] == before["activity"]
+
+
+def test_bad_recent_history_does_not_discard_a_valid_active_observation(live_catalog, live_catalog_client):
+    email = "delegation-recent-isolation@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=10)
+    event = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed,
+        dedupe_key="valid-active-with-bad-history",
+        items=[_task("active-worker", "subagent", "running", "Current provider work")],
+    )
+    event.update(kind="delegation_signal", phase=None)
+    event["payload"]["delegation"]["recent_items"] = [
+        {"id": "done-job", "kind": "shell", "status": "completed", "ended_at": observed.isoformat()},
+        {"id": "bad-job", "kind": "shell", "status": "failed", "ended_at": "not-a-date"},
+    ]
+    _post_event(live_catalog_client, token=token, event=event)
+    served = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert served["delegation"]["count"] == 1
+    assert served["delegation"]["kinds"] == {"subagent": 1}
+    assert [item["id"] for item in served["delegation"]["items"]] == ["active-worker"]
+    assert [item["id"] for item in served["delegation"]["recent_items"]] == ["done-job"]

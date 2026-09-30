@@ -941,6 +941,7 @@ def _project_delegation(
             # Retain the last explicit empty registry for presentation only;
             # unknown still forbids treating it as a current no-work claim.
             items=[] if value.get("items") == [] else None,
+            recent_items=[_project_delegation_task(item, children) for item in value.get("recent_items") or []],
             source=source,
             observed_at=observed_at,
             valid_until=valid_until,

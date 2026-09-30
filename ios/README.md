@@ -12,6 +12,11 @@ Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
   `web/src/embeds/ios-transcript/` by `make generate-ios-transcript`.
 - `Sources/Shared/Generated/` is written by generators; never edit it.
 
+Background task details distinguish active membership from reported terminal
+history. Expired active evidence becomes unknown without erasing a provider's
+recorded completion, failure, cancellation, or abort. Native progress counters
+remain separate from counters derived from the archived child transcript.
+
 Test: `make test-ios`. Previews: `make ios-previews`. Renderer benchmark:
 `make benchmark-ios-transcript`.
 For a focused bench run, `make ios-unit TEST=LonghouseIOSTests/SessionModelsTests`

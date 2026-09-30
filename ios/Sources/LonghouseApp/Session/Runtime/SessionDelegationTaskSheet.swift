@@ -96,13 +96,13 @@ struct SessionDelegationTaskSheet: View {
             } else {
                 aggregateOnlyState(facts)
             }
-            if let recent = facts.recentItems, !recent.isEmpty {
-                Text("Recently finished")
-                    .font(.headline)
-                taskGroups(recent)
-            }
         } else {
             unknownState
+        }
+        if let recent = facts?.recentItems, !recent.isEmpty {
+            Text("Reported terminal history")
+                .font(.headline)
+            taskGroups(recent)
         }
     }
 
@@ -141,7 +141,7 @@ struct SessionDelegationTaskSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Background work status unknown", systemImage: "questionmark.circle")
                 .font(.headline)
-            Text("The provider's background-work evidence is missing or expired. No task is treated as completed.")
+            Text("The provider's active-work evidence is missing or expired. No current membership is inferred from its absence.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

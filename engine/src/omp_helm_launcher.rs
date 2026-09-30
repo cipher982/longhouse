@@ -1632,7 +1632,7 @@ impl OmpHelmServer {
                 recent_items.push(item);
             }
         }
-        if items.len() > 256 {
+        if items.len() > 256 || recent_items.len() > 256 {
             return;
         }
         let snapshot = json!({

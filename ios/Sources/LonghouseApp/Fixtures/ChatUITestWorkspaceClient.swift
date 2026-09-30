@@ -502,6 +502,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Background Tasks (sheet)"
         case "background-tasks-recent-sheet":
             return "Background Tasks (empty) (recent)"
+        case "background-tasks-recent-stale-sheet":
+            return "Background Tasks (stale) (recent)"
         case "background-tasks-timeline":
             return "Background Tasks (timeline)"
         case "background-tasks-attention":
@@ -688,7 +690,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 observedAt: observedAt,
                 validUntil: validUntil,
                 items: positiveExpired || unobservedUnknown ? nil : tasks,
-                recentItems: serverUnknown ? nil : [
+                recentItems: !title.contains("(recent)") ? nil : [
                     SessionDelegationTask(
                         id: "finished-command", kind: "shell", status: "failed",
                         description: "Completed provider command", firstObservedAt: Self.fixedTimestamp(offset: -20),
