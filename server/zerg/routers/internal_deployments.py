@@ -62,7 +62,7 @@ class ReadConsistencyResponse(BaseModel):
 
 def _require_internal_token(token: str | None) -> None:
     expected = str(get_settings().internal_api_secret or "")
-    if not token or not expected or not hmac.compare_digest(token, expected):
+    if not token or not expected or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="internal authentication required")
 
 

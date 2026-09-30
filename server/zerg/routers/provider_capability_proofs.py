@@ -95,7 +95,7 @@ def _verify_factory_token(request: Request) -> None:
         # ordinary public or self-hosted Runtime Host contract.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     presented = request.headers.get("X-Provider-Capability-Factory-Token")
-    if not presented or not hmac.compare_digest(presented, expected):
+    if not presented or not hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Provider capability factory access denied")
 
 

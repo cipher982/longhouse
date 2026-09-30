@@ -427,6 +427,20 @@ def test_device_or_wrong_factory_token_cannot_publish(monkeypatch, tmp_path: Pat
     assert wrong_factory.status_code == 403
 
 
+def test_non_ascii_factory_token_is_403_not_a_server_error(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    try:
+        response = client.post(
+            "/api/internal/provider-capability-proofs",
+            headers={"X-Provider-Capability-Factory-Token": "caf\u00e9".encode("latin-1")},
+            json=_bundle(_record()),
+        )
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+
+
 def test_machine_read_requires_agents_auth(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, tmp_path)
 

@@ -386,7 +386,7 @@ async def service_login(request: Request, response: Response) -> TokenOut:
     expected = settings.smoke_test_secret or ""
     run_id = (request.headers.get("X-Smoke-Run-Id") or "").strip()
 
-    if not expected or not hmac.compare_digest(secret, expected):
+    if not expected or not hmac.compare_digest(secret.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     email = "smoke@service.local"

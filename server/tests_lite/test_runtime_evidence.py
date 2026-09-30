@@ -72,6 +72,13 @@ def test_schema_observation_does_not_authorize_candidate(evidence_runtime):
     runtime.mark_candidate_consistent(attempt_id="owned-attempt")
 
 
+def test_non_ascii_internal_token_is_401_not_a_server_error(evidence_runtime):
+    client, _runtime, _ping = evidence_runtime
+    # A non-ASCII header value reaches the app as latin-1 text; compare_digest on str raises TypeError for it.
+    response = client.get("/internal/deployments/evidence", headers={"X-Internal-Token": "caf\u00e9".encode("latin-1")})
+    assert response.status_code == 401
+
+
 def test_unknown_catalog_schema_is_not_ready(evidence_runtime):
     client, runtime, ping = evidence_runtime
     ping.pop("schema_version")

@@ -218,3 +218,17 @@ def test_password_login_routes_refresh_session_write_through_serializer(tmp_path
     assert len(refresh_calls) == 1
     assert refresh_calls[0]["user_id"] == 1
     assert len(refresh_calls[0]["token_hash"]) == 64
+
+
+def test_service_login_non_ascii_secret_is_403_not_a_server_error(tmp_path):
+    """A non-ASCII header value is text to compare_digest(str, str), which raises; it must be a refusal."""
+    sf = _make_db(tmp_path)
+    settings = SimpleNamespace(control_plane_url=None, smoke_test_secret="smoke-secret", testing=False)
+
+    with patch("zerg.routers.auth_browser.get_settings", return_value=settings):
+        for client in _get_client(sf):
+            resp = client.post(
+                "/auth/service-login",
+                headers={"X-Service-Secret": "café".encode("latin-1"), "X-Smoke-Run-Id": "run-1"},
+            )
+    assert resp.status_code == 403
