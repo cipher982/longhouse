@@ -105,7 +105,7 @@ def parse_media_url_token(
         expected = _signature(_b64url_decode(payload).decode("utf-8"))
     except (MediaUrlTokenError, UnicodeDecodeError, ValueError):
         return None
-    if not hmac.compare_digest(signature, expected):
+    if not hmac.compare_digest(signature.encode("utf-8"), expected.encode("utf-8")):
         return None
     try:
         version, raw_owner_id, raw_expires, bound_hash = _b64url_decode(payload).decode("utf-8").split(".", 3)

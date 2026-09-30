@@ -104,7 +104,7 @@ def parse_share_token(token: str) -> int:
         raise SessionShareNotFound() from exc
 
     expected = _token_signature(payload)
-    if not hmac.compare_digest(signature, expected):
+    if not hmac.compare_digest(signature.encode("utf-8"), expected.encode("utf-8")):
         raise SessionShareNotFound()
 
     try:
