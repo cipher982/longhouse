@@ -248,6 +248,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
   ${LSUIELEMENT_XML}
   <key>LSMultipleInstancesProhibited</key>
   <true/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Longhouse opens Terminal so you can sign in and connect this Mac.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSPrincipalClass</key>

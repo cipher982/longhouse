@@ -70,12 +70,14 @@ if [[ -z "$MODE" ]]; then
   fi
 fi
 
+ENTITLEMENTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/Longhouse.entitlements"
+
 case "$MODE" in
   adhoc)
-    SIGN_ARGS=(--force --sign "$IDENTITY")
+    SIGN_ARGS=(--force --entitlements "$ENTITLEMENTS" --sign "$IDENTITY")
     ;;
   developer-id)
-    SIGN_ARGS=(--force --options runtime --timestamp --sign "$IDENTITY")
+    SIGN_ARGS=(--force --options runtime --entitlements "$ENTITLEMENTS" --timestamp --sign "$IDENTITY")
     ;;
   *)
     echo "--mode must be adhoc or developer-id" >&2
@@ -89,6 +91,12 @@ done
 
 codesign "${SIGN_ARGS[@]}" "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+# The entitlement is what lets the app's sign-in button open Terminal; refuse a bundle without it.
+if ! codesign -d --entitlements - "$APP_PATH" 2>/dev/null | grep -q "com.apple.security.automation.apple-events"; then
+  echo "Signed bundle is missing the apple-events entitlement: ${APP_PATH}" >&2
+  exit 1
+fi
 
 if [[ "$MODE" == "developer-id" ]]; then
   spctl --assess --type execute -vv "$APP_PATH" || true

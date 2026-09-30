@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- "Sign in to connect this Mac" opens Terminal with an Apple Event (`tell application
+       "Terminal" to do script`). A hardened-runtime app without this entitlement has that
+       event refused outright: no consent prompt, just "Sign-in could not open". Cold-install
+       proof, macOS 26.6.2 VM, v0.1.60. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>

@@ -120,6 +120,9 @@ assert plist["CFBundleName"] == "Longhouse"
 assert plist["CFBundleExecutable"] == "Longhouse"
 assert plist["CFBundleIdentifier"] == "ai.longhouse.app"
 assert plist["LSUIElement"] is True
+# The sign-in button opens Terminal with an Apple Event; macOS shows its consent prompt only
+# with a usage description (macos-sign-app.sh refuses a bundle without the entitlement).
+assert plist["NSAppleEventsUsageDescription"].strip()
 
 with zipfile.ZipFile(archive_path) as archive:
     names = set(archive.namelist())
