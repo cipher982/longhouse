@@ -36,7 +36,7 @@ export default function PrivacyPage() {
         <p className="info-page-subtitle">
           How we handle your data.
         </p>
-        <p className="info-page-updated">Last updated: August 25, 2026</p>
+        <p className="info-page-updated">Last updated: September 30, 2026</p>
 
         <div className="legal-content">
           <p>
@@ -67,6 +67,27 @@ export default function PrivacyPage() {
           <h3>Integration Credentials</h3>
           <p>
             When you connect integrations, your credentials are stored encrypted.
+          </p>
+
+          <h3>Install Pings</h3>
+          <p>
+            The installer, the first start of <code>longhouse-server</code>, and updates send one
+            small anonymous ping to control.longhouse.ai: a random install id, operating system,
+            CPU architecture, Longhouse version, and how it was installed. No prompts, paths,
+            secrets or session content. Set <code>LONGHOUSE_TELEMETRY=0</code> or{" "}
+            <code>DO_NOT_TRACK=1</code> to turn it off; it is already off in CI.
+          </p>
+
+          <h3>Alpha Testers</h3>
+          <p>
+            If you were invited as a tester and agreed on the launch screen, your hosted instance
+            keeps counts and dates that the person running the alpha can read: when your first
+            machine connected, how many sessions came from each provider and when the first one
+            arrived, when you first searched, opened your instance from the iPhone app, and sent
+            an instruction to an agent, and which days you used it. Never transcripts, prompts,
+            file names, search text or code. Nothing is pushed anywhere: the control plane asks
+            your instance. Tell us to stop and we delete the instance and everything in it. A
+            self-hosted instance records none of this.
           </p>
 
           <h2>What We Don't Do</h2>

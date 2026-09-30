@@ -128,6 +128,7 @@ from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.health import router as health_router
 from zerg.routers.heartbeat import router as heartbeat_router
 from zerg.routers.internal_deployments import router as internal_deployments_router
+from zerg.routers.internal_funnel import router as internal_funnel_router
 from zerg.routers.machine_sign_in import router as machine_sign_in_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
@@ -351,6 +352,7 @@ api_app.include_router(health_router)
 app.include_router(metrics_router)
 
 api_app.include_router(internal_deployments_router)
+api_app.include_router(internal_funnel_router)
 app.mount("/api", api_app)
 
 # ---------------------------------------------------------------------------

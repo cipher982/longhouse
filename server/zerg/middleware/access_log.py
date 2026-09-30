@@ -5,6 +5,10 @@ everything useful. This records one line per real request so an incident can
 answer who read what, from where, and when. Request bodies, headers, cookies,
 query strings, and transcript content are never logged, and path segments that
 are themselves bearer credentials are redacted (see ``_CREDENTIAL_ROUTES``).
+
+The same finished-request seam also feeds services/funnel_facts.py, which is off
+unless a consenting tester's control plane turned it on; it keeps counts and
+dates only and logs nothing.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from starlette.types import Message
 from starlette.types import Receive
 from starlette.types import Scope
 from starlette.types import Send
+from zerg.services.funnel_facts import observe_request as observe_funnel_request
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +175,7 @@ class AccessLogMiddleware:
         try:
             await self.app(scope, receive, send_with_status)
         finally:
+            observe_funnel_request(scope, status_code)
             logger.info(
                 "%s %s %s",
                 scope.get("method", "-"),

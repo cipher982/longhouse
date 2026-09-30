@@ -108,6 +108,7 @@ _SAFE_RETRY_METHODS = {
     "storage.session.render_generation.restore.v2",
     "storage.session.timeline.list.v2",
     "storage.health.v2",
+    "tenant.funnel.facts.read.v2",
     "storage.telemetry.summary.v2",
     "storage.session.raw_manifest.v2",
     "storage.session.raw_neighborhood.v2",

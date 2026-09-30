@@ -11827,6 +11827,58 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def read_tenant_funnel_facts(self, *, owner_id: str) -> dict[str, Any]:
+        """Return the catalog half of a tester's funnel: machines and sessions per provider.
+
+        Counts and first-arrival times only (docs/specs/first-users-gtm.md, Phase 0).
+        "Shipped" is the catalog's own ingest time (`created_at`), not the
+        provider's transcript start, so an imported year of history reads as
+        arriving when it was imported. System-hidden work (automation, test,
+        subagents) is excluded the way the timeline excludes it.
+        """
+
+        sessions = StorageSession.__table__
+        tombstones = LiveSessionTombstone.__table__
+        tokens = LiveDeviceToken.__table__
+        visible = and_(
+            sessions.c.owner_id == owner_id,
+            sessions.c.user_state != "deleted",
+            ~select(tombstones.c.session_id).where(tombstones.c.session_id == sessions.c.session_id).exists(),
+            ~effective_system_hidden_clause(
+                sessions,
+                include_test=False,
+                worker_only_evidence=primary_worker_only_clause(sessions, LiveSessionThread.__table__),
+            ),
+        )
+        with _read_snapshot(self.engine) as connection:
+            provider_rows = connection.execute(
+                select(sessions.c.provider, func.count(sessions.c.session_id), func.min(sessions.c.created_at))
+                .where(visible)
+                .group_by(sessions.c.provider)
+                .order_by(sessions.c.provider)
+            ).all()
+            device_count, first_created_at, last_used_at = connection.execute(
+                select(func.count(tokens.c.id), func.min(tokens.c.created_at), func.max(tokens.c.last_used_at)).where(
+                    tokens.c.owner_id == int(owner_id)
+                )
+            ).one()
+            return {
+                "providers": [
+                    {
+                        "provider": str(provider),
+                        "sessions": int(count or 0),
+                        "first_shipped_at": _encode_datetime(first_shipped_at),
+                    }
+                    for provider, count, first_shipped_at in provider_rows
+                ],
+                "devices": {
+                    "count": int(device_count or 0),
+                    "first_created_at": _encode_datetime(first_created_at),
+                    "last_used_at": _encode_datetime(last_used_at),
+                },
+                "observed_at": datetime.now(UTC).isoformat(),
+            }
+
     def read_storage_telemetry_summary(self) -> dict[str, Any]:
         """Return O(1) transactional storage and projector counters."""
 
