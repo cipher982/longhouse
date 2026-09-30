@@ -1,0 +1,127 @@
+# Import edges that cross the verifier/subject boundary today, each with the reason it exists.
+# Format: `importer -> imported  # reason`. Checked by scripts/ci/verifier_boundary.py (make validate).
+#
+# This list is a ratchet and only shrinks:
+#   * a new crossing import fails the check, and adding a line here is not a fix (with --base REV
+#     the check also fails on any entry the base did not carry; CI passes the previous main tip);
+#   * a line whose import is gone fails the check: delete it in the commit that removes the import.
+#
+# The sides are defined in the script: verifier = server/zerg/qa/** plus the canary script,
+# neutral = server/zerg/provider_contract/** (none yet), subject = the rest of server/zerg/.
+# Seeded from main at 018eca869. Design: control-plane docs/specs/provider-factory-findings-loop.md,
+# 3.2 and 3.3a.
+
+server/zerg/cli/provider_live.py -> server/zerg/qa/provider_live_canary.py  # subject CLI wraps the live canary; move the wrapper into the verifier or drop it
+server/zerg/cli/provider_live.py -> server/zerg/qa/provider_live_proof_publish.py  # subject CLI wraps the live canary; move the wrapper into the verifier or drop it
+server/zerg/qa/antigravity_hook_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/antigravity_launch_hook_inbox.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/claude_real_print_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/claude_turn_start_real_print.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/codex_helm_interrupt.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/codex_helm_interrupt.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/codex_helm_interrupt.py -> server/zerg/services/provider_capability_proof_store.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/codex_helm_launch_visibility.py -> server/zerg/services/internal_sessions.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/codex_tool_call_result.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/codex_tool_call_result.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/codex_tool_call_result.py -> server/zerg/services/provider_capability_proof_store.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/conversation_reset.py -> server/zerg/services/longhouse_paths.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/conversation_reset_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/cursor_helm_product_e2e.py -> server/zerg/services/longhouse_paths.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/e2e_app.py -> server/zerg/config/__init__.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/e2e_app.py -> server/zerg/main.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/harness_catalog.py -> server/zerg/catalogd/client.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/harness_catalog.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/harness_catalog.py -> server/zerg/catalogd/server.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/harness_catalog.py -> server/zerg/models/live_store.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/harness_catalog.py -> server/zerg/services/catalogd_supervisor.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/omp_console_producer.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/omp_console_producer.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/omp_helm_lifecycle.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/omp_helm_lifecycle.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/opencode_server_contract_producer.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/opencode_server_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/pi_console_tool_producer.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/pi_helm_lifecycle.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/pi_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/product_console_lifecycle.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/product_console_lifecycle.py -> server/zerg/catalogd/store.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/product_console_lifecycle.py -> server/zerg/models/live_store.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/product_console_lifecycle.py -> server/zerg/services/live_catalog_timeline.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/product_console_lifecycle.py -> server/zerg/services/session_runtime.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/auth/managed_session_tokens.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/database.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/models/agents.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/routers/permission_gate.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/routers/session_chat.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/services/claude_channel_bridge.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_adapters/claude.py -> server/zerg/services/shipper/hooks.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_adapters/codex.py -> server/zerg/database.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/codex.py -> server/zerg/models/agents.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/codex.py -> server/zerg/services/managed_local_control.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/codex.py -> server/zerg/services/managed_local_transport.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_adapters/codex.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_adapters/codex.py -> server/zerg/session_execution_home.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_adapters/omp.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_capability_proof_publish.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_capability_proof_publish.py -> server/zerg/services/provider_capability_proof_store.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_console_lifecycle.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/mcp_server/server.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/provider_cli_contract.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/longhouse_paths.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/provider_capability_local_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/provider_capability_proof_store.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_coordination_scenarios.py -> server/zerg/services/shipper/hooks.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_factory_model.py -> server/zerg/services/provider_capability_schema.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_harness_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_interaction_probe.py -> server/zerg/provider_cli_contract.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_interaction_probe.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_interaction_semantics.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_interaction_semantics.py -> server/zerg/services/provider_interaction_semantics.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_launch_oracles.py -> server/zerg/services/internal_sessions.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_live_canary.py -> server/zerg/provider_live_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_live_canary.py -> server/zerg/services/antigravity_hook_inbox.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_live_canary.py -> server/zerg/services/longhouse_paths.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_live_canary.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_live_proof_publish.py -> server/zerg/provider_live_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_live_proof_publish.py -> server/zerg/services/longhouse_paths.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/provider_release_identity.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_release_identity.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_release_identity.py -> server/zerg/services/provider_capability_proof_store.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_release_schedule.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_resume_factory.py -> server/zerg/catalogd/client.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_resume_factory.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_resume_factory.py -> server/zerg/catalogd/server.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_resume_factory.py -> server/zerg/models/live_store.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/provider_resume_factory.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_semantic_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/provider_semantic_qualification.py -> server/zerg/services/provider_capability_proof_store.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/repo_root.py -> server/zerg/services/longhouse_paths.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/runtime_host_canary_isolation.py -> server/zerg/services/session_title.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/runtime_host_canary_isolation.py -> server/zerg/services/session_visibility_policy.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/title_dependency_oracles.py -> server/zerg/catalogd/models.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/title_dependency_oracles.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/title_dependency_oracles.py -> server/zerg/services/factory_assurance_title_binding.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/title_dependency_oracles.py -> server/zerg/services/internal_sessions.py  # shared runtime helper (paths, hooks, session identity); neutral module or black-box call
+server/zerg/qa/title_dependency_oracles.py -> server/zerg/storage_v2/contracts.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/catalogd/fact_reducer.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/catalogd/store.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/database.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/models/agents.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/models/live_store.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/provider_cli_contract.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/agents/kernel_capabilities.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/agents/kernel_writes.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/managed_local_control.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/managed_provider_contracts.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/provider_action_coverage.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_pause_requests.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_runtime.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_state_contract.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_state_facts_projector.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/tool_presentation.py  # drives subject runtime internals in-process; replace with the served API or CLI
+server/zerg/qa/universal_agent_harness.py -> server/zerg/services/tool_translation_evaluator.py  # drives subject runtime internals in-process; replace with the served API or CLI

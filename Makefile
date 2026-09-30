@@ -60,6 +60,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-format validate-legacy-nouns
 .PHONY: validate-review-gate
+.PHONY: validate-verifier-boundary
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
 .PHONY: test-provider-contract test-isolation
 .PHONY: affected-check
@@ -750,6 +751,7 @@ dogfood-check: ## Show installed local runtime status + local health
 VALIDATE_MEMBERS := \
 	validate-codemap \
 	validate-review-gate \
+	validate-verifier-boundary \
 	validate-provider-cli-canaries \
 	validate-ops-scripts \
 	validate-sdk \
@@ -819,6 +821,14 @@ validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 
 validate-review-gate: ## @internal Review gate tests (the landing rule itself runs on the host: check-push-readiness, ship.sh)
 	@python3 scripts/tests/review-gate.test.py
+
+# The verifier (server/zerg/qa/**, the canary) and the subject import nothing from each other outside the
+# shrink-only allowlist. The guest has no git history, so "the allowlist did not grow" (--base) is checked
+# outside it: by check-push-readiness on the host and by a step in contract-first CI.
+# Design: control-plane specs/provider-factory-findings-loop.md 3.3a.
+validate-verifier-boundary: ## @internal Verifier/subject import boundary and its shrink-only allowlist
+	@python3 scripts/tests/verifier-boundary.test.py
+	@python3 scripts/ci/verifier_boundary.py check
 
 validate-affected-check: ## @internal Affected-path glob and dirty-tree contract
 	@cd server && uv run --no-sync python ../scripts/tests/affected.test.py

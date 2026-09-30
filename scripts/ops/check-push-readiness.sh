@@ -21,6 +21,10 @@ remote="${PUSH_READINESS_REMOTE:-origin}"
 git fetch --quiet "$remote" main 2>/dev/null || true
 python3 "$(dirname "${BASH_SOURCE[0]}")/review_gate.py" push --base "$remote/main" || exit 1
 
+# The verifier/subject import allowlist only shrinks: no new crossing import, no new entry
+# (scripts/ci/verifier_boundary.py; control-plane spec provider-factory-findings-loop.md 3.3a).
+python3 "$(dirname "${BASH_SOURCE[0]}")/../ci/verifier_boundary.py" check --base "$remote/main" || exit 1
+
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 
 # Only main is shared+contended. Topic branches are owned by one worktree.
