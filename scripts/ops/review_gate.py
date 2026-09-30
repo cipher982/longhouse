@@ -300,7 +300,11 @@ def check_commits(repo: str | Path, commits: list[Commit], events: list[dict]) -
 # --- modes -----------------------------------------------------------------
 
 def push_verdicts(repo: str | Path, policy: Policy, base: str, head: str = "HEAD") -> list[Verdict]:
-    commits = commits_in(repo, f"{resolve(repo, base)}..{resolve(repo, head)}")
+    return revs_verdicts(repo, policy, [f"{resolve(repo, base)}..{resolve(repo, head)}"])
+
+
+def revs_verdicts(repo: str | Path, policy: Policy, revs: list[str]) -> list[Verdict]:
+    commits = commits_in(repo, *revs)
     gated = [(c, policy.blocking_areas(c.files)) for c in commits]
     gated = [(c, areas) for c, areas in gated if areas]
     verdicts = check_commits(repo, [c for c, _ in gated], load_events(repo))
@@ -321,9 +325,15 @@ def pre_push_verdicts(repo: str | Path, policy: Policy, remote: str, stdin_lines
         if remote_ref != f"refs/heads/{DEFAULT_BRANCH}" or set(local_sha) == {"0"}:
             continue
         known = set(remote_sha) != {"0"} and git(repo, "rev-parse", "--verify", "--quiet", f"{remote_sha}^{{commit}}", check=False).strip()
-        # What the remote holds now; when this checkout has not fetched it yet, what it last saw.
-        base = remote_sha if known else f"{remote}/{DEFAULT_BRANCH}"
-        verdicts += push_verdicts(repo, policy, base, local_sha)
+        head = resolve(repo, local_sha)
+        if known:
+            revs = [f"{remote_sha}..{head}"]
+        else:
+            # The remote's main is a commit this checkout never fetched (the push will be refused as a
+            # non-fast-forward unless it is forced) or main does not exist there yet. Either way, the
+            # commits to ask about are the ones no remote-tracking ref has, not none of them.
+            revs = [head, "--not", "--remotes"]
+        verdicts += revs_verdicts(repo, policy, revs)
     return verdicts
 
 
@@ -432,7 +442,11 @@ def main(argv: list[str] | None = None) -> int:
     repo = str(Path(args.repo).resolve())
     policy_path = args.policy or str(Path(__file__).resolve().parent / "review-policy.toml")
     try:
-        policy = Policy.load(policy_path, args.name or repo_name(repo))
+        try:
+            policy = Policy.load(policy_path, args.name or repo_name(repo))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # A missing or malformed policy is a gate fault, not a refusal: exit 1 means "refused".
+            raise GateError(f"cannot read the review policy {policy_path}: {type(exc).__name__}: {exc}")
         if args.mode == "push":
             if not git(repo, "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}", check=False).strip():
                 print(f"review-gate: {args.base} not found; push check skipped.", file=sys.stderr)
@@ -459,6 +473,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
     except GateError as exc:
         print(f"review-gate: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - an uncaught exception exits 1, which callers read as "refused"
+        print(f"review-gate: internal error, could not decide: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     if not verdicts:
         if args.mode != "pre-push":  # a hook that prints on every push is a hook people stop reading

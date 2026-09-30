@@ -251,6 +251,53 @@ class PrePushHookTests(unittest.TestCase):
         self.assertIn("could not decide", pushed.stderr)
         self.assertEqual(self.remote_main("nopolicy"), head)
 
+    def test_a_malformed_or_missing_policy_is_a_gate_fault_not_a_refusal(self):
+        # An uncaught exception exits 1, which the hook would read as "refused" and stop every push on.
+        gate_dir = self.repo.dir / "scripts" / "ops"
+        (gate_dir / "review-policy.toml").write_text("this is [not toml")
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        direct = subprocess.run([sys.executable, str(gate_dir / "review_gate.py"), "--repo", str(self.repo.dir), "push", "--base", self.base],
+                                capture_output=True, text=True)
+        self.assertEqual(direct.returncode, 2)
+        self.assertIn("cannot read the review policy", direct.stderr)
+        self.assertNotIn("Traceback", direct.stderr)
+        pushed = self.git_push("origin", "HEAD:main")
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertIn("could not decide", pushed.stderr)
+        (gate_dir / "review-policy.toml").unlink()
+        self.repo.commit("more auth", {"server/zerg/auth/other.py": "2"})
+        self.assertEqual(self.git_push("origin", "HEAD:main").returncode, 0)
+
+    def test_an_internal_error_in_the_gate_is_exit_2_not_a_refusal(self):
+        # No git on PATH: subprocess raises FileNotFoundError, which is not a GateError.
+        result = subprocess.run([sys.executable, str(GATE), "--repo", str(self.repo.dir), "--name", "longhouse", "push"],
+                                capture_output=True, text=True, env={"PATH": ""})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("could not", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_push_whose_remote_main_was_never_fetched_still_asks_about_every_unpublished_commit(self):
+        # remote_sha is unknown to this checkout and no remote-tracking ref exists: the range is "what no remote has".
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        head = self.repo.git("rev-parse", "HEAD")
+        line = f"refs/heads/main {head} refs/heads/main {'1' * 40}\n"
+        result = subprocess.run([sys.executable, str(GATE), "--repo", str(self.repo.dir), "pre-push", "origin"],
+                                input=line, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("no review receipt", result.stderr)
+        self.assertIn(head[:12], result.stderr)
+
+    def test_a_missing_python_does_not_stop_pushes_either(self):
+        bin_dir = self.base_dir / "only-git"
+        bin_dir.mkdir()
+        (bin_dir / "git").symlink_to(subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip())
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        env = {k: v for k, v in os.environ.items() if k not in ("CI", "GITHUB_ACTIONS", gate.OVERRIDE_ENV, gate.OVERRIDE_REASON_ENV)}
+        env["PATH"] = str(bin_dir)
+        pushed = subprocess.run([str(bin_dir / "git"), "push", "origin", "HEAD:main"], cwd=self.repo.dir, capture_output=True, text=True, env=env)
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertIn("python3 is not on PATH", pushed.stderr)
+
     def test_the_installer_is_idempotent_and_never_replaces_a_hook_that_is_not_its_own(self):
         again = subprocess.run(["bash", str(INSTALLER)], cwd=self.repo.dir, capture_output=True, text=True)
         self.assertEqual(again.returncode, 0, again.stderr)

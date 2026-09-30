@@ -11,8 +11,8 @@
 #
 # What the hook does: a push that updates main gets `review_gate.py pre-push`; refused (exit 1) when a
 # commit touching the blocking list has no completed receipt. It does not gate topic branches or tags.
-# When the gate cannot decide (exit 2: unknown policy table, unreachable git data) the push is allowed
-# with the reason printed, so a gate fault cannot stop every push. `git push --no-verify` and the logged
+# When the gate cannot decide (exit 2: unknown or unreadable policy, internal error, git data it needs
+# missing) the push is allowed with the reason printed, so a gate fault cannot stop every push. `git push --no-verify` and the logged
 # LONGHOUSE_REVIEW_OVERRIDE bypass it; the promotion rule is the backstop for both.
 #
 # Idempotent. Refuses to replace a pre-push hook that is not this one.
@@ -33,6 +33,7 @@ trap 'rm -f "$tmp"' EXIT
 cat >"$tmp" <<'HOOK'
 #!/bin/sh
 # longhouse-review-gate-pre-push: installed by scripts/ops/install-push-gate.sh (see it for what this does).
+command -v python3 >/dev/null 2>&1 || { echo "review-gate: python3 is not on PATH; this push was not checked." >&2; exit 0; }
 top="$(git rev-parse --show-toplevel)" || exit 0
 gate="$top/scripts/ops/review_gate.py"
 # A worktree cut before the gate existed has no copy; the primary checkout's is the fallback.
