@@ -289,7 +289,10 @@ install_native_pair() {
         fi
         legacy_conversion=1
     done
-    target="$(native_target)"; facade_asset="longhouse-${target}"; engine_asset="longhouse-engine-${target}"; tmp_dir="$(mktemp -d)"
+    target="$(native_target)"; facade_asset="longhouse-${target}"; engine_asset="longhouse-engine-${target}"
+    # Stage beside the destination rather than in $TMPDIR: /tmp is often mounted
+    # noexec on hardened hosts, and `verify-pair` executes the staged binaries.
+    mkdir -p "$native_root" && tmp_dir="$(mktemp -d "$native_root/stage.XXXXXX")" || { error "Cannot create a staging directory under $native_root"; return 1; }
     if [[ -n "$source_dir" ]]; then
         INSTALL_TELEMETRY_SOURCE="local"; INSTALL_TELEMETRY_PACKAGE_REF="$source_dir"; INSTALL_RELEASE_VERSION=""
         [[ -x "$source_dir/longhouse" && -x "$source_dir/longhouse-engine" ]] || { error "LONGHOUSE_NATIVE_BIN_DIR must contain executable longhouse and longhouse-engine binaries"; rm -rf "$tmp_dir"; return 1; }
@@ -472,10 +475,9 @@ download_and_install_macos_app_release_asset() {
     checksums_path="$tmp_dir/local-runtime-checksums.txt"
     extracted_app="$tmp_dir/Longhouse.app"
 
-    info "Falling back to release asset install for Longhouse.app (${asset_name})"
-    info "Release tag: v${cli_version}"
+    info "Downloading Longhouse.app v${cli_version} (${asset_name})"
 
-    if ! curl -fL "$asset_url" -o "$archive_path"; then
+    if ! curl -fsSL "$asset_url" -o "$archive_path"; then
         rm -rf "$tmp_dir"
         error "Could not download Longhouse.app release asset from $asset_url"
         return 1
@@ -549,6 +551,25 @@ APP_REPLACE
     rm -rf "$tmp_dir"
     success "Longhouse.app installed in $app_install_dir"
     return 0
+}
+
+# Longhouse.app only runs from /Applications, so an account that cannot write
+# there (a standard, non-admin user) cannot finish the install. Say so before
+# anything is downloaded instead of failing in mktemp/ditto halfway through.
+check_macos_app_destination() {
+    [[ "$(uname -s)" == "Darwin" ]] || return 0
+    [[ -z "${LONGHOUSE_NATIVE_BIN_DIR:-}" ]] || return 0  # a local pair installs no app
+    local app_install_dir="${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}"
+    [[ "$app_install_dir" == /* ]] || return 0  # rejected with its own message later
+    if [[ -d "$app_install_dir" ]]; then
+        [[ -w "$app_install_dir" ]] && return 0
+    elif mkdir -p "$app_install_dir" 2>/dev/null; then
+        return 0
+    fi
+    error "This account cannot write to $app_install_dir, where Longhouse.app is installed."
+    error "Run this installer from an administrator account, or ask an administrator to install Longhouse."
+    record_install_failure 1
+    exit 1
 }
 
 # Install Longhouse.app into the selected Applications directory on macOS
@@ -833,10 +854,14 @@ print_success() {
         echo "  1. Open ${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}/Longhouse.app"
         echo "  2. Choose 'Sign in to connect this Mac'"
         echo "  3. Find one prior session in the timeline"
+        echo "  (No Longhouse address yet? Run a local one on this Mac:"
+        echo "   curl -LsSf https://astral.sh/uv/install.sh | sh && uv tool install longhouse && longhouse-server onboard)"
     else
         echo "Next:"
         echo "  1. Run longhouse auth --url <your Longhouse address>"
         echo "  2. Run longhouse machine repair --repair-service"
+        echo "  (No Longhouse address yet? Run a local one on this machine:"
+        echo "   curl -LsSf https://astral.sh/uv/install.sh | sh && uv tool install longhouse && longhouse-server onboard)"
         if has_command claude; then
             # Claude Console turns stay unavailable until the native lifecycle
             # hook is installed; nothing else tells a Linux user that.
@@ -940,10 +965,21 @@ connect_this_machine() {
             return 0
         fi
     fi
-    if ! "$longhouse_bin" machine repair --repair-service; then
-        error "Stored credentials, but the Machine Agent service did not start; run: longhouse machine repair --repair-service"
+    # `machine repair` exits 0 whatever it found, and prints its verdict as the
+    # first line, "<headline> (<state>)". Read the verdict: without it a box
+    # with no systemd user session (a container, WSL, `sudo -u` without a
+    # login) reports "Connected" while nothing will ever ship.
+    local repair_log repair_status=0
+    repair_log="$(mktemp)"
+    "$longhouse_bin" machine repair --repair-service 2>&1 | tee "$repair_log" || repair_status=$?
+    if [[ "$repair_status" != 0 ]] || grep -Eq '\((failed|rejected_[a-z_]+)\)[[:space:]]*$' "$repair_log"; then
+        rm -f "$repair_log"
+        error "Stored credentials, but the Machine Agent service did not start, so nothing will sync yet."
+        error "On Linux it needs a systemd user session (log in over SSH or a desktop, not su or sudo -u)."
+        error "Fix that, then run: longhouse machine repair --repair-service"
         return 1
     fi
+    rm -f "$repair_log"
     if has_command claude; then
         "$longhouse_bin" claude configure >/dev/null 2>&1 || warn "Could not configure Claude hooks; run: longhouse claude configure"
     fi
@@ -981,6 +1017,7 @@ main() {
     platform=$(detect_platform)
     info "Platform: $platform"
     emit_installer_telemetry "install_attempt" "installer_start" "" "" "0"
+    check_macos_app_destination
 
     install_native_pair
     install_macos_app
