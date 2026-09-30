@@ -4,7 +4,16 @@ import XCTest
 
 @MainActor
 final class SessionChatUITests: XCTestCase {
-    private static let webTranscriptTimeout: TimeInterval = 12
+    /// Every positive wait below is scaled by this. A hosted macOS VM runs the
+    /// same UI three times slower on a bad day (compile 3.4 vs 10.7 min), and
+    /// WebKit publishing text to XCUITest, or XCUITest answering a snapshot, can
+    /// take longer than the 5, 8 and 12 second waits these were written with:
+    /// "Waiting 12.0s" lasted 25 s and still missed the element (run
+    /// 36658111569). A wait returns as soon as its condition holds, so patience
+    /// costs nothing on a healthy runner; only negative waits stay short.
+    private static let patience: TimeInterval = 3
+    private static func patient(_ seconds: TimeInterval) -> TimeInterval { seconds * patience }
+    private static let webTranscriptTimeout: TimeInterval = 12 * patience
 
     private enum LaunchEnvironment {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
@@ -38,9 +47,9 @@ final class SessionChatUITests: XCTestCase {
         app.launchArguments += [LaunchArgument.appearanceOverride, Appearance.light.rawValue]
         app.launch()
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8))
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: 8))
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
         // Consume the WebKit render beacon rather than a DOM accessibility
         // child: the simulator intermittently publishes the WebView without
         // any of its text descendants even after rendering has completed.
@@ -53,9 +62,9 @@ final class SessionChatUITests: XCTestCase {
     func testProviderNotificationRendersAsCompactRow() {
         let app = launchChatFixture(name: "provider-notification", eventCount: 0)
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8))
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: 8))
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
         XCTAssertTrue(
             waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
             renderStatus.label
@@ -74,11 +83,11 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: "basic", eventCount: 3)
 
         let actions = app.buttons["session-chat-compose-actions"]
-        XCTAssertTrue(actions.waitForExistence(timeout: 8), "composer action menu did not load")
+        XCTAssertTrue(actions.waitForExistence(timeout: Self.patient(8)), "composer action menu did not load")
         actions.tap()
 
         let unavailable = app.buttons["session-chat-attach-unavailable"]
-        XCTAssertTrue(unavailable.waitForExistence(timeout: 5), "the + menu opened without an attach item")
+        XCTAssertTrue(unavailable.waitForExistence(timeout: Self.patient(5)), "the + menu opened without an attach item")
         XCTAssertFalse(unavailable.isEnabled, "attach must be disabled when the session cannot accept images")
         XCTAssertFalse(app.buttons["session-chat-attach"].exists)
 
@@ -99,8 +108,8 @@ final class SessionChatUITests: XCTestCase {
 
         let title = app.descendants(matching: .any)["session-navigation-title"]
         let actions = app.buttons["Session actions"]
-        XCTAssertTrue(title.waitForExistence(timeout: 8))
-        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        XCTAssertTrue(title.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(actions.waitForExistence(timeout: Self.patient(8)))
         XCTAssertLessThan(title.frame.maxX, actions.frame.minX)
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -132,7 +141,7 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(eventCount: 120)
         let latestMessage = app.staticTexts["Assistant fixture message 119: streaming-style response with enough body to exercise row layout."]
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 5))
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(5)))
         XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
@@ -142,7 +151,7 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(eventCount: 119)
         let latestMessage = app.staticTexts["User fixture message 118: request text for chat scroll anchoring."]
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 5))
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(5)))
         XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
@@ -160,7 +169,7 @@ final class SessionChatUITests: XCTestCase {
         sendButton.tap()
 
         XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.staticTexts["Longhouse"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Longhouse"].waitForExistence(timeout: Self.patient(5)))
         XCTAssertEqual(composer.value as? String, "Steer this turn")
     }
 
@@ -215,7 +224,7 @@ final class SessionChatUITests: XCTestCase {
         let message = "Keep the current diagnostics and inspect the changed hose."
 
         XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(sendButton.waitForExistence(timeout: Self.patient(5)))
         XCTAssertEqual(sendButton.label, "Send update mid-turn")
         composer.tap()
         composer.typeText(message)
@@ -270,7 +279,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(summary.label.contains("1 command"))
         summary.tap()
         let childTask = app.buttons["session-runtime-background-task-agent-1"]
-        XCTAssertTrue(childTask.waitForExistence(timeout: 5))
+        XCTAssertTrue(childTask.waitForExistence(timeout: Self.patient(5)))
         let sheetShot = XCTAttachment(screenshot: app.screenshot())
         sheetShot.name = "background-task-sheet"
         sheetShot.lifetime = .keepAlways
@@ -278,7 +287,7 @@ final class SessionChatUITests: XCTestCase {
         childTask.tap()
 
         let childID = "019fc50b-1111-4111-8111-111111111111"
-        XCTAssertTrue(app.staticTexts["Child transcript"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Child transcript"].waitForExistence(timeout: Self.patient(5)))
         XCTAssertTrue(app.staticTexts[childID].exists)
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "background-task-child-route"
@@ -298,7 +307,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(summary.label.contains("unknown"))
         summary.tap()
-        XCTAssertTrue(app.staticTexts["Background work status unknown"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Background work status unknown"].waitForExistence(timeout: Self.patient(5)))
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "background-task-unknown"
         shot.lifetime = .keepAlways
@@ -316,7 +325,7 @@ final class SessionChatUITests: XCTestCase {
         summary.tap()
 
         let agent = app.buttons["session-runtime-background-task-agent-1"]
-        XCTAssertTrue(agent.waitForExistence(timeout: 5))
+        XCTAssertTrue(agent.waitForExistence(timeout: Self.patient(5)))
         XCTAssertGreaterThan(agent.frame.height, 44)
         XCTAssertGreaterThanOrEqual(agent.frame.minX, 0)
         XCTAssertLessThanOrEqual(agent.frame.maxX, app.windows.firstMatch.frame.width)
@@ -358,7 +367,7 @@ final class SessionChatUITests: XCTestCase {
         let summary = app.buttons["session-runtime-background-summary"]
         XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
         let clear = app.buttons["background-tasks-clear"]
-        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        XCTAssertTrue(clear.waitForExistence(timeout: Self.patient(5)))
         clear.tap()
         XCTAssertFalse(summary.waitForExistence(timeout: 2))
     }
@@ -370,7 +379,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(summary.label.contains("unknown"))
         summary.tap()
         XCTAssertTrue(
-            app.staticTexts["Background work status unknown"].waitForExistence(timeout: 5)
+            app.staticTexts["Background work status unknown"].waitForExistence(timeout: Self.patient(5))
         )
         XCTAssertTrue(app.descendants(matching: .any)["session-runtime-background-unknown"].exists)
     }
@@ -380,12 +389,12 @@ final class SessionChatUITests: XCTestCase {
         let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
 
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: 5))
+        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
         XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         composer.typeText("typing keeps transcript pinned")
 
-        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: 5))
+        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
         assertAnchoredAboveBottomChrome(currentLastMessage, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
@@ -401,7 +410,7 @@ final class SessionChatUITests: XCTestCase {
         let liveUpdate = app.staticTexts["Assistant fixture live update at bottom."]
 
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 5))
+        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: Self.patient(5)))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
@@ -424,7 +433,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         XCTAssertTrue(
-            app.keyboards.firstMatch.waitForExistence(timeout: 3),
+            app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)),
             "Composer keyboard should appear promptly"
         )
 
@@ -442,7 +451,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         XCTAssertTrue(
-            app.keyboards.firstMatch.waitForExistence(timeout: 3),
+            app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)),
             "Composer keyboard should appear promptly"
         )
 
@@ -456,7 +465,7 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: "stress", eventCount: 500)
         let transcript = transcriptElement(app)
 
-        XCTAssertTrue(transcript.waitForExistence(timeout: 10))
+        XCTAssertTrue(transcript.waitForExistence(timeout: Self.patient(10)))
         XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitForExistence(timeout: Self.webTranscriptTimeout))
 
         let options = XCTMeasureOptions()
@@ -513,12 +522,12 @@ final class SessionChatUITests: XCTestCase {
     ) throws {
         let app = launchChatFixture(name: fixtureName, eventCount: eventCount, appearance: appearance)
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8), file: file, line: line)
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)), file: file, line: line)
         // WebKit does not reliably publish DOM text into XCUITest's
         // cross-process accessibility tree. The native render beacon is the
         // authoritative signal that the deterministic fixture reached the DOM.
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: 8), file: file, line: line)
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)), file: file, line: line)
         XCTAssertTrue(
             waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
             renderStatus.label,
@@ -598,7 +607,7 @@ final class SessionChatUITests: XCTestCase {
     private func assertNotVisible(
         _ element: XCUIElement,
         in app: XCUIApplication,
-        timeout: TimeInterval = 5,
+        timeout: TimeInterval = SessionChatUITests.patient(5),
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -644,7 +653,7 @@ final class SessionChatUITests: XCTestCase {
         line: UInt = #line
     ) {
         let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
-        XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: Self.patient(5)), file: file, line: line)
         let gap = waitForBottomGap(
             element,
             bottomChromeCard: bottomChromeCard,
@@ -669,7 +678,7 @@ final class SessionChatUITests: XCTestCase {
         line: UInt = #line
     ) {
         let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
-        XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: Self.patient(5)), file: file, line: line)
 
         let gap = waitForBottomGap(
             element,
@@ -701,7 +710,7 @@ final class SessionChatUITests: XCTestCase {
         bottomChromeCard: XCUIElement,
         minimumGap: CGFloat,
         maximumGap: CGFloat,
-        timeout: Duration = .seconds(5)
+        timeout: Duration = .seconds(SessionChatUITests.patient(5))
     ) -> CGFloat? {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
