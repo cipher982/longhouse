@@ -58,6 +58,10 @@ SSH_CONFIG="$OUT_ROOT/ssh_config"
 
 die() { echo "crunch: $*" >&2; exit 1; }
 
+# Both reach the guest inside one unquoted command string, and a non-numeric slot count makes its slot loop spin forever.
+[[ "$SLOTS" =~ ^[1-9][0-9]*$ ]] || die "CRUNCH_SLOTS must be a positive integer (got: $SLOTS)"
+[[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "CRUNCH_TIMEOUT must be seconds, digits only (got: $TIMEOUT)"
+
 [[ -f "$KEY" ]] || die "no key at $KEY (the guest trusts ~/.ssh/crunch_vm_ed25519; see control-plane scripts/ops/crunch/)"
 
 write_ssh_config() {
@@ -166,10 +170,10 @@ PROGRAM
 }
 
 cmd_run() {
-  local outs=() envs=() keep=0
+  local outs=() envs=() keep=0 dotdot='(^|/)\.\.(/|$)'
   while (($#)); do
     case "$1" in
-      --out) [[ $# -ge 2 && "$2" != /* && "$2" != *..* ]] || die "--out needs a path inside the checkout (no absolute path, no ..)"; outs+=("$2"); shift 2 ;;
+      --out) [[ $# -ge 2 && -n "$2" && "$2" != /* && ! "$2" =~ $dotdot ]] || die "--out needs a path inside the checkout (not empty, not absolute, no .. component)"; outs+=("$2"); shift 2 ;;
       --env) [[ $# -ge 2 && "$2" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env needs K=V"; envs+=("$2"); shift 2 ;;
       --timeout) [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die "--timeout needs seconds"; TIMEOUT="$2"; shift 2 ;;
       --keep) keep=1; shift ;;
