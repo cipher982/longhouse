@@ -30,8 +30,15 @@ extension SessionStateFacts {
 
     /// The first clock boundary that can retire the presentation's work claim.
     var workClaimValidUntil: String? {
-        guard primary?.key == "delegated_work" else { return activityValidUntil }
-        let delegationWindow = delegation?.validUntil
+        if pendingInteractionKind != nil || primary?.key == "needs_answer" || primary?.key == "needs_approval" {
+            return nil
+        }
+        guard primary?.key == "delegated_work" else {
+            return activityState == "thinking" || activityState == "executing" || activityState == "stalled"
+                ? activityValidUntil : nil
+        }
+        guard let delegation, delegation.state == "pending", (delegation.count ?? 0) > 0 else { return nil }
+        let delegationWindow = delegation.validUntil
         guard activityState == "thinking" || activityState == "executing" else {
             return delegationWindow
         }
@@ -215,8 +222,7 @@ extension SessionStateFacts {
             return .attention
         }
         if workClaimExpired(asOf: now) { return .uncertain }
-        let tone = primary?.tone
-        if tone == "active" || tone == "running" || tone == "thinking"
+        if primary?.key == "delegated_work"
             || activityState == "thinking" || activityState == "executing" {
             return .working
         }

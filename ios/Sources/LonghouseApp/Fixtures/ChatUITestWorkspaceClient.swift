@@ -502,6 +502,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Background Tasks (sheet)"
         case "background-tasks-timeline":
             return "Background Tasks (timeline)"
+        case "background-tasks-timeline-attention":
+            return "Background Tasks (timeline) (attention)"
         case "background-tasks-timeline-stale":
             return "Background Tasks (timeline) (stale)"
         case "background-tasks-transition":
@@ -615,7 +617,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     reattach: unavailable,
                     resume: unavailable,
                     branch: unavailable,
-                    pendingInteractionKind: nil,
+                    pendingInteractionKind: title.contains("Background Tasks (timeline) (attention)") ? "question" : nil,
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(
                         key: isTimelineDelegation ? "delegated_work" : (isHelmChannelReconcile ? "thinking" : "idle"),

@@ -125,6 +125,31 @@ struct ActivityEvidenceExpiryTests {
     }
 
     @Test
+    func absentOrEmptyDelegationHasNoDeferredWorkClock() {
+        let primary = SessionStateLabel(key: "delegated_work", label: "Background", tone: "active", observedAt: nil)
+        var facts = makeSessionStateFacts(activity: "quiescent", primaryOverride: primary)
+        let now = at("2026-08-23T12:05:00Z")
+        #expect(facts.ledgerEvidence(asOf: now) == .uncertain)
+        #expect(facts.workClaimValidUntil == nil)
+        facts.delegation = SessionDelegationFacts(
+            state: "none", count: 0, kinds: [:], source: "claude_hook",
+            observedAt: "2026-08-23T12:00:00Z", validUntil: "2026-08-23T12:30:00Z", items: []
+        )
+        #expect(facts.ledgerEvidence(asOf: now) == .uncertain)
+        #expect(facts.workClaimValidUntil == nil)
+    }
+
+    @Test
+    func anActiveToneCannotInventWorkForAQuietNonDelegatedParent() {
+        let primary = SessionStateLabel(key: "idle", label: "Idle", tone: "active", observedAt: nil)
+        let facts = makeSessionStateFacts(
+            activity: "quiescent", activityValidUntil: "2026-08-23T12:01:00Z", primaryOverride: primary
+        )
+        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .quiet)
+        #expect(facts.workClaimValidUntil == nil)
+    }
+
+    @Test
     func elapsedStopsAtExpiryWithoutCountingFutureValidity() {
         let now = at("2026-08-23T12:05:00Z")
         let future = at("2026-08-23T12:10:00Z")
