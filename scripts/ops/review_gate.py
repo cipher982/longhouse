@@ -313,26 +313,31 @@ def revs_verdicts(repo: str | Path, policy: Policy, revs: list[str]) -> list[Ver
     return [v for v in verdicts if v.reasons]
 
 
-def pre_push_verdicts(repo: str | Path, policy: Policy, remote: str, stdin_lines: list[str]) -> list[Verdict]:
+def main_updates(stdin_lines: list[str]) -> list[tuple[str, str]]:
     """Git's pre-push stdin is `<local ref> <local sha> <remote ref> <remote sha>` per ref being pushed.
-    Only a push that updates main is asked; a topic branch, a tag or a deletion is not."""
-    verdicts: list[Verdict] = []
+    Only a push that updates main is asked (as (local sha, remote sha)); a topic branch, a tag or a deletion is not."""
+    updates = []
     for line in stdin_lines:
         parts = line.split()
-        if len(parts) != 4:
-            continue
-        _, local_sha, remote_ref, remote_sha = parts
-        if remote_ref != f"refs/heads/{DEFAULT_BRANCH}" or set(local_sha) == {"0"}:
-            continue
+        if len(parts) == 4 and parts[2] == f"refs/heads/{DEFAULT_BRANCH}" and set(parts[1]) != {"0"}:
+            updates.append((parts[1], parts[3]))
+    return updates
+
+
+def pre_push_verdicts(repo: str | Path, policy: Policy, updates: list[tuple[str, str]]) -> list[Verdict]:
+    verdicts: list[Verdict] = []
+    for local_sha, remote_sha in updates:
         known = set(remote_sha) != {"0"} and git(repo, "rev-parse", "--verify", "--quiet", f"{remote_sha}^{{commit}}", check=False).strip()
         head = resolve(repo, local_sha)
         if known:
             revs = [f"{remote_sha}..{head}"]
         else:
             # The remote's main is a commit this checkout never fetched (the push will be refused as a
-            # non-fast-forward unless it is forced) or main does not exist there yet. Either way, the
-            # commits to ask about are the ones no remote-tracking ref has, not none of them.
-            revs = [head, "--not", "--remotes"]
+            # non-fast-forward unless it is forced) or main does not exist there yet. Either way, ask about
+            # every commit no remote's main is known to hold (a commit on some topic branch still counts,
+            # it is about to reach main), back to the point the review lane began.
+            boundary = grandfather_boundary(repo)
+            revs = [head, "--not", "--glob=refs/remotes/*/" + DEFAULT_BRANCH, *([boundary] if boundary else [])]
         verdicts += revs_verdicts(repo, policy, revs)
     return verdicts
 
@@ -455,8 +460,11 @@ def main(argv: list[str] | None = None) -> int:
             verdicts = push_verdicts(repo, policy, args.base, args.head)
             kind, what, target = "push", "touch the blocking list without a completed review", args.head
         elif args.mode == "pre-push":
+            updates = main_updates(sys.stdin.read().splitlines())
+            if not updates:
+                return 0  # a topic branch, a tag or a deletion: nothing to ask, nothing to print
             check_policy(repo, policy, args.name or repo_name(repo))
-            verdicts = pre_push_verdicts(repo, policy, args.remote, sys.stdin.read().splitlines())
+            verdicts = pre_push_verdicts(repo, policy, updates)
             kind, what, target = "push", "touch the blocking list without a completed review", DEFAULT_BRANCH
         elif args.mode == "promotion":
             served = args.served or served_commit(args.served_url)

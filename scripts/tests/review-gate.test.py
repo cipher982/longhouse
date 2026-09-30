@@ -287,6 +287,29 @@ class PrePushHookTests(unittest.TestCase):
         self.assertIn("no review receipt", result.stderr)
         self.assertIn(head[:12], result.stderr)
 
+    def test_the_unfetched_fallback_still_counts_a_commit_that_sits_on_a_topic_branch(self):
+        # A commit some remote topic branch holds is about to reach main; it is not "already published".
+        head = self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        self.repo.git("update-ref", "refs/remotes/origin/topic", head)
+        line = f"refs/heads/main {head} refs/heads/main {'1' * 40}\n"
+        result = subprocess.run([sys.executable, str(GATE), "--repo", str(self.repo.dir), "pre-push", "origin"],
+                                input=line, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(head[:12], result.stderr)
+
+    def test_a_topic_branch_push_prints_nothing_at_all(self):
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        pushed = self.git_push("origin", "HEAD:refs/heads/topic")
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertNotIn("review-gate", pushed.stderr)  # not even the dead-glob warning
+
+    def test_a_gate_that_does_not_even_import_is_a_fault_not_a_refusal(self):
+        (self.repo.dir / "scripts" / "ops" / "review_gate.py").write_text("def broken(:\n")
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        pushed = self.git_push("origin", "HEAD:main")
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertIn("could not decide", pushed.stderr)
+
     def test_a_missing_python_does_not_stop_pushes_either(self):
         bin_dir = self.base_dir / "only-git"
         bin_dir.mkdir()
@@ -307,6 +330,9 @@ class PrePushHookTests(unittest.TestCase):
         refused = subprocess.run(["bash", str(INSTALLER)], cwd=self.repo.dir, capture_output=True, text=True)
         self.assertEqual(refused.returncode, 1)
         self.assertIn("someone else's hook", hook.read_text())
+
+    def test_push_readiness_says_where_a_clone_lacks_the_hook(self):
+        self.assertIn("make install-push-gate", (ROOT / "scripts" / "ops" / "check-push-readiness.sh").read_text())
 
     def test_the_makefile_offers_the_installer(self):
         makefile = (ROOT / "Makefile").read_text()

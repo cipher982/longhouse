@@ -20,6 +20,10 @@ remote="${PUSH_READINESS_REMOTE:-origin}"
 # A stale `$remote/main` would widen the range with commits others already landed.
 git fetch --quiet "$remote" main 2>/dev/null || true
 python3 "$(dirname "${BASH_SOURCE[0]}")/review_gate.py" push --base "$remote/main" || exit 1
+# The same rule as a pre-push hook covers a bare `git push origin HEAD:main`; hooks are not versioned, so say so
+# where a clone lacks it.
+[ -x "$(git rev-parse --path-format=absolute --git-path hooks)/pre-push" ] ||
+  echo "check-push-readiness: NOTE this clone has no pre-push review hook; run: make install-push-gate" >&2
 
 # The verifier/subject import allowlist only shrinks: no new crossing import, no new entry
 # (scripts/ci/verifier_boundary.py; control-plane spec provider-factory-findings-loop.md 3.3a).

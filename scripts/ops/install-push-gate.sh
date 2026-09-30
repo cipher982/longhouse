@@ -11,8 +11,9 @@
 #
 # What the hook does: a push that updates main gets `review_gate.py pre-push`; refused (exit 1) when a
 # commit touching the blocking list has no completed receipt. It does not gate topic branches or tags.
-# When the gate cannot decide (exit 2: unknown or unreadable policy, internal error, git data it needs
-# missing) the push is allowed with the reason printed, so a gate fault cannot stop every push. `git push --no-verify` and the logged
+# When the gate cannot decide (unknown or unreadable policy, internal error, a gate file that does not
+# import, git data it needs missing) the push is allowed with the reason printed, so a gate fault cannot
+# stop every push. `git push --no-verify` and the logged
 # LONGHOUSE_REVIEW_OVERRIDE bypass it; the promotion rule is the backstop for both.
 #
 # Idempotent. Refuses to replace a pre-push hook that is not this one.
@@ -42,13 +43,17 @@ if [ ! -f "$gate" ]; then
   echo "review-gate: no scripts/ops/review_gate.py in this worktree or the primary checkout; this push was not checked." >&2
   exit 0
 fi
-python3 "$gate" --repo "$top" pre-push "$@"
+# Only a real refusal blocks. A crash (a syntax error in the gate, a signal, exit 2) also exits non-zero
+# but is not a verdict, so it is told apart by the refusal line the gate prints, not by the status alone.
+out="$(python3 "$gate" --repo "$top" pre-push "$@" 2>&1)"
 status=$?
-if [ "$status" -eq 2 ]; then
-  echo "review-gate: could not decide (above), so this push was not checked. Fix the gate, or ask David." >&2
-  exit 0
-fi
-exit "$status"
+[ -z "$out" ] || printf '%s\n' "$out" >&2
+[ "$status" -eq 0 ] && exit 0
+case "$out" in
+  *"review-gate: REFUSED"*) [ "$status" -eq 1 ] && exit 1 ;;
+esac
+echo "review-gate: could not decide (above), so this push was not checked. Fix the gate, or ask David." >&2
+exit 0
 HOOK
 chmod +x "$tmp"
 mv "$tmp" "$hook"
