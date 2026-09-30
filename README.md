@@ -36,6 +36,17 @@ Machine Agent. On macOS it also drops `Longhouse.app` into `/Applications`.
 An empty timeline shows this line with its own address filled in. Runtime Host
 operators install `longhouse-server` in that server environment.
 
+**No Longhouse address yet?** Run one on this machine (Linux or macOS, about a minute):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if you already have uv
+uv tool install longhouse                          # the Runtime Host: longhouse-server
+longhouse-server onboard                           # starts it, installs the Machine Agent, imports your sessions
+```
+
+It serves `http://127.0.0.1:8080` and stops when the machine does; a trial. Use the
+self-host steps below for one that stays up, or hosted (invited addresses only for now).
+
 ## First Session
 
 ```bash
@@ -83,6 +94,9 @@ A laptop runtime stops when the laptop sleeps. For real durability, run the Runt
 **Self-host — on the always-on box:**
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if you already have uv
+uv tool install longhouse                          # installs longhouse-server
+
 export LONGHOUSE_PASSWORD_HASH="$(longhouse-server hash-password)"   # prompts for a password
 export JWT_SECRET=$(openssl rand -hex 32)
 export INTERNAL_API_SECRET=$(openssl rand -hex 32)

@@ -16,6 +16,23 @@ export default function QuickStartPage() {
         first proof it is already useful on this machine.
       </p>
 
+      <h2>0. Get a Longhouse address</h2>
+      <p>
+        Connecting a machine needs a Longhouse to connect to. A hosted one is
+        invite-only for now; to run your own on this machine (Linux or macOS):
+      </p>
+      <CodeBlock title="terminal">
+        {`curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if you have uv
+uv tool install longhouse
+longhouse-server onboard`}
+      </CodeBlock>
+      <p>
+        That starts a Runtime Host at <code>http://127.0.0.1:8080</code>,
+        installs the Machine Agent, and imports your sessions in one step, so
+        you can skip to step 3. It stops when the machine does; to keep one
+        running, see <Link to="/docs/configuration">Configuration</Link>.
+      </p>
+
       <h2>1. Connect a machine</h2>
       <p>
         Run this on the machine where you use Claude Code, Codex, or another
@@ -63,7 +80,8 @@ longhouse machine repair --repair-service`}
       <div className="docs-callout">
         <p>
           <strong>No sessions yet?</strong> Use the hosted Runtime Host or run
-          <code>longhouse-server serve --demo</code> for a safe preview.
+          <code>uv tool install longhouse && longhouse-server serve --demo</code>{" "}
+          for a safe preview.
         </p>
       </div>
       <div className="docs-callout">

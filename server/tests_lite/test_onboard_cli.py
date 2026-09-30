@@ -253,6 +253,10 @@ def test_onboard_topology_local_skips_prompt(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "Where should your Longhouse server run?" not in result.output
     assert "Choose" not in result.output
+    # A first run names where Longhouse is; a headless box also says how to reach it.
+    output = _strip_ansi(result.output)
+    assert "Open Longhouse: http://127.0.0.1:8080" in output
+    assert "ssh -L 8080:127.0.0.1:8080" in output
 
 
 def test_onboard_topology_remote_requires_url_in_noninteractive_mode(monkeypatch):

@@ -426,6 +426,8 @@ def onboard(
     ),
 ) -> None:
     """Run the default local quickstart or connect to existing Longhouse."""
+    # httpx logs every health probe at INFO; on a first run they drown the steps.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     normalized_topology = topology.lower() if topology else None
 
     if remote_url and normalized_topology == "local":
@@ -452,8 +454,8 @@ def onboard(
         # Interactive topology choice
         typer.echo("Where should your Longhouse server run?")
         typer.echo("")
-        typer.echo("  1. Try on this Mac (localhost, trial-mode, works but stops when laptop sleeps)")
-        typer.echo("  2. Connect to existing Longhouse (agent on this Mac, server on VPS/homelab/Mac mini)")
+        typer.echo("  1. Try on this machine (localhost, trial mode: works, but stops when this machine sleeps or shuts down)")
+        typer.echo("  2. Connect to existing Longhouse (agent on this machine, server on a VPS, homelab, or Mac mini)")
         typer.echo("")
 
         choice = typer.prompt("Choose", type=Choice(["1", "2"], case_sensitive=False), default="1")
@@ -652,11 +654,14 @@ def onboard(
     typer.echo("=" * 50)
     typer.echo("")
     typer.echo("First run:")
+    typer.echo(f"  1. Open Longhouse: {api_url}")
+    if not _has_gui() and not remote_url:
+        typer.echo(
+            f"     (No display here. From your own machine: ssh -L {port}:127.0.0.1:{port} <this machine>, then open http://127.0.0.1:{port})"
+        )
     if has_any_cli:
-        typer.echo("  1. Open Longhouse")
         typer.echo("  2. Find one prior session in the timeline")
     else:
-        typer.echo("  1. Open Longhouse")
         typer.echo("  2. Install a supported agent CLI when you want real imports")
     if installed_desktop_app:
         typer.echo("  3. Look for Longhouse.app in /Applications and your menu bar")
