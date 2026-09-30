@@ -18,7 +18,15 @@ DIGEST = "sha256:" + "b" * 64
 
 
 class PromotionAuthorizationTests(unittest.TestCase):
-    def run_promotion(self, *, receipt_available: bool = True, receipt_sha: str = SHA, gate_refuses: bool = False):
+    def run_promotion(
+        self,
+        *,
+        receipt_available: bool = True,
+        receipt_sha: str = SHA,
+        gate_refuses: bool = False,
+        final_attempt: int = 1,
+        receipt_attempts: tuple[int, ...] = (1,),
+    ):
         with tempfile.TemporaryDirectory(prefix="longhouse-promotion-test-") as directory:
             root = Path(directory)
             ops = root / "scripts" / "ops"
@@ -79,15 +87,25 @@ elif name == 'gh':
         print(json.dumps(runs))
     elif args[:2] == ['run', 'view']:
         publish = args[2] == '10'
-        print(json.dumps({'headSha':sha,'attempt':1,'number':10,'status':'completed',
+        attempt = 1 if publish else int(os.environ['FIXTURE_FINAL_ATTEMPT'])
+        print(json.dumps({'headSha':sha,'attempt':attempt,'number':10,'status':'completed',
                          'conclusion':'success','workflowName':'Publish Runtime Image' if publish else 'Deploy and Verify'}))
     elif args[0] == 'api':
         available = '/runs/20/' in args[1] and os.environ['FIXTURE_HAS_RECEIPT'] == '1'
-        print(json.dumps({'artifacts':[{'id':120,'expired':False,'name':'runtime-verification-20-1'}] if available else []}))
+        artifacts = []
+        if available:
+            for attempt in (int(n) for n in os.environ['FIXTURE_RECEIPT_ATTEMPTS'].split(',')):
+                artifacts.append({'id':100+attempt,'expired':False,'name':f'runtime-verification-20-{attempt}'})
+            # Artifacts that are not canary receipts never count, whatever their attempt suffix.
+            artifacts.append({'id':900,'expired':False,'name':'hosted-live-qa-failure-20-1'})
+            artifacts.append({'id':901,'expired':False,'name':'runtime-verification-20-x'})
+        print(json.dumps({'artifacts':artifacts}))
     else:
         raise AssertionError(args)
 elif name == 'curl':
     destination = args[args.index('--output')+1]
+    with open(root/'downloads', 'a') as log:
+        log.write(args[-1].rsplit('/artifacts/', 1)[1].split('/')[0] + '\n')
     with zipfile.ZipFile(destination, 'w') as archive:
         archive.write(root/'receipt.json','runtime-verification.json')
 elif name == 'unzip':
@@ -111,6 +129,8 @@ else:
                 "FIXTURE_ROOT": str(root),
                 "FIXTURE_SHA": SHA,
                 "FIXTURE_HAS_RECEIPT": "1" if receipt_available else "0",
+                "FIXTURE_FINAL_ATTEMPT": str(final_attempt),
+                "FIXTURE_RECEIPT_ATTEMPTS": ",".join(str(n) for n in receipt_attempts),
                 "FIXTURE_PYTHON": sys.executable,
                 "FIXTURE_GATE_REFUSES": "1" if gate_refuses else "0",
                 "SUBDOMAIN": "fixture-owner",
@@ -125,7 +145,9 @@ else:
             )
             promotions = root / "promotions"
             gate_calls = root / "gate_calls"
+            downloads = root / "downloads"
             self.gate_calls = gate_calls.read_text().splitlines() if gate_calls.exists() else []
+            self.downloaded_artifacts = downloads.read_text().splitlines() if downloads.exists() else []
             return result, promotions.read_text().splitlines() if promotions.exists() else []
 
     def test_manual_canary_receipt_survives_newer_successful_noop(self):
@@ -150,6 +172,30 @@ else:
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(promotions, [])
         self.assertIn("REFUSED", result.stderr)
+
+    def test_receipt_from_an_earlier_attempt_counts_when_the_run_finally_succeeded(self):
+        # `gh run rerun --failed` reran only the demo job: the canary receipt was uploaded by
+        # attempt 1, and the run's final conclusion (attempt 2) is success.
+        result, promotions = self.run_promotion(final_attempt=2, receipt_attempts=(1,))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
+        self.assertEqual(self.downloaded_artifacts, ["101"])
+
+    def test_newest_attempt_receipt_wins_when_several_attempts_uploaded_one(self):
+        result, _ = self.run_promotion(final_attempt=3, receipt_attempts=(1, 3, 2))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.downloaded_artifacts, ["103"])
+
+    def test_receipt_from_an_attempt_after_the_final_one_is_not_used(self):
+        result, promotions = self.run_promotion(final_attempt=1, receipt_attempts=(2,))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(promotions, [])
+        self.assertEqual(self.downloaded_artifacts, [])
+
+    def test_an_earlier_attempt_receipt_for_another_source_cannot_promote(self):
+        result, promotions = self.run_promotion(final_attempt=2, receipt_attempts=(1,), receipt_sha="c" * 40)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(promotions, [])
 
     def test_successful_workflows_without_receipts_cannot_promote(self):
         result, promotions = self.run_promotion(receipt_available=False)

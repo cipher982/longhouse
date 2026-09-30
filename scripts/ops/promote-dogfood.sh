@@ -60,18 +60,26 @@ while IFS= read -r deploy_run_id; do
     exit 1
   fi
 
+  # `gh run rerun --failed` reruns only the failed jobs, so the canary receipt of a run that
+  # succeeded on attempt N was often uploaded by an earlier attempt (the canary jobs passed
+  # there; a later job such as the demo deploy failed and was rerun). The run's final
+  # conclusion is what counts; the receipt may come from any attempt up to it, newest first.
+  # Every receipt is still bound to the exact SHA and the publishing run by verify-publication.
   artifact_json="$(gh api "repos/$REPO/actions/runs/$deploy_run_id/artifacts?per_page=100")"
-  artifact_id="$(jq -r --arg run_id "$deploy_run_id" --arg attempt "$deploy_attempt" \
-    '[.artifacts[] | select(.expired == false and .name == ("runtime-verification-" + $run_id + "-" + $attempt))] | if length == 1 then .[0].id else empty end' \
+  artifact_id="$(jq -r --arg prefix "runtime-verification-${deploy_run_id}-" --argjson final "$deploy_attempt" \
+    '[.artifacts[] | select(.expired == false and (.name | startswith($prefix)))
+      | {id, attempt: (.name[($prefix | length):] | if test("^[1-9][0-9]*$") then tonumber else empty end)}
+      | select(.attempt <= $final)]
+     | sort_by(.attempt) | last | .id // empty' \
     <<<"$artifact_json")"
   # A successful path-filtered run may not have deployed anything.
-  # Only an exact-attempt canary receipt can authorize promotion.
+  # Only a canary receipt of this run can authorize promotion.
   if [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
     break
   fi
 done <<<"$deploy_run_ids"
 if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Refusing $SHA: no successful $DEPLOY_WORKFLOW run has a usable canary verification receipt." >&2
+  echo "Refusing $SHA: no successful $DEPLOY_WORKFLOW run has a usable canary verification receipt (any attempt)." >&2
   exit 1
 fi
 receipt_zip="$(mktemp)"
