@@ -212,8 +212,8 @@ describe("mapping from the timeline row", () => {
         activity: { ...facts.activity, state: "executing" as const, tool: "Bash" },
         delegation: {
           state: "pending" as const,
-          count: 14,
-          kinds: { subagent: 2, commands: 7, monitors: 5 },
+          count: 4,
+          kinds: { subagent: 2, shell: 1, monitor: 1 },
           valid_until: "2026-09-27T16:05:00Z",
           items: [
             {
@@ -225,57 +225,52 @@ describe("mapping from the timeline row", () => {
               assistant_messages: 4,
               user_messages: 1,
             },
+            { id: "unlinked", kind: "subagent", status: "running", session_id: null },
+            { id: "shell", kind: "shell", status: "running", session_id: null },
             {
               id: "monitor",
               kind: "monitor",
               status: "running",
               session_id: null,
-              tool_calls: 99,
+              tool_calls: null,
             },
           ],
         },
       },
     };
-    expect(hearthSnapshotFromSession(session, "working", NOW)).toEqual({
-      mode: "working",
-      toolCalls: 42,
-      assistantMessages: 7,
-      userMessages: 3,
-      subagents: 2,
-      childToolCalls: 11,
-      childAssistantMessages: 4,
-      childUserMessages: 1,
-      childMembership: "child",
-      tool: "Bash",
-      lastActivityMs: Date.parse("2026-09-27T15:59:00Z"),
-      startedMs: Date.parse("2026-09-27T15:00:00Z"),
-    });
+    const active = hearthSnapshotFromSession(session, "working", NOW);
+    expect(active.subagents).toBe(2);
+    expect(Object.keys(active.children ?? {})).toEqual(["child"]);
+    expect(hearthSnapshotFromSession(session, "working", NOW + 6 * 60_000).subagents).toBe(0);
   });
 
-  it("treats child archive population changes as baselines, not reconnect spikes", () => {
-    const first = snap({
-      childToolCalls: 11,
-      childAssistantMessages: 4,
-      childUserMessages: 1,
-      childMembership: "alpha|beta",
-    });
-    const advanced = snap({
-      childToolCalls: 15,
-      childAssistantMessages: 6,
-      childUserMessages: 2,
-      childMembership: "alpha|beta",
-    });
-    expect(diffSnapshots(first, advanced)).toEqual({ tools: 4, messages: 2, prompts: 1 });
+  it("preserves continuing children while other children join, leave, or reconnect", () => {
+    const first = snap({ children: {
+      alpha: { toolCalls: 11, assistantMessages: 4, userMessages: 1 },
+      beta: { toolCalls: 20, assistantMessages: 5, userMessages: 1 },
+    } });
+    const joined = snap({ children: {
+      alpha: { toolCalls: 15, assistantMessages: 6, userMessages: 2 },
+      gamma: { toolCalls: 500, assistantMessages: 100, userMessages: 20 },
+    } });
+    expect(diffSnapshots(first, joined)).toEqual({ tools: 4, messages: 2, prompts: 1 });
+    const reconnected = snap({ children: {
+      alpha: { toolCalls: 16, assistantMessages: 7, userMessages: 2 },
+      beta: { toolCalls: 25, assistantMessages: 7, userMessages: 3 },
+    } });
+    expect(diffSnapshots(joined, reconnected)).toEqual({ tools: 1, messages: 1, prompts: 0 });
+    const next = snap({ children: {
+      alpha: { toolCalls: 17, assistantMessages: 8, userMessages: 2 },
+      beta: { toolCalls: 27, assistantMessages: 7, userMessages: 4 },
+    } });
+    expect(diffSnapshots(reconnected, next)).toEqual({ tools: 3, messages: 1, prompts: 1 });
+  });
 
-    const removed = snap({ childMembership: "alpha", childToolCalls: 15, childAssistantMessages: 6, childUserMessages: 2 });
-    expect(diffSnapshots(advanced, removed)).toEqual({ tools: 0, messages: 0, prompts: 0 });
-
-    const reconnected = snap({
-      childToolCalls: 15,
-      childAssistantMessages: 6,
-      childUserMessages: 2,
-      childMembership: "alpha|beta",
-    });
-    expect(diffSnapshots(removed, reconnected)).toEqual({ tools: 0, messages: 0, prompts: 0 });
+  it("baselines each newly known child counter without losing other known work", () => {
+    const unknown = snap({ children: { alpha: { toolCalls: null, assistantMessages: 4, userMessages: null } } });
+    const known = snap({ children: { alpha: { toolCalls: 500, assistantMessages: 5, userMessages: 20 } } });
+    expect(diffSnapshots(unknown, known)).toEqual({ tools: 0, messages: 1, prompts: 0 });
+    const next = snap({ children: { alpha: { toolCalls: 502, assistantMessages: 6, userMessages: 21 } } });
+    expect(diffSnapshots(known, next)).toEqual({ tools: 2, messages: 1, prompts: 1 });
   });
 });

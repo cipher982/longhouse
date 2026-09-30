@@ -82,18 +82,19 @@ For Claude, a parent Stop registry's task ID selects only that parent's exact
 the existing child lineage; missing, malformed, or ambiguous evidence leaves
 the task visible without a transcript link.
 
-Child archive commits notify the parent's existing workspace stream, so child
-timing and counters update without a parent turn. This does not alter the
-parent's transcript counters, activity clock, or registry observation/expiry.
+Subagent archive commits notify the parent's existing workspace stream, so child
+timing and counters update without a parent turn. Ordinary forks do not trigger
+this background-work wake. It does not alter the parent's transcript counters,
+activity clock, or registry observation/expiry.
 
-Web delegated-work claims use the registry's own expiry, not the parent's
-short-lived activity expiry. The named registry is inspectable in the session
+Web and native timeline work claims use the registry's own expiry, not the
+parent's short-lived activity expiry. The named registry is inspectable in the session
 evidence disclosure; expired observations show unknown, never an active count
 of zero. The single timeline fire includes linked child tool/reply deltas.
 Only subagents add agent flame roots; commands and monitors are separate
-populations. Joining or removing a child establishes a new counter baseline,
-not a burst of historical work. Fire intensity is qualitative, not token
-throughput or billing.
+populations. New children and newly known counters establish their own baselines
+without suppressing progress from continuing children. Historical work is not
+replayed as a burst. Fire intensity is qualitative, not token throughput or billing.
 
 ## Non-goals
 

@@ -27,6 +27,31 @@ extension SessionStateFacts {
         guard let expiresAt = LonghouseDateParser.parse(validUntil) else { return true }
         return now <= expiresAt
     }
+
+    /// The presentation's work claim owns its clock; delegation outlives parent activity.
+    func workClaimExpired(asOf now: Date = Date()) -> Bool {
+        if pendingInteractionKind != nil || primary?.key == "needs_answer" || primary?.key == "needs_approval" {
+            return false
+        }
+        switch activityState {
+        case "thinking", "executing":
+            if !activityEvidenceIsLive(asOf: now) { return true }
+        default:
+            break
+        }
+        if primary?.key == "delegated_work" {
+            guard let delegation, delegation.state == "pending", (delegation.count ?? 0) > 0 else {
+                return true
+            }
+            return !delegation.isValid(asOf: now)
+        }
+        switch activityState {
+        case "thinking", "executing", "stalled":
+            return !activityEvidenceIsLive(asOf: now)
+        default:
+            return false
+        }
+    }
 }
 /// Connection state belongs to the viewer's workspace stream, not the provider.
 /// A connected stream only means updates can arrive; it is never provider

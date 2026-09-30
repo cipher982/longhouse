@@ -25,6 +25,14 @@ export function activityEvidenceIsLive(activity: ActivityEvidence | null | undef
   return nowMs <= expiresAtMs;
 }
 
+/** Registry expiry is exclusive, matching catalogd and native delegation facts. */
+export function delegationEvidenceIsLive(delegation: ActivityEvidence | null | undefined, nowMs: number): boolean {
+  if (!delegation) return false;
+  if (!delegation.valid_until) return true;
+  const expiresAtMs = Date.parse(delegation.valid_until);
+  return Number.isNaN(expiresAtMs) || nowMs < expiresAtMs;
+}
+
 /** Is the session actively working, according to evidence that is still valid? */
 export function isActivityExecuting(activity: ActivityEvidence | null | undefined, nowMs: number): boolean {
   if (!activityEvidenceIsLive(activity, nowMs)) return false;

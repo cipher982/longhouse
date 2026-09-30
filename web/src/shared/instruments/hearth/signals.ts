@@ -18,11 +18,17 @@
  */
 
 import type { AgentSession, SessionStateFacts } from "@/shared/api/agents";
-import { activityEvidenceIsLive } from "@/shared/session/activityEvidence";
+import { delegationEvidenceIsLive } from "@/shared/session/activityEvidence";
 import { executingToolName } from "@/shared/session/sessionStatus";
 
 export type HearthMode = "working" | "waiting" | "idle" | "ended";
 export type ToolKind = "exec" | "edit" | "read" | "agent" | "other";
+
+interface ChildArchiveCounters {
+  toolCalls: number | null;
+  assistantMessages: number | null;
+  userMessages: number | null;
+}
 
 /** The card facts the fire reads. Plain values so a signature is cheap. */
 export interface HearthSnapshot {
@@ -31,12 +37,8 @@ export interface HearthSnapshot {
   assistantMessages: number;
   userMessages: number;
   subagents: number;
-  /** Archive counts for exactly linked child sessions, kept off parent totals. */
-  childToolCalls?: number;
-  childAssistantMessages?: number;
-  childUserMessages?: number;
-  /** Stable linked-child population; changes reset its archive delta baseline. */
-  childMembership?: string;
+  /** Exact child archive baselines; missing counters remain unknown. */
+  children?: Record<string, ChildArchiveCounters>;
   /** Tool running now, when the activity observation names one. */
   tool: string | null;
   /** Wall-clock ms of the session's last activity (server fact). */
@@ -46,16 +48,19 @@ export interface HearthSnapshot {
 }
 
 export function snapshotSignature(s: HearthSnapshot): string {
+  const childSignatures: string[] = [];
+  for (const id in s.children) {
+    const child = s.children[id];
+    childSignatures.push(`${id}:${child.toolCalls ?? ""}:${child.assistantMessages ?? ""}:${child.userMessages ?? ""}`);
+  }
+  childSignatures.sort();
   return [
     s.mode,
     s.toolCalls,
     s.assistantMessages,
     s.userMessages,
     s.subagents,
-    s.childToolCalls ?? "",
-    s.childAssistantMessages ?? "",
-    s.childUserMessages ?? "",
-    s.childMembership ?? "",
+    childSignatures.join(";"),
     s.tool ?? "",
     s.lastActivityMs ?? "",
     s.startedMs ?? "",
@@ -140,24 +145,22 @@ export interface CardDelta {
 export function diffSnapshots(prev: HearthSnapshot | null, next: HearthSnapshot): CardDelta {
   if (!prev) return { tools: 0, messages: 0, prompts: 0 };
   const d = (a: number, b: number) => (b > a ? b - a : 0);
-  // A child disappearing or reconnecting with a different population is a
-  // new archive baseline, never a burst of work. Parent counts remain
-  // independent and continue to produce their own deltas.
-  const childPopulationChanged = prev.childMembership !== next.childMembership;
-  const childTools = childPopulationChanged
-    ? 0
-    : d(prev.childToolCalls ?? 0, next.childToolCalls ?? 0);
-  const childMessages = childPopulationChanged
-    ? 0
-    : d(prev.childAssistantMessages ?? 0, next.childAssistantMessages ?? 0);
-  const childPrompts = childPopulationChanged
-    ? 0
-    : d(prev.childUserMessages ?? 0, next.childUserMessages ?? 0);
-  return {
-    tools: d(prev.toolCalls, next.toolCalls) + childTools,
-    messages: d(prev.assistantMessages, next.assistantMessages) + childMessages,
-    prompts: d(prev.userMessages, next.userMessages) + childPrompts,
+  const delta = {
+    tools: d(prev.toolCalls, next.toolCalls),
+    messages: d(prev.assistantMessages, next.assistantMessages),
+    prompts: d(prev.userMessages, next.userMessages),
   };
+  // New children and newly known counters establish their own baselines.
+  // Other children still contribute progress during a join or removal.
+  for (const id in next.children) {
+    const previous = prev.children?.[id];
+    if (!previous) continue;
+    const current = next.children[id];
+    if (previous.toolCalls != null && current.toolCalls != null) delta.tools += d(previous.toolCalls, current.toolCalls);
+    if (previous.assistantMessages != null && current.assistantMessages != null) delta.messages += d(previous.assistantMessages, current.assistantMessages);
+    if (previous.userMessages != null && current.userMessages != null) delta.prompts += d(previous.userMessages, current.userMessages);
+  }
+  return delta;
 }
 
 /** Lifetime tool density as work: a session that has fired a tool every few
@@ -366,39 +369,21 @@ function parseMs(value: string | null | undefined): number | null {
 }
 
 
-function linkedChildArchiveCounts(
+function linkedChildArchiveCounters(
   delegation: NonNullable<SessionStateFacts["delegation"]>,
   parentId: string,
-): {
-  toolCalls: number;
-  assistantMessages: number;
-  userMessages: number;
-  membership: string;
-} {
-  let toolCalls = 0;
-  let assistantMessages = 0;
-  let userMessages = 0;
-  const linkedIds: string[] = [];
+): Record<string, ChildArchiveCounters> {
+  const children: Record<string, ChildArchiveCounters> = {};
   for (const task of delegation.items ?? []) {
     const childId = task.session_id?.trim();
     if (!childId || childId === parentId || task.kind !== "subagent") continue;
-    linkedIds.push(childId);
-    if (typeof task.tool_calls === "number" && Number.isFinite(task.tool_calls) && task.tool_calls >= 0) {
-      toolCalls += task.tool_calls;
-    }
-    if (
-      typeof task.assistant_messages === "number" &&
-      Number.isFinite(task.assistant_messages) &&
-      task.assistant_messages >= 0
-    ) {
-      assistantMessages += task.assistant_messages;
-    }
-    if (typeof task.user_messages === "number" && Number.isFinite(task.user_messages) && task.user_messages >= 0) {
-      userMessages += task.user_messages;
-    }
+    children[childId] = {
+      toolCalls: task.tool_calls ?? null,
+      assistantMessages: task.assistant_messages ?? null,
+      userMessages: task.user_messages ?? null,
+    };
   }
-  linkedIds.sort();
-  return { toolCalls, assistantMessages, userMessages, membership: linkedIds.join("\u001f") };
+  return children;
 }
 
 /** The fire's inputs from a timeline session, given the row's lamp mode. */
@@ -416,7 +401,7 @@ export function hearthSnapshotFromSession(
     delegation &&
       delegation.state === "pending" &&
       delegation.count > 0 &&
-      activityEvidenceIsLive(delegation, nowMs),
+      delegationEvidenceIsLive(delegation, nowMs),
   );
   const subagentCount = delegation?.kinds?.subagent;
   const freshSubagentCount =
@@ -426,19 +411,16 @@ export function hearthSnapshotFromSession(
     subagentCount > 0
       ? subagentCount
       : 0;
-  const child = delegationLive && delegation
-    ? linkedChildArchiveCounts(delegation, session.id)
-    : { toolCalls: 0, assistantMessages: 0, userMessages: 0, membership: "" };
+  const children = delegationLive && delegation
+    ? linkedChildArchiveCounters(delegation, session.id)
+    : undefined;
   return {
     mode,
     toolCalls: session.tool_calls ?? 0,
     assistantMessages: session.assistant_messages ?? 0,
     userMessages: session.user_messages ?? 0,
     subagents: freshSubagentCount,
-    childToolCalls: child.toolCalls,
-    childAssistantMessages: child.assistantMessages,
-    childUserMessages: child.userMessages,
-    childMembership: child.membership,
+    children,
     tool: executingToolName(activity),
     lastActivityMs: parseMs(session.last_activity_at),
     startedMs: parseMs(session.started_at),

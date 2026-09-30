@@ -54,7 +54,7 @@ describe("sessionStatus", () => {
       state: "pending",
       count: 1,
       kinds: { subagent: 1 },
-      valid_until: iso(-1),
+      valid_until: iso(0),
     } as never;
     expect(sessionIsWorking(facts, NOW)).toBe(false);
     expect(delegatedWorkLabel(facts, NOW)).toBeNull();

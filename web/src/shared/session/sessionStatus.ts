@@ -14,7 +14,7 @@
 import type { SessionStateFacts } from "@/shared/api/agents";
 import {
   activityClaimIsStale,
-  activityEvidenceIsLive,
+  delegationEvidenceIsLive,
   type ActivityEvidence,
 } from "./activityEvidence";
 
@@ -32,7 +32,7 @@ function delegatedWorkIsLive(facts: Pick<SessionStateFacts, "delegation">, nowMs
     delegation &&
       delegation.state === "pending" &&
       delegation.count > 0 &&
-      activityEvidenceIsLive(delegation, nowMs),
+      delegationEvidenceIsLive(delegation, nowMs),
   );
 }
 

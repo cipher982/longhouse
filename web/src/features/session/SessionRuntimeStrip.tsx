@@ -4,7 +4,7 @@ import type { SessionInteractionCapabilities } from "@/shared/session/model";
 import { getToolInputRecord } from "@/shared/session/model";
 import type { SessionActivityFeed } from "./sessionActivityFeed";
 import { useWallClock } from "@/shared/hooks/useWallClock";
-import { activityEvidenceIsLive } from "@/shared/session/activityEvidence";
+import { activityEvidenceIsLive, delegationEvidenceIsLive } from "@/shared/session/activityEvidence";
 import { resolveSessionRuntimeState } from "@/shared/session/sessionRuntime";
 import {
   getRuntimeDisplayCopy,
@@ -52,7 +52,7 @@ function buildBackgroundInspector(
 ): SessionBackgroundInspector | null {
   const delegation = facts.delegation;
   if (!delegation || !delegation.observed_at) return null;
-  const state = activityEvidenceIsLive(delegation, nowMs) ? delegation.state : "unknown";
+  const state = delegationEvidenceIsLive(delegation, nowMs) ? delegation.state : "unknown";
   const tasks: SessionBackgroundTask[] = (state === "unknown" ? [] : delegation.items ?? []).map((task) => {
     const sessionId = task.session_id?.trim() || null;
     const toolCalls =

@@ -613,6 +613,42 @@ def test_live_named_subagent_task_enriches_exact_child_timing_and_denies_ambigui
     assert ambiguous_task["tool_calls"] is None
 
 
+def test_ordinary_fork_archive_does_not_wake_background_parent(live_catalog, live_catalog_client):
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import topic_session
+
+    owner = live_catalog.create_user("fork-parent@example.test")
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    parent, _, _ = _seed_running_session(live_catalog, owner_id=owner, provider_session_id="fork-parent-native")
+    child = uuid4()
+    body = live_catalog.envelope_body(
+        session_id=child,
+        device_id=DEVICE_ID,
+        provider=PROVIDER,
+        texts=("Continue an ordinary fork",),
+        project="ordinary-fork",
+    )
+    body["session"].update(
+        {
+            "provider_session_id": "ordinary-fork-native",
+            "parent_provider_session_id": "fork-parent-native",
+            "is_subagent": False,
+        }
+    )
+    bus = get_pubsub()
+    topic = topic_session(str(parent))
+    before = bus.peek_latest_seq(topic)
+    response = live_catalog_client.post(
+        "/agents/storage/v2/envelopes",
+        json=body,
+        headers={"X-Agents-Token": token, "X-Longhouse-Storage-Lane": "live"},
+    )
+    assert response.status_code == 200, response.text
+    child_row = live_catalog.rpc("storage.session.read.v2", {"session_id": str(child)})["session"]
+    assert child_row["subagent_parent_session_id"] == str(parent)
+    assert bus.peek_latest_seq(topic) == before
+
+
 def test_hook_presence_serves_named_registry_without_overwriting_parent_activity(live_catalog, live_catalog_client):
     email = "delegation-presence@example.test"
     owner = live_catalog.create_user(email)

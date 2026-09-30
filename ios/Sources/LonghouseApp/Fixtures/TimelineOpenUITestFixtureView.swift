@@ -115,6 +115,18 @@ private struct TimelineOpenFixtureSession: Identifiable {
     }
 
     var summary: SessionSummary {
+        if index == 2 || index == 3 {
+            let name = index == 2 ? "background-tasks-timeline" : "background-tasks-timeline-stale"
+            let detail = ChatUITestWorkspaceClient.makeDetail(
+                sessionID: id, events: [], title: ChatUITestWorkspaceClient.titleForFixture(name)
+            )
+            return SessionSummary(
+                id: id, title: index == 2 ? "Background work continues" : "Expired background registry",
+                presenceState: "quiescent", provider: "claude", project: "background-fixture",
+                lastActivityAt: detail.lastActivityAt, runtimeDisplay: detail.runtimeDisplay,
+                stateFacts: detail.stateFacts
+            )
+        }
         let working = index.isMultiple(of: 3)
         let statusLabel = working ? "Working" : "Idle"
         let statusTone = working ? "running" : "inactive"

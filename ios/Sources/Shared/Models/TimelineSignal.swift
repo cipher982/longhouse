@@ -78,12 +78,17 @@ enum TimelineSignal {
     /// `suppressed` flag lets a surface force `.quiet` (e.g. the app suppresses
     /// per-row attention while a global connectivity banner owns severity).
     /// Pending interaction and provider activity are independent facts.
-    static func resolve(for session: SessionSummary, suppressed: Bool = false) -> TimelineSignal {
+    static func resolve(for session: SessionSummary, suppressed: Bool = false, asOf now: Date = Date()) -> TimelineSignal {
         if session.isClosed { return .closed }
         if suppressed { return .quiet }
-        if session.needsAttention { return .attention }
-
-        let signal = forActivityState(session.stateFacts.activityState)
+        let facts = session.stateFacts
+        if session.needsAttention || facts.primary?.key == "needs_answer" || facts.primary?.key == "needs_approval" {
+            return .attention
+        }
+        if facts.workClaimExpired(asOf: now) { return .unknown }
+        let tone = facts.primary?.tone
+        if tone == "running" || tone == "thinking" || tone == "active" { return .working }
+        let signal = forActivityState(facts.activityState)
         guard signal == .unknown else { return signal }
         // A managed Helm session's idle/needs_user activity observation can
         // expire while its control lease or attached terminal stays fresh;

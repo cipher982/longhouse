@@ -10201,7 +10201,10 @@ class CatalogStore:
             delegation_parent_session_id = None
             if effective_owner_id is not None:
                 parent_session_id = connection.execute(
-                    select(storage_session.c.subagent_parent_session_id).where(storage_session.c.session_id == session_key)
+                    select(storage_session.c.subagent_parent_session_id).where(
+                        storage_session.c.session_id == session_key,
+                        storage_session.c.is_subagent == 1,
+                    )
                 ).scalar_one_or_none()
                 if parent_session_id is not None:
                     delegation_parent_session_id = connection.execute(

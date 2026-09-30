@@ -170,7 +170,7 @@ struct SessionRow: View {
                             .font(.system(size: 10))
                             .foregroundStyle(Ember.textSecondary)
                     }
-                    Text(session.displayPhaseLabel)
+                    Text(session.spokenStatusLabel())
                         .font(.system(size: 10))
                         .foregroundStyle(signal.statusColor.opacity(0.85))
                 }

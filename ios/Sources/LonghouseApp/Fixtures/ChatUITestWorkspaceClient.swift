@@ -498,6 +498,10 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Helm Send Reconciliation"
         case "background-tasks":
             return "Background Tasks"
+        case "background-tasks-timeline":
+            return "Background Tasks (timeline)"
+        case "background-tasks-timeline-stale":
+            return "Background Tasks (timeline) (stale)"
         case "background-tasks-transition":
             return "Background Tasks"
         case "background-tasks-empty":
@@ -517,7 +521,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         }
     }
 
-    private static func makeDetail(
+    static func makeDetail(
         sessionID: String,
         events: [SessionEvent],
         title: String = "Chat UI Fixture"
@@ -525,6 +529,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         // Marketing captures must not leak test-harness copy into the chrome.
         let isMarketing = title == titleForFixture("marketing")
         let isHelmChannelReconcile = title == titleForFixture("helm-channel-reconcile")
+        let isTimelineDelegation = title.contains("Background Tasks (timeline)")
         let composerPlaceholder = isMarketing
             ? "Message"
             : "Steer this turn"
@@ -594,7 +599,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     activityTool: nil,
                     activitySource: nil,
                     activityObservedAt: nil,
-                    activityValidUntil: nil,
+                    activityValidUntil: isTimelineDelegation ? "2000-01-01T00:00:00Z" : nil,
                     controlOwnership: "owned",
                     controlConnection: "connected",
                     workingSet: "open",
@@ -611,9 +616,9 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     pendingInteractionKind: nil,
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(
-                        key: isHelmChannelReconcile ? "thinking" : "idle",
-                        label: isHelmChannelReconcile ? "Thinking" : "Idle",
-                        tone: isHelmChannelReconcile ? "thinking" : "idle",
+                        key: isTimelineDelegation ? "delegated_work" : (isHelmChannelReconcile ? "thinking" : "idle"),
+                        label: isTimelineDelegation ? "Background · 1 agent · 1 command" : (isHelmChannelReconcile ? "Thinking" : "Idle"),
+                        tone: isTimelineDelegation ? "active" : (isHelmChannelReconcile ? "thinking" : "idle"),
                         observedAt: nil
                     ),
                     access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),

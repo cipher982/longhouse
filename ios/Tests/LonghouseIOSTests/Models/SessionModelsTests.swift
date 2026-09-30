@@ -319,6 +319,47 @@ struct SessionModelsTests {
         #expect(TimelineSignal.resolve(for: ordinaryStale) == .unknown)
     }
 
+    @Test
+    func delegatedTimelineSignalUsesItsOwnClockAndPreservesParentAndInteractionPrecedence() {
+        let base = timelineSummary(activityRecency: "none")
+        let now = LonghouseDateParser.parse("2026-09-25T16:05:00Z")!
+        let primary = SessionStateLabel(key: "delegated_work", label: "Background · 1 agent", tone: "active", observedAt: nil)
+        var facts = makeSessionStateFacts(
+            activity: "quiescent",
+            activityValidUntil: "2026-09-25T16:01:00Z",
+            primaryOverride: primary
+        )
+        facts.delegation = SessionDelegationFacts(
+            state: "pending", count: 1, kinds: ["subagent": 1], source: "claude_hook",
+            observedAt: "2026-09-25T16:00:00Z", validUntil: "2026-09-25T16:30:00Z", items: nil
+        )
+        func summary(_ facts: SessionStateFacts) -> SessionSummary {
+            SessionSummary(
+                id: base.id, title: base.title, presenceState: base.presenceState,
+                provider: base.provider, project: base.project, lastActivityAt: base.lastActivityAt,
+                runtimeDisplay: base.runtimeDisplay, stateFacts: facts
+            )
+        }
+        #expect(TimelineSignal.resolve(for: summary(facts), asOf: now) == .working)
+        #expect(!facts.workClaimExpired(asOf: now))
+        let expired = LonghouseDateParser.parse("2026-09-25T16:31:00Z")!
+        #expect(TimelineSignal.resolve(for: summary(facts), asOf: expired) == .unknown)
+        #expect(summary(facts).spokenStatusLabel(asOf: expired) != primary.label)
+
+        var parentWorking = makeSessionStateFacts(
+            activity: "thinking", activityValidUntil: "2026-09-25T16:01:00Z",
+            primaryOverride: primary
+        )
+        parentWorking.delegation = facts.delegation
+        #expect(TimelineSignal.resolve(for: summary(parentWorking), asOf: now) == .unknown)
+        var interaction = makeSessionStateFacts(
+            activity: "quiescent", pendingInteractionKind: "question",
+            activityValidUntil: "2026-09-25T16:01:00Z"
+        )
+        interaction.delegation = facts.delegation
+        #expect(TimelineSignal.resolve(for: summary(interaction), asOf: expired) == .attention)
+    }
+
     /// VoiceOver says the server's label verbatim while the work claim is
     /// fresh, and the ledger's "Activity uncertain" once its window passed on
     /// the reader's clock -- never a cached "Using Bash".

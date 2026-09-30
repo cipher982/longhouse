@@ -289,9 +289,7 @@ extension SessionSummary {
     /// reader's clock is spoken as "Activity uncertain", never as the cached
     /// "Using Bash" (the ledger's `.uncertain` verdict).
     func spokenStatusLabel(asOf now: Date = Date()) -> String {
-        if !isClosed,
-           ["thinking", "executing"].contains(stateFacts.activityState),
-           !stateFacts.activityEvidenceIsLive(asOf: now) {
+        if !isClosed, stateFacts.workClaimExpired(asOf: now) {
             return "Activity uncertain"
         }
         let label = timelineStatusLabel

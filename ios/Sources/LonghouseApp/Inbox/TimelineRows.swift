@@ -191,7 +191,7 @@ private struct CompactRuntimeLine: View {
         let sessionStale = signal == .quiet && session.shouldAnnotateTimelineStatusAsStale
 
         HStack(spacing: 5) {
-            Text(session.timelineStatusLabel)
+            Text(session.spokenStatusLabel())
                 .font(.caption.weight(.medium))
                 .foregroundStyle(signal.statusColor)
                 .lineLimit(1)
