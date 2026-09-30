@@ -118,6 +118,7 @@ class ImportGraph(unittest.TestCase):
 
     def test_imports_inside_code_strings_and_aliased_loaders_count(self):
         sources = {
+            "server/zerg/services/__init__.py": "",
             "server/zerg/services/proof.py": "",
             "server/zerg/services/paths.py": "",
             "server/zerg/services/other.py": "",
@@ -133,6 +134,10 @@ class ImportGraph(unittest.TestCase):
                 'script = "import zerg.services.proof\\nprint(1)"\n'
                 'prose = "you can write from zerg.services import other in a script"\n'
                 'quoted = "    from zerg.not valid python"\n'
+                'names = f"""\n'
+                "    from zerg.services import {symbol}\n"
+                "    import zerg.{module}\n"
+                '    """\n'
             ),
             "server/zerg/qa/aliased.py": (
                 "from importlib import import_module as load\n"
@@ -146,6 +151,7 @@ class ImportGraph(unittest.TestCase):
             {
                 ("qa/embedded.py", "services/paths.py"),
                 ("qa/embedded.py", "services/proof.py"),
+                ("qa/embedded.py", "services/__init__.py"),  # `from zerg.services import {symbol}`
                 ("qa/aliased.py", "services/other.py"),
             },
         )

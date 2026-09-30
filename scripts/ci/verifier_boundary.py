@@ -97,22 +97,27 @@ def read_sources(root: Path) -> dict[str, str]:
 
 
 _EMBEDDED_IMPORT = re.compile(
-    r"^[ \t]*(?:from[ \t]+zerg[\w.]*[ \t]+import[ \t]+\S.*|import[ \t]+zerg[\w.]*.*)$", re.MULTILINE
+    r"^[ \t]*(?:from[ \t]+zerg[\w.]*[ \t]+import\b.*|import[ \t]+zerg[\w.]*.*)$", re.MULTILINE
 )
 
 
 def _import_nodes(tree: ast.AST) -> Iterator[ast.AST]:
     """Every node of a module, plus the import statements inside embedded Python: a string (or f-string
     chunk) with a line `from zerg... import ...` or `import zerg...` is code the verifier hands to a
-    subprocess, and it depends on the subject as much as a real import does."""
+    subprocess, and it depends on the subject as much as a real import does. Only whole literal lines
+    are seen. `from zerg.x import {name}` counts as an import of zerg.x; an interpolated module name
+    (`import zerg.{mod}`) or a script assembled from pieces is not seen."""
     for node in ast.walk(tree):
         yield node
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            for line in _EMBEDDED_IMPORT.findall(node.value):
+            for line in (match.strip() for match in _EMBEDDED_IMPORT.findall(node.value)):
                 try:
-                    yield from ast.walk(ast.parse(line.strip()))
+                    yield from ast.walk(ast.parse(line))
                 except SyntaxError:
-                    continue
+                    # An f-string chunk that stops at its placeholder: `from zerg.x import ` + {names}.
+                    dangling = re.fullmatch(r"from[ \t]+(zerg[\w.]*)[ \t]+import", line)
+                    if dangling:
+                        yield ast.ImportFrom(module=dangling.group(1), names=[ast.alias(name="*")], level=0)
 
 
 def import_edges(sources: Mapping[str, str]) -> set[Edge]:
@@ -233,7 +238,8 @@ def check_edges(
     if base_allowed is not None:
         for edge in sorted(set(allowed) - set(base_allowed)):
             problems.append(
-                f"{ALLOWLIST} grew: `{edge[0]} -> {edge[1]}` is not in the base; the allowlist only shrinks"
+                f"{ALLOWLIST} grew: `{edge[0]} -> {edge[1]}` is not in the base; the allowlist only shrinks "
+                "(if you did not add it, your branch is behind the base: rebase first)"
             )
     return problems
 
