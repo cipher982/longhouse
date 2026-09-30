@@ -152,6 +152,19 @@ def test_plain_http_warning_follows_bind_and_declared_tls(capsys):
     assert warned("0.0.0.0", "https://longhouse.example.com") is False
 
 
+def test_declared_tls_on_a_public_bind_names_the_proxy_trust_setting(capsys):
+    from zerg.cli.serve import warn_plain_http_bind
+
+    warn_plain_http_bind("0.0.0.0", "https://longhouse.example.com")
+    output = " ".join(capsys.readouterr().out.split())
+    assert "FORWARDED_ALLOW_IPS" in output
+    assert "LONGHOUSE_COOKIE_SECURE=1" in output
+
+    # A same-host proxy on a loopback bind is trusted by default: nothing to say.
+    warn_plain_http_bind("127.0.0.1", "https://longhouse.example.com")
+    assert capsys.readouterr().out == ""
+
+
 def test_public_bind_escape_hatch_starts():
     """B1: --allow-public-no-auth lets the operator accept the risk explicitly."""
     result, started = _run_serve(

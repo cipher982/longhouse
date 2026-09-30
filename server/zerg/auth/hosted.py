@@ -7,7 +7,6 @@ import os
 import re
 import secrets
 import time
-from functools import lru_cache
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
@@ -51,17 +50,6 @@ def _is_loopback_cookie_host(host: str | None) -> bool:
         return False
 
 
-@lru_cache(maxsize=1)
-def _process_settings():
-    """Settings for the per-request cookie decision.
-
-    ``get_settings()`` re-reads the environment on every call and this runs on
-    every authenticated request, so resolve it once per process like the
-    strategies do.
-    """
-    return get_settings()
-
-
 def cookie_secure_for_scheme(scheme: str | None, settings=None) -> bool:
     """Decide whether auth cookies are ``Secure`` for a request arriving over ``scheme``.
 
@@ -76,9 +64,10 @@ def cookie_secure_for_scheme(scheme: str | None, settings=None) -> bool:
     ``LONGHOUSE_COOKIE_SECURE=1`` forces ``Secure`` for a TLS proxy the server
     cannot see through.
     """
-    if settings is None:
-        settings = _process_settings()
-    if getattr(settings, "control_plane_url", None):
+    # Hosted is decided from the variable Settings reads, not from get_settings(): this runs
+    # on every authenticated request and get_settings() re-reads the environment each call.
+    hosted = getattr(settings, "control_plane_url", None) if settings is not None else os.getenv("CONTROL_PLANE_URL")
+    if hosted:
         return True
     if os.getenv("LONGHOUSE_COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes", "on"}:
         return True

@@ -75,7 +75,18 @@ def warn_plain_http_bind(host: str, public_url: str | None) -> None:
     are stricter: ``normalize_zerg_url`` accepts plaintext http only for loopback.
     """
     if public_url and public_url.startswith("https://"):
-        return  # the operator declared TLS in front of this port
+        # TLS is declared in front of this port. Cookies are Secure only for requests the
+        # server sees arriving over https, which behind a proxy on another machine or
+        # container takes FORWARDED_ALLOW_IPS (uvicorn trusts X-Forwarded-Proto from loopback only).
+        if _host_is_public(host):
+            typer.secho(
+                "  Cookies are Secure only for requests that arrive over https: a TLS proxy on another machine "
+                "or container must be listed in FORWARDED_ALLOW_IPS (or set LONGHOUSE_COOKIE_SECURE=1 "
+                "when every request is https).",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo("")
+        return
     if not (_host_is_public(host) or (public_url and normalize_zerg_url(public_url) is None)):
         return
     typer.secho(
