@@ -217,8 +217,21 @@ struct ChatUITestFixtureView: View {
                 message = "Assistant fixture live update at bottom."
             }
             try? await Task.sleep(nanoseconds: delay)
-            await client.appendAssistantMessage(message)
+            let rowID = await client.appendAssistantMessage(message)
+            await reloadUntilPublished(rowID: rowID)
+        }
+    }
+
+    /// `reload` joins a tail refresh that is already in flight, and that request
+    /// may have read the workspace before the reply was appended. Nothing asks
+    /// again, so on a slow runner the update never reached the screen
+    /// (testLongAssistantUpdateKeepsWrappedTailAboveBottomChrome, run
+    /// 36645544095). Reload until the row is there, for at most ten seconds.
+    private func reloadUntilPublished(rowID: String) async {
+        for _ in 0..<40 {
             await viewModel.reload(sessionId: client.sessionID, appState: appState)
+            if viewModel.items.contains(where: { $0.id == rowID }) || Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
     }
     private func clearBackgroundDelegation() {

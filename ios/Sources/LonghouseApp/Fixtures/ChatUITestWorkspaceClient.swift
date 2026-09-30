@@ -231,8 +231,11 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         realtimeContinuation = nil
     }
 
-    func appendAssistantMessage(_ text: String) {
+    /// Returns the timeline row id the appended reply will have once a reload shows it.
+    @discardableResult
+    func appendAssistantMessage(_ text: String) -> String {
         let endedAt = ISO8601DateFormatter().string(from: Date())
+        let rowID = "prose:\(nextEventID)"
         events.append(Self.makeEvent(
             id: nextEventID,
             role: "assistant",
@@ -243,6 +246,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             turnEnd: SessionTurnEnd(durationMs: 129_299, endedAt: endedAt, messageCount: nil)
         ))
         nextEventID += 1
+        return rowID
     }
 
     func streamAssistantMessage(chunks: [String], intervalNanoseconds: UInt64) async {
