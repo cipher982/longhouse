@@ -3983,6 +3983,83 @@ mod tests {
         });
     }
 
+    /// The Runtime Host keys a preview by (run, turn, seq) and drops a second
+    /// event at the same one, so a turn's completion only reaches it if it
+    /// carries a sequence its partial previews did not.
+    #[test]
+    fn a_completed_turn_previews_under_a_sequence_its_partials_did_not_use() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let frame = |kind: &str, event: Value| {
+                json!({
+                    "kind": kind,
+                    "event": event,
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "native",
+                    "session_file": "/tmp/session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                })
+            };
+            for (kind, event) in [
+                ("agent_start", json!({"type": "agent_start"})),
+                (
+                    "message_start",
+                    json!({"type": "message_start", "message_id": "m"}),
+                ),
+                (
+                    "message_update",
+                    json!({"type": "message_update", "message_event_type": "text_delta", "delta": "the "}),
+                ),
+                (
+                    "message_update",
+                    json!({"type": "message_update", "message_event_type": "text_delta", "delta": "answer"}),
+                ),
+            ] {
+                server.handle_extension_frame("connection", frame(kind, event));
+            }
+            let partial_seq = server.shared.lock().unwrap().live_text_seq;
+            assert!(partial_seq > 0, "the deltas were not taken as live text");
+
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "agent_end",
+                    json!({"type": "agent_end", "isTerminal": true}),
+                ),
+            );
+            let completed = crate::status_slot::read_all(&longhouse_home.join("agent/status"))
+                .into_iter()
+                .find(|slot| slot.session_id == "session")
+                .and_then(|slot| slot.preview)
+                .expect("a completed turn keeps its final preview");
+            assert!(completed.turn_completed);
+            assert_eq!(completed.live_text, "the answer");
+            assert!(
+                completed.seq > partial_seq,
+                "a completion at the sequence of its last partial is dropped by the host as a duplicate"
+            );
+            server.shutdown();
+        });
+    }
+
     #[test]
     fn reconnect_resamples_active_provider_after_terminal_turn() {
         // Mutates process-global environment: hold the shared agent-state

@@ -82,13 +82,17 @@ impl StatusSlot {
 /// The host keys a preview by the run, the turn and the sequence within it (the
 /// `progress_signal` dedupe key), so this is the whole statement: a slot
 /// rewritten with the same identity says nothing new about the preview, however
-/// many times its phase or observation time moved.
+/// many times its phase or observation time moved. It is exactly the host's key
+/// and no finer: a field the host does not key on would make the daemon send what
+/// the host drops as a duplicate, and then record it as held. A producer that
+/// completes a turn therefore advances `seq` with it (the OMP Helm launcher does,
+/// `record_activity`), since the host cannot tell a completion at the same `seq`
+/// from what it already holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewIdentity {
     run_id: String,
     turn_id: String,
     seq: u64,
-    turn_completed: bool,
 }
 
 impl StatusSlot {
@@ -98,7 +102,6 @@ impl StatusSlot {
             run_id: self.run_id.clone(),
             turn_id: preview.turn_id.clone(),
             seq: preview.seq,
-            turn_completed: preview.turn_completed,
         })
     }
 }
@@ -770,7 +773,8 @@ mod tests {
 
     /// A rewrite of the slot is a new observation of the phase, not a new
     /// preview. What the host already holds is left out; anything else, a new
-    /// sequence, a new turn, a new run, the turn completing, still goes.
+    /// sequence, a new turn, a new run, still goes, and a turn completing is a
+    /// new sequence.
     #[test]
     fn a_preview_the_host_already_holds_is_not_stated_again() {
         let mut carrying = slot("s1", "idle", 9);
@@ -811,8 +815,18 @@ mod tests {
         );
         assert_eq!(differs(&|s| s.run_id = "run-2".into()), both);
         assert_eq!(
-            differs(&|s| s.preview.as_mut().unwrap().turn_completed = true),
+            differs(&|s| {
+                let preview = s.preview.as_mut().unwrap();
+                preview.seq = 59;
+                preview.turn_completed = true;
+            }),
             both
+        );
+        // The host's dedupe key is (run, turn, seq): at the same one it drops the
+        // event, so sending it would only be recorded as held without being so.
+        assert_eq!(
+            differs(&|s| s.preview.as_mut().unwrap().turn_completed = true),
+            ["phase_signal"]
         );
     }
 
