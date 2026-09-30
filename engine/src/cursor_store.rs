@@ -626,25 +626,69 @@ fn conversation_dirs(path: &Path) -> Vec<PathBuf> {
         .into_iter()
         .collect();
     roots.extend(crate::cursor_visibility::cursor_chat_roots());
-    crate::cursor_visibility::cursor_store_candidates_in(&roots, &conversation_id)
-        .into_iter()
-        .filter_map(|store| store.parent().map(Path::to_path_buf))
-        .collect()
+    // Every root that holds the conversation, not the first: an identity held by
+    // two stores is judged by both.
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for root in &roots {
+        for store in crate::cursor_visibility::cursor_store_candidates_in(
+            std::slice::from_ref(root),
+            &conversation_id,
+        ) {
+            if let Some(dir) = store.parent().map(Path::to_path_buf) {
+                if !dirs.contains(&dir) {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+    dirs
 }
 
 fn read_sidecar(dir: &Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()
 }
 
-/// When the conversation began: the sidecar's creation time, else the store's own.
+/// When the conversation began. The store is the authority: it is what the
+/// shipper dates the session by. The sidecar is a second witness, and one that
+/// disagrees with its store (a store replaced under an older `meta.json`, a
+/// copied archive) is never read in the direction that leaks: the earlier wins.
 fn conversation_started_at(dir: &Path) -> Option<DateTime<Utc>> {
-    read_sidecar(dir)
+    let store = store_created_at(&dir.join("store.db"));
+    let sidecar = read_sidecar(dir)
         .and_then(|sidecar| sidecar.get("createdAtMs")?.as_i64())
-        .and_then(DateTime::from_timestamp_millis)
-        .or_else(|| store_created_at(&dir.join("store.db")))
+        .and_then(DateTime::from_timestamp_millis);
+    match (store, sidecar) {
+        (Some(store), Some(sidecar)) => Some(store.min(sidecar)),
+        (store, sidecar) => store.or(sidecar),
+    }
 }
 
+/// A conversation's creation time never changes, so a store read once is not
+/// opened again by every later scan: only sources that look new reach this, and
+/// on a long-running machine that is every conversation since the scope began.
 fn store_created_at(store: &Path) -> Option<DateTime<Utc>> {
+    static KNOWN: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, DateTime<Utc>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    const MAX_KNOWN: usize = 50_000;
+    if let Some(known) = KNOWN
+        .lock()
+        .ok()
+        .and_then(|known| known.get(store).copied())
+    {
+        return Some(known);
+    }
+    let created = read_store_created_at(store)?;
+    if let Ok(mut known) = KNOWN.lock() {
+        if known.len() >= MAX_KNOWN {
+            known.clear();
+        }
+        known.insert(store.to_path_buf(), created);
+    }
+    Some(created)
+}
+
+fn read_store_created_at(store: &Path) -> Option<DateTime<Utc>> {
     let conn = open_readonly(store).ok()?;
     let value = conn
         .query_row("SELECT value FROM meta WHERE key = '0'", [], |row| {
@@ -1440,6 +1484,72 @@ mod import_scope_tests {
         // The projection is shared by both stores, so it follows the older one.
         assert!(!source_in_import_scope(&scope, &old.projection));
         assert_eq!(conversation_dirs(&old.projection).len(), 2);
+    }
+
+    /// The store, not the sidecar, dates the conversation: a `meta.json` that
+    /// claims a later start than its store (a store replaced under it, a copied
+    /// archive) must not bring an older conversation in.
+    #[test]
+    fn a_sidecar_that_disagrees_with_its_store_never_admits() {
+        let home = tempfile::tempdir().unwrap();
+        let since = Utc::now();
+        pause();
+        let id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let conv = conversation(
+            home.path(),
+            "ws",
+            id,
+            ms(since - chrono::Duration::days(2)),
+            Some("/work/a"),
+        );
+        // The sidecar says the conversation began after the scope; the store says otherwise.
+        fs::write(
+            conv.store.with_file_name("meta.json"),
+            format!(
+                r#"{{"schemaVersion":1,"createdAtMs":{},"cwd":"/work/a"}}"#,
+                ms(since + chrono::Duration::seconds(30))
+            ),
+        )
+        .unwrap();
+        let scope = ImportScope::starting(since, "cli");
+        assert!(!source_in_import_scope(&scope, &conv.store));
+        assert!(!source_in_import_scope(&scope, &conv.projection));
+    }
+
+    /// Cursor keeps chats in `~/.cursor` and, on some installs, under the XDG
+    /// config directory too; a conversation found in both is judged by both.
+    #[test]
+    fn a_conversation_held_under_two_chat_roots_needs_both_to_be_in_scope() {
+        let old_home = tempfile::tempdir().unwrap();
+        let new_home = tempfile::tempdir().unwrap();
+        let id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+        let since = Utc::now();
+        pause();
+        let old = conversation(
+            old_home.path(),
+            "ws",
+            id,
+            ms(since - chrono::Duration::days(1)),
+            Some("/work/a"),
+        );
+        let _new = conversation(
+            new_home.path(),
+            "ws",
+            id,
+            ms(since + chrono::Duration::seconds(30)),
+            Some("/work/a"),
+        );
+        let scope = ImportScope::starting(since, "cli");
+        temp_env::with_vars(
+            [
+                ("CURSOR_HOME", Some(new_home.path().as_os_str().to_owned())),
+                ("XDG_CONFIG_HOME", None),
+            ],
+            || {
+                assert_eq!(conversation_dirs(&old.projection).len(), 2);
+                assert!(!source_in_import_scope(&scope, &old.projection));
+            },
+        );
     }
 
     #[test]
