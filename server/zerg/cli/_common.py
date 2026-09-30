@@ -12,6 +12,7 @@ from uuid import UUID
 
 import typer
 
+from zerg.cli.plaintext_guard import enforce_plaintext_rule
 from zerg.services.local_health import collect_launch_readiness
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.shipper import get_zerg_url
@@ -54,6 +55,7 @@ def load_api_credentials(
         typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
         raise typer.Exit(code=exit_code)
 
+    enforce_plaintext_rule(resolved_url, state_root, exit_code=exit_code)
     return resolved_url, resolved_token
 
 

@@ -267,3 +267,75 @@ def test_the_two_swift_copies_of_the_rule_are_identical():
     ios = (root / "ios/Sources/Shared/Auth/PlaintextHTTP.swift").read_text()
     desktop = (root / "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/PlaintextHTTP.swift").read_text()
     assert ios == desktop
+
+
+def _expect_refusal(callable_, capsys, *needles):
+    with pytest.raises(typer.Exit) as exc:
+        callable_()
+    assert exc.value.exit_code == 1
+    err = capsys.readouterr().err
+    for needle in needles:
+        assert needle in err, err
+
+
+def test_the_cli_commands_that_send_a_token_apply_the_rule(monkeypatch, tmp_path: Path, capsys):
+    from zerg.cli._common import load_api_credentials
+    from zerg.cli.plaintext_guard import enforce_plaintext_rule
+
+    monkeypatch.delenv(OPT_IN_ENV, raising=False)
+
+    def credentials(url):
+        return load_api_credentials(
+            url=url, token="device-token", config_dir=tmp_path, resolve_url=lambda _dir: None, resolve_token=lambda _dir: None
+        )
+
+    # Loopback, Tailscale and https pass untouched.
+    for allowed in ("http://127.0.0.1:8080", "http://100.64.0.1:8080", "https://demo.longhouse.ai"):
+        assert credentials(allowed) == (allowed, "device-token")
+    assert capsys.readouterr().err == ""
+
+    # A LAN address is refused with the reason and how to opt in for a command with no flag.
+    _expect_refusal(
+        lambda: credentials("http://192.168.1.20:8080"), capsys, "Refusing plaintext", OPT_IN_ENV, "longhouse auth --allow-insecure-http"
+    )
+    # A public address is refused, opt-in or not.
+    monkeypatch.setenv(OPT_IN_ENV, "1")
+    _expect_refusal(lambda: credentials("http://demo.longhouse.ai"), capsys, "Refusing plaintext", "https://")
+    # An opted-in LAN address works and warns on stderr each time.
+    for _ in range(2):
+        assert credentials("http://192.168.1.20:8080")[0] == "http://192.168.1.20:8080"
+        assert capsys.readouterr().err.count("WARNING") == 1
+    # A value the rule cannot parse is left to the request to fail on, as before.
+    enforce_plaintext_rule("not a url")
+    monkeypatch.delenv(OPT_IN_ENV)
+
+    # The stored opt-in covers only its own address.
+    write_machine_state(base_dir=tmp_path, written_by="test", runtime_url="http://192.168.1.20:8080", allow_insecure_http=True)
+    enforce_plaintext_rule("http://192.168.1.20:8080", tmp_path)
+    assert "WARNING" in capsys.readouterr().err
+    _expect_refusal(lambda: enforce_plaintext_rule("http://192.168.1.99:8080", tmp_path), capsys, "Refusing plaintext")
+
+
+def test_mcp_server_and_recall_refuse_a_cleartext_address_before_sending_the_token(monkeypatch, tmp_path: Path, capsys):
+    from zerg.cli import mcp_serve
+
+    monkeypatch.delenv(OPT_IN_ENV, raising=False)
+    monkeypatch.setattr(mcp_serve, "load_token", lambda *args, **kwargs: "device-token")
+
+    _expect_refusal(
+        lambda: mcp_serve.mcp_server(url="http://demo.longhouse.ai", token=None, transport="stdio", port=8001), capsys, "Refusing plaintext"
+    )
+
+    monkeypatch.setattr(connect, "load_token", lambda config_dir=None: "device-token")
+    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: "http://192.168.1.20:8080")
+    sent = []
+    monkeypatch.setattr(connect.httpx, "Client", lambda *args, **kwargs: sent.append(args) or None)
+    _expect_refusal(
+        lambda: connect.recall(
+            query="x", project=None, provider=None, days_back=7, limit=5, output_json=False, url=None, token=None, claude_dir=None
+        ),
+        capsys,
+        "Refusing plaintext",
+        OPT_IN_FLAG,
+    )
+    assert sent == []

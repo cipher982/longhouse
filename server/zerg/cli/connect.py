@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 import typer
 
+from zerg.cli.plaintext_guard import enforce_plaintext_rule
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.plaintext_http import OPT_IN_ENV
 from zerg.services.plaintext_http import OPT_IN_FLAG
@@ -244,6 +245,7 @@ def recall(
         if not token:
             typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
+    enforce_plaintext_rule(url, config_dir)
 
     # Build query params
     params: dict = {
@@ -368,6 +370,7 @@ def recall_context(
     if not url or not token:
         typer.secho("Longhouse URL and device token are required. Run 'longhouse auth' first.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+    enforce_plaintext_rule(url, config_dir)
 
     try:
         with httpx.Client(timeout=15) as client:

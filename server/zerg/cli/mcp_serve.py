@@ -6,6 +6,7 @@ import logging
 
 import typer
 
+from zerg.cli.plaintext_guard import enforce_plaintext_rule
 from zerg.services.shipper.token import get_zerg_url
 from zerg.services.shipper.token import load_token
 
@@ -42,6 +43,7 @@ def mcp_server(
         url = get_zerg_url() or "http://localhost:8080"
     if not token:
         token = load_token()
+    enforce_plaintext_rule(url)
 
     from zerg.mcp_server import create_server
 
