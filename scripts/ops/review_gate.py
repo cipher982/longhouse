@@ -22,8 +22,15 @@ lists the commit's SHA or its stable patch-id, so a rebase after review keeps th
 review; a change to the patch itself (amend, conflict resolution) does not.
 
   review_gate.py push [--base origin/main]
+  review_gate.py pre-push REMOTE [URL]        (the git hook; stdin is git's list of refs being pushed)
   review_gate.py promotion --target SHA (--served SHA | --served-url URL)
   review_gate.py status [--range A..B]
+
+`push` is asked by the scripts that push (make check-push-readiness, make ship, release.sh), which is
+cooperative: a bare `git push origin HEAD:main` skipped it, and on 2026-09-29 three commits to the gate
+and to promote-production.sh landed with no receipt that way. scripts/ops/install-push-gate.sh installs
+`pre-push` as a git hook in the shared git dir, so every worktree's push to main is asked whichever
+recipe the agent follows. `git push --no-verify` still bypasses it; the promotion rule is the backstop.
 
 Exit 0: allowed. Exit 1: refused (the message lists the commits). Exit 2: the gate
 could not decide (unresolvable SHA, unreachable health URL); promotion treats that
@@ -51,6 +58,7 @@ STORE_DIRNAME = "review-receipts"
 LOG_NAME = "receipts.jsonl"
 GATED_SEVERITIES = ("blocking", "material")
 RESOLVING = ("fixed", "rejected")
+DEFAULT_BRANCH = "main"
 OVERRIDE_ENV = "LONGHOUSE_REVIEW_OVERRIDE"
 OVERRIDE_REASON_ENV = "LONGHOUSE_REVIEW_OVERRIDE_REASON"
 OVERRIDE_WHO = "david"
@@ -301,6 +309,35 @@ def push_verdicts(repo: str | Path, policy: Policy, base: str, head: str = "HEAD
     return [v for v in verdicts if v.reasons]
 
 
+def pre_push_verdicts(repo: str | Path, policy: Policy, remote: str, stdin_lines: list[str]) -> list[Verdict]:
+    """Git's pre-push stdin is `<local ref> <local sha> <remote ref> <remote sha>` per ref being pushed.
+    Only a push that updates main is asked; a topic branch, a tag or a deletion is not."""
+    verdicts: list[Verdict] = []
+    for line in stdin_lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        _, local_sha, remote_ref, remote_sha = parts
+        if remote_ref != f"refs/heads/{DEFAULT_BRANCH}" or set(local_sha) == {"0"}:
+            continue
+        known = set(remote_sha) != {"0"} and git(repo, "rev-parse", "--verify", "--quiet", f"{remote_sha}^{{commit}}", check=False).strip()
+        # What the remote holds now; when this checkout has not fetched it yet, what it last saw.
+        base = remote_sha if known else f"{remote}/{DEFAULT_BRANCH}"
+        verdicts += push_verdicts(repo, policy, base, local_sha)
+    return verdicts
+
+
+def check_policy(repo: str | Path, policy: Policy, name: str) -> None:
+    """The push rule is only as good as the policy it reads: a dead glob is a protection a rename switched off."""
+    dead = policy.dead_globs(git(repo, "ls-files").split("\n"))
+    if dead:
+        print("review-gate: WARNING these blocking globs match no tracked file (a rename may have switched a "
+              "protection off; fix scripts/ops/review-policy.toml): " + ", ".join(dead), file=sys.stderr)
+    if not policy.blocking:
+        raise GateError(f"review-policy.toml has no [[repos.{name}.blocking]] table, so "
+                        "the landing rule would enforce nothing here; add one or pass --name")
+
+
 def promotion_verdicts(repo: str | Path, policy: Policy, served: str, target: str) -> list[Verdict]:
     served, target = resolve(repo, served), resolve(repo, target)
     revs = [f"{served}..{target}"]
@@ -380,6 +417,9 @@ def main(argv: list[str] | None = None) -> int:
     push = sub.add_parser("push", help="landing rule: blocking-list commits need a completed review")
     push.add_argument("--base", default="origin/main")
     push.add_argument("--head", default="HEAD")
+    hook = sub.add_parser("pre-push", help="git pre-push hook: the landing rule for whatever `git push` is about to send to main")
+    hook.add_argument("remote")
+    hook.add_argument("url", nargs="?")
     promo = sub.add_parser("promotion", help="promotion rule: every code commit since the served SHA is reviewed")
     promo.add_argument("--target", required=True)
     group = promo.add_mutually_exclusive_group(required=True)
@@ -397,15 +437,13 @@ def main(argv: list[str] | None = None) -> int:
             if not git(repo, "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}", check=False).strip():
                 print(f"review-gate: {args.base} not found; push check skipped.", file=sys.stderr)
                 return 0
-            dead = policy.dead_globs(git(repo, "ls-files").split("\n"))
-            if dead:
-                print("review-gate: WARNING these blocking globs match no tracked file (a rename may have switched a "
-                      "protection off; fix scripts/ops/review-policy.toml): " + ", ".join(dead), file=sys.stderr)
-            if not policy.blocking:
-                raise GateError(f"review-policy.toml has no [[repos.{args.name or repo_name(repo)}.blocking]] table, so "
-                                "the landing rule would enforce nothing here; add one or pass --name")
+            check_policy(repo, policy, args.name or repo_name(repo))
             verdicts = push_verdicts(repo, policy, args.base, args.head)
             kind, what, target = "push", "touch the blocking list without a completed review", args.head
+        elif args.mode == "pre-push":
+            check_policy(repo, policy, args.name or repo_name(repo))
+            verdicts = pre_push_verdicts(repo, policy, args.remote, sys.stdin.read().splitlines())
+            kind, what, target = "push", "touch the blocking list without a completed review", DEFAULT_BRANCH
         elif args.mode == "promotion":
             served = args.served or served_commit(args.served_url)
             verdicts = promotion_verdicts(repo, policy, served, args.target)
@@ -423,7 +461,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"review-gate: {exc}", file=sys.stderr)
         return 2
     if not verdicts:
-        print(f"review-gate: {kind} OK.")
+        if args.mode != "pre-push":  # a hook that prints on every push is a hook people stop reading
+            print(f"review-gate: {kind} OK.")
         return 0
     if override(repo, kind, target, verdicts):
         return 0

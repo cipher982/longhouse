@@ -94,6 +94,7 @@ paths = [
   "scripts/lib/hosted-instance.sh",
   "scripts/lib/review-gate.sh",
   "scripts/ops/promote-*.sh",
+  "scripts/ops/promotion_gates.py",
   "scripts/ops/runtime-deploy.sh",
   "scripts/ops/release.sh",
   "scripts/ops/release-artifacts.py",
@@ -115,6 +116,7 @@ paths = [
   "scripts/ops/review_gate.py",
   "scripts/ops/review-policy.toml",
   "scripts/ops/check-push-readiness.sh",
+  "scripts/ops/install-push-gate.sh",
   "scripts/ops/ship.sh",
 ]
 

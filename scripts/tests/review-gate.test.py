@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "scripts" / "ops" / "review_gate.py"
+INSTALLER = ROOT / "scripts" / "ops" / "install-push-gate.sh"
 POLICY = ROOT / "scripts" / "ops" / "review-policy.toml"
 
 spec = importlib.util.spec_from_file_location("review_gate", GATE)
@@ -151,8 +152,119 @@ class EnforcementWiringTests(unittest.TestCase):
         policy = gate.Policy.load(POLICY, "longhouse")
         for path in ("scripts/ops/ship.sh", "scripts/ops/release.sh", "scripts/ops/check-push-readiness.sh",
                      "scripts/ops/promote-dogfood.sh", "scripts/ops/promote-production.sh",
-                     "scripts/lib/review-gate.sh", "scripts/ops/review_gate.py", "scripts/ops/review-policy.toml"):
+                     "scripts/lib/review-gate.sh", "scripts/ops/review_gate.py", "scripts/ops/review-policy.toml",
+                     "scripts/ops/promotion_gates.py", "scripts/ops/install-push-gate.sh"):
             self.assertTrue(policy.blocking_areas([path]), f"{path} must be on the blocking list")
+
+
+class PrePushHookTests(unittest.TestCase):
+    """A bare `git push origin HEAD:main` asks the gate too: the hole three unreviewed commits landed through."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base_dir = Path(self.tmp.name)
+        self.repo = self.clone("longhouse")  # the policy table is the origin URL's basename
+        self.base = self.repo.commit("base", {"README.md": "x"})
+        self.git_push("origin", "main")  # before the hook exists, so it seeds the remote
+        installed = subprocess.run(["bash", str(INSTALLER)], cwd=self.repo.dir, capture_output=True, text=True)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+
+    def clone(self, name):
+        remote = self.base_dir / f"{name}.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True)
+        work = self.base_dir / f"work-{name}"
+        work.mkdir()
+        repo = Repo(str(work))
+        repo.git("remote", "set-url", "origin", str(remote))
+        # The hook runs the checkout's own gate and policy, like a worktree of the real repository does.
+        ops = work / "scripts" / "ops"
+        ops.mkdir(parents=True)
+        for source in (GATE, POLICY):
+            (ops / source.name).write_bytes(source.read_bytes())
+        return repo
+
+    def git_push(self, *args, repo=None):
+        repo = repo or self.repo
+        env = {k: v for k, v in os.environ.items() if k not in ("CI", "GITHUB_ACTIONS", gate.OVERRIDE_ENV, gate.OVERRIDE_REASON_ENV)}
+        return subprocess.run(["git", "push", *args], cwd=repo.dir, capture_output=True, text=True, env=env)
+
+    def remote_main(self, name="longhouse"):
+        return subprocess.run(["git", "--git-dir", str(self.base_dir / f"{name}.git"), "rev-parse", "main"],
+                              capture_output=True, text=True).stdout.strip()
+
+    def test_an_unreviewed_blocking_commit_cannot_be_pushed_to_main(self):
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        pushed = self.git_push("origin", "HEAD:main")
+        self.assertNotEqual(pushed.returncode, 0)
+        self.assertIn("REFUSED push", pushed.stderr)
+        self.assertIn("no review receipt", pushed.stderr)
+        self.assertEqual(self.remote_main(), self.base, "the refused push moved nothing")
+
+    def test_a_reviewed_blocking_commit_lands_quietly(self):
+        head = self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        self.repo.receipt(self.base)
+        pushed = self.git_push("origin", "HEAD:main")
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertEqual(pushed.stdout, "")
+        self.assertNotIn("push OK", pushed.stdout + pushed.stderr)  # (the fixture tree lacks most globs' files, so a dead-glob warning is expected)
+        self.assertEqual(self.remote_main(), head)
+
+    def test_a_docs_only_push_is_not_asked_for_anything(self):
+        head = self.repo.commit("docs", {"docs/notes.md": "words"})
+        pushed = self.git_push("origin", "HEAD:main")
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertEqual(self.remote_main(), head)
+
+    def test_a_topic_branch_is_not_gated_but_main_is_even_when_it_is_not_the_first_ref(self):
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        self.assertEqual(self.git_push("origin", "HEAD:refs/heads/topic").returncode, 0)
+        refused = self.git_push("origin", "HEAD:refs/heads/topic2", "HEAD:main")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("REFUSED push", refused.stderr)
+        self.assertEqual(self.remote_main(), self.base)
+
+    def test_an_unreviewed_commit_on_top_of_a_reviewed_one_is_still_refused(self):
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        reviewed_through = self.repo.git("rev-parse", "HEAD")
+        self.repo.receipt(self.base)
+        self.repo.commit("more auth", {"server/zerg/auth/other.py": "2"})
+        refused = self.git_push("origin", "HEAD:main")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertNotIn(reviewed_through[:12], refused.stderr)  # only the commit without a receipt is named
+
+    def test_the_logged_override_lets_it_through(self):
+        self.repo.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        env = {**os.environ, gate.OVERRIDE_ENV: "david", gate.OVERRIDE_REASON_ENV: "hotfix"}
+        pushed = subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=self.repo.dir, capture_output=True, text=True, env=env)
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertIn("OVERRIDDEN", pushed.stderr)
+
+    def test_a_gate_that_cannot_decide_does_not_stop_every_push(self):
+        # No policy table for this repository name: the gate answers exit 2, the hook says so and allows.
+        other = self.clone("nopolicy")
+        head = other.commit("auth change", {"server/zerg/auth/tokens.py": "1"})
+        installed = subprocess.run(["bash", str(INSTALLER)], cwd=other.dir, capture_output=True, text=True)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        pushed = self.git_push("origin", "HEAD:main", repo=other)
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertIn("could not decide", pushed.stderr)
+        self.assertEqual(self.remote_main("nopolicy"), head)
+
+    def test_the_installer_is_idempotent_and_never_replaces_a_hook_that_is_not_its_own(self):
+        again = subprocess.run(["bash", str(INSTALLER)], cwd=self.repo.dir, capture_output=True, text=True)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        hook = Path(self.repo.git("rev-parse", "--path-format=absolute", "--git-path", "hooks")) / "pre-push"
+        self.assertTrue(os.access(hook, os.X_OK))
+        hook.write_text("#!/bin/sh\necho someone else's hook\n")
+        refused = subprocess.run(["bash", str(INSTALLER)], cwd=self.repo.dir, capture_output=True, text=True)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("someone else's hook", hook.read_text())
+
+    def test_the_makefile_offers_the_installer(self):
+        makefile = (ROOT / "Makefile").read_text()
+        self.assertIn("install-push-gate: ##", makefile)
+        self.assertIn("./scripts/ops/install-push-gate.sh", makefile)
 
 
 class RepoNameTests(unittest.TestCase):
