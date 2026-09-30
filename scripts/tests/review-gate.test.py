@@ -512,6 +512,15 @@ class PromotionRuleTests(unittest.TestCase):
         with self.assertRaises(gate.GateError):
             gate.served_commit("http://127.0.0.1:9/api/health")
 
+    def test_a_served_url_without_a_scheme_is_a_clean_error_not_a_traceback(self):
+        with self.assertRaises(gate.GateError) as caught:
+            gate.served_commit("david010.longhouse.ai/api/health")
+        self.assertIn("unknown url type", str(caught.exception))
+        result = self.repo.run("promotion", "--target", "HEAD", "--served-url", "david010.longhouse.ai/api/health")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not read the served commit", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
 
 class StatusTests(unittest.TestCase):
     def test_status_prints_a_line_per_commit_and_never_refuses(self):

@@ -88,6 +88,14 @@ save_receipt() {
   name="${name:-unresolved}"
   mkdir -p "$RECEIPT_DIR" && cp "$receipt" "$RECEIPT_DIR/production-${name}-$(date -u +%Y%m%dT%H%M%SZ).json" || true
 }
+# A stop after the control plane took the submission keeps the receipt too, with the deployment and
+# key it used, so the recovery commands the stop prints can be run from it later.
+save_stopped_receipt() {
+  jq --arg outcome "$1" --arg deployment "${LH_DEPLOYMENT_ID:-}" --arg key "${LH_DEPLOYMENT_IDEMPOTENCY_KEY:-}" --arg attempt "$ATTEMPT" \
+    '. + {promotion: {outcome: $outcome, deployment_id: $deployment, idempotency_key: $key, attempt: ($attempt | tonumber), demo_verified: false}}' \
+    "$receipt" >"$receipt.next" && mv "$receipt.next" "$receipt" || true
+  save_receipt
+}
 if [[ "$gates_ok" != "1" ]]; then
   echo "Refusing to promote to production: the gates above did not all pass. Nothing was changed." >&2
   cat "$receipt"
@@ -173,6 +181,7 @@ succeeded, so it is unchanged; tenants ahead of the failure are already on $PROD
   roll back: POST ${CONTROL_PLANE_URL%/}/api/deployments/${LH_DEPLOYMENT_ID}/rollback  {"scope":"all"}
   roll forward after fixing the cause: PROMOTION_ATTEMPT=$((ATTEMPT + 1)) make promote-production SHA=$SHA
 EOF
+  save_stopped_receipt wave-halted
   exit 1
 fi
 DEPLOYMENT_ID="${LH_DEPLOYMENT_ID:-}"
@@ -201,6 +210,7 @@ cd '$demo_dir'
 docker compose up -d --force-recreate '$DEMO_COMPOSE_SERVICE'"; then
   echo "Could not pin the public demo over ssh." >&2
   demo_recovery
+  save_stopped_receipt demo-not-pinned
   exit 1
 fi
 
@@ -218,6 +228,7 @@ done
 if [[ "$demo_commit" != "$SHA" ]]; then
   echo "Timed out waiting for public demo to report commit $SHA (last seen: ${demo_commit:-<unreachable>})." >&2
   demo_recovery
+  save_stopped_receipt demo-not-verified
   exit 1
 fi
 

@@ -315,9 +315,10 @@ def promotion_verdicts(repo: str | Path, policy: Policy, served: str, target: st
 
 
 def served_commit(url: str) -> str:
-    # Cloudflare answers the default Python-urllib agent with 403 (error 1010).
-    request = urllib.request.Request(url, headers={"User-Agent": "longhouse-review-gate/1"})
     try:
+        # Cloudflare answers the default Python-urllib agent with 403 (error 1010). A URL without a scheme
+        # raises ValueError from Request itself, so the request is built inside the try.
+        request = urllib.request.Request(url, headers={"User-Agent": "longhouse-review-gate/1"})
         with urllib.request.urlopen(request, timeout=15) as resp:  # noqa: S310 - operator-supplied health URL
             body = json.load(resp)
     except (OSError, ValueError) as exc:

@@ -54,6 +54,7 @@ class PromotionAuthorizationTests(unittest.TestCase):
                 'lh_review_gate_promotion() {\n'
                 '  printf "%s %s\\n" "$1" "$2" >> "$FIXTURE_ROOT/gate_calls"\n'
                 '  [[ "$FIXTURE_GATE_REFUSES" != 1 ]] || { echo "review-gate: REFUSED" >&2; return 1; }\n'
+                '  echo "review-gate: promotion OK."\n'  # the real gate reports success on stdout
                 '}\n'
             )
             # External services are isolated; the real receipt verifier and
@@ -136,6 +137,13 @@ else:
         result, _ = self.run_promotion()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.gate_calls, [f"{SHA} https://fixture-owner.longhouse.ai/api/health"])
+
+    def test_the_gates_success_line_stays_off_stdout(self):
+        # Like promote-production: stdout is for what the script produces, not the gate's chatter.
+        result, _ = self.run_promotion()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("review-gate:", result.stdout)
+        self.assertIn("review-gate: promotion OK.", result.stderr)
 
     def test_an_unreviewed_range_promotes_nothing(self):
         result, promotions = self.run_promotion(gate_refuses=True)

@@ -83,6 +83,14 @@ class PromoteProductionTests(unittest.TestCase):
             self.gate_calls = gate_calls.read_text().splitlines() if gate_calls.exists() else []
             return result, promotions, ssh_calls, saved
 
+    def assert_stopped_receipt(self, saved: list, outcome: str) -> None:
+        """A stop after the control plane took the submission keeps the receipt, with the deployment and key it used."""
+        self.assertEqual(len(saved), 1, "this stop keeps its receipt too")
+        promotion = saved[0]["promotion"]
+        self.assertEqual((promotion["outcome"], promotion["demo_verified"]), (outcome, False))
+        self.assertEqual(promotion["idempotency_key"], f"promote-production-{w.SHA}")
+        self.assertTrue(promotion["deployment_id"])
+
     def test_the_review_gate_is_asked_for_the_target_against_what_production_serves(self) -> None:
         result, promotions, _ssh, _saved = self.run_promotion(w.green_world(), w.SHA)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -247,10 +255,11 @@ class PromoteProductionTests(unittest.TestCase):
     def test_a_halted_wave_leaves_the_demo_alone_and_says_how_to_recover(self) -> None:
         world = w.green_world()
         world["instances"].append({"id": 11, "subdomain": "acme", "status": "active"})
-        result, promotions, ssh_calls, _saved = self.run_promotion(world, env={"FIXTURE_REPROVISION_FAIL": "1"})
+        result, promotions, ssh_calls, saved = self.run_promotion(world, env={"FIXTURE_REPROVISION_FAIL": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(promotions), 1)
         self.assertEqual(ssh_calls, [], "the demo must not be touched after a failed wave")
+        self.assert_stopped_receipt(saved, "wave-halted")
         self.assertIn("stopped before the public demo was touched", result.stderr)
         self.assertIn("/rollback", result.stderr)
         self.assertIn("PROMOTION_ATTEMPT=2 make promote-production", result.stderr)
@@ -271,19 +280,21 @@ class PromoteProductionTests(unittest.TestCase):
         self.assertEqual(promotions[0][2], f"promote-production-{w.SHA}-attempt-2")
 
     def test_a_demo_that_cannot_be_pinned_says_only_the_demo_is_behind(self) -> None:
-        result, promotions, ssh_calls, _saved = self.run_promotion(env={"FIXTURE_SSH_FAIL": "1"})
+        result, promotions, ssh_calls, saved = self.run_promotion(env={"FIXTURE_SSH_FAIL": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(promotions), 1)
         self.assertEqual(len(ssh_calls), 1)
+        self.assert_stopped_receipt(saved, "demo-not-pinned")
         self.assertIn("only the\npublic demo is not verified", result.stderr)
         self.assertIn(f"make promote-production SHA={w.SHA}", result.stderr)
 
     def test_a_demo_that_never_reports_the_commit_says_only_the_demo_is_behind(self) -> None:
         world = w.green_world()
         world["demo_health"]["build"]["commit"] = w.OTHER_SHA
-        result, promotions, ssh_calls, _saved = self.run_promotion(world)
+        result, promotions, ssh_calls, saved = self.run_promotion(world)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((len(promotions), len(ssh_calls)), (1, 1))
+        self.assert_stopped_receipt(saved, "demo-not-verified")
         self.assertIn("Timed out waiting for public demo", result.stderr)
         self.assertIn("Nothing to roll back", result.stderr)
 

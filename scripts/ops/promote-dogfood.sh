@@ -36,7 +36,7 @@ SHA="$(git -C "$ROOT" rev-parse --verify --quiet "${SHA}^{commit}")" || {
 
 # Every code commit between what dogfood serves now and SHA needs a completed review.
 . "$ROOT/scripts/lib/review-gate.sh"
-lh_review_gate_promotion "$SHA" "https://${SUBDOMAIN}.longhouse.ai/api/health"
+lh_review_gate_promotion "$SHA" "https://${SUBDOMAIN}.longhouse.ai/api/health" >&2
 
 deploy_json="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --commit "$SHA" --status success --limit 20 --json headSha,databaseId,workflowName,event)"
 deploy_run_ids="$(jq -r --arg sha "$SHA" \
