@@ -15,6 +15,9 @@ from zerg.cli import serve as serve_cli
 
 
 class _FakeSocket:
+    def setsockopt(self, *_args) -> None:
+        return None
+
     def bind(self, _addr) -> None:
         return None
 

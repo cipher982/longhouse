@@ -18,6 +18,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from typing import NoReturn
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -221,6 +222,59 @@ def _apply_lite_mode_defaults(*, public_intent: bool = False) -> None:
         os.environ["FERNET_SECRET"] = _get_or_create_fernet_secret()
 
 
+def _port_is_free(host: str, port: int) -> bool:
+    """True when nothing listens on host:port.
+
+    The probe sets SO_REUSEADDR like uvicorn does on its own listener. Without it a
+    server that stopped seconds ago leaves TIME_WAIT sockets on the port for about a
+    minute and the probe says "already in use" for a port that `lsof` shows empty:
+    `serve --stop` followed by `serve` (the README's own trial-to-self-host step)
+    failed that way.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1" if host in ("0.0.0.0", "::", "") else host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def _print_public_auth_setup() -> None:
+    """The three exports that let a public bind start, and the proxy escape hatch."""
+    typer.echo("  Enable password auth (simplest):")
+    typer.secho(
+        '    export LONGHOUSE_PASSWORD_HASH="$(longhouse-server hash-password)"',
+        fg=typer.colors.BRIGHT_BLACK,
+    )
+    typer.secho("    export JWT_SECRET=$(openssl rand -hex 32)", fg=typer.colors.BRIGHT_BLACK)
+    typer.secho("    export INTERNAL_API_SECRET=$(openssl rand -hex 32)", fg=typer.colors.BRIGHT_BLACK)
+    typer.echo("")
+    typer.echo("  Or, if a trusted reverse proxy already authenticates requests,")
+    typer.echo("  re-run with --allow-public-no-auth to accept the risk.")
+
+
+def _exit_on_invalid_config(error: RuntimeError, *, public_intent: bool) -> NoReturn:
+    """Turn a settings-validation failure into a readable exit instead of a traceback.
+
+    Importing `zerg.main` validates the environment. On a public bind with auth on and
+    nothing configured, that raised a 30-line rich traceback ending in a message that
+    asked for Google OAuth credentials and never named the password variable the
+    README tells the operator to set.
+    """
+    typer.secho("ERROR: Longhouse cannot start with this configuration.", fg=typer.colors.RED)
+    typer.echo("")
+    for line in str(error).splitlines():
+        if line.strip() and not line.startswith(("Set these", "Deployment will fail", "Current DATABASE_URL", "LLM available")):
+            typer.echo(f"  {line}")
+    typer.echo("")
+    if public_intent:
+        _print_public_auth_setup()
+    raise typer.Exit(code=1)
+
+
 def _get_pid_file() -> Path:
     """Get the path to the server PID file."""
     return _get_longhouse_home() / "server.pid"
@@ -252,14 +306,69 @@ def _is_server_running() -> tuple[bool, int | None]:
         return False, None
 
 
-def _daemonize() -> None:
-    """Fork into background daemon process (Unix only)."""
+def _await_daemon_ready(host: str, port: int, *, timeout: float = 45.0) -> tuple[bool, str]:
+    """Wait for a just-forked daemon to answer, or to be seen dead.
+
+    The daemon detaches before it imports the app, so a startup failure (a bad
+    environment, an owner mismatch in the database) used to leave the parent printing
+    "Starting daemon..." and exiting 0 while the server was already gone; the only
+    trace was in the log.
+    """
+    import urllib.error
+    import urllib.request
+
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    url = f"http://{probe_host}:{port}/api/health"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(url, timeout=1).close()
+            return True, ""
+        except urllib.error.HTTPError:
+            return True, ""  # answering, whatever it says about its own health
+        except OSError:
+            pass
+        pid_file = _get_pid_file()
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text().strip()), 0)
+            except (ValueError, ProcessLookupError):
+                return False, "the server process exited during startup"
+            except OSError:
+                pass  # exists but not ours to signal: still running
+        time.sleep(0.4)
+    return False, f"the server did not answer on port {port} within {int(timeout)}s"
+
+
+def _log_tail(lines: int = 12) -> str:
+    try:
+        text = _get_log_file().read_text(errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def _daemonize(*, host: str, port: int) -> None:
+    """Fork into background daemon process (Unix only).
+
+    The parent waits for the daemon to answer before it exits, and exits 1 with the
+    log tail when it does not.
+    """
     # First fork
     try:
         pid = os.fork()
         if pid > 0:
-            # Parent exits
-            sys.exit(0)
+            # Parent: report whether the daemon came up, then exit
+            ready, detail = _await_daemon_ready(host, port)
+            if ready:
+                sys.exit(0)
+            typer.secho(f"ERROR: The server did not start: {detail}.", fg=typer.colors.RED)
+            tail = _log_tail()
+            if tail:
+                typer.echo(f"  Last lines of {_get_log_file()}:")
+                for line in tail.splitlines():
+                    typer.echo(f"    {line}")
+            sys.exit(1)
     except OSError as e:
         raise RuntimeError(f"First fork failed: {e}")
 
@@ -528,22 +637,7 @@ def serve(
             typer.echo("  You bound a non-loopback host or set --domain, but AUTH_DISABLED=1.")
             typer.echo("  This would expose an unauthenticated server to the network.")
             typer.echo("")
-            typer.echo("  Enable password auth (simplest):")
-            typer.secho(
-                '    export LONGHOUSE_PASSWORD_HASH="$(longhouse hash-password)"',
-                fg=typer.colors.BRIGHT_BLACK,
-            )
-            typer.secho(
-                "    export JWT_SECRET=$(openssl rand -hex 32)",
-                fg=typer.colors.BRIGHT_BLACK,
-            )
-            typer.secho(
-                "    export INTERNAL_API_SECRET=$(openssl rand -hex 32)",
-                fg=typer.colors.BRIGHT_BLACK,
-            )
-            typer.echo("")
-            typer.echo("  Or, if a trusted reverse proxy already authenticates requests,")
-            typer.echo("  re-run with --allow-public-no-auth to accept the risk.")
+            _print_public_auth_setup()
             raise typer.Exit(code=1)
 
     # Prevent SQLite with multiple workers (Longhouse is SQLite-only).
@@ -564,17 +658,11 @@ def serve(
         raise typer.Exit(code=1)
 
     # Check if port is available
-    import socket
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind((host if host != "0.0.0.0" else "127.0.0.1", port))
-        sock.close()
-    except OSError as e:
+    if not _port_is_free(host, port):
         typer.secho(f"ERROR: Port {port} is already in use.", fg=typer.colors.RED)
         typer.echo(f"  Try: longhouse-server serve --port {port + 1}")
         typer.echo(f"  Or find what's using it: lsof -i :{port}")
-        raise typer.Exit(code=1) from e
+        raise typer.Exit(code=1)
 
     # Persist public domain to config if provided, then load from config as fallback.
     from zerg.cli.config_file import load_config
@@ -595,9 +683,12 @@ def serve(
     is_public_interface = host in ("0.0.0.0", "::", "")
     lan_ip = _get_lan_ip() if is_public_interface else None
 
-    # Check for bundled frontend
-    from zerg.main import FRONTEND_DIST_DIR
-    from zerg.main import FRONTEND_SOURCE
+    # Check for bundled frontend (importing zerg.main also validates the environment)
+    try:
+        from zerg.main import FRONTEND_DIST_DIR
+        from zerg.main import FRONTEND_SOURCE
+    except RuntimeError as error:
+        _exit_on_invalid_config(error, public_intent=public_intent)
 
     has_frontend = FRONTEND_DIST_DIR is not None
     frontend_source = FRONTEND_SOURCE
@@ -671,7 +762,7 @@ def serve(
             raise typer.Exit(code=1)
 
         typer.echo(f"Starting daemon... (log: {_get_log_file()})")
-        _daemonize()
+        _daemonize(host=host, port=port)
 
     uvicorn.run(
         "zerg.main:app",
@@ -828,12 +919,12 @@ def hash_password(
 
     Prints a pbkdf2_sha256 hash. Use it to enable auth on a public bind:
 
-        export LONGHOUSE_PASSWORD_HASH="$(longhouse hash-password)"
+        export LONGHOUSE_PASSWORD_HASH="$(longhouse-server hash-password)"
 
     The plaintext password is never stored or logged.
     """
     if password is None:
-        # Prompt on stderr so stdout stays clean for $(longhouse hash-password).
+        # Prompt on stderr so stdout stays clean for $(longhouse-server hash-password).
         password = typer.prompt("Password", hide_input=True, confirmation_prompt=True, err=True)
 
     if not password:
