@@ -31,7 +31,7 @@ router = APIRouter(prefix="/internal", tags=["internal-funnel"])
 
 def _require_internal_token(token: str | None) -> None:
     expected = str(get_settings().internal_api_secret or "")
-    if not token or not expected or not hmac.compare_digest(token, expected):
+    if not token or not expected or not hmac.compare_digest(token.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="internal authentication required")
 
 

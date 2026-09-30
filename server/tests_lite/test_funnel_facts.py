@@ -66,9 +66,9 @@ class TestClassify:
     def test_the_explicit_ios_agent_string_counts_too(self):
         assert funnel_facts.classify(_scope(path=OPEN, user_agent="Longhouse-iOS"), 200)[0] == "ios"
 
-    def test_opening_a_session_in_a_browser_with_a_session_cookie_is_a_web_view(self):
+    def test_opening_a_session_in_a_browser_is_a_day_of_web_use_and_no_milestone(self):
         scope = _scope(path=OPEN, user_agent=CHROME_UA, authorization=None, cookie="longhouse_session=abc")
-        assert funnel_facts.classify(scope, 200) == ("web", ["web_view"])
+        assert funnel_facts.classify(scope, 200) == ("web", [])
 
     def test_the_plain_timeline_list_is_not_a_view(self):
         """The app fetches it on its own from a silent push, without the person opening it."""
@@ -102,11 +102,9 @@ class TestClassify:
         assert funnel_facts.classify(_scope(path=OPEN, scope_type="websocket"), 200) == (None, [])
 
     def test_a_search_needs_query_text_on_a_search_route(self):
-        assert funnel_facts.classify(_scope(query="query=refresh+token"), 200) == ("ios", ["phone_view", "search"])
-        assert funnel_facts.classify(_scope(path="/api/timeline/recall", query="query=x"), 200)[1] == [
-            "phone_view",
-            "search",
-        ]
+        # A search from the phone is a day of use and a search, not a phone view.
+        assert funnel_facts.classify(_scope(query="query=refresh+token"), 200) == ("ios", ["search"])
+        assert funnel_facts.classify(_scope(path="/api/timeline/recall", query="query=x"), 200)[1] == ["search"]
         assert funnel_facts.classify(_scope(query=""), 200) == (None, [])  # just listing
         assert funnel_facts.classify(_scope(query="query=%20"), 200) == (None, [])
         assert funnel_facts.classify(_scope(query="query=x", method="POST"), 200) == (None, [])
@@ -114,7 +112,7 @@ class TestClassify:
     @pytest.mark.parametrize("route", ["input", "inputs-multipart", "send-live"])
     def test_sending_an_instruction_is_a_steer(self, route):
         scope = _scope(method="POST", path=f"/api/sessions/abc123/{route}")
-        assert funnel_facts.classify(scope, 200)[1] == ["phone_view", "steer"]
+        assert funnel_facts.classify(scope, 200) == ("ios", ["steer"])
 
     def test_reading_or_interrupting_is_not_a_steer(self):
         assert funnel_facts.classify(_scope(method="GET", path="/api/sessions/abc123/inputs"), 200) == (None, [])
@@ -233,7 +231,7 @@ async def test_enabled_records_the_observation_beside_the_live_catalog(facts_run
     await _drain_executor()
 
     snapshot = FunnelFactsStore(path).snapshot()
-    assert set(snapshot["milestones"]) == {"phone_view", "steer"}
+    assert set(snapshot["milestones"]) == {"steer"}
     assert len(snapshot["active_days"]["ios"]) == 1
 
 
@@ -329,6 +327,9 @@ def funnel_route(monkeypatch, tmp_path):
 
 def test_the_route_wants_the_tenants_own_secret(funnel_route):
     client, catalog = funnel_route(True)
+
+    # A non-ASCII token is a wrong token, not a server error.
+    assert client.get("/internal/funnel", headers={"X-Internal-Token": "sécret".encode("latin-1")}).status_code == 401
 
     assert client.get("/internal/funnel").status_code == 401
     assert client.get("/internal/funnel", headers={"X-Internal-Token": "wrong"}).status_code == 401
@@ -457,7 +458,7 @@ async def test_the_catalog_reports_machines_and_sessions_per_provider(daemon_pat
         nobody = await client.call("tenant.funnel.facts.read.v2", {"owner_id": "9"})
         assert nobody["providers"] == [] and nobody["devices"] == {"first_created_at": None}
 
-        for bad in ("not-a-number", "9" * 19, ""):
+        for bad in ("not-a-number", "9" * 19, "", "\u00b2"):
             with pytest.raises(CatalogRemoteError):
                 await client.call("tenant.funnel.facts.read.v2", {"owner_id": bad})
     finally:
@@ -496,7 +497,7 @@ async def test_the_access_log_seam_feeds_the_facts_after_the_handler_resolved_th
     await _run_through_access_log(scope)
 
     snapshot = FunnelFactsStore(path).snapshot()
-    assert set(snapshot["milestones"]) == {"phone_view", "search"}
+    assert set(snapshot["milestones"]) == {"search"}
 
 
 @pytest.mark.asyncio

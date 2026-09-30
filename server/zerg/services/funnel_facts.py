@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 SCHEMA = "longhouse.tenant-funnel.v1"
 
 # The complete vocabulary. Anything else is refused at the door of `note`.
-MILESTONES = ("search", "steer", "phone_view", "web_view")
+MILESTONES = ("search", "steer", "phone_view")
 SURFACES = ("web", "ios")
 
 # The iOS app's default User-Agent is `Longhouse/<build> CFNetwork/<v> Darwin/<v>`
@@ -206,13 +206,14 @@ def classify(scope: Scope, status_code: int) -> tuple[str | None, list[str]]:
 
     path, method = str(scope.get("path", "")), scope.get("method", "")
     milestones: list[str] = []
+    opened = method == "GET" and _OPEN_SESSION_PATH.match(path) is not None
     if method == "GET" and path in _SEARCH_PATHS:
         query = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("query", [""])[0]
         if query.strip():
             milestones.append("search")
     elif method == "POST" and _STEER_PATH.match(path):
         milestones.append("steer")
-    if not (milestones or (method == "GET" and _OPEN_SESSION_PATH.match(path))):
+    if not (opened or milestones):
         return None, []
 
     headers = _headers(scope)
@@ -224,7 +225,11 @@ def classify(scope: Scope, status_code: int) -> tuple[str | None, list[str]]:
         surface = "web" if headers.get("cookie") and "mozilla" in user_agent.lower() else None
     if surface is None:
         return None, []
-    return surface, ["phone_view" if surface == "ios" else "web_view", *milestones]
+    # Only opening a session on the phone is a "phone view"; a search or an instruction
+    # from the phone is a day of use, not a view.
+    if opened and surface == "ios":
+        milestones.insert(0, "phone_view")
+    return surface, milestones
 
 
 def _record(store: FunnelFactsStore, surface: str, milestones: list[str]) -> None:
@@ -268,5 +273,5 @@ def build_document(catalog_facts: dict[str, Any], side_facts: dict[str, Any]) ->
             for row in catalog_facts.get("providers") or []
         },
         "milestones": side_facts.get("milestones") or {},
-        "active_days": side_facts.get("active_days") or {},
+        "active_days": side_facts.get("active_days") or {surface: [] for surface in SURFACES},
     }
