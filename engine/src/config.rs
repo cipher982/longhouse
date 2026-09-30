@@ -433,7 +433,10 @@ pub fn import_scope_in(machine_dir: &Path) -> ImportScope {
                 );
                 chrono::Utc::now()
             });
-            ImportScope::starting(since, "invalid")
+            // Remembered, so deleting the broken file does not read as "no scope".
+            let closed = ImportScope::starting(since, "invalid");
+            remember_scope(machine_dir, &closed);
+            closed
         }
     }
 }
@@ -610,13 +613,27 @@ fn machine_is_connected(machine_dir: &Path) -> bool {
             .is_some()
 }
 
-/// Whether the shipper state database has ever tracked a source.
+/// Whether the shipper state database has ever tracked a source. A table an
+/// older engine's database never had holds no rows.
 fn state_has_shipped_history(conn: &rusqlite::Connection) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM source_epoch_registry) OR EXISTS(SELECT 1 FROM file_state)",
-        [],
-        |row| row.get(0),
-    )?)
+    for table in ["source_epoch_registry", "file_state"] {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [table],
+            |row| row.get(0),
+        )?;
+        // `table` is one of the two literals above, never input.
+        if exists
+            && conn.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM {table})"),
+                [],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The database this machine's own service uses, read-only, if it exists. One
@@ -810,6 +827,34 @@ mod import_scope_tests {
         assert!(
             !restore_lost_scope_file(&machine),
             "nothing to restore twice"
+        );
+    }
+
+    #[test]
+    fn a_database_missing_the_tracking_tables_has_shipped_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = rusqlite::Connection::open(dir.path().join("bare.db")).unwrap();
+        assert!(!state_has_shipped_history(&bare).unwrap());
+        bare.execute_batch(
+            "CREATE TABLE file_state (path TEXT); INSERT INTO file_state VALUES ('/x')",
+        )
+        .unwrap();
+        assert!(state_has_shipped_history(&bare).unwrap());
+    }
+
+    #[test]
+    fn deleting_a_broken_scope_file_does_not_open_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine");
+        std::fs::create_dir_all(&machine).unwrap();
+        std::fs::write(machine.join("import-scope.json"), "{oops").unwrap();
+        let closed = import_scope_in(&machine);
+        assert_eq!(closed.chosen_via, "invalid");
+        std::fs::remove_file(machine.join("import-scope.json")).unwrap();
+        assert_eq!(
+            import_scope_in(&machine),
+            closed,
+            "still closed, not 'unset'"
         );
     }
 

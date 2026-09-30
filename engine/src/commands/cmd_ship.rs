@@ -185,6 +185,11 @@ pub async fn cmd_ship(
                 .find(|item| item.name == pending.provider)
                 .map(|item| item.name)
                 .unwrap_or("claude");
+            // A pointer row is not permission: a source outside the machine's
+            // import scope stays out of a one-shot import too.
+            if !discovery::source_in_import_scope(&import_scope, provider, &path) {
+                continue;
+            }
             all_files.push((path, provider));
         }
     }

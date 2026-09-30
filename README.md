@@ -63,8 +63,9 @@ longhouse machine scope --project ~/git/app    # also import one project's full 
 longhouse machine scope --since all            # everything on this computer
 ```
 
-Older sessions that are out of scope stay on your computer and are never
-uploaded. Machines that were already shipping history before scopes existed
+Sessions outside the scope stay on your computer and are not uploaded.
+Narrowing it later stops further imports; what is already uploaded or queued is
+not recalled. Machines that were already shipping history before scopes existed
 keep shipping all of it. Details: [`longhouse machine scope`](https://longhouse.ai/docs/cli).
 
 ### Uninstall
