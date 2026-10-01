@@ -228,8 +228,15 @@ def check_tree(root: Path) -> list[str]:
     listed = {entry.get("module") for entry in manifest}
     unlisted = []
     for module in PRODUCER_MODULES:
-        if module not in listed and (registration := registration_of(module)) is not None:
-            unlisted.append(registration)
+        if module in listed:
+            continue
+        try:
+            registration = registration_of(module)
+        except ImportError as exc:
+            problems.append(f"{module} cannot be imported: {exc}")
+        else:
+            if registration is not None:
+                unlisted.append(registration)
     for module in sorted(str(item) for item in listed if isinstance(item, str) and item not in PRODUCER_MODULES):
         problems.append(f"{module} is listed but is not in provider_factory_model.PRODUCER_MODULES")
     return problems + registry_failures(manifest, registrations, rows, unlisted=unlisted)

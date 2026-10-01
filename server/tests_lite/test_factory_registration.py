@@ -278,31 +278,46 @@ def _reads_the_invocation_variant(value: ast.AST) -> bool:
     return False
 
 
-def _invocation_variant_reports(source: str) -> list[int]:
-    """Lines of dict literals whose "variant" value is read from the invocation (``args.variant``, ``getattr``)."""
+def _invocation_variant_reports(source: str, *, mixed: bool = False) -> list[int]:
+    """Lines of dict literals whose "variant" value is read from the invocation (``args.variant``, ``getattr``).
+
+    ``mixed`` is a producer with authored and unauthored cells: ``None if steer else variant`` is how it reports each
+    cell's own variant, and any other read of the invocation's variant would be wrong for the unauthored cells.
+    """
+
+    def reads(value: ast.AST) -> bool:
+        if (
+            mixed
+            and isinstance(value, ast.IfExp)
+            and any(isinstance(branch, ast.Constant) and branch.value is None for branch in (value.body, value.orelse))
+        ):
+            return False
+        return _reads_the_invocation_variant(value)
 
     return [
         key.lineno
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Dict)
         for key, value in zip(node.keys, node.values)
-        if isinstance(key, ast.Constant) and key.value == "variant" and _reads_the_invocation_variant(value)
+        if isinstance(key, ast.Constant) and key.value == "variant" and reads(value)
     ]
 
 
-def test_a_producer_without_authored_variants_never_reports_the_invocation_variant() -> None:
+def test_a_producer_never_reports_the_invocation_variant_for_a_cell_that_authors_none() -> None:
     """The invocation's ``--variant`` is the execution key unless a cell authors a variant (Resume's clean_exit and so on).
 
     912b6e979 wrote ``"variant": getattr(args, "variant", None)`` in a producer whose cells author none, on every path
-    of the Claude Helm result; a path no fixture drives is still caught here.
+    of the Claude Helm result; a path no fixture drives is still caught here. A backstop, not an exhaustive proof: it
+    reads direct and ``getattr`` uses, so an aliased read passes, and the producers' conformance tests run the result.
     """
 
     reported = {}
     for entry in factory.load_manifest(MANIFEST):
         module = importlib.import_module(entry["module"])
-        if any(variant for _assertion, variant in module.REGISTRATION.assertion_cells):
+        authored = [variant for _assertion, variant in module.REGISTRATION.assertion_cells]
+        if all(authored):
             continue
-        if lines := _invocation_variant_reports(Path(module.__file__).read_text(encoding="utf-8")):
+        if lines := _invocation_variant_reports(Path(module.__file__).read_text(encoding="utf-8"), mixed=any(authored)):
             reported[entry["module"]] = lines
     assert reported == {}
 
@@ -312,3 +327,7 @@ def test_the_static_check_sees_the_912b6e979_literal_and_leaves_authored_variant
     assert _invocation_variant_reports('result = {"variant": args.variant}') == [1]
     assert _invocation_variant_reports('result = {"variant": None, "execution_variant": args.variant}') == []
     assert _invocation_variant_reports('result = {"variant": "interrupt_supported"}') == []
+    # A producer with authored and unauthored cells may choose per cell, but may not read the invocation's variant plainly.
+    assert _invocation_variant_reports('result = {"variant": None if steer else variant}', mixed=True) == []
+    assert _invocation_variant_reports('result = {"variant": None if steer else variant}') == [1]
+    assert _invocation_variant_reports('result = {"variant": args.variant}', mixed=True) == [1]
