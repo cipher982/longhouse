@@ -1177,10 +1177,12 @@ def _primary(
     # tailing it now. That is every session a fresh host imports, and "Activity
     # unknown" on each row reads as a fault on a first screen. The label states
     # what Longhouse holds; it claims neither that the session ended nor that it
-    # is idle. A session that is being observed live, or whose live evidence
-    # merely expired, is not "imported" and keeps its own wording or none.
+    # is idle. The tone stays "inactive", what clients already read for a row
+    # with no primary label, so nothing keyed on it (data-status, the iOS stale
+    # note) changes. A session that is being observed live, or whose live
+    # evidence merely expired, is not "imported" and keeps its own wording or none.
     if mode == "shadow" and activity.state == "unknown" and activity.raw_kind is None and not transcript.live_observation:
-        return SessionPresentationLabel(key="imported", label="Imported", tone="quiet")
+        return SessionPresentationLabel(key="imported", label="Imported", tone="inactive")
     return None
 
 

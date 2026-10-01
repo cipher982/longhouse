@@ -111,7 +111,7 @@ function promptHeadline(prompt: string): string {
 }
 
 export function buildFirstRunMachineFixture() {
-  const headline = { key: "imported", label: "Imported", tone: "quiet" };
+  const headline = { key: "imported", label: "Imported", tone: "inactive" };
   const cards = IMPORTED.map((spec) => {
     const title = promptHeadline(spec.prompt);
     const state = importedState(headline);

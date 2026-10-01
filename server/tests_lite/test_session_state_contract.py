@@ -920,7 +920,7 @@ def test_imported_shadow_session_reads_imported_not_activity_unknown():
     assert facts.activity.state == "unknown"
     primary = facts.presentation.primary
     assert primary is not None
-    assert (primary.key, primary.label, primary.tone) == ("imported", "Imported", "quiet")
+    assert (primary.key, primary.label, primary.tone) == ("imported", "Imported", "inactive")
     assert facts.presentation.access is not None
     assert facts.presentation.access.key == "search_only"
 
