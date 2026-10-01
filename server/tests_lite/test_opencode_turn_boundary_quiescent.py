@@ -592,3 +592,65 @@ def test_a_status_endpoint_that_stays_unreadable_is_a_failure_to_observe(tmp_pat
         m._wait_session_quiescence(process, {}, timeout=5.0, stable_seconds=0.2, poll_seconds=0.01)
     with pytest.raises(RuntimeError, match="unreadable"):
         m._session_stays_idle(process, {}, seconds=5.0, poll_seconds=0.01)
+
+
+def test_one_dropped_status_read_is_retried_inside_the_shared_busy_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    from zerg.qa import live_session_toolkit as toolkit
+
+    replies: list[object] = [ConnectionResetError("reset"), {"psess-1": {"type": "busy"}}]
+
+    def get(_state: dict[str, Any], _path: str, **_kw: object) -> object:
+        reply = replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(toolkit, "opencode_get", get)
+    monkeypatch.setattr(toolkit.time, "sleep", lambda _s: None)
+
+    assert toolkit.opencode_session_busy({"provider_session_id": "psess-1"}) is True
+
+
+def test_a_status_endpoint_that_keeps_failing_still_raises_after_the_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    from zerg.qa import live_session_toolkit as toolkit
+
+    calls = {"count": 0}
+
+    def get(_state: dict[str, Any], _path: str, **_kw: object) -> object:
+        calls["count"] += 1
+        raise ConnectionResetError("reset")
+
+    monkeypatch.setattr(toolkit, "opencode_get", get)
+    monkeypatch.setattr(toolkit.time, "sleep", lambda _s: None)
+
+    with pytest.raises(ConnectionResetError):
+        toolkit.opencode_session_busy({"provider_session_id": "psess-1"})
+    assert calls["count"] == 3
+
+
+def test_redaction_that_lengthens_the_log_is_still_bounded_and_says_it_was_cut(tmp_path: Path) -> None:
+    """A secret shorter than the marker grows the text; the bound is on what is kept."""
+
+    from zerg.qa import live_session_toolkit as toolkit
+
+    log = tmp_path / "serve.log"
+    log.write_bytes(b"ab" * 50)  # exactly the bound: nothing is truncated on read
+    destination = tmp_path / "opencode-serve.log"
+
+    receipt = toolkit.retain_opencode_serve_log(destination, {"log_path": str(log)}, ["ab"], max_bytes=100)
+
+    assert len(destination.read_bytes()) == 100
+    assert destination.read_bytes() == b"<redacted>" * 10
+    assert receipt["truncated"] is True and receipt["bytes_total"] == 100 and receipt["bytes_retained"] == 100
+
+
+def test_a_serve_log_that_cannot_be_written_is_reported_not_raised(tmp_path: Path) -> None:
+    from zerg.qa import live_session_toolkit as toolkit
+
+    log = tmp_path / "serve.log"
+    log.write_text("stream started\n")
+
+    receipt = toolkit.retain_opencode_serve_log(tmp_path / "no-such-dir" / "opencode-serve.log", {"log_path": str(log)}, [])
+
+    assert receipt["error"].startswith("FileNotFoundError")
+    assert receipt["bytes_retained"] == 0

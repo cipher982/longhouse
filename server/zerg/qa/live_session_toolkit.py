@@ -18,6 +18,7 @@ import base64
 import errno
 import hashlib
 import http
+import http.client
 import ipaddress
 import json
 import os
@@ -1511,16 +1512,25 @@ def opencode_get(state: dict[str, Any], path: str, *, directory: bool = True) ->
         return json.loads(response.read().decode("utf-8") or "null")
 
 
-def opencode_session_busy(state: dict[str, Any]) -> bool:
+def opencode_session_busy(state: dict[str, Any], *, attempts: int = 3) -> bool:
     """True while OpenCode's ``/session/status`` lists the session as anything but idle.
 
     OpenCode drops an idle session from that map. The TUI is not the authority: its
     reasoning spinner can keep redrawing after the reply rendered and the server
-    already reports idle (upstream anomalyco/opencode 16646 and 17680, and the
-    factory's 2026-09-30 03:58Z turn-boundary failure).
+    already reads idle (upstream anomalyco/opencode 16646 and 17680, and the
+    factory's 2026-09-30 03:58Z turn-boundary failure). A read that fails in transit
+    (a reset on localhost) is retried a couple of times, 0.2 s apart, before it raises:
+    one dropped read must not fail a cell that is otherwise telling the truth.
     """
 
-    statuses = opencode_get(state, "/session/status")
+    for attempt in range(1, attempts + 1):
+        try:
+            statuses = opencode_get(state, "/session/status")
+            break
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError):
+            if attempt == attempts:
+                raise
+            time.sleep(0.2)
     entry = statuses.get(state["provider_session_id"]) if isinstance(statuses, dict) else None
     return isinstance(entry, dict) and entry.get("type") not in {None, "idle"}
 
@@ -1567,9 +1577,14 @@ def retain_opencode_serve_log(
         if secret:
             data = data.replace(secret.encode(), b"<redacted>")
     # A secret shorter than the marker lengthens the text: bound what is kept, not what was read.
+    cut = len(data) > max_bytes
     data = data[-max_bytes:]
-    destination.write_bytes(data)
-    receipt.update({"bytes_total": total, "bytes_retained": len(data), "truncated": total > max_bytes})
+    try:
+        destination.write_bytes(data)
+    except OSError as exc:
+        receipt["error"] = f"{type(exc).__name__}: {exc}"
+        return receipt
+    receipt.update({"bytes_total": total, "bytes_retained": len(data), "truncated": total > max_bytes or cut})
     return receipt
 
 

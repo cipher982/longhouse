@@ -67,6 +67,7 @@ is meant to certify, or whether a new machine-surface field is the intended
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import subprocess
@@ -244,7 +245,7 @@ def _read_busy(state: dict[str, Any], errors: list[int]) -> bool | None:
 
     try:
         busy = opencode_session_busy(state)
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
         errors[0] += 1
         if errors[0] >= _MAX_CONSECUTIVE_STATUS_ERRORS:
             raise RuntimeError(f"opencode /session/status unreadable {errors[0]} times in a row: {type(exc).__name__}: {exc}") from exc
