@@ -243,13 +243,15 @@ enum QueuedInputIndicator {
         return (queued.count, elsewhere.count)
     }
 
-    /// This app mints every id it sends as "ios-<uuid>", so another phone of
-    /// the same person is not another sender; an agent's `continue`, the web and
-    /// directed input each mint ids of their own.
+    /// A row is this client's when this client sent it: every send is held in
+    /// `submittedInputs` (and the pending store across a relaunch) until its event
+    /// is linked, so a queued row it does not hold was sent by someone else: an
+    /// agent's `continue`, the web, directed input, or another device. Another
+    /// phone's message is no more visible here than an agent's.
     static func isFromAnotherSender(_ clientRequestId: String?, ownClientRequestIds: Set<String>) -> Bool {
         // This app always sends an id, so a row without one was not sent by it.
         guard let id = clientRequestId else { return true }
-        return !(ownClientRequestIds.contains(id) || id.hasPrefix("ios-"))
+        return !ownClientRequestIds.contains(id)
     }
 }
 

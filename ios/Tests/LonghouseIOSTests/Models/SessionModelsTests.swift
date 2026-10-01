@@ -1844,7 +1844,10 @@ struct SessionModelsTests {
 
         let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
         #expect(response.visibleFailedInputCount == 2)
-        #expect(response.visibleFailedInputCount(ownClientRequestIds: []) == 1)
+        #expect(
+            response.visibleFailedInputCount(ownClientRequestIds: ["ios-FA93E7FD-2ADB-494D-A494-2173D6312602"]) == 1
+        )
+        #expect(response.visibleFailedInputCount(ownClientRequestIds: []) == 0)
     }
 
     @Test
@@ -1856,13 +1859,15 @@ struct SessionModelsTests {
             receipts: [
                 receipt("ios-A", "queued"),
                 receipt("d978c0f2b6fc47d8acd8e24fc687cbab", "queued"),
+                receipt("ios-SECOND-PHONE", "queued"),
                 receipt("ios-B", "delivered"),
                 receipt("directed-input-1996", "failed"),
             ],
             ownClientRequestIds: ["ios-A"]
         )
-        #expect(queued.total == 2)
-        #expect(queued.elsewhere == 1)
+        // Another device's message is as invisible here as an agent's.
+        #expect(queued.total == 3)
+        #expect(queued.elsewhere == 2)
 
         // The agent's message expired and this phone's was delivered: nothing is
         // left to claim, however many were queued when the last send returned.

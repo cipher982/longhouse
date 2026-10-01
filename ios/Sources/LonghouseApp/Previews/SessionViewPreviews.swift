@@ -248,6 +248,7 @@ private struct SessionScreenPreview: View {
     var connection: SessionRealtimeConnection = .connected
     var isSending: Bool = false
     var queuedInputCount: Int = 0
+    var queuedElsewhereCount: Int = 0
     @State private var text: String
     @FocusState private var composerFocused: Bool
 
@@ -261,7 +262,8 @@ private struct SessionScreenPreview: View {
         connection: SessionRealtimeConnection = .connected,
         draft: String = "",
         isSending: Bool = false,
-        queuedInputCount: Int = 0
+        queuedInputCount: Int = 0,
+        queuedElsewhereCount: Int = 0
     ) {
         self.detail = detail
         self.activity = activity
@@ -269,6 +271,7 @@ private struct SessionScreenPreview: View {
         self.connection = connection
         self.isSending = isSending
         self.queuedInputCount = queuedInputCount
+        self.queuedElsewhereCount = queuedElsewhereCount
         _text = State(initialValue: draft)
     }
 
@@ -296,6 +299,7 @@ private struct SessionScreenPreview: View {
                                 text: $text,
                                 focused: $composerFocused,
                                 queuedInputCount: queuedInputCount,
+                                queuedElsewhereCount: queuedElsewhereCount,
                                 isSending: isSending,
                                 onQueueInstead: {},
                                 onDismissTurnEnded: {},
@@ -481,7 +485,8 @@ private struct PreviewConnectionDrop: View {
         activity: claudeSparse(),
         transcript: ["Running the full restore now. This will take a while."],
         draft: "Queue a checksum comparison for the next turn",
-        queuedInputCount: 1
+        queuedInputCount: 2,
+        queuedElsewhereCount: 1
     )
     .preferredColorScheme(.dark)
     .emberChrome()

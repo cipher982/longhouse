@@ -98,9 +98,8 @@ final class SessionViewModel: ObservableObject {
     @Published var lastSendOutcome: SessionInputOutcome?
     @Published var queuedInputCount: Int = 0
     /// How many of those were queued by another sender (an agent's `continue`,
-    /// the web, directed input): real, but not visible as a bubble here, so the
-    /// count needs to say so. Another phone of the same person is not another
-    /// sender; every id this app mints is `ios-<uuid>`.
+    /// the web, directed input, another device): real, but not visible as a
+    /// bubble here, so the count needs to say so.
     @Published var queuedElsewhereCount: Int = 0
     @Published var failedInputCount: Int = 0
     @Published var submittedInputs: [SubmittedInput] = [] { didSet { transcriptRevision &+= 1 } }
