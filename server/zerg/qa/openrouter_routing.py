@@ -65,14 +65,20 @@ def openrouter_qualification_routing() -> dict[str, Any]:
 def pi_openrouter_model_id(model: str) -> str:
     """The OpenRouter model id inside Pi's ``--model`` value.
 
-    Pi takes ``<id>`` or ``<id>:<thinking level>``. OpenRouter ids may carry their
-    own ``:variant`` suffix, so only a known thinking level is stripped.
+    Pi takes ``<id>`` or ``<id>:<thinking level>``, and the factory passes the
+    provider-qualified form (``openrouter/<id>:off``). ``modelOverrides`` is keyed by the
+    model id Pi records natively (``deepseek/deepseek-v4.1-flash``), so the ``openrouter/``
+    provider prefix is dropped too: with it, the override never matched and Pi spread
+    requests over every host (2026-10-01 factory tick: Morph and Wafer, both in ``ignore``,
+    served 21 of the Pi key's 25 requests). OpenRouter ids may carry their own ``:variant``
+    suffix, so only a known thinking level is stripped.
     """
 
-    base, separator, suffix = str(model).strip().rpartition(":")
+    value = str(model).strip().removeprefix("openrouter/")
+    base, separator, suffix = value.rpartition(":")
     if separator and suffix in _PI_THINKING_LEVELS:
         return base
-    return str(model).strip()
+    return value
 
 
 def prepare_pi_openrouter_routing(agent_dir: Path, model: str) -> dict[str, Any]:

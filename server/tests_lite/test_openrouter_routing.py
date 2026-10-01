@@ -39,12 +39,16 @@ def test_a_caller_gets_a_copy_it_cannot_use_to_edit_the_shared_routing() -> None
         ("deepseek/deepseek-v4.1-flash:off", "deepseek/deepseek-v4.1-flash"),
         ("deepseek/deepseek-v4.1-flash:xhigh", "deepseek/deepseek-v4.1-flash"),
         ("deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash"),
+        # The factory's own value: provider-qualified, with a thinking level. Pi keys modelOverrides by
+        # the model id it records natively, which has no provider prefix.
+        ("openrouter/deepseek/deepseek-v4.1-flash:off", "deepseek/deepseek-v4.1-flash"),
+        ("openrouter/deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash"),
         # An OpenRouter variant suffix is part of the id, not a thinking level.
         ("meta-llama/llama-3.3-70b-instruct:free", "meta-llama/llama-3.3-70b-instruct:free"),
         ("meta-llama/llama-3.3-70b-instruct:free:off", "meta-llama/llama-3.3-70b-instruct:free"),
     ],
 )
-def test_pi_model_id_drops_only_a_thinking_level(configured: str, expected: str) -> None:
+def test_pi_model_id_drops_the_provider_prefix_and_a_thinking_level(configured: str, expected: str) -> None:
     assert pi_openrouter_model_id(configured) == expected
 
 
