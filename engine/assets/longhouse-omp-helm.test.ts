@@ -559,6 +559,10 @@ describe("subagent sessions", () => {
 
       // The main continuation's wire state must survive every child event,
       // not merely suppress frames carrying the child's native session id.
+      const nativeClone = {
+        ...contextFor("native-clone", join(channelDir, "clone.jsonl")),
+        agent: { kind: "sub", depth: 0 },
+      };
       const childEvents: Array<[string, Record<string, unknown>]> = [
         ["agent_start", { type: "agent_start" }],
         ["agent_end", { type: "agent_end", willContinue: false }],
@@ -567,7 +571,7 @@ describe("subagent sessions", () => {
       ];
       for (const [name, event] of childEvents) {
         const before = frames.filter((frame) => frame.kind === "message_end").length;
-        await handlers[name](event, subagent);
+        await handlers[name](event, nativeClone);
         await handlers.message_end({ type: "message_end" }, parent);
         await waitForFrame(
           (frame) =>
@@ -590,13 +594,21 @@ describe("subagent sessions", () => {
       );
       expect(response).toMatchObject({ isError: true });
 
+      const legacyBefore = frames.filter((frame) => frame.kind === "message_end").length;
       await handlers.session_start({ type: "session_start" }, subagent);
       await handlers.agent_start({ type: "agent_start" }, subagent);
       await handlers.message_update({ type: "message_update" }, subagent);
       await handlers.message_end({ type: "message_end" }, parent);
       // One ordered channel: this frame arriving proves the subagent's were
       // never written, and that the child never replaced the connection.
-      await waitForFrame((frame) => frame.kind === "message_end");
+      await waitForFrame(
+        (frame) =>
+          frame.kind === "message_end" &&
+          frames.filter((candidate) => candidate.kind === "message_end").length > legacyBefore,
+      );
+      const legacySnapshot = frames.findLast((frame) => frame.kind === "message_end")!;
+      expect(legacySnapshot.turn_generation).toBe(1);
+      expect(legacySnapshot.agent_end_terminal).toBe(false);
       expect(
         frames.some((frame) => frame.native_session_id === "native-child"),
       ).toBe(false);
