@@ -4,6 +4,7 @@
 bundle_id = "ai.longhouse.ios"
 locale = "en-US"
 group_name = "Public beta"
+internal_group_name = "Internal: David"
 public_link_limit = 100
 
 [localization]

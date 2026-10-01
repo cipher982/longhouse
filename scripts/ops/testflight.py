@@ -8,10 +8,14 @@
     testflight.py status                      app, recent builds, groups, public link
     testflight.py wait-build --build N        block until build N has finished processing
     testflight.py publish --build N           make build N reachable through the public link
+                                              and the internal group
 
 `publish` is idempotent: it upserts the tester-facing text and review details from
 ios/testflight/beta.toml, attaches the build to the public beta group, submits it for
-Beta App Review when that is still needed, and prints the public link. The app record
+Beta App Review when that is still needed, and prints the public link. It also keeps an
+internal group (every App Store Connect account holder/admin, with access to all builds):
+internal testers get a processed build immediately, with no Beta App Review, and the
+group's all-builds flag means no per-build attach exists or is allowed. The app record
 itself cannot be created through the API; create it once in App Store Connect.
 
 Environment (nothing is read from anywhere else):
@@ -45,6 +49,9 @@ API = "https://api.appstoreconnect.apple.com"
 LANDING_LINK_FILE = ROOT / "web" / "src" / "features" / "marketing" / "landing" / "links.ts"
 
 # externalBuildState values after which nothing more needs submitting.
+# App Store Connect roles whose users become internal testers.
+INTERNAL_TESTER_ROLES = {"ACCOUNT_HOLDER", "ADMIN"}
+
 PAST_SUBMISSION = {
     "WAITING_FOR_BETA_REVIEW",
     "IN_BETA_REVIEW",
@@ -199,8 +206,16 @@ def cmd_status(_: argparse.Namespace) -> None:
     groups = call("GET", f"/v1/apps/{app_id}/betaGroups")
     for g in groups.get("data", []):
         a = g["attributes"]
+        if a["isInternalGroup"]:
+            testers = call("GET", f"/v1/betaGroups/{g['id']}/betaTesters" + q(limit="200"))["data"]
+            available = _group_builds(g["id"])
+            print(
+                f"group {a['name']!r}: internal all_builds={a.get('hasAccessToAllBuilds')} "
+                f"testers={len(testers)} builds={sorted(available.values(), key=int, reverse=True)}"
+            )
+            continue
         link = a.get("publicLink") if a.get("publicLinkEnabled") else "(public link off)"
-        print(f"group {a['name']!r}: internal={a['isInternalGroup']} link={link}")
+        print(f"group {a['name']!r}: internal=False link={link}")
 
 
 def cmd_wait_build(args: argparse.Namespace) -> None:
@@ -335,6 +350,82 @@ def _ensure_public_group(app_id: str, config: dict) -> dict:
     return call("GET", f"/v1/betaGroups/{match['id']}")["data"]
 
 
+def _group_builds(group_id: str) -> dict[str, str]:
+    """build id -> build number for every build the group can install."""
+    result = call("GET", f"/v1/betaGroups/{group_id}/builds" + q(limit="200"))
+    return {b["id"]: b["attributes"]["version"] for b in result.get("data", [])}
+
+
+def _ensure_internal_group(app_id: str, config: dict) -> dict:
+    """The internal group, with access to all builds (App Store Connect's automatic distribution)."""
+    groups = call("GET", f"/v1/apps/{app_id}/betaGroups")
+    match = next(
+        (
+            g
+            for g in groups.get("data", [])
+            if g["attributes"]["isInternalGroup"] and g["attributes"]["name"] == config["internal_group_name"]
+        ),
+        None,
+    )
+    wanted = {"hasAccessToAllBuilds": True, "feedbackEnabled": True}
+    if match is None:
+        created = call(
+            "POST",
+            "/v1/betaGroups",
+            {
+                "data": {
+                    "type": "betaGroups",
+                    "attributes": {"name": config["internal_group_name"], "isInternalGroup": True, **wanted},
+                    "relationships": {"app": {"data": {"type": "apps", "id": app_id}}},
+                }
+            },
+        )
+        return created["data"]
+    if any(match["attributes"].get(k) != v for k, v in wanted.items()):
+        call(
+            "PATCH",
+            f"/v1/betaGroups/{match['id']}",
+            {"data": {"type": "betaGroups", "id": match["id"], "attributes": wanted}},
+        )
+    return call("GET", f"/v1/betaGroups/{match['id']}")["data"]
+
+
+def _ensure_internal_testers(group_id: str) -> int:
+    """Every App Store Connect account holder/admin is in the group; returns how many testers it has."""
+    users = call("GET", "/v1/users" + q(limit="200"))["data"]
+    members = call("GET", f"/v1/betaGroups/{group_id}/betaTesters" + q(limit="200"))["data"]
+    have = {m["attributes"]["email"].lower() for m in members}
+    for user in users:
+        attrs = user["attributes"]
+        email = attrs["username"]
+        if not INTERNAL_TESTER_ROLES & set(attrs.get("roles", [])) or email.lower() in have:
+            continue
+        known = call("GET", "/v1/betaTesters" + q(**{"filter[email]": email}))["data"]
+        if known:
+            call(
+                "POST",
+                f"/v1/betaGroups/{group_id}/relationships/betaTesters",
+                {"data": [{"type": "betaTesters", "id": known[0]["id"]}]},
+                ok_conflict=True,
+            )
+        else:
+            call(
+                "POST",
+                "/v1/betaTesters",
+                {
+                    "data": {
+                        "type": "betaTesters",
+                        "attributes": {
+                            k: v for k, v in {"email": email, "firstName": attrs.get("firstName"), "lastName": attrs.get("lastName")}.items() if v
+                        },
+                        "relationships": {"betaGroups": {"data": [{"type": "betaGroups", "id": group_id}]}},
+                    }
+                },
+            )
+        have.add(email.lower())
+    return len(have)
+
+
 # States Apple passes through on its way to a state we can act on.
 TRANSITIONAL = {"PROCESSING", "IN_EXPORT_COMPLIANCE_REVIEW", "NOT_APPLICABLE", None}
 POLL_DELAY = 10
@@ -413,12 +504,25 @@ def cmd_publish(args: argparse.Namespace) -> None:
     elif external not in PAST_SUBMISSION:
         die(f"build {args.build} is in external state {external}; not submitting (see App Store Connect)")
 
+    # Internal testers need no Beta App Review. The group's all-builds flag attaches the build
+    # (an explicit attach is refused by App Store Connect), so this ensures the group and checks the build is in it.
+    internal = _ensure_internal_group(app_id, config)
+    internal_testers = _ensure_internal_testers(internal["id"])
+    for attempt in range(POLL_ATTEMPTS):
+        if build_id in _group_builds(internal["id"]):
+            break
+        if attempt == POLL_ATTEMPTS - 1:
+            die(f"build {args.build} is not available to internal group {config['internal_group_name']!r} after {POLL_ATTEMPTS * POLL_DELAY}s")
+        time.sleep(POLL_DELAY)
+
     group = call("GET", f"/v1/betaGroups/{group['id']}")["data"]
     result = {
         "build": args.build,
         "version": version,
         "external_build_state": external,
         "submitted_this_run": submitted,
+        "internal_group_testers": internal_testers,
+        "internal_build_available": True,
         "public_link": group["attributes"].get("publicLink"),
     }
     print(json.dumps(result, indent=2))

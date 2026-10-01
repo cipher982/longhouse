@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["pyjwt[crypto]>=2"]
 # ///
-"""scripts/ops/testflight.py against a fake App Store Connect: first publish, re-publish."""
+"""scripts/ops/testflight.py against a fake App Store Connect: first publish, re-publish, internal group."""
 
 from __future__ import annotations
 
@@ -45,6 +45,16 @@ class Fake:
         self.auto_notify = False
         self.calls: list[str] = []
         self.transient_reads = 0
+        # internal group (G2) and the people App Store Connect knows about
+        self.internal: dict | None = None
+        self.users = [
+            {"id": "U1", "username": "owner@example.test", "firstName": "Ada", "lastName": "Owner", "roles": ["ACCOUNT_HOLDER", "ADMIN"]},
+            {"id": "U2", "username": "books@example.test", "firstName": "Fin", "lastName": "Ance", "roles": ["FINANCE"]},
+        ]
+        self.testers: list[dict] = []  # every beta tester record, any group
+        self.internal_members: list[str] = []  # tester ids in G2
+        self.internal_hidden_reads = 0  # reads of G2's builds that do not list B1 yet
+        self.internal_never_lists = False
 
 
 FAKE = Fake()
@@ -118,11 +128,47 @@ class Handler(BaseHTTPRequestHandler):
             FAKE.auto_notify = body["data"]["attributes"]["autoNotifyEnabled"]
             return self._send(200, {"data": {}})
         if path == "/v1/apps/APP/betaGroups":
-            return self._send(200, {"data": [FAKE.group] if FAKE.group else []})
+            return self._send(200, {"data": [g for g in (FAKE.group, FAKE.internal) if g]})
         if method == "POST" and path == "/v1/betaGroups":
-            attrs = {**body["data"]["attributes"], "publicLink": "https://testflight.apple.com/join/ABC123"}
+            attrs = body["data"]["attributes"]
+            if attrs["isInternalGroup"]:
+                FAKE.internal = envelope("betaGroups", "G2", attrs)
+                return self._send(201, {"data": FAKE.internal})
+            attrs = {**attrs, "publicLink": "https://testflight.apple.com/join/ABC123"}
             FAKE.group = envelope("betaGroups", "G1", attrs)
             return self._send(201, {"data": FAKE.group})
+        if path == "/v1/betaGroups/G2":
+            if method == "PATCH":
+                FAKE.internal["attributes"].update(body["data"]["attributes"])
+            return self._send(200, {"data": FAKE.internal})
+        if method == "POST" and path == "/v1/betaGroups/G2/relationships/builds":
+            return self._send(422, {"errors": [{"detail": "Cannot add internal group to a build."}]})
+        if method == "GET" and path == "/v1/betaGroups/G2/builds":
+            if FAKE.internal_never_lists:
+                return self._send(200, {"data": []})
+            if FAKE.internal_hidden_reads > 0:
+                FAKE.internal_hidden_reads -= 1
+                return self._send(200, {"data": []})
+            listed = [envelope("builds", "B1", {"version": "42"})] if FAKE.internal["attributes"]["hasAccessToAllBuilds"] else []
+            return self._send(200, {"data": listed})
+        if method == "GET" and path == "/v1/betaGroups/G2/betaTesters":
+            return self._send(200, {"data": [t for t in FAKE.testers if t["id"] in FAKE.internal_members]})
+        if method == "POST" and path == "/v1/betaGroups/G2/relationships/betaTesters":
+            FAKE.internal_members.extend(item["id"] for item in body["data"] if item["id"] not in FAKE.internal_members)
+            return self._send(204)
+        if method == "GET" and path == "/v1/users":
+            data = [envelope("users", u["id"], {k: v for k, v in u.items() if k != "id"}) for u in FAKE.users]
+            return self._send(200, {"data": data})
+        if method == "GET" and path == "/v1/betaTesters":
+            wanted = parse_qs(url.query)["filter[email]"][0]
+            return self._send(200, {"data": [t for t in FAKE.testers if t["attributes"]["email"] == wanted]})
+        if method == "POST" and path == "/v1/betaTesters":
+            tester = envelope("betaTesters", f"T{len(FAKE.testers) + 1}", body["data"]["attributes"])
+            FAKE.testers.append(tester)
+            for group in body["data"]["relationships"]["betaGroups"]["data"]:
+                assert group["id"] == "G2", "the fake only knows the internal group's testers"
+                FAKE.internal_members.append(tester["id"])
+            return self._send(201, {"data": tester})
         if path == "/v1/betaGroups/G1":
             if method == "PATCH":
                 FAKE.group["attributes"].update(body["data"]["attributes"])
@@ -232,6 +278,41 @@ def main() -> None:
         FAKE.submissions = 0
         transient = run_publish(args)
         assert transient["submitted_this_run"] is True and FAKE.submissions == 1, transient
+
+        # 3c. internal group: created with all-builds access, holds only the account holder/admin, and the build
+        # reaches it with no per-build attach (App Store Connect refuses one) and no Beta App Review involved.
+        assert FAKE.internal["attributes"]["isInternalGroup"] is True
+        assert FAKE.internal["attributes"]["hasAccessToAllBuilds"] is True
+        assert [t["attributes"]["email"] for t in FAKE.testers] == ["owner@example.test"], FAKE.testers
+        assert FAKE.testers[0]["attributes"]["firstName"] == "Ada"
+        assert first["internal_build_available"] is True and first["internal_group_testers"] == 1, first
+        assert "POST /v1/betaGroups/G2/relationships/builds" not in FAKE.calls
+        assert FAKE.calls.count("POST /v1/betaTesters") == 1, "a second publish must not re-invite"
+        assert FAKE.calls.count("POST /v1/betaGroups") == 2, "one public group and one internal group, once each"
+
+        # 3d. all-builds access switched off in the console is switched back on; a tester removed from the group is
+        # re-added from the existing tester record rather than invited again
+        FAKE.internal["attributes"]["hasAccessToAllBuilds"] = False
+        FAKE.internal_members.clear()
+        repaired = run_publish(args)
+        assert FAKE.internal["attributes"]["hasAccessToAllBuilds"] is True
+        assert FAKE.internal_members == ["T1"] and len(FAKE.testers) == 1, (FAKE.internal_members, FAKE.testers)
+        assert repaired["internal_build_available"] is True
+
+        # 3e. a build the group lists late is waited for; one it never lists fails the publish
+        FAKE.internal_hidden_reads = 2
+        assert run_publish(args)["internal_build_available"] is True
+        FAKE.internal_never_lists = True
+        polls = testflight.POLL_ATTEMPTS
+        testflight.POLL_ATTEMPTS = 2
+        try:
+            run_publish(args)
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("publish must fail when the internal group cannot see the build")
+        testflight.POLL_ATTEMPTS = polls
+        FAKE.internal_never_lists = False
 
         # 4. a build that has not finished processing is refused, never submitted
         FAKE.processing = "PROCESSING"
