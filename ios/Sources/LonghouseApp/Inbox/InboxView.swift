@@ -450,11 +450,7 @@ struct TimelineView: View {
     }
 
     private var emptyView: some View {
-        ContentUnavailableView(
-            "No timeline sessions",
-            systemImage: "rectangle.stack",
-            description: Text("Sessions will appear here as Longhouse syncs them.")
-        )
+        TimelineEmptyView()
     }
 
     private func errorView(_ message: String) -> some View {

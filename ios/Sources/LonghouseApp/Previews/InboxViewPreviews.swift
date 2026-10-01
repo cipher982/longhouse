@@ -298,6 +298,56 @@ private func mockSession(
     .emberChrome()
 }
 
+/// A brand-new host after its first machine connected: imported Shadow history,
+/// no live evidence, and no title model, so titles are the first prompt cut short.
+private func firstRunImportedSessions() -> [SessionSummary] {
+    func imported(_ id: String, _ project: String, _ title: String, _ provider: String, _ branch: String, hoursAgo: Double) -> SessionSummary {
+        mockSession(
+            id: id,
+            project: project,
+            title: title,
+            summary: "",
+            provider: provider,
+            branch: branch,
+            machine: "alex-macbook",
+            statusLabel: "Imported",
+            statusTone: "quiet",
+            activityRecency: "none",
+            anchorSecondsAgo: hoursAgo * 3600,
+            isManaged: false,
+            turns: 1,
+            tools: 0
+        )
+    }
+    return [
+        imported("fr-1", "public-api", "Add rate limiting to the public\u{2026}", "claude", "feature/rate-limit", hoursAgo: 26),
+        imported("fr-2", "web-app", "Summarise the open TODOs in this\u{2026}", "codex", "main", hoursAgo: 31),
+        imported("fr-3", "data-pipeline", "Why does the nightly export job\u{2026}", "claude", "fix/export-timeout", hoursAgo: 73),
+        imported("fr-4", "billing-service", "Write a Dockerfile and a docker-compose\u{2026}", "claude", "main", hoursAgo: 123),
+    ]
+}
+
+#Preview("First run — imported history") {
+    ScrollView {
+        VStack(spacing: 12) {
+            ForEach(firstRunImportedSessions()) { session in
+                TimelineSessionCardRow(session: session, role: .recent, connectivityBanner: .none)
+            }
+        }
+        .padding(16)
+    }
+    .background(Ember.page)
+    .preferredColorScheme(.dark)
+    .emberChrome()
+}
+
+#Preview("First run — empty timeline") {
+    TimelineEmptyView()
+        .background(Ember.page)
+        .preferredColorScheme(.dark)
+        .emberChrome()
+}
+
 #Preview("Timeline cards — attention colors light") {
     let sessions: [SessionSummary] = [
         mockSession(
