@@ -10274,7 +10274,10 @@ class CatalogStore:
                 parent_session_id = connection.execute(
                     select(storage_session.c.subagent_parent_session_id).where(
                         storage_session.c.session_id == session_key,
-                        storage_session.c.is_subagent == 1,
+                        or_(
+                            storage_session.c.is_subagent == 1,
+                            primary_worker_only_clause(storage_session, LiveSessionThread.__table__),
+                        ),
                     )
                 ).scalar_one_or_none()
                 if parent_session_id is not None:

@@ -4925,3 +4925,62 @@ async def test_spawn_reference_cannot_promote_a_native_less_fork_to_worker(daemo
         reference = next(row for row in graph["child_references"] if row["provider_session_id"] == spawned_native_id)
         assert reference["session_id"] is None
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_primary_thread_worker_evidence_wakes_parent_without_a_storage_worker_marker(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    parent_id, child_id = uuid4(), uuid4()
+    parent_native_id = "legacy-native-parent"
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(
+            LiveSessionThread(
+                id=str(uuid4()),
+                session_id=str(child_id),
+                provider="claude",
+                device_id="cinder",
+                branch_kind="subagent",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+    engine.dispose()
+    parent = _raw_params(
+        epoch=uuid4(),
+        session_id=parent_id,
+        start=0,
+        end=10,
+        records=(b"parent",),
+        sealed_at=now,
+        provider="claude",
+        provider_session_id=parent_native_id,
+        opaque_source_id="legacy-parent",
+    )
+    child = _raw_params(
+        epoch=uuid4(),
+        session_id=child_id,
+        start=0,
+        end=10,
+        records=(b"child",),
+        sealed_at=now,
+        provider="claude",
+        opaque_source_id="legacy-worker",
+        subagent={"is_subagent": False, "parent_provider_session_id": parent_native_id},
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = _catalog_client(socket_path)
+    try:
+        await client.call("storage.raw_object.commit.v2", parent)
+        receipt = await client.call("storage.raw_object.commit.v2", child)
+        assert receipt["delegation_parent_session_id"] == str(parent_id)
+        served = await client.call("session.subagents.list.v2", {"session_id": str(parent_id), "owner_id": "42"})
+        assert [row["session_id"] for row in served["children"]] == [str(child_id)]
+    finally:
+        await client.close()
+        await daemon.close()
