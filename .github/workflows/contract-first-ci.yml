@@ -31,8 +31,8 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/heads/main') }}
 
 env:
-  # Self-hosted runners can have global pip config pointing at private indexes.
-  # Force public PyPI for CI so setup-python's pip step doesn't fail.
+  # A runner's global pip config can point at a private index. Pin public PyPI
+  # so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
   # Test jobs run on GitHub-hosted arm64 runners (ubuntu-24.04-arm): free for
@@ -143,7 +143,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - run: |
-          echo "::error::Portable CI has a writable self-hosted runner cache. Fork code cannot execute there; replay the patch on a trusted branch before merge."
+          echo "::error::This workflow does not run for fork PRs: its jobs publish the fixture image to GHCR with this repository's token. Replay the patch on a trusted branch before merge."
           exit 1
 
   # Only when the dependency manifests changed. CI tests wait only for arm64;
