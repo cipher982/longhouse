@@ -1107,7 +1107,10 @@ def run_lifecycle(
         "artifact_kind": artifact_kind,
         "producer": registration.to_dict(),
         "provider": "claude",
-        "variant": getattr(args, "variant", None),
+        # The authored variant axis of the cells this scenario covers (none), which the factory compares
+        # with each command's variant. ``args.variant`` is the execution key ("cell:claude:...") and is
+        # not that axis: reporting it failed all five claude_helm_* cells as "malformed result".
+        "variant": None,
         "scenario_id": registration.scenario_id,
         "scenario_revision": registration.scenario_revision,
         "evidence_class": "live_token",

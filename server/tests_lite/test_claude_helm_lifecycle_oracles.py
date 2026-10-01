@@ -458,3 +458,29 @@ def test_typed_setup_prompts_stay_below_claude_paste_framing():
     assert len(steer) <= TYPED_PROMPT_MAX_CHARS
     assert len(abort) <= TYPED_PROMPT_MAX_CHARS
     assert all(f"lh_claude_step_{token}_{n}" in steer for n in (1, 2, 3))
+
+
+def test_the_scenario_result_reports_the_authored_variant_axis_not_the_execution_key() -> None:
+    """The factory compares ``result["variant"]`` with each command's authored variant (none for these cells).
+
+    ``args.variant`` is the execution key (``cell:claude:...``); reporting it failed all five ``claude_helm_*``
+    cells as a malformed result on the 2026-10-01 factory tick. The producer's result is built inside a live
+    run, so pin the one literal.
+    """
+
+    import ast
+    import inspect
+
+    from zerg.qa import claude_helm_lifecycle
+
+    tree = ast.parse(inspect.getsource(claude_helm_lifecycle))
+    variants = [
+        value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        and any(isinstance(key, ast.Constant) and key.value == "artifact_kind" for key in node.keys)
+        for key, value in zip(node.keys, node.values)
+        if isinstance(key, ast.Constant) and key.value == "variant"
+    ]
+    assert len(variants) == 1
+    assert isinstance(variants[0], ast.Constant) and variants[0].value is None
