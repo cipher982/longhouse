@@ -903,6 +903,55 @@ def test_unowned_console_projection_keeps_the_searchable_history_label():
     assert facts.presentation.access.key == "search_only"
 
 
+def test_imported_shadow_session_reads_imported_not_activity_unknown():
+    """Every session a fresh host imports is Shadow with no run and no live evidence.
+
+    "Activity unknown" on each row of a first screen reads as a fault. The label
+    must say what Longhouse holds, and must not claim the session ended or is idle.
+    """
+
+    facts = build_archive_session_state_facts(
+        session=_session(),
+        capabilities=_capabilities(label="imported", live=False, reattach=False, search=True, run_id=None),
+    )
+
+    assert facts.mode == "shadow"
+    assert facts.run is None
+    assert facts.activity.state == "unknown"
+    primary = facts.presentation.primary
+    assert primary is not None
+    assert (primary.key, primary.label, primary.tone) == ("imported", "Imported", "quiet")
+    assert facts.presentation.access is not None
+    assert facts.presentation.access.key == "search_only"
+
+
+def test_shadow_session_being_tailed_live_is_not_called_imported():
+    facts = _facts(
+        runtime=None,
+        capabilities=_capabilities(observe=True, live=False, reattach=False, run_id=None),
+        liveness=_liveness(managed=False),
+    )
+
+    assert facts.mode == "shadow"
+    assert facts.transcript.live_observation is True
+    assert facts.presentation.primary is None
+
+
+def test_shadow_session_with_expired_live_evidence_is_not_relabelled_imported():
+    """Evidence that arrived and aged out is not "never observed"; it keeps its own wording."""
+
+    facts = _facts(
+        runtime=_runtime(phase="idle", confidence="stale"),
+        capabilities=_capabilities(observe=True, live=False, reattach=False, run_id=None),
+        liveness=_liveness(managed=False),
+    )
+
+    assert facts.mode == "shadow"
+    assert facts.activity.raw_kind is not None
+    primary = facts.presentation.primary
+    assert primary is None or primary.key != "imported"
+
+
 def test_process_gone_ends_run_but_does_not_close_session():
     facts = _facts(
         runtime=_runtime(phase=None, confidence="stale", terminal_state="process_gone"),
@@ -965,7 +1014,10 @@ def test_no_run_means_no_primary_runtime_claim():
     )
 
     assert facts.run is None
-    assert facts.presentation.primary is None
+    # The headline names the provenance, not an activity: no "Idle", no "Ended".
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "imported"
+    assert facts.activity.state == "unknown"
     assert facts.presentation.access is not None
     assert facts.presentation.access.label == "Search only"
 
@@ -1222,6 +1274,7 @@ def _primary_for_helm_idle(*, connection, terminal_attached):
     from zerg.services.session_state_contract import SessionDelegationFacts
     from zerg.services.session_state_contract import SessionDispositionFacts
     from zerg.services.session_state_contract import SessionRunFacts
+    from zerg.services.session_state_contract import SessionTranscriptFacts
     from zerg.services.session_state_contract import _primary
 
     unavailable = SessionActionAvailability(state="unavailable", reason="test")
@@ -1246,6 +1299,7 @@ def _primary_for_helm_idle(*, connection, terminal_attached):
         delegation=SessionDelegationFacts(),
         control=control,
         interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current"),
     )
 
 

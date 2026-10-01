@@ -109,7 +109,19 @@ def _build_session_titles_summary(*, window: _Window, generated_at: datetime) ->
     from zerg.services.catalog_read_gateway import CatalogReadError
     from zerg.services.catalog_read_gateway import title_dependency_health
     from zerg.services.storage_session_titles import storage_title_scheduler_snapshot
+    from zerg.services.storage_session_titles import title_generation_off_reason
 
+    titles_off = title_generation_off_reason()
+    if titles_off is not None:
+        return ProductHealthCheckSummaryResponse(
+            check=SESSION_TITLES_CHECK_ID,
+            verdict="ok",
+            coverage="full",
+            window=window.label,
+            generated_at=generated_at,
+            headline="Session titles are off here; titles fall back to the first prompt.",
+            signals={"titles_off_reason": titles_off},
+        )
     try:
         health = title_dependency_health()
     except CatalogReadError:

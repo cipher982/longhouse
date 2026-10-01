@@ -366,16 +366,23 @@ def health_check(request: Request):
     if not _settings.testing:
         try:
             from zerg.services.catalog_read_gateway import title_dependency_health
+            from zerg.services.storage_session_titles import title_generation_off_reason
 
-            title_health = title_dependency_health()
-            degraded = title_health.get("status") == "degraded"
-            checks["session_titles"] = {
-                "status": "warn" if degraded else "pass",
-                **title_health,
-            }
-            if degraded and health_status["status"] == "healthy":
-                health_status["status"] = "degraded"
-                health_status["message"] = "Session title generation dependency is degraded"
+            titles_off = title_generation_off_reason()
+            if titles_off is not None:
+                # No provider (or no transcript egress) is a normal state, not a
+                # degraded one: titles fall back to the first prompt.
+                checks["session_titles"] = {"status": "pass", "state": "off", "reason": titles_off}
+            else:
+                title_health = title_dependency_health()
+                degraded = title_health.get("status") == "degraded"
+                checks["session_titles"] = {
+                    "status": "warn" if degraded else "pass",
+                    **title_health,
+                }
+                if degraded and health_status["status"] == "healthy":
+                    health_status["status"] = "degraded"
+                    health_status["message"] = "Session title generation dependency is degraded"
         except Exception as exc:  # catalog connectivity is graded separately below
             checks["session_titles"] = {"status": "warn", "error": type(exc).__name__}
 

@@ -31,7 +31,7 @@ from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 4
-PRESENTATION_POLICY_VERSION = 3
+PRESENTATION_POLICY_VERSION = 4
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -48,6 +48,7 @@ PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "ended",
     "ready",
     "no_recent_activity",
+    "imported",
     "activity_unknown",
 )
 ACCESS_PRESENTATION_KEYS: tuple[str, ...] = (
@@ -889,6 +890,7 @@ def assemble_session_state_facts(
         delegation=delegation,
         control=control,
         interaction=pending_interaction,
+        transcript=transcript,
     )
     access = _access(mode=mode, disposition=disposition, run=run, control=control, transcript=transcript)
     transcript_label = (
@@ -1049,6 +1051,7 @@ def _primary(
     delegation: SessionDelegationFacts,
     control: SessionControlFacts,
     interaction: SessionPendingInteractionFacts | None,
+    transcript: SessionTranscriptFacts,
 ) -> SessionPresentationLabel | None:
     if disposition.state == "closed":
         return SessionPresentationLabel(key="closed", label="Closed", tone="closed", observed_at=disposition.closed_at)
@@ -1169,6 +1172,15 @@ def _primary(
             )
     if run is not None:
         return SessionPresentationLabel(key="activity_unknown", label="Activity unknown", tone="quiet")
+    # A Shadow session Longhouse only ever read from a transcript: no run, no live
+    # evidence has ever arrived for it (`raw_kind` would name one), and nothing is
+    # tailing it now. That is every session a fresh host imports, and "Activity
+    # unknown" on each row reads as a fault on a first screen. The label states
+    # what Longhouse holds; it claims neither that the session ended nor that it
+    # is idle. A session that is being observed live, or whose live evidence
+    # merely expired, is not "imported" and keeps its own wording or none.
+    if mode == "shadow" and activity.state == "unknown" and activity.raw_kind is None and not transcript.live_observation:
+        return SessionPresentationLabel(key="imported", label="Imported", tone="quiet")
     return None
 
 

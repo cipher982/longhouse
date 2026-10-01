@@ -74,6 +74,27 @@ async def test_title_worker_is_silent_when_transcript_egress_is_off(monkeypatch)
     assert calls == []
 
 
+def test_title_generation_off_reason_names_every_normal_off_state(monkeypatch):
+    """No provider, no egress opt-in and llm_disabled are healthy states; a configured provider is not off."""
+
+    import zerg.services.storage_session_titles as storage_titles
+
+    monkeypatch.setattr(storage_titles, "get_settings", lambda: SimpleNamespace(llm_disabled=True))
+    assert storage_titles.title_generation_off_reason() == "llm_disabled"
+
+    monkeypatch.setattr(storage_titles, "get_settings", lambda: SimpleNamespace(llm_disabled=False))
+    monkeypatch.delenv("AI_TITLES_AND_SUMMARIES_ENABLED", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    assert storage_titles.title_generation_off_reason() == "transcript_egress_not_enabled"
+
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert storage_titles.title_generation_off_reason() == "no_provider_configured"
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    assert storage_titles.title_generation_off_reason() is None
+
+
 @pytest.mark.asyncio
 async def test_title_worker_requires_canonical_catalog_eligibility(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles

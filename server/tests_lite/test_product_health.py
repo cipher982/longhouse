@@ -23,6 +23,7 @@ import zerg.services.agent_heartbeat_health as heartbeat_health
 import zerg.services.catalog_read_gateway as catalog_read_gateway
 import zerg.routers.observability as observability_router
 import zerg.services.product_health as product_health
+import zerg.services.storage_session_titles as storage_session_titles
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -38,6 +39,12 @@ from zerg.services.session_observations import SOURCE_DOMAIN_CLIENT
 from zerg.services.session_observations import record_session_observation
 
 PINNED_NOW = datetime(2026, 5, 22, 18, 0, 0, tzinfo=timezone.utc)
+
+
+def _titles_on(monkeypatch):
+    """A host where title generation can run, so its dependency health is graded."""
+
+    monkeypatch.setattr(storage_session_titles, "title_generation_off_reason", lambda: None)
 
 
 def _make_db(tmp_path):
@@ -180,6 +187,7 @@ def test_live_preview_no_observations_returns_unknown_with_missing(tmp_path, mon
 
 
 def test_product_health_summary_orders_launch_loop_checks(tmp_path, monkeypatch):
+    _titles_on(monkeypatch)
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(
@@ -213,6 +221,7 @@ def test_product_health_summary_orders_launch_loop_checks(tmp_path, monkeypatch)
 
 
 def test_product_health_exposes_durable_session_title_dependency_incident(tmp_path, monkeypatch):
+    _titles_on(monkeypatch)
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(
         catalog_read_gateway,
@@ -239,6 +248,7 @@ def test_product_health_exposes_durable_session_title_dependency_incident(tmp_pa
 
 
 def test_product_health_degrades_on_aged_title_backlog_with_healthy_dependency(tmp_path, monkeypatch):
+    _titles_on(monkeypatch)
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(
         catalog_read_gateway,
@@ -265,6 +275,27 @@ def test_product_health_degrades_on_aged_title_backlog_with_healthy_dependency(t
     assert check.verdict == "degraded"
     assert "3 obligations overdue" in check.headline
     assert check.signals["oldest_overdue_age_seconds"] == 600
+
+
+def test_product_health_session_titles_is_ok_when_no_provider_is_configured(tmp_path, monkeypatch):
+    """Titles off is a normal state; the imported-session backlog it leaves is not an outage."""
+
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(storage_session_titles, "title_generation_off_reason", lambda: "no_provider_configured")
+
+    def _must_not_grade_the_backlog():
+        raise AssertionError("graded a title backlog on a host that cannot generate titles")
+
+    monkeypatch.setattr(catalog_read_gateway, "title_dependency_health", _must_not_grade_the_backlog)
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        payload = build_product_health_checks(db, window="15m")
+
+    check = _check(payload, "session_titles")
+    assert check.verdict == "ok"
+    assert check.coverage == "full"
+    assert check.signals == {"titles_off_reason": "no_provider_configured"}
 
 
 def test_machine_connected_unknown_without_recent_heartbeats(tmp_path, monkeypatch):

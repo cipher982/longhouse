@@ -2181,13 +2181,14 @@ def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_pa
 
     imported = by_title["Imported history"]
     assert imported.runtime_display.state is None
-    assert imported.timeline_card.status.label == "Activity unknown"
+    assert imported.timeline_card.status.label == "Imported"
     assert imported.session_state.mode == "shadow"
     assert imported.capabilities.observe_only is False
     assert imported.capabilities.search_only is True
 
     shadow = by_title["Shadow active"]
     assert shadow.runtime_display.state is None
+    # Being tailed right now: not "Imported", and no live evidence either.
     assert shadow.timeline_card.status.label == "Activity unknown"
     assert shadow.session_state.mode == "shadow"
     assert shadow.capabilities.observe_only is True
