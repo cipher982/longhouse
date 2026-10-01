@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { usePageMeta } from "@/shared/hooks/usePageMeta";
 import { CodeBlock } from "./CodeBlock";
 
@@ -141,6 +142,40 @@ longhouse-server serve --db sqlite:///path/to/your.db`}
             <td>(none)</td>
             <td>Device token read by <code>longhouse auth</code></td>
           </tr>
+          <tr>
+            <td><code>LONGHOUSE_IMPORT_SCOPE</code></td>
+            <td>(asks)</td>
+            <td>
+              Read by the installer: <code>now</code>, <code>all</code>, or a
+              date such as <code>2026-09-01</code> answers what history to
+              import without a prompt
+            </td>
+          </tr>
+          <tr>
+            <td><code>LONGHOUSE_ALLOW_INSECURE_HTTP</code></td>
+            <td>(unset)</td>
+            <td>
+              Set to <code>1</code> to let native clients use plain http to a
+              LAN address. Tailscale and loopback never need it
+            </td>
+          </tr>
+          <tr>
+            <td><code>LONGHOUSE_COOKIE_SECURE</code></td>
+            <td>(unset)</td>
+            <td>
+              Set to <code>1</code> to force <code>Secure</code> auth cookies
+              when a TLS proxy the server does not trust reports every request
+              as https
+            </td>
+          </tr>
+          <tr>
+            <td><code>FORWARDED_ALLOW_IPS</code></td>
+            <td>loopback</td>
+            <td>
+              Proxy addresses trusted to report https through{" "}
+              <code>X-Forwarded-Proto</code> (uvicorn setting)
+            </td>
+          </tr>
         </tbody>
       </table>
 
@@ -176,6 +211,15 @@ longhouse-server serve --host 0.0.0.0 --domain longhouse.example.com`}
         <code>reverse_proxy 127.0.0.1:8080</code> is the whole Caddy config. The
         hosted plan handles all of this if you prefer not to run
         infrastructure.
+      </p>
+      <p>
+        Without TLS, native clients accept plain <code>http://</code> to
+        loopback and Tailscale addresses, and to a LAN address only after an
+        opt-in (see <Link to="/docs/quickstart">Quick Start</Link>). Browser
+        login also works over plain http: auth cookies are marked{" "}
+        <code>Secure</code> only for requests that arrive over https. A TLS
+        proxy on another machine or container must be listed in{" "}
+        <code>FORWARDED_ALLOW_IPS</code> for its requests to count as https.
       </p>
     </>
   );

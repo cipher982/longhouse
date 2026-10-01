@@ -8,6 +8,10 @@ const STEERABLE = PROVIDERS.filter((p) => p.steerMidTurn);
 const INTERRUPTIBLE = PROVIDERS.filter((p) => p.interrupt && !p.steerMidTurn);
 const SEND_ONLY = PROVIDERS.filter((p) => p.launchAndSend && !p.interrupt);
 
+function names(providers: typeof PROVIDERS) {
+  return providers.map((p) => p.marketingName).join(", ");
+}
+
 export default function RemoteControlPage() {
   usePageMeta({
     title: "Remote Control - Longhouse Docs",
@@ -33,11 +37,11 @@ export default function RemoteControlPage() {
       </div>
       <div className="docs-callout">
         <p>
-          <strong>Provider truth matters.</strong> Only{" "}
-          {STEERABLE.map((p) => p.marketingName).join(" and ")} can be steered
-          mid-turn. {INTERRUPTIBLE.map((p) => p.marketingName).join(", ")} take
-          send and interrupt but not mid-turn steer, and{" "}
-          {SEND_ONLY.map((p) => p.marketingName).join(", ")} takes send alone.
+          <strong>Provider truth matters.</strong> {names(STEERABLE)} can be
+          steered mid-turn.{" "}
+          {INTERRUPTIBLE.length > 0 &&
+            `${names(INTERRUPTIBLE)} take send and interrupt but not mid-turn steer. `}
+          {SEND_ONLY.length > 0 && `${names(SEND_ONLY)} takes send alone. `}
           The timeline offers each session only the controls its provider can
           actually perform.
         </p>

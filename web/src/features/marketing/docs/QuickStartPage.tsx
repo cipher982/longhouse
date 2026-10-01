@@ -28,9 +28,9 @@ longhouse-server onboard`}
       </CodeBlock>
       <p>
         That starts a Runtime Host at <code>http://127.0.0.1:8080</code>,
-        installs the Machine Agent, and imports your sessions in one step, so
-        you can skip to step 3. It stops when the machine does; to keep one
-        running, see <Link to="/docs/configuration">Configuration</Link>.
+        installs the Machine Agent, and asks what history to import, so you can
+        skip to step 4. It stops when the machine does; to keep one running,
+        see <Link to="/docs/configuration">Configuration</Link>.
       </p>
 
       <h3>Your own always-on box, over Tailscale</h3>
@@ -120,13 +120,13 @@ longhouse machine scope --since all            # import everything on this compu
 
       <h2>4. Find a session</h2>
       <p>
-        Start a session in Claude Code, Codex, Cursor Agent, OpenCode, or
-        Antigravity, then look for it in the timeline or search. A session you
-        start after setup appears within seconds.
+        Start a session in Claude Code, Codex, Cursor Agent, OpenCode, Pi, Oh My
+        Pi, or Antigravity, then look for it in the timeline or search. A
+        session you start after setup appears within seconds.
       </p>
       <div className="docs-callout">
         <p>
-          <strong>No sessions yet?</strong> Use the hosted Runtime Host or run
+          <strong>No sessions yet?</strong> Run{" "}
           <code>uv tool install longhouse && longhouse-server serve --demo</code>{" "}
           for a safe preview.
         </p>
@@ -148,23 +148,22 @@ longhouse machine scope --since all            # import everything on this compu
         reachable later:
       </p>
       <CodeBlock title="terminal">
-        {`longhouse claude       # Claude Code, steerable mid-turn
-longhouse codex        # Codex CLI, steerable mid-turn
-longhouse cursor       # Cursor Agent, send and interrupt
-longhouse opencode     # OpenCode, send and interrupt
-longhouse pi --prompt "..."   # Pi Agent, one-shot turn
+        {`longhouse claude       # Claude Code
+longhouse codex        # Codex CLI
+longhouse cursor       # Cursor Agent
+longhouse opencode     # OpenCode
+longhouse pi           # Pi Agent
+longhouse omp          # Oh My Pi
 longhouse antigravity  # Antigravity CLI, send only`}
       </CodeBlock>
       <p>
         When Longhouse launches the session, it owns the session record and
-        local observation path. All six providers ship today; what they can do
-        after launch differs. Claude and Codex can be steered mid-turn. Cursor
-        Agent takes send and interrupt but not mid-turn steer. OpenCode Helm
-        supports managed send, interrupt, terminate, pause-answer, and
-        active-turn steer that lands at the next step boundary. Pi runs one-shot Console turns: you can start a turn
-        and interrupt it, but there is no live session to send into. Antigravity
-        takes send alone, and refuses to start if its Longhouse hook is not
-        installed. The{" "}
+        local observation path. All seven providers ship today; what they can do
+        after launch differs. Every provider but Antigravity can be steered
+        mid-turn. OpenCode Helm supports managed send, interrupt, terminate,
+        pause-answer, and active-turn steer that lands at the next step
+        boundary. Antigravity takes send alone, and refuses to start if its
+        Longhouse hook is not installed. The{" "}
         <Link to="/docs/integrations">Integrations</Link> page carries the full
         provider detail, generated from the managed-provider declarations.
       </p>
@@ -172,14 +171,13 @@ longhouse antigravity  # Antigravity CLI, send only`}
         <p>
           <strong>Managed vs unmanaged.</strong> Both show up in the timeline,
           but managed sessions keep Longhouse ownership of the launch and
-          observation path. Use <code>longhouse claude</code> or{" "}
-          <code>longhouse codex</code> when you want to redirect a turn that is
-          already running; the rest still land as managed sessions the browser
-          and the API can reach.
+          observation path. Launch through <code>longhouse &lt;provider&gt;</code>{" "}
+          when you want to redirect a turn that is already running; a bare
+          provider run stays observe-only.
         </p>
       </div>
 
-      <h2>5. Troubleshooting</h2>
+      <h2>6. Troubleshooting</h2>
       <p>
         Most people should not need this on the first run. If the timeline or
         menu bar says something is wrong:

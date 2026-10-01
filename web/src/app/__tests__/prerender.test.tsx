@@ -120,9 +120,9 @@ describe("prerendered routes", () => {
   it("the integrations page documents the providers it names and counts them", async () => {
     const { html, meta } = await renderRoute("/docs/integrations");
 
-    expect(html).toContain("Six providers ship today");
-    expect(meta.description).toContain("six");
-    for (const name of ["Claude Code", "Codex CLI", "Cursor Agent", "OpenCode", "Pi Agent", "Antigravity CLI"]) {
+    expect(html).toContain("Seven providers ship today");
+    expect(meta.description).toContain("seven");
+    for (const name of ["Claude Code", "Codex CLI", "Cursor Agent", "OpenCode", "Pi Agent", "Oh My Pi", "Antigravity CLI"]) {
       expect(html).toContain(name);
     }
   });

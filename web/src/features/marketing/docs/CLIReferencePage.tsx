@@ -46,6 +46,7 @@ longhouse codex
 longhouse cursor
 longhouse opencode
 longhouse pi --prompt "summarize the failing test"
+longhouse omp
 longhouse antigravity`}
       </CodeBlock>
       <p>
@@ -86,9 +87,10 @@ longhouse antigravity`}
       </table>
       <p>
         Bare <code>claude</code>, <code>codex</code>, <code>cursor-agent</code>,{" "}
-        <code>opencode</code>, <code>pi</code>, and <code>agy</code> runs still
-        import into the timeline. They stay Shadow sessions: searchable and
-        observable, with no control path, because Longhouse never owned one.
+        <code>opencode</code>, <code>pi</code>, <code>omp</code>, and{" "}
+        <code>agy</code> runs still import into the timeline. They stay Shadow
+        sessions: searchable and observable, with no control path, because
+        Longhouse never owned one.
       </p>
       <p>
         Codex and OpenCode also take <code>attach</code> and <code>stop</code>{" "}
@@ -109,8 +111,17 @@ longhouse antigravity`}
         {`longhouse auth
 longhouse auth --url https://you.longhouse.ai
 LONGHOUSE_DEVICE_TOKEN="..." longhouse auth --url https://you.longhouse.ai
+longhouse auth --url http://192.168.1.20:8080 --allow-insecure-http
 longhouse auth --clear`}
       </CodeBlock>
+      <p>
+        Plain <code>http://</code> is accepted only for loopback and Tailscale
+        addresses. A LAN address needs <code>--allow-insecure-http</code> (or{" "}
+        <code>LONGHOUSE_ALLOW_INSECURE_HTTP=1</code>), which is stored with that
+        address and warns on every use; any other address needs{" "}
+        <code>https://</code>. Every native client follows the same rule, as do the{" "}
+        <code>longhouse-server</code> commands that send the device token.
+      </p>
       <p>
         <code>--clear</code> disconnects the machine: it revokes this
         machine&apos;s device token on the Runtime Host, then deletes the stored
@@ -123,6 +134,7 @@ longhouse auth --clear`}
       <p>Install, repair, or restart the native Machine Agent service.</p>
       <CodeBlock title="terminal">
         {`longhouse machine repair
+longhouse machine repair --dry-run
 longhouse machine repair --repair-service`}
       </CodeBlock>
 
@@ -130,9 +142,11 @@ longhouse machine repair --repair-service`}
       <p>
         Choose which existing session history the Machine Agent may import.
         Old transcripts can hold code and secrets from any project you ever ran
-        an agent in, so a machine that has never chosen imports only sessions
-        that <em>start</em> from now on. Sessions you start later always ship.
-        Changing the scope later backfills whatever became eligible.
+        an agent in, so a newly connected machine that has not chosen imports
+        only sessions that <em>start</em> from now on. A machine that was
+        already shipping history before scopes existed keeps shipping all of
+        it. Sessions you start later always ship. Changing the scope later
+        backfills whatever became eligible.
       </p>
       <CodeBlock title="terminal">
         {`longhouse machine scope                      # show the scope and what it leaves out
@@ -145,8 +159,8 @@ longhouse machine scope --prompt             # ask (needs a terminal)`}
       </CodeBlock>
       <p>
         A session belongs to a folder when the working directory it recorded is
-        that folder or below it (Claude, Codex, OpenCode, Pi and OMP record
-        one; Cursor and Antigravity history is covered by the date rule only).
+        that folder or below it (Claude, Codex, OpenCode, Pi, OMP and Cursor
+        record one; Antigravity history is covered by the date rule only).
         A session&apos;s start is its file&apos;s creation time (last
         modification where the file system keeps none), or the session&apos;s
         own first timestamp when that is earlier. Narrowing the scope stops
@@ -167,7 +181,8 @@ longhouse machine scope --prompt             # ask (needs a terminal)`}
         {`longhouse uninstall --dry-run   # list what would be removed
 longhouse uninstall             # asks first; --yes skips the question
 longhouse uninstall --purge     # also delete local state under ~/.longhouse
-longhouse uninstall --local-only  # do not revoke the token on the Runtime Host`}
+longhouse uninstall --local-only  # do not revoke the token on the Runtime Host
+longhouse uninstall --keep-app    # leave Longhouse.app in place (macOS)`}
       </CodeBlock>
       <p>
         Sessions already uploaded stay in your Runtime Host&apos;s archive until
@@ -226,8 +241,9 @@ longhouse-server serve --stop               # stop the background server`}
       <h3>longhouse-server onboard</h3>
       <p>
         The guided path: start a local Runtime Host, install the Machine Agent,
-        and open the timeline. <code>--remote-url</code> points it at a Runtime
-        Host you already run instead.
+        ask what history to import, and open the timeline.{" "}
+        <code>--remote-url</code> points it at a Runtime Host you already run
+        instead.
       </p>
       <CodeBlock title="terminal">
         {`longhouse-server onboard

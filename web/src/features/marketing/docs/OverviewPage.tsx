@@ -28,7 +28,7 @@ export default function OverviewPage() {
       <h2>What Longhouse Does</h2>
       <p>
         Longhouse puts Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent,
-        and Antigravity CLI sessions into one searchable timeline. Bare provider
+        Oh My Pi, and Antigravity CLI sessions into one searchable timeline. Bare provider
         runs land as unmanaged history. When you launch a session through
         Longhouse, it becomes managed, so you can send to it, tail it, or
         continue it later from the browser, CLI, or API.
@@ -45,7 +45,8 @@ export default function OverviewPage() {
       <ol>
         <li>
           <strong>Import</strong> — Longhouse reads the session files your CLI
-          tools already produce. No workflow changes required.
+          tools already produce: new sessions by default, older history when
+          you choose it. No workflow changes required.
         </li>
         <li>
           <strong>Find</strong> — Full-text search across every conversation,
@@ -100,7 +101,7 @@ export default function OverviewPage() {
         </Link>
         <Link to="/docs/integrations" className="docs-overview-card">
           <h3>Integrations</h3>
-          <p>The six CLI agents Longhouse launches, and what each can do.</p>
+          <p>The seven CLI agents Longhouse launches, and what each can do.</p>
         </Link>
         <Link to="/docs/configuration" className="docs-overview-card">
           <h3>Configuration</h3>

@@ -31,15 +31,17 @@ export default function MachineAPIPage() {
 
       <h2>Sessions</h2>
 
-      <h3>Ingest sessions</h3>
-      <CodeBlock title="POST /api/agents/ingest">
-        {`curl -X POST http://localhost:8080/api/agents/ingest \\
-  -H "X-Agents-Token: YOUR_DEVICE_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d @session.json
+      <h3>Ship transcripts</h3>
+      <CodeBlock title="POST /api/agents/storage/v2/envelopes">
+        {`# The Machine Agent ships transcripts as storage-v2 envelopes
+# (X-Longhouse-Storage-Lane: live|repair). That is the engine's wire format,
+# not a scripting contract. To import a file by hand:
+longhouse-server ship --file path/to/session.jsonl
 
-# Accepts gzip-compressed payloads: Content-Encoding: gzip
-# Creates or updates a session and inserts events with deduplication`}
+# GET /api/agents/storage/v2/capabilities returns the protocol version,
+# ingest path, and size limits for the calling machine
+curl -H "X-Agents-Token: $LONGHOUSE_DEVICE_TOKEN" \\
+  http://localhost:8080/api/agents/storage/v2/capabilities`}
       </CodeBlock>
 
       <h3>List sessions</h3>
@@ -48,10 +50,10 @@ export default function MachineAPIPage() {
 
 # Query parameters:
 #   query              - search query
-#   limit              - max results (default 50)
+#   limit              - max results (default 20, max 100)
 #   offset             - pagination offset
 #   project            - filter by project name
-#   provider           - filter by provider id (claude, codex, cursor, opencode, pi, antigravity)
+#   provider           - filter by provider id (claude, codex, cursor, opencode, pi, omp, antigravity)
 #   environment        - filter by environment (production, development, test, e2e)
 #   device_id          - filter by device ID
 #   days_back          - look back N days; with a query, omit to search all
@@ -163,7 +165,7 @@ export default function MachineAPIPage() {
 # Query parameters:
 #   direction  - inbound|outbound|all (default: inbound)
 #   after_id   - stable input cursor (default: 0)
-#   limit      - max results (default 20, max 200)`}
+#   limit      - max results (default 50, max 200)`}
       </CodeBlock>
 
       <h3>Reply to directed input</h3>
@@ -200,7 +202,9 @@ export default function MachineAPIPage() {
         {`curl -X POST http://localhost:8080/api/agents/presence \\
   -H "X-Agents-Token: YOUR_DEVICE_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"device_id": "DEVICE_ID", "work_state": "working"}'`}
+  -d '{"session_id": "SESSION_ID", "state": "running", "provider": "claude"}'
+
+# state: thinking|running|idle|needs_user|blocked|stalled. Returns 204.`}
       </CodeBlock>
 
       <h2>Health</h2>
@@ -209,14 +213,15 @@ export default function MachineAPIPage() {
       <CodeBlock title="GET /api/health">
         {`curl http://localhost:8080/api/health
 
-# Returns: server status, uptime, database stats, write serializer metrics`}
+# Returns status (healthy, degraded, or unhealthy with HTTP 503) and the
+# build identity. Loopback, admin, and internal callers also get per-check detail.`}
       </CodeBlock>
 
       <h3>Readiness</h3>
       <CodeBlock title="GET /api/readyz">
         {`curl http://localhost:8080/api/readyz
 
-# Lightweight check: returns 200 if the database is reachable`}
+# Readiness: returns 200 when the catalog service answers, 503 otherwise`}
       </CodeBlock>
 
       <h2>Response format</h2>
