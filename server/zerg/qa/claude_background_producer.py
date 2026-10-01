@@ -196,11 +196,7 @@ def _served_active(state: Mapping[str, Any]) -> bool:
 def _served_empty(state: Mapping[str, Any]) -> bool:
     delegation = _delegation(state)
     state_name = str(delegation.get("state") or "").strip().lower()
-    if state_name == "none":
-        return True
-    items = delegation.get("items")
-    count = delegation.get("count")
-    return state_name == "none" or (isinstance(items, list) and not items and count in (0, None))
+    return state_name == "none"
 
 
 def _nested_strings(value: object) -> list[str]:

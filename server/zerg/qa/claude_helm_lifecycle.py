@@ -706,17 +706,6 @@ def _drive_lifecycle(
             description="Claude live-control lease on Runtime Host",
         )
 
-    served = api_json_tolerant(api, token, f"sessions/{session_id}") or {}
-    state = _channel_state(home, session_id)
-    wait_can_send()
-    lifecycle["launch_registration"] = {
-        "passed": bool(state.get("ready")) and bool(state.get("provider_session_id")) and bool(served),
-        "channel_ready": bool(state.get("ready")),
-        "native_binding_claimed": bool(state.get("provider_session_id")),
-        "served_session_registered": bool(served),
-        "send_input_available": True,
-    }
-
     def send_marker_prompt(marker: str, description: str) -> list[str]:
         """Send a marker prompt from Longhouse and wait for the answer to archive.
 
@@ -1026,6 +1015,20 @@ def run_lifecycle(
         write_json(root / "session-launch-receipt.json", {"session_id": session_id, "workspace": str(workspace)})
         try:
             lookup_id = transcript_lookup_id(session_id, provider_session_id)
+            wait_until(
+                lambda: _action_available(_served_state(args.api_url, args.agents_token, session_id), "send_input"),
+                timeout=args.response_timeout_secs,
+                description="Claude live-control lease on Runtime Host",
+            )
+            served = api_json_tolerant(args.api_url, args.agents_token, f"sessions/{session_id}") or {}
+            state = _channel_state(home, session_id)
+            lifecycle["launch_registration"] = {
+                "passed": bool(state.get("ready")) and bool(state.get("provider_session_id")) and bool(served),
+                "channel_ready": bool(state.get("ready")),
+                "native_binding_claimed": bool(state.get("provider_session_id")),
+                "served_session_registered": bool(served),
+                "send_input_available": True,
+            }
             if scenario_capture is None:
                 _drive_lifecycle(
                     args,

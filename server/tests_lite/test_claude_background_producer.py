@@ -218,17 +218,22 @@ def _capture_scenario(
         states = iter([empty, active, final_state if final_state is not None else empty])
     monkeypatch.setattr(oracle.helm, "_transcript_rows", lambda *_args: transcript)
     monkeypatch.setattr(oracle.helm, "_hosted_assistant_texts", lambda *_args: [parent_marker])
-    monkeypatch.setattr(oracle.helm, "_served_state", lambda *_args: next(states))
+    monkeypatch.setattr(oracle.helm, "_served_state", lambda *_args: next(states, final_state if final_state is not None else empty))
     monkeypatch.setattr(oracle, "_capture_records", lambda *_args: _native_records())
 
     def wait_until(predicate: Any, **_kwargs: Any) -> None:
         assert predicate()
 
-    def unexpected_poll(_seconds: float) -> None:
-        raise AssertionError("completed source or fired fault must not consume another polling deadline")
+    clock = [0.0]
+
+    def poll(seconds: float) -> None:
+        if fault_fired:
+            raise AssertionError("fired writer fault must not consume another polling deadline")
+        clock[0] += seconds
 
     monkeypatch.setattr(oracle.helm, "wait_until", wait_until)
-    monkeypatch.setattr(oracle.time, "sleep", unexpected_poll)
+    monkeypatch.setattr(oracle.time, "sleep", poll)
+    monkeypatch.setattr(oracle.time, "monotonic", lambda: clock[0])
     return oracle._capture_background(
         args=Namespace(
             api_url="http://127.0.0.1",
@@ -285,3 +290,11 @@ def test_fired_writer_fault_rejects_registry_without_waiting_for_impossible_empt
     assert all(value for name, value in result["assertions"].items() if name != "claude_background_registry_served")
     assert result["status"] == "fail"
     assert "error" not in result
+
+
+def test_native_empty_source_cannot_certify_unknown_served_registry(monkeypatch: Any, tmp_path: Path) -> None:
+    result = _capture_scenario(monkeypatch, tmp_path, final_state={"delegation": {"state": "unknown", "items": [], "count": 0}})
+
+    assert result["assertions"]["claude_background_explicit_empty"] is True
+    assert result["assertions"]["claude_background_registry_served"] is False
+    assert result["status"] == "fail"
