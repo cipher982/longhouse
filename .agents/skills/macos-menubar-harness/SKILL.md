@@ -13,52 +13,49 @@ Do not start with fragile GUI scripting.
 
 The inner loop is:
 1. shared SwiftUI core
-2. fixture or live `longhouse local-health --json`
+2. fixture JSON in the shape of `longhouse local-health --json`
 3. PNG snapshot render
 4. full-frame visual inspection of the rendered PNGs
 5. window-host app
 6. menu-bar-host app
 
-For menu bar/dashboard information architecture work, treat the harness as a **mini product surface**, not a screenshot tool. Start by deciding which user-facing states must be obvious at a glance, then encode those as fixtures before touching live data.
+For menu bar/dashboard information architecture work, treat the harness as a **mini product surface**, not a screenshot tool. Start by deciding which user-facing states must be obvious at a glance, then encode those as fixtures.
 
 ## Commands
 
+`make menubar-harness` is a native target: from a developer machine it dispatches a
+fresh GitHub-hosted macOS VM (a clean, pushed revision and an authenticated `gh`,
+as in the `zerg-ui` skill) and downloads the VM's evidence. The dispatcher accepts
+only the fixture modes; the live modes (`snapshot-live`, `window-live`,
+`menubar-live`, `full`) use a live Runtime Host and are refused.
+
 ```bash
-make menubar-harness MODE=full            # one-shot loop: test, render, smoke, manifest
-make menubar-harness MODE=test            # build + Swift tests
-make menubar-harness MODE=render-fixtures # render healthy/degraded/broken PNGs
-make menubar-harness MODE=snapshot-live   # render live local-health PNG
-make menubar-harness MODE=smoke           # boot both app shells and dry-run all controls
-make menubar-harness MODE=xcuitest        # generate the Xcode wrapper and run macOS XCUITests
-make menubar-harness MODE=window-live     # launch as a normal live window
-make menubar-harness MODE=menubar-live    # launch as a real live menu bar extra
-make test-install-macos-ambient           # full disposable installer smoke for engine + menu bar on local macOS
+make menubar-harness MODE=test             # build + Swift tests (the default)
+make menubar-harness MODE=render-fixtures  # render every fixture to a PNG
+make menubar-harness MODE=render-trust-states
+make menubar-harness MODE=smoke            # boot both app shells and dry-run all controls
+make menubar-harness MODE=xcuitest         # generate the Xcode wrapper and run macOS XCUITests
+make test-install                          # installer smoke through the hosted native worker
 ```
+
+`scripts/qa/menubar-harness.sh` (its `snapshot-fixture <name>`, `window-fixture`,
+`menubar-fixture` subcommands) refuses to run outside that VM.
 
 ## Artifacts
 
-Rendered PNGs and action logs land in:
-
-```bash
-artifacts/menubar-harness/
-```
-
-Typical files:
-- `healthy.png`
-- `degraded.png`
-- `broken.png`
-- `managed-attached.png`
-- `managed-detached.png`
-- `managed-degraded.png`
-- `orphan-bridges.png`
-- `machine-broken.png`
-- `live.png`
+Each run writes `artifacts/menubar-harness/<run-id>/` inside the VM. The dispatcher
+downloads the VM's `artifacts/` tree to
+`artifacts/test-isolation/<id>/evidence/menubar-harness/project/` (CI keeps it one
+day), so the files below are under `.../project/menubar-harness/<run-id>/`. Typical files:
+- one `<fixture>.png` per fixture in `desktop/LonghouseMenuBarHarness/Fixtures/`
+  (`healthy`, `degraded`, `broken`, `managed-attached`, `managed-detached`,
+  `managed-degraded`, `orphan-bridges`, `machine-broken`, ...)
+- `trust-never-loaded.png` and the other trust-state renders
 - `window-smoke-actions.jsonl`
 - `menubar-smoke-actions.jsonl`
 - `xcuitest.log`
 - `LonghouseMenuBarWindowHost.xcresult`
 - `manifest.json`
-- installer temp-home artifacts under `/var/folders/.../longhouse-install-smoke-*` during `make test-install-macos-ambient`
 
 ## Source Layout
 
@@ -81,14 +78,12 @@ desktop/LonghouseMenuBarHarness/
 - The key menu bar states for managed sessions are: `attached`, `detached`, `degraded`, and `orphan bridge`.
 - Keep orphaned background bridges separate from managed sessions in the UI. They are an attention surface, not a normal session card.
 - Do not hide managed session/process cards behind a generic blocker state. When the machine is broken, the specific managed sessions or orphan bridges causing it must stay visible and actionable.
-- Treat `artifacts/menubar-harness/*.png` as required QA, not a side effect. Inspect the literal full-frame images before touching the installed app.
+- Treat the downloaded fixture PNGs as required QA, not a side effect. Inspect the literal full-frame images before touching the installed app.
 - Do not accept “rendered successfully” or image dimensions as proof. Catch spacing, clipping, edge contact, and optical balance in the PNG stage.
-- Reinstall `Longhouse.app` only after the fixture/live PNGs look correct.
-- Prefer `make menubar-harness-full` when you need the whole unattended loop.
+- Reinstall `Longhouse.app` only after the fixture PNGs look correct.
 - Treat the Xcode wrapper as generated harness infrastructure; regenerate it via the script instead of hand-editing `.xcodeproj` files.
-- Use live PNG/window/menubar runs only after the fixture loop is stable.
 - Reuse the existing `longhouse local-health --json` contract. Do not teach the Swift code to parse launchd directly.
-- Use `make test-install-macos-ambient` when changing the unified install path, launchd wiring, or menu bar runtime packaging.
+- Use `make test-install` when changing the unified install path, launchd wiring, or menu bar runtime packaging.
 
 ## Recommended Iteration Loop For New States
 
@@ -96,12 +91,12 @@ desktop/LonghouseMenuBarHarness/
    - Example: `managed-attached`, `managed-detached`, `managed-degraded`, `orphan-bridges`, `machine-broken`
 2. Add or update fixture JSON in `desktop/LonghouseMenuBarHarness/Fixtures/`.
 3. Extend the shared snapshot contract in `Sources/LonghouseMenuBarCore/HealthSnapshot.swift`.
-4. Render all fixtures:
+4. Render all fixtures (commit and push first; it is a dispatched run):
    ```bash
-   make menubar-harness-fixtures
+   make menubar-harness MODE=render-fixtures
    ```
-5. Inspect the actual PNGs in `artifacts/menubar-harness/`.
-6. Only after the fixtures read well, check `make menubar-harness-window` or `make menubar-harness-menubar`.
+5. Inspect the actual PNGs in the downloaded evidence (path above).
+6. Only after the fixtures read well, run `MODE=smoke` and `MODE=xcuitest`, then refresh the installed app (`make dogfood-refresh`) and look at the real menu bar.
 
 ## Product Guidance
 

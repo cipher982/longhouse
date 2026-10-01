@@ -18,6 +18,8 @@ recorded completion, failure, cancellation, or abort. Native progress counters
 remain separate from counters derived from the archived child transcript.
 
 Test: `make test-ios`. Previews: `make ios-previews`. Renderer benchmark:
-`make benchmark-ios-transcript`.
+`make benchmark-ios-transcript`. Ship a build to TestFlight: `make testflight`
+(`make testflight-status` shows builds and the public link; see
+[`RELEASE.md`](../RELEASE.md)).
 For a focused bench run, `make ios-unit TEST=LonghouseIOSTests/SessionModelsTests`
 selects a suite; append `/testName` to select one case.

@@ -29,7 +29,7 @@ Use Longhouse in product copy. Keep Zerg internal.
 ## Product Thesis
 
 1. **Session sync and memory are table stakes.**
-   Users should be able to pull up any relevant Claude, Codex, Cursor, OpenCode, Pi, or Antigravity session from the web or CLI without hunting through local logs.
+   Users should be able to pull up any relevant Claude, Codex, Cursor, OpenCode, Pi, Oh My Pi, or Antigravity session from the web or CLI without hunting through local logs.
 
 2. **The wedge is remote control over real sessions running on user-owned machines.**
    The product becomes compelling when the user can steer work after launch, not just read a transcript.
@@ -55,10 +55,11 @@ The launch story should fit in one paragraph:
 
 Install the Longhouse agent on each machine where you run coding sessions. Point
 it at an always-on box where your Longhouse server lives — a VPS, homelab, or Mac
-mini. Longhouse imports sessions started directly in provider terminals. From
-the web or iOS interface, users can also choose a provider and connected machine
-and launch Console work there; from a terminal, `longhouse <provider>` launches
-Helm with the provider's normal TUI. The installed provider client performs the
+mini. Longhouse imports sessions started directly in provider terminals, new
+ones by default; older history comes in only when the machine's owner chooses.
+From the web or iOS interface, users can also choose a provider and connected
+machine and launch Console work there; from a terminal, `longhouse <provider>`
+launches Helm with the provider's normal TUI. The installed provider client performs the
 work with its existing account and local environment while Longhouse keeps the
 session available from every client.
 
@@ -154,7 +155,7 @@ Longhouse is not:
 
 ### Core
 
-- session ingest for Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, and Antigravity CLI
+- session ingest for Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, Oh My Pi, and Antigravity CLI
 - timeline, search, session detail, and recall
 - canonical `/api/agents/*` machine surface plus CLI parity
 - managed-local launch and remote control on user-owned machines

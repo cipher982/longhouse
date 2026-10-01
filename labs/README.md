@@ -7,10 +7,9 @@ the launch product.
 
 Anything under `labs/`:
 
-- is **not installed by default** by `longhouse connect --install` or `Longhouse.app`
+- is **not installed by default** by the installer or `Longhouse.app`
 - is **not advertised** on the landing page, README, or docs/specs canon
-- is **opt-in** via an explicit `longhouse labs enable <name>` step or a dedicated
-  script inside the lab's own directory
+- is **opt-in** via a dedicated script inside the lab's own directory
 - **may be removed without deprecation** if it stops earning its keep
 
 If something under `labs/` starts being relied on by the launch product, promote

@@ -14,10 +14,14 @@ history directory:
 - Antigravity CLI — `~/.gemini/antigravity-cli/brain/`, `~/.gemini/antigravity/brain/`, `~/.gemini/tmp/`
 - OpenCode — `~/.local/share/opencode/`
 - Cursor — `~/.cursor/chats/`, `~/.cursor/projects/`, `$XDG_CONFIG_HOME/cursor/chats/`
+- Pi and Oh My Pi — their own session roots (profile-aware)
 
 Anything a provider writes there is your interactive history, the AI-coding equivalent of
 `~/.bash_history`, and it lands on your timeline. A background script that shells out to
 `claude` writes to the same place, which is why it shows up next to work you actually did.
+Your machine's import scope still applies: a machine that connects imports only sessions that
+start from now on unless you chose otherwise (`longhouse machine scope` shows it; the README's
+"What gets imported" has the rest).
 
 ## Keep automation archived but off the timeline
 

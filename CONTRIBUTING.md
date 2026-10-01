@@ -81,8 +81,9 @@ cold build. Local runs and standalone manual/weekly fresh-clone workflows
 without an explicit digest keep their original manifest-only local
 preparation; those proofs are not claims about the push CI warm path.
 Hosted post-deploy QA resolves the published digest for its exact source
-SHA. Fork PRs cannot execute repository code on the self-hosted runner's
-writable cache; replay on a trusted branch to qualify.
+SHA. Fork PRs do not get the trusted fixture image: the `Fork PR requires
+trusted replay` job fails by design, and a maintainer replays the patch on a
+trusted branch to qualify it.
 
 For an already-pushed maintainer SHA, `make ship-watch SHA=<full-sha>
 ARGS=--json` waits for the exact workflow/deployment disposition and returns
@@ -110,7 +111,8 @@ no self-hosted Mac or paid-runner substitute. Inspect the one-day CI artifact
 and its receipt when a native fixture fails.
 
 Dispatching one of these lanes from a workstation (`make test-ios`,
-`make ios-previews`, `make simlab-run`) requires an **authenticated `gh` on the
+`make ios-previews`, `make ios-ui-shot`, `make simlab-run`,
+`make menubar-harness`) requires an **authenticated `gh` on the
 dispatching host**: the dispatcher reads the repository visibility, proves the
 revision is pushed, submits the workflow, and reconciles the run it owns. Run
 dispatched targets from the machine that holds that credential; a host without
@@ -120,6 +122,13 @@ The workflow definition is always taken from `main` while the VM checks out your
 `source_sha`, so a dispatched run's own `head_sha` is `main` — read the
 `source=<sha>` line the dispatcher prints, not the run's SHA, when asking what
 was tested.
+
+CI runs the iOS merge gate as two lanes split by test class: the unit scheme
+plus the small UI classes, and `SessionChatUITests` alone (`IOS_TEST_SCHEMES` and
+`IOS_TEST_FILTER`, entries `Scheme:only:Id` or `Scheme:skip:Id`).
+`scripts/tests/ios-test-lanes.test.py` fails when the lanes stop covering the
+Makefile's merge-gate schemes; `make test-ios IOS_TEST_FILTER=...` runs part of
+the gate and says so.
 
 For iterating on iOS unit tests, `make ios-unit` runs the hermetic unit target on
 a local simulator in about 35 seconds of tests (~80 s cold). It is a **host
@@ -341,7 +350,7 @@ one:
   `server/`, `engine/`, `schemas/`, `scripts/` or CI plumbing change (and always
   on a manual dispatch).
 - **A runtime deploy waits on the suites that can invalidate it** — backend,
-  engine, frontend+runner. Browser E2E, accessibility, model smoke and onboarding
+  engine, frontend+runner, provider contract. Browser E2E, accessibility, model smoke and onboarding
   smoke verify after the fact, and hosted live QA is dispatched asynchronously;
   an unrelated E2E red must not hold a deploy.
 - **Main runs queue; branch and PR runs cancel.** A main run is a deploy

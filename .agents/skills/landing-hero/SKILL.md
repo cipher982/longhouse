@@ -70,7 +70,14 @@ providers.yml (pinned source + auth mode + sentinels)
   `HeroTimeline.tsx`, `HeroPhone.tsx`, `useDemoClock.ts` (rAF loop,
   offscreen/hidden pause, reduced-motion poster freeze, `?demoT=` freeze),
   `ResponsiveTerminal.tsx` (ResizeObserver -> cell metrics)
-- `web/src/features/marketing/landing/HeroSection.tsx` — copy + HeroDemo mount
+- `web/src/features/marketing/landing/HeroSection.tsx` — copy + HeroDemo mount.
+  The landing route is prerendered (`web/scripts/prerender.mjs`): the static HTML
+  and the hydration pass show `HeroDemoFallback`, and `AfterHydration` mounts the
+  lazy `HeroDemo` once the browser runs the page
+- `web/src/features/marketing/landing/SteerPlayground.tsx` (with
+  `hero-demo/LiveDemo.tsx`) — the separate below-the-fold live sandbox where a
+  visitor sends one real instruction; the hero itself stays the recorded autoplay
+  story, and the landing script's `--run` exercises the sandbox
 - `make landing-screenshots` — regenerates the "Every session" showcase
   images (desktop 16:9 + phone layout, webp + png masters) from the current
   web UI via `ui-capture` scenes `landing`/`landing-search`/`landing-session`
@@ -139,7 +146,7 @@ for s in d['states'][::8]:
 EOF
 ```
 
-### Browser QA hygiene (paid for 2026-08-12)
+### Browser QA hygiene
 
 Drive a **disposable headless browser**, never a managed `agent-browser-profile`
 one. `background`/`watchable` are for interactive, identity-bearing browsing;
@@ -151,10 +158,13 @@ and the tempting fallback — driving `watchable` — is the visible one).
 The landing page is unauthenticated, so QA needs no identity at all:
 
 ```bash
-make qa-landing-live                      # local dev server, no instruction run
-make qa-landing-live URL=https://longhouse.ai RUN=1   # spends money, uses quota
+cd e2e && node scripts/qa-landing-live-demo.mjs                              # local dev server, no instruction run
+cd e2e && node scripts/qa-landing-live-demo.mjs https://longhouse.ai --run   # spends money, uses quota
 ```
 
+`make qa-landing-live` wraps the same script, but it is a live-class goal
+(`qa-*`) that the isolation dispatcher refuses on a developer machine without
+`--live --image`, so run the script directly.
 `e2e/scripts/qa-landing-live-demo.mjs` launches its own headless chromium with a
 throwaway profile, closes every context in `finally`, and asserts the layout
 contract (fold at 1440x900 / 1800x850 / 390x844, terminal fill, no horizontal
@@ -183,7 +193,7 @@ Verify loop (never skip; this is the vision-check rule):
    `**/api/**` glob also swallows Vite's `src/shared/api/*` modules and
    blanks the page; the dev proxy otherwise forwards `/api` to the
    personal instance.
-2. `make test-frontend`; `make qa-landing-live` (layout + handoff causality).
+2. `make test-frontend`; the landing live script above (layout + handoff causality).
 3. Export lane when it matters (composition or recordings changed):
    `cd video && bun install && bunx tsc --noEmit && bun run render:control`
    (video/ is its own Bun project, outside the root workspaces), extract
@@ -288,7 +298,7 @@ Process:
 - **Steer causality:** the pre-send hold frame must show an EMPTY
   composer. If the terminal ever shows the instruction (or a ghost
   suggestion of the reply) before the phone's Send fires, the hold drifted.
-  `make qa-landing-live` checks the follow-up lands on a frozen frame.
+  the landing live script checks the follow-up lands on a frozen frame.
 - **Mobile fold:** on phones the subhead's later sentences hide and the
   curl block renders below the demo (`landing-hero-secondary` grid area) so
   the demo starts above the fold; keep that when editing hero copy.

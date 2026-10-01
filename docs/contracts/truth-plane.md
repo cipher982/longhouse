@@ -87,6 +87,13 @@ timing and counters update without a parent turn. Ordinary forks do not trigger
 this background-work wake. It does not alter the parent's transcript counters,
 activity clock, or registry observation/expiry.
 
+The delegation fact may also carry `recent_items`: tasks the provider reported terminal
+(completed, failed, cancelled, aborted) with their native end time. They are history, not
+active work: they are never counted in `count` or `kinds`, session detail lists them
+separately as recently finished work, and expiry of the active registry leaves them in place
+instead of erasing a recorded outcome. A newer complete registry is authoritative over older
+lifecycle edges, so a completion callback is never a permanent client-side tombstone.
+
 Web and native timeline work claims use the registry's own expiry, not the
 parent's short-lived activity expiry. The named registry is inspectable in the session
 evidence disclosure; expired observations show unknown, never an active count

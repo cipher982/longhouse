@@ -22,7 +22,7 @@ them. It is opt-in and separate from `make dev`, which stays lean.
 
    ```bash
    export LONGHOUSE_METRICS_TOKEN=$(openssl rand -hex 16)
-   longhouse serve   # or set it in the dev compose backend env
+   longhouse-server serve   # or export it before `make dev-demo`
    ```
 
 2. Bring up the stack with the same token so Prometheus can authenticate:
@@ -39,7 +39,7 @@ them. It is opt-in and separate from `make dev`, which stays lean.
 ## Targeting a different runtime
 
 `RUNTIME_METRICS_TARGET` defaults to `host.docker.internal:8080` (a local
-`longhouse serve`). Override for the dev compose backend or a remote host:
+`longhouse-server serve`). Override for the `make dev-demo` backend or a remote host:
 
 ```bash
 RUNTIME_METRICS_TARGET=host.docker.internal:47300 make observability-up

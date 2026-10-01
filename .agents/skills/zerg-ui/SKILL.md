@@ -14,14 +14,23 @@ shown to you. Use it.
 
 ## Pick the render path
 
-| You changed | Render it with | Cost | Sees |
+| You changed | Render it with | Where it runs | Sees |
 | --- | --- | --- | --- |
-| A SwiftUI view or its states | `make ios-previews` | ~4 min, renders every `#Preview` | Component in dark/light, edge states, no server |
-| iOS screen against real data | `make sim-deploy SESSION=<id>` then `make sim-shot LABEL=<name>` | ~3 min build, then seconds per shot | The real pipeline: hosted data, real fonts, real chrome |
-| iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | ~2 min | A fixture-driven frame the UI test attaches, exported to PNG |
-| iOS ingest/recovery without a phone | `make simlab-run` | six real-client journeys | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
-| Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
-| Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed, unknown side by side |
+| A SwiftUI view or its states | `make ios-previews` | Hosted macOS VM (dispatched), minutes | Every `#Preview` in dark/light and edge states, no server |
+| iOS screen against real data | `make sim-deploy SESSION=<id>` then `make sim-shot LABEL=<name>` | Simulator on the bench: `scripts/ops/bench.sh run ...` (cold build ~70 s, then seconds per shot) | The real pipeline: hosted data, real fonts, real chrome |
+| iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | Hosted macOS VM (dispatched) | A fixture-driven frame the UI test attaches, exported to PNG |
+| iOS ingest/recovery without a phone | `make simlab-run` | Hosted macOS VM (dispatched); `simlab.py up/run` on the bench for iteration | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
+| Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | Here, ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
+| Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | Here, ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed, unknown side by side |
+
+**Dispatched targets** (`ios-previews`, `ios-ui-shot`, `simlab-run`, `test-ios`,
+`menubar-harness`) run in a fresh GitHub-hosted macOS VM and refuse a dirty or
+unpushed worktree: commit and push first, from a host with an authenticated `gh`
+(the laptop, or the bench once its credential file is provisioned). The dispatcher
+prints the run URL and a `source=<sha>` line, and downloads the VM's `artifacts/`
+tree to `artifacts/test-isolation/<id>/evidence/<target>/project/` (CI keeps the
+artifact one day). Nothing in this skill's PNG paths below exists locally for a
+dispatched target until that download lands.
 
 Look at more than one when the change spans surfaces. The simulator shot
 proves the data path; the fixture shot proves the layout at a known state.
@@ -59,13 +68,14 @@ If a check is interrupted, inspect and clean its exact process group before doin
 ### Autonomous recovery dogfood (simlab)
 
 Use this before asking a user to reproduce transcript-delivery or reconnect
-problems on a phone. Run from the product repo on a Mac with Xcode and a
-simulator:
+problems on a phone. The gate form is the dispatched hosted-VM job; iterate on
+the bench:
 
 ```bash
-make simlab-run
+make simlab-run                                    # dispatched, clean pushed revision
 make simlab-run SCENARIOS="interrupted-client-recovery client-network-recovery"
 make test-ios-helper
+scripts/ops/bench.sh run 'python3 scripts/qa/simlab.py up --build && python3 scripts/qa/simlab.py run --deploy interrupted-client-recovery; python3 scripts/qa/simlab.py down'
 ```
 
 `scripts/qa/simlab.py` owns the experiment: isolated provider HOME, scratch
@@ -75,11 +85,10 @@ in the client path; the engine keeps shipping while the client is offline.
 Do not run concurrent simlab jobs against its shared `current` state/simulator.
 
 `simlab up` runs the newest binary it finds across the `release` and `ci`
-cargo profiles, and neither is guaranteed to match `HEAD`. On 2026-09-18 a
-`ci` engine built at 05:12 predated interaction-edge code landed that morning,
-so hook events produced no interactions and the silence read as product
-behavior. Compare `longhouse-engine --version` with the commit under test, or
-run `simlab.py up --build`, before believing a negative result.
+cargo profiles, and neither is guaranteed to match `HEAD`: a stale engine
+silently drops newer behavior and the silence reads as product behavior.
+Compare `longhouse-engine --version` with the commit under test, or run
+`simlab.py up --build`, before believing a negative result.
 
 Six scenarios: open imported history; live appended turns; abandon/resend;
 malformed/split/delayed transcript input; terminate/reopen after new output;
@@ -96,7 +105,9 @@ stream connection after the offline boundary, and no new session-open.
 `source_revision` is optional benchmark attribution (normally `-1` here), not
 a production freshness requirement.
 
-Read `artifacts/simlab/current/summary.json` for links to each unique scratch
+Read `artifacts/simlab/current/summary.json` (on the bench, under its collected
+`/tmp/agents/bench/<job>/`; for a dispatched run, in the downloaded evidence tree)
+for links to each unique scratch
 run's screenshots, app/server/engine/relay logs, source transcript, projection,
 recovery checkpoints, timings, and verdict. Inspect the PNGs: a rendered
 callback alone does not prove a usable layout. `current` is overwritten by the
@@ -120,6 +131,9 @@ also live in the root `CONTRIBUTING.md` Tests section.
 make sim-deploy SESSION=<longhouse-session-id>   # Debug build, install, sign in headlessly, open the session
 make sim-shot LABEL=turn-footer                   # artifacts/sim/<timestamp>-turn-footer.png
 ```
+Run these on the bench (`scripts/ops/bench.sh run 'make sim-deploy SESSION=<id> && make sim-shot LABEL=<name>'`);
+the laptop only when the bench is unreachable, and say so. On the bench the shot
+lands in the job's collected output, `/tmp/agents/bench/<stamp>/`, not `artifacts/sim/`.
 Signs in with this machine's device token against its linked Runtime Host
 (`SIM_SERVER_URL` / `SIM_AUTH_TOKEN` override). The session id is the
 Longhouse id (`GET /api/agents/sessions/<id>` returns it next to the
@@ -131,7 +145,7 @@ the simulator from the shell; use a fixture shot for a frame you control.
 ### Fixture-driven frame with a screenshot
 ```bash
 make ios-ui-shot TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderReply
-# artifacts/ios-ui-shot/<timestamp>/turn-footer_0_<uuid>.png
+# in the downloaded evidence: .../project/ios-ui-shot/<timestamp>/turn-footer_0_<uuid>.png
 ```
 Write the test like the ones in `ios/Tests/LonghouseIOSUITests/SessionChatUITests.swift`:
 launch a chat fixture (`launchChatFixture(eventCount:)` or a named fixture from
@@ -149,7 +163,7 @@ scheme refuses `-only-testing:LonghouseIOSUITests/...`. The target handles that.
 
 ### SwiftUI previews
 ```bash
-make ios-previews        # artifacts/ios-previews/<timestamp>/<File>_0_<Preview name>.png
+make ios-previews        # in the downloaded evidence: .../project/ios-previews/<timestamp>/<File>_0_<Preview name>.png
 ```
 Add a `#Preview` in `*Previews.swift` for every new view, in dark and light
 when it uses materials or secondary text. Put the view in the shell it
@@ -174,6 +188,7 @@ where to look before blaming a style.
 
 ### Phone
 Real performance and device-only behavior (APNS, Live Activity, cellular).
+Testers get builds from TestFlight (`make testflight`, the `zerg-ship` skill).
 `make phone-deploy` builds and installs over the Wi-Fi tunnel; a locked phone
 takes the install and refuses the launch (`phone.sh` says so). Unlocked:
 `phone.sh console [--seconds N]` relaunches and streams the app's stdout and
@@ -224,7 +239,7 @@ request, render the page before reasoning from CSS or a pasted screenshot:
 make ui-capture PAGE=session-detail SCENE=session-detail-stress   # the session chat, ~7s from cold
 make ui-capture PAGE=session-detail SCENE=session-tones            # composer in all seven live states
 make ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile
-make qa-ui-workbench                                  # timeline + session fixtures, desktop and mobile, one index.html
+make qa-ui-workbench                                  # timeline + session fixtures, desktop and mobile, one index.html (a qa-* goal: runs in the disposable container, output returns under artifacts/test-isolation/<run-id>/files/)
 make ui-capture                                       # demo data; needs the demo backend on :47300 (`make dev-demo`)
 make ui-capture ALL=1
 ```
@@ -270,10 +285,9 @@ SKIP_LLM=1 make qa-visual-compare
 ```
 
 ## Public pages
-```python
-mcp__browser-hub__browser(action="navigate", url="https://longhouse.ai")
-mcp__browser-hub__browser(action="look")   # screenshot + accessibility tree
-```
+Public pages need no identity: drive a disposable headless browser (the
+`browser` skill; `make hero-frames` and `e2e/scripts/qa-landing-live-demo.mjs`
+already do) and `Read` the screenshot.
 For the landing-page ASCII scene, `make qa-remote-scene` writes a review
 bundle (frames, contact sheets, `review-prompt.md`); hand only the bundle to
 a separate vision-capable agent and let it describe what the frames show.

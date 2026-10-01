@@ -27,3 +27,4 @@ as the routing map for those documents.
 Operational runbooks live in [`runbooks/`](runbooks/).
 
 - [`runbooks/production-logging.md`](runbooks/production-logging.md) — production stdout retention and journal queries
+- [`runbooks/provider-release-proof.md`](runbooks/provider-release-proof.md) — provider release-proof commands and artifact rules

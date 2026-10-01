@@ -7,8 +7,20 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
 
 ## Rules
 - Always use Make targets. Never run pytest/bun/playwright directly.
-
-
+- `test*`, `validate*`, `qa-*`, `provider-*`, `ci-*` and the other goals in
+  `ISOLATED_GOALS` (top of the Makefile) never run on the host: they dispatch to
+  a disposable Docker container, or for native iOS/macOS targets to a hosted macOS
+  VM (below). Receipts and collected files land under
+  `artifacts/test-isolation/<run-id>/`. Run them on their own, never in the same
+  `make` invocation as a host goal such as `dev` or `ship`.
+- One heavy build at a time on this Mac (cargo, Docker, xcodebuild, release
+  validation): wrap it as `lockf -k /tmp/agents/longhouse-heavy-build.lock <cmd>`
+  (`release.sh` takes the same lock for its validation only, so never wrap
+  `make release`). Docker-dispatched goals can instead go to the crunch VM,
+  `scripts/ops/crunch.sh run make test` (`status` shows load; `--out PATH`,
+  `--env K=V`, `--timeout S`; the workspace AGENTS.md has the rules). Keep goals
+  that stamp git identity (`release`, `validate-build-identity`) on the laptop,
+  and never run a provider CLI on crunch.
 - A proof run is incomplete while its provider process, Longhouse session,
   simulator/browser tab, scratch `HOME`, relay, or dev service is alive.
 - Create every test/QA session with an explicit hidden `launch_surface`; never
@@ -19,9 +31,11 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
   the session ID is absent from the served agent inventory. Record
   `canary_session_hidden: true` in the receipt. `include_test=true` diagnostic
   surfaces can still expose a merely launch-hidden session.
-- Provider probes must use `--no-session` or an explicitly disposable
-  `--session-dir`; never let a verification command write to David's default
-  provider archive. If a protocol ignores that flag, record the exact native
+- Provider probes (running a provider CLI to see what it does) run on the bench
+  or the provider factory, never on the maintainer's Mac (`managed-provider-cli`).
+  Wherever they run they use `--no-session` or an explicitly disposable
+  `--session-dir`; never let a verification command write to a default provider
+  archive. If a protocol ignores that flag, record the exact native
   session path and remove it in the same `finally` block.
 - Every disposable proof run must allocate unique `mktemp -d` roots, record every path/PID it owns, and install an `EXIT/INT/TERM` trap; fixed `/tmp` names and untracked scratch files are prohibited.
 - Treat reparented descendants as still run-owned: a provider, bridge, shipper,
@@ -49,8 +63,7 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
   `LONGHOUSE_RUN_ID` in the ambient shell make the MCP and coordination clients
   attach `X-Agents-Token` and `X-Longhouse-Session-Id`, so tests asserting exact
   request arguments fail on the extra headers. Re-run with those unset before
-  concluding anything; on 2026-09-25 that accounted for 4 of 5 local `tests_lite`
-  failures that looked like a real regression.
+  concluding anything.
 - `test_raw_object_workers.py::test_broken_pool_cleanup_terminates_surviving_owned_child`
   is load-sensitive: it passes in isolation and can fail under the full suite.
 - **A focused selection is not a gate.** Regressions have shipped in changes
@@ -64,32 +77,43 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
 
 ## Core Commands
 ```bash
-make test                # unit tests
-make test-e2e-core       # core E2E (must pass 100%)
-make test-e2e            # full E2E (retries ok)
-make test-full           # unit + full E2E + visual checks
+make test                # backend unit tests (server/tests_lite)
+make test-backend-single TEST=tests_lite/<file>.py
+make test-frontend       # web unit tests + type-check (ARGS="src/path.test.ts" focuses)
+make test-engine         # Rust engine (TEST="mod::tests::name" via test-engine-single)
+make test-runner         # runner
+make test-e2e-core       # launch-surface E2E plus accessibility, retries=0 (must pass 100%)
+make test-e2e            # same lane (core + a11y, one backend boot)
 make test-e2e-single TEST=tests/<spec>.ts
-make test-e2e-errors     # show last E2E errors
-make test-e2e-verbose    # full output for debugging
+make validate            # every contract/drift check (the pre-push gate)
+make test-ci             # broad cutover: validate, import-smoke, test, frontend, runner, engine, wheel, shipper E2E
+make test-full           # test, frontend, runner, engine, shipper E2E, E2E
 ```
 
 ## The iOS lane is a dispatch, not a local run
 
-`make test-ios`, `make ios-previews`, and `make simlab-run` submit the work to a
-fresh GitHub-hosted macOS VM. They need an **authenticated `gh` on the machine
+`make test-ios`, `make ios-previews`, `make ios-ui-shot`, `make simlab-run` and
+`make menubar-harness` submit the work to a fresh GitHub-hosted macOS VM. They need an **authenticated `gh` on the machine
 that runs them** (repo visibility, pushed-SHA proof, submission, run
 reconciliation) and a **clean, pushed revision**; an uncommitted worktree is
 refused by design, and there is no local native fallback for fixtures.
 
 - Run dispatched targets from the laptop, which holds the `gh` auth, or from the
   bench once its credential file is provisioned: `bench.sh` loads
-  `~/.config/longhouse/bench.env` on that host when it exists (source key
-  `LONGHOUSE_PROVIDER_FACTORY_GITHUB_TOKEN`; rotate by rewriting the file). The
+  `~/.config/longhouse/bench.env` on that host when it exists (a GitHub
+  credential; rotate by rewriting the file). The
   bench is otherwise for the lanes that build and boot locally: `sim.sh`,
   `simlab.py up/run`, `phone.sh`.
 - A dispatched run's own `head_sha` is `main` while the VM checks out your
   `source_sha`. Read the `source=<sha>` line the dispatcher prints, not the run's
   SHA, when asking what was tested.
+- CI splits the merge gate over two class-split lanes with `IOS_TEST_SCHEMES` /
+  `IOS_TEST_FILTER` (entries `Scheme:only:Id` / `Scheme:skip:Id`; see
+  `scripts/ci/run_ios_tests.sh`): the unit scheme plus the small UI classes, and
+  `SessionChatUITests` alone. Each lane repeats the test plan's own skips, and
+  `scripts/tests/ios-test-lanes.test.py` (run by `make test-ios-helper`) fails when
+  the lanes stop covering the merge gate. `make test-ios IOS_TEST_FILTER=...`
+  runs part of it and says so (`PARTIAL run`); only the unfiltered run is the gate.
 - Hermetic unit tests do not need the VM: `make ios-unit` runs them on a local
   simulator in ~35s of tests (~80s cold). It is a host development goal beside
   `sim-deploy` and `phone-deploy`, and an iteration loop, not the gate -- the
@@ -114,14 +138,15 @@ immutability. These complement simlab; real execution, rendered pixels and
 connection recovery are separate proof obligations.
 
 ## Debugging Flow
-1) `make test-e2e-errors`
+1) Read the failed run's collected evidence under `artifacts/test-isolation/<run-id>/files/`
+   (`errors.txt` and `summary.json` from the minimal reporter, plus `test-results/`)
 2) `make test-e2e-single TEST=tests/<spec>.ts`
-3) `make test-e2e-verbose`
+3) Add `VERBOSE=1` for the list, HTML and JUnit reporters
 
 ## Flake Policy
 - Keep core E2E at retries=0. If a CI failure passes on rerun with no code
   diff, quarantine or move that test out of the blocking lane the same day and
   leave a tracking issue; do not normalize red-but-ignored CI. Core E2E no longer
-  gates a *runtime deploy* (a deploy waits on backend, engine and frontend+runner,
+  gates a *runtime deploy* (a deploy waits on backend, engine, frontend+runner and provider-contract tests,
   and the deploy gate warns about E2E instead), but a red E2E is still a red CI run
   and still owes that same-day decision.

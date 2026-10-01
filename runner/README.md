@@ -20,11 +20,11 @@ Commands are filtered by declared capabilities:
 
 Additional safety rails: 50KB output cap, timeout enforcement, shell metacharacter restrictions in readonly mode.
 
-The Runner authenticates with a shared secret issued during `longhouse connect --install`.
+The Runner authenticates with a shared secret issued when it enrolls: create an enrollment token on the Runtime Host's Runners page, then run the install command it shows.
 
 ## When to use
 
-Most users do not need to set up a Runner separately. `longhouse connect --install` sets up the Machine Agent (session shipping) and optionally a Runner if the machine should accept remote commands.
+Most users do not need a Runner. Connecting a machine (`longhouse auth`, then `longhouse machine repair --repair-service`) sets up the Machine Agent, which ships sessions and carries remote control. Add a Runner only if the machine should also accept remote commands.
 
 ## Dev run
 

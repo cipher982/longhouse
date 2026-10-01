@@ -5,7 +5,7 @@ description: Diagnose slow or inconsistent managed Longhouse sessions by separat
 
 # Managed Session Debug
 
-Use this when a managed Claude/Codex/Gemini session feels slow, appears stuck, shows the wrong lifecycle state, or disagrees between local CLI and hosted timeline.
+Use this when a managed provider session (Claude, Codex, OpenCode, Cursor, Pi, OMP, Antigravity) feels slow, appears stuck, shows the wrong lifecycle state, or disagrees between local CLI and hosted timeline.
 
 ## Fast Path
 
@@ -72,15 +72,15 @@ needs no environment beyond a machine device token
 ### The state plane is not the transcript
 
 The rows below the badge come from the transcript and are near-real-time. The
-badge comes from a different axis, and since 2026-09-18 that axis is explicit:
+badge comes from a different axis, and that axis is explicit:
 
 - **A wait is only ever a keyed interaction.** `needs_answer` and
   `needs_approval` require a pending interaction row; a provider merely
-  *saying* it is blocked is not enough. `blocked` stopped being a presentation
+  *saying* it is blocked is not enough. `blocked` is not a presentation
   rung, and `_ACTIVITY_STATE["blocked"]` maps to `quiescent`, because an
-  id-less observation was asserting that the user owed something — the 2026-09-18
-  incident, where a Claude session read "Blocked" beside a timeline that already
-  showed its question answered.
+  id-less observation asserted that the user owed something (a Claude session
+  once read "Blocked" beside a timeline that already showed its question
+  answered).
 - **Claude's waits are keyed by its own hooks.** `PreToolUse` on the pause tool
   opens a question keyed by `tool_use_id`; `PermissionRequest` opens an approval
   (it carries no `tool_use_id`, so it is keyed by tool name plus a digest of the
@@ -122,7 +122,7 @@ in a session that already has the new hook installed.
 - Slow `tool_result_to_next_assistant` means provider/model-loop latency.
 - A huge gap after `assistant_text` with no following `tool_use`, `Stop`, or `idle` phase is a stuck provider/TUI turn, not tool latency or hosted ingest lag. On a Bedrock Claude flow, also check whether `LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS=1` is using the private native-channel patch.
 - Large `cache_read_input_tokens` plus slow `tool_result_to_next_assistant` usually points at provider latency from a large thread, not Longhouse telemetry.
-- Hosted `sessions.ended_at` with `session_runtime_state.terminal_state = null` is a state-model mismatch. Treat runtime state as the lifecycle source of truth.
+- Served state and command authority come from the catalogd fact snapshots (the live catalog's `live_sessions` / `live_runtime_state` rows, which `hosted-session-debug.sh` prints). The legacy `session_runtime_state` table is evidence, not served authority: a legacy `sessions.ended_at` with a null `terminal_state` there is a mismatch to explain, not a lifecycle verdict.
 - WriteSerializer waits and high ingest/runtime request counts explain hosted UI/ingest lag, not local provider thinking time, unless a synchronous local hook is slow.
 
 ## Session Ran Unregistered
@@ -165,7 +165,7 @@ Claude hooks should be local-only and fast. The installed hook should write loca
 
 - Claude transcript: `~/.claude/projects/**/<session-id>.jsonl`
 - Claude channel state: `~/.claude/channels/longhouse/sessions/<session-id>.json`
-- Hosted tenant DB: `/var/app-data/longhouse/<subdomain>/longhouse.db` on the runtime host
+- Hosted tenant live catalog: `/var/app-data/longhouse/<subdomain>/longhouse-live.db` on the runtime host (the archive database `longhouse.db` sits beside it)
 - Tenant container: `longhouse-<subdomain>`
 
 ## Report Shape

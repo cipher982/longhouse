@@ -17,8 +17,12 @@ description: Zerg E2E principles and stability guardrails. Use when fixing flaky
 
 ## Common Commands
 ```bash
-make test-e2e-core
-make test-e2e
+make test-e2e-core                         # core E2E plus accessibility, retries=0
+make test-e2e                              # same lane
 make test-e2e-single TEST=tests/<spec>.ts
-make test-e2e-errors
+make test-e2e-single TEST=tests/<spec>.ts VERBOSE=1   # list/HTML/JUnit reporters
 ```
+
+Failures land in the run's collected evidence under
+`artifacts/test-isolation/<run-id>/files/` (`errors.txt`, `summary.json`); see
+`zerg-testing` for the flow.

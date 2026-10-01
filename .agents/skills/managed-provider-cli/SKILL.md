@@ -7,7 +7,7 @@ description: Longhouse managed provider CLI control paths for Claude, Codex, Ant
 
 Use this skill when a task touches how Longhouse starts, observes, steers, or repairs provider CLIs. The core rule: Longhouse manages session control, not provider binary distribution.
 
-See [`ARCHITECTURE.md`'s Session modes section](../../ARCHITECTURE.md#session-modes)
+See [`ARCHITECTURE.md`'s Session modes section](../../../ARCHITECTURE.md#session-modes)
 for the canonical definitions of Shadow, Helm, Console, and managed/unmanaged
 sessions.
 
@@ -16,6 +16,21 @@ sessions.
 - **Provider CLI**: an upstream executable the user installs separately, such as `claude`, `codex`, or `agy`.
 - **Machine Agent**: `longhouse-engine`; ships local events, owns runtime hooks/state, and may run provider-specific bridge processes.
 - **Runtime Host**: FastAPI/web/database product runtime. It stores session state and exposes `/api/agents/*`.
+
+## Probing a provider CLI
+
+Never run a provider CLI to see what it does on the maintainer's Mac: not
+`opencode run`, not `cursor-agent`, not a quick `claude -p`. The Machine Agent
+there ships whatever the provider writes to its real state (OpenCode's database
+is global, so a quick run lands on the real timeline), and on macOS a relocated
+`HOME` makes keychain-backed CLIs raise "Keychain Not Found" dialogs on the
+desktop (its "Reset To Defaults" button can wipe the login keychain). Live proofs run on the bench (`scripts/ops/bench.sh run ...`) or the
+provider factory; the Makefile marks canaries that must stay off the laptop
+(`test-opencode-console-steer-live-canary`). Fixture lanes (`make test-*`) need
+no provider at all. Whichever host runs it, a `cursor-agent` with a relocated
+`HOME` must set `AGENT_CLI_CREDENTIAL_STORE=file`. Certifying a provider change
+is the factory's job (workspace AGENTS.md, "Providers and the factory"), not a
+local run.
 
 ## Input semantics: SEND and STEER
 
@@ -58,7 +73,7 @@ target's phase never decides whether a message survives, only when it lands.
   lifecycle hook returns `continue: false` (plus a PreToolUse deny) until the
   turn ends. Terminate is SIGTERM then SIGKILL on the recorded Claude pid.
 - Live Claude Helm proofs run on Linux (`claude.helm_lifecycle.v1`); on macOS a
-  relocated HOME risks Keychain prompts on David's desktop.
+  relocated HOME risks Keychain prompts (see "Probing a provider CLI").
 - Helm creation is terminal-originated through `longhouse claude`; the Machine
   Agent has no remote Helm-originating launch command.
 - Longhouse's channel is a private MCP server, not an Anthropic allowlisted
@@ -182,6 +197,17 @@ Hard Codex contract:
   refuses a live prior owner and never creates a second source.
 
 
+### Cursor
+
+- Helm is `cursor_helm` over stock `cursor-agent` (`LONGHOUSE_CURSOR_BIN`
+  overrides the binary): the launcher owns the PTY master and the child, and the
+  Machine Agent forwards send, interrupt, steer and terminate over a
+  per-session Unix socket, observed through a heartbeat lease. Console is the
+  separate `cursor_print` turn adapter. `cursor_acp` and `cursor_exec` are read
+  aliases for already archived sessions only; the Machine Agent no longer
+  executes ACP. Read the `cursor` cell in `schemas/managed_providers.yml` for
+  each operation's disposition.
+
 ### Antigravity And Future CLIs
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
@@ -196,10 +222,6 @@ Hard Codex contract:
 - Antigravity's source is `.system_generated/logs/transcript_full.jsonl`.
   The shorter `transcript.jsonl` truncates tool output and stringifies arguments;
   never ingest both as independent sources or prefer the lossy sibling.
-- Any `cursor-agent` run with a relocated `HOME` (scratch profile, producer,
-  experiment) must set `AGENT_CLI_CREDENTIAL_STORE=file`. Otherwise Cursor asks
-  macOS Keychain and pops "Keychain Not Found ... Reset To Defaults" on David's
-  desktop, repeatedly; that button can wipe his login keychain.
 
 ## Workflows
 

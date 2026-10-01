@@ -24,8 +24,8 @@ bash scripts/ops/hosted-session-debug.sh --subdomain <subdomain> --session <sess
 
 It does the right order automatically:
 - resolve the tenant via the control plane
-- query the tenant SQLite DB on the host data path
-- summarize `sessions`, `events`, runtime `session_observations`, `session_runtime_state`, and `session_turns`
+- open the tenant's live catalog (`longhouse-live.db`) read-only on the host data path
+- summarize the session's `live_sessions` row, `live_runtime_state`, `live_interaction_requests`, `live_timeline_cards` and client-render observations (a database without live tables falls back to the legacy `sessions`, `events`, `session_runtime_state` and `session_turns` tables)
 - summarize recent WriteSerializer pressure and request counts from tenant logs
 
 Prefer this over ad hoc `ssh` + guessed DB paths + nested heredoc quoting.
@@ -34,7 +34,8 @@ Prefer this over ad hoc `ssh` + guessed DB paths + nested heredoc quoting.
 
 - Host data root: `/var/app-data/longhouse/<subdomain>`
 - Tenant container mount: `/data`
-- Tenant DB: `/data/longhouse.db`
+- Archive DB: `/data/longhouse.db` (`DATABASE_URL`; what `db doctor`, `db optimize` and `migrate` act on)
+- Live catalog: `/data/longhouse-live.db`, the sibling every file-backed archive DB has; the authoritative served-state store, and the file `hosted-session-debug.sh` reads
 
 This is an explicit Longhouse exception on the runtime host; do not assume the generic VPS `/var/lib/docker/data/...` layout.
 
@@ -49,9 +50,9 @@ It uses the existing repo helper in `scripts/lib/hosted-instance.sh`, which alre
 
 ## Debug Order
 
-1. Check `sessions` for execution ownership, managed transport, revisions, and misleading `ended_at`.
-2. Check `session_runtime_state` for current phase, active tool, terminal state, and live timestamps.
-3. Check recent `events` and runtime `session_observations` to see what ingested and when.
+1. Check the `live_sessions` row for execution ownership, managed transport and revisions.
+2. Check `live_runtime_state` and the timeline card for current phase, active tool, terminal state and live timestamps. Served state and command authority come from catalogd fact snapshots; the legacy `session_runtime_state` table is evidence, not authority.
+3. Check `live_interaction_requests` and the client-render observations to see what is pending and what the client painted.
 4. Check WriteSerializer/request-count summaries to distinguish hosted ingest lag from provider-loop latency.
 5. Only then tail full logs.
 
@@ -113,7 +114,7 @@ Important fields:
 - `disk_free_bytes`, `disk_free_ratio`: remaining disk headroom on the DB volume.
 - `db_page_size`, `db_page_count`: logical SQLite page footprint.
 - `db_freelist_count`, `db_freelist_bytes`: pages SQLite can reclaim with an offline compact/VACUUM-style operation.
-- `backup_bytes`, `backup_file_count`, `backup_scan_truncated`: backup footprint. The scan is capped so Watchman cannot get stuck walking a huge backup tree.
+- `backup_bytes`, `backup_file_count`, `backup_scan_truncated`: backup footprint. The scan is capped so it cannot get stuck walking a huge backup tree.
 - `schema.sqlite_stat1_estimated_rows`: planner row estimates from the last ANALYZE/optimize.
 - `schema.raw_json_pending_indexes`: whether indexed raw JSON backlog counts are safe to run.
 
@@ -176,31 +177,18 @@ python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --ap
 Heavy migrations can rewrite large archive tables. Treat them as operator
 maintenance, not startup work.
 
-For the render branch-count upgrade, precompute verified counts from immutable
-render files while the old API still serves; no raw-native replay is required:
-
-```bash
-python -m zerg.cli.main db repair-render-counts --database /data/longhouse-live.db --cache /data/cache/render-counts.jsonl
-```
-
-After the updated catalog writer is running, repeat with `--apply`. It preserves
-raw/render bytes, uses current-generation fences, and requires zero missing
-current count facts before success. Do not accept the upgraded API while it
-returns `branch_projection_pending` for historical data. Keep the cache on the
-persistent data mount across container replacement; `--limit` is preflight-only.
-
-`schema_generation` fingerprints the table shape, so do not assume an old API
-can adopt the new writer. For a combined Runtime Host, use an explicit
-maintenance window: stop old API/catalog, start the new catalog alone, apply
-cached facts to zero missing, then start the new API. Re-apply after API upgrade
-to catch the old writer's final objects; do not infer readiness from process health.
-
-## Watchman Evidence
-
-Ops Watchman records `db_file_stats` observations with the same DB/disk/page
-fields used by `db doctor`. In an incident, check recent Watchman observations
-before manually sampling the host; they should show whether DB size, WAL size,
-backup footprint, or disk free changed before the outage.
+The render branch-count upgrade (`db repair-render-counts`: prepare a verified
+cache while the old API still serves, then `--apply` once the updated catalog
+writer runs) is documented in
+[CONTRIBUTING.md, "Runtime data upgrades"](../../../CONTRIBUTING.md#runtime-data-upgrades).
+On a hosted tenant run it in the container (`docker exec ... python -m
+zerg.cli.main db repair-render-counts ...`), keep the cache on the persistent
+data mount across container replacement, and use an explicit maintenance window
+for a combined Runtime Host: stop the old API and catalog, start the new catalog
+alone, apply to zero missing, start the new API, then re-apply to catch the old
+writer's final objects. Do not accept the upgraded API while it returns
+`branch_projection_pending` for historical data, and never infer readiness from
+process health.
 
 ## SQLite Guardrails
 
@@ -217,4 +205,4 @@ backup footprint, or disk free changed before the outage.
 
 - SSH host is the runtime host (a configured SSH alias)
 - `rg` is not guaranteed on the server; use `grep` in remote log commands
-- Coolify app container names are hashy, but hosted tenant containers are stable `longhouse-<subdomain>`
+- Hosted tenant containers are named `longhouse-<subdomain>`

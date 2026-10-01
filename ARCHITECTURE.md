@@ -252,6 +252,19 @@ Python modules stay flat by design; services group by file prefix.
 | `server/zerg/auth/`, `server/zerg/middleware/`, `server/zerg/websocket/` | Auth, middleware, WebSocket |
 | `server/tests_lite/` | Backend tests (`make test`) |
 
+### Ship, promotion and review (`scripts/`)
+
+| Path | What |
+| --- | --- |
+| `scripts/ops/review_gate.py`, `scripts/ops/review-policy.toml`, `scripts/lib/review-gate.sh` | Review landing rule: a commit on the blocking list needs a completed `hatch review` receipt. Asked by `make check-push-readiness`, `make ship`, `release.sh`, the pre-push hook (`scripts/ops/install-push-gate.sh`) and both promotions |
+| `scripts/ops/check-push-readiness.sh` | Pre-push check: stale duplicate commits on main, the review rule, the verifier-boundary ratchet |
+| `scripts/ci/verifier_boundary.py`, `scripts/ci/verifier-boundary.allow` | Import boundary between the provider factory's verifier (`server/zerg/qa/`) and the code it judges; the allowlist only shrinks; computes the verifier digest |
+| `scripts/ops/ship.sh`, `scripts/ops/ship-monitor.py` | `make ship` and `make ship-watch`: push an exact SHA, wait for its workflows |
+| `scripts/ops/promote-dogfood.sh`, `scripts/ops/promote-production.sh`, `scripts/ops/promotion_gates.py` | Ring promotions; production promotes the image dogfood serves once its four gates pass and writes the receipt |
+| `scripts/ops/release.sh`, `scripts/ops/release-artifacts.py`, `scripts/ops/launch-readiness.py` | `make release`: bump, validate, push, exact-SHA gates, GitHub release, notarization checks |
+| `scripts/ops/crunch.sh`, `scripts/ops/bench.sh` | Remote executors: heavy Docker-dispatched goals on the crunch VM, iOS build and simulator work on the bench Mac |
+| `scripts/ops/testflight.py`, `scripts/ops/testflight-ship.sh` | `make testflight` and `make testflight-status` (workflow `.github/workflows/ios-testflight.yml`) |
+
 ### Generated files
 
 Never edit these by hand. `make validate` fails when one is stale.
@@ -288,6 +301,7 @@ Python projector, OpenAPI and both clients.
 | Hearth (row flame) | none: reads served facts | `web/src/shared/instruments/hearth/` (`signals.ts` maps facts to flame) | `ios/Sources/LonghouseApp/DesignSystem/EmberChrome.swift` (background light only) |
 | Provider support | `schemas/managed_providers.yml` | `web/src/generated/provider-capabilities.ts` | none |
 | Plaintext-http rule (which Runtime Host addresses native clients may reach without https: loopback, Tailscale, an opted-in LAN address) | `server/zerg/services/plaintext_http.py`; engine `engine/src/plaintext_http.rs`; Desktop `desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/PlaintextHTTP.swift` (byte-identical to the iOS copy); shared cases `schemas/plaintext-http-vectors.json` | none | `ios/Sources/Shared/Auth/PlaintextHTTP.swift` |
+| Import scope (which local history a Machine Agent may ship) and uninstall | `server/zerg/cli/onboard.py` asks what to import; `server/zerg/routers/device_tokens.py` revokes a device token; engine `engine/src/import_scope.rs` and `engine/src/machine_scope.rs` enforce the scope, `engine/src/machine_uninstall.rs` implements `longhouse uninstall` | `web/src/features/machines/` (revoke a machine) | none |
 
 ## Where to read next
 

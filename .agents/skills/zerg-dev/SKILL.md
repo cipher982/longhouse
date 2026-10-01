@@ -30,3 +30,4 @@ make dev-demo  # isolated local backend + seeded demo UI
 - `make dev` requires an existing `longhouse auth` machine link.
 - The normal local UI must never silently fall back to an empty local database.
 - Use `make dev-demo` for disposable local data and `make dev` for real account data.
+- `make stop` runs `pkill -f` on every `uvicorn zerg.main:app` and `vite` on the machine, not just yours; do not use it when another session's dev stack may be running.

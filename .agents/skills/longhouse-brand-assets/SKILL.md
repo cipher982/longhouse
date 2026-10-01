@@ -88,7 +88,7 @@ img = Image.open('desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/R
 print(img.size, img.getchannel('A').getbbox())
 PY
 
-# Menu bar harness verification
+# Menu bar harness verification (dispatched to a hosted macOS VM: commit and push first)
 make menubar-harness MODE=test
 
 # Refresh the installed app after menu bar/runtime changes

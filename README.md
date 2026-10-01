@@ -4,7 +4,7 @@
 
 → **[longhouse.ai](https://longhouse.ai)** · [Download for macOS](https://longhouse.ai/download/macos) · [Hosted](https://control.longhouse.ai/signup) · [Docs](https://longhouse.ai/docs)
 
-Watch any Claude Code, Codex, Cursor, or OpenCode session live from the web. Search everything they've done. Send your next instruction while the agent keeps running in its real terminal on your machine. Apache-2.0 open core.
+Watch any Claude Code, Codex, Cursor, or OpenCode session live from the web. Search everything they've done. Send your next instruction to a session launched through Longhouse while the agent keeps running in its real terminal on your machine. Apache-2.0 open core.
 
 ![Longhouse timeline — one searchable view of your coding-agent sessions across providers and machines](web/public/images/landing/timeline-preview.png)
 
@@ -120,7 +120,7 @@ A laptop runtime stops when the laptop sleeps. For real durability, run the Runt
 | | Self-host | Hosted |
 |---|---|---|
 | You operate | Runtime Host on a VPS, homelab, or Mac mini | Nothing — we run it |
-| Cost | Free (Apache-2.0) | $20/mo |
+| Cost | Free (Apache-2.0) | Invite-only alpha; free for invited testers |
 | Setup | `longhouse-server serve` (steps below) | [control.longhouse.ai/signup](https://control.longhouse.ai/signup) |
 | Always-on | Up to you | Yes |
 | iOS push on `needs_user` | Yes (APNs config required) | Yes |
