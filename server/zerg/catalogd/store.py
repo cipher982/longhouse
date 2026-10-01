@@ -1659,9 +1659,9 @@ def _apply_delegation_lineage(
 ) -> int:
     """Bind only owner/machine/provider-matching source observations.
 
-    Spawn rows stay immutable provider facts. This routine only fills existing
-    lineage columns when a concrete child session already resolves; it never
-    creates a child or a live pending claim.
+    Spawn rows stay immutable provider facts. Resolved children receive native
+    parent/tool lineage; an exact spawn also authorizes worker-only visibility.
+    This never creates a child or infers a live pending claim from ancestry.
     """
 
     if owner_id is None:

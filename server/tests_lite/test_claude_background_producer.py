@@ -72,6 +72,35 @@ def test_source_rejects_unmatched_native_callback_even_with_a_registry() -> None
     assert source["native_callbacks_matched"] is False
 
 
+def test_stop_only_nonregistry_callbacks_do_not_invalidate_the_parent_task_pair() -> None:
+    records = _native_records()
+    records.insert(2, _record("SubagentStop", {"agent_id": "native-stop-only-actor", "agent_type": ""}))
+
+    source = oracle._source_observation(records, "native-1")
+
+    assert source["native_callbacks_matched"] is True
+    assert source["active_registry_kinds"] == ["shell", "subagent"]
+
+
+def test_callback_pairs_for_another_actor_cannot_certify_the_parent_registry_task() -> None:
+    records = _native_records()
+    records[1]["payload"]["background_tasks"][0]["id"] = "unobserved-parent-task"
+
+    source = oracle._source_observation(records, "native-1")
+
+    assert source["active_registry_observed"] is True
+    assert source["native_callbacks_matched"] is False
+
+
+def test_stop_only_parent_registry_task_cannot_certify_a_missing_start() -> None:
+    records = _native_records()[1:]
+
+    source = oracle._source_observation(records, "native-1")
+
+    assert source["native_callbacks_available"] is True
+    assert source["native_callbacks_matched"] is False
+
+
 def test_source_rejects_identity_or_digest_drift() -> None:
     source = oracle._source_observation(_native_records(digest_ok=False, session_id="other-native"), "native-1")
 

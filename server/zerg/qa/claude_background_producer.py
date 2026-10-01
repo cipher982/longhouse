@@ -266,10 +266,16 @@ def _source_observation(records: list[dict[str, Any]], native_session_id: str | 
     active_registry = active[-1]["registry"] if active else []
     active_ids = {str(item.get("id")) for item in active_registry if item.get("id")}
     active_kinds = sorted({str(item.get("type") or "").strip().lower().replace("-", "").replace("_", "") for item in active_registry})
+    background_subagent_ids = {
+        str(task["id"])
+        for snapshot in parent_stops
+        for task in snapshot["registry"]
+        if task.get("id") and str(task.get("type") or "").strip().lower().replace("-", "").replace("_", "") == "subagent"
+    }
     start_ids = set(starts)
     stop_ids = set(stops)
     callback_available = bool(start_ids or stop_ids)
-    callbacks_matched = not callback_available or start_ids == stop_ids
+    callbacks_matched = bool(background_subagent_ids) and background_subagent_ids <= start_ids and background_subagent_ids <= stop_ids
     return {
         "records": [{key: value for key, value in record.items() if key not in {"payload", "metadata"}} for record in records],
         "native_session_id": native_session_id,
@@ -285,6 +291,8 @@ def _source_observation(records: list[dict[str, Any]], native_session_id: str | 
         "explicit_empty_record_index": records.index(empty[-1]["record"]) if empty else None,
         "subagent_start_ids": sorted(start_ids),
         "subagent_stop_ids": sorted(stop_ids),
+        "background_subagent_ids": sorted(background_subagent_ids),
+        "nonregistry_stop_callback_ids": sorted(stop_ids - background_subagent_ids),
         "native_callbacks_available": callback_available,
         "native_callbacks_matched": callbacks_matched,
     }
@@ -441,6 +449,8 @@ def _capture_background(
         observation["child_callback_replaced_parent_tool"] = callback_tool_replaced
         callbacks_scoped = (
             observation.get("canonical_parent_observed") is True
+            and source.get("identity_ok") is True
+            and source.get("digests_ok") is True
             and source.get("native_callbacks_matched") is True
             and observation.get("initial_served_active") is not True
             and not callback_tool_replaced
@@ -493,6 +503,8 @@ def _run_direct(args: argparse.Namespace) -> dict[str, Any]:
     result["producer"] = REGISTRATION.to_dict()
     result["profile"] = PROFILE
     result["scenario_id"] = SCENARIO_ID
+    result["variant"] = None
+    result["execution_variant"] = getattr(args, "variant", None)
     result["requested_assertion"] = requested_assertion
     root = args.evidence_root.resolve()
     observation = result.get("observation") if isinstance(result.get("observation"), dict) else {}
