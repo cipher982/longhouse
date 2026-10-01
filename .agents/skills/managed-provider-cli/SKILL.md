@@ -192,6 +192,12 @@ Hard Codex contract:
 - Console is one stock `omp -p --mode json` process per turn with native tools,
   context, extensions, skills, auth, and model settings. Use `provider_local`;
   do not invent remote approval or auto-approval fallbacks.
+- Console RPC stdin: write nothing until OMP has printed its `ready` frame.
+  Stock OMP's stdin reader wedges for good when a byte is already pending while
+  it starts and a large frame (an image prompt) follows; the process stays alive
+  and idle and never acknowledges the prompt. Every write is stall-bounded and an
+  unacknowledged prompt fails the turn after 30 s (`console_rpc.rs`). Repro: the
+  bench, never this Mac.
 - Native JSONL is the durable OMP archive. Bind exact native identity,
   workspace, and source file before claiming managed ownership; cold Resume
   refuses a live prior owner and never creates a second source.

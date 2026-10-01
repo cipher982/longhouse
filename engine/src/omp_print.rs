@@ -259,6 +259,13 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         local_db_path,
         runtime_events_outbox_dir,
     };
+    // Nothing is written until OMP says `ready`: see `stdout_has_ready`.
+    if let Err(error) = wait_for_rpc_ready(&mut child, &stdout_path, &stderr_path).await {
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ =
+            crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error.to_string());
+        return Err(error).context("waiting for OMP to become ready");
+    }
     for command in [
         json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "get_state"}),
         prompt_command,
@@ -319,6 +326,35 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         session_file: session_file.to_string_lossy().to_string(),
         argv,
     })
+}
+
+/// Wait for OMP's `ready` frame (see `console_rpc::stdout_has_ready`), failing
+/// early when the process exits first so the stderr tail names the cause.
+async fn wait_for_rpc_ready(
+    child: &mut Child,
+    stdout_path: &Path,
+    stderr_path: &Path,
+) -> Result<()> {
+    let deadline = Instant::now() + crate::console_rpc::RPC_READY_DEADLINE;
+    loop {
+        if crate::console_rpc::stdout_has_ready(stdout_path) {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            let cause = stderr_tail(stderr_path).map(|tail| format!("; omp stderr: {tail}"));
+            anyhow::bail!(
+                "OMP exited ({status}) before reporting ready{}",
+                cause.unwrap_or_default()
+            );
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "OMP did not report ready within {}s",
+                crate::console_rpc::RPC_READY_DEADLINE.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 /// Enter the running OMP Console turn with an RPC `steer`. OMP delivers it at
@@ -500,6 +536,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
     // An RPC process stays up after the run settles; Longhouse ends it, and
     // that exit is the run's successful end rather than a failure.
     let mut settled_shutdown = false;
+    let prompt_written_at = Instant::now();
     sink.post_phase("thinking", None, 0).await;
     loop {
         if let Err(error) = publish_stdout_growth(
@@ -530,6 +567,23 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
             crate::console_adapter::cleanup_process_group("omp-print", sink.process_group_id).await;
         }
         refresh_owned_processes(&sink.run_id);
+        if crate::console_rpc::prompt_ack_overdue(
+            projection.prompt_acknowledged,
+            projection.rpc_rejected,
+            prompt_written_at.elapsed(),
+        ) {
+            // The process is alive and idle and nothing will follow. Say so now
+            // instead of presenting a turn nobody is running as Thinking.
+            let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
+            let reason = crate::console_rpc::prompt_ack_overdue_reason(prompt_written_at.elapsed());
+            let reason = if cleanup_verified {
+                reason
+            } else {
+                format!("{reason}; owned process-group cleanup was not verified")
+            };
+            sink.post_terminal("run_failed", None, Some(reason)).await;
+            return;
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -624,7 +678,19 @@ async fn monitor_recovered_omp_claim(
     let mut pending = Vec::new();
     let mut seq = claim.projected_seq;
     let mut terminal_drain_deadline = None;
-    sink.post_phase("thinking", None, seq).await;
+    // The prompt was handed over when the claim was made, so an unacknowledged
+    // one is as old as the claim. `thinking` is posted only for a turn the
+    // provider accepted, or one still inside the time it has to accept: a
+    // restart used to re-assert Thinking for a run that never began, for ever.
+    let claimed_age =
+        || crate::console_rpc::age_since_rfc3339(&claim.claimed_at).unwrap_or(Duration::ZERO);
+    let mut thinking_posted = false;
+    if projection.prompt_acknowledged
+        || !crate::console_rpc::prompt_ack_overdue(false, false, claimed_age())
+    {
+        sink.post_phase("thinking", None, seq).await;
+        thinking_posted = true;
+    }
     loop {
         if let Err(error) = publish_stdout_growth(
             &mut sink,
@@ -641,6 +707,26 @@ async fn monitor_recovered_omp_claim(
                 error.to_string()
             } else {
                 format!("OMP recovered process-group cleanup was not verified: {error}")
+            };
+            sink.post_terminal("run_failed", None, Some(reason)).await;
+            return;
+        }
+        if !thinking_posted && projection.prompt_acknowledged {
+            sink.post_phase("thinking", None, seq).await;
+            thinking_posted = true;
+        }
+        if crate::console_rpc::prompt_ack_overdue(
+            projection.prompt_acknowledged,
+            projection.rpc_rejected,
+            claimed_age(),
+        ) {
+            let cleanup_verified =
+                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
+            let reason = crate::console_rpc::prompt_ack_overdue_reason(claimed_age());
+            let reason = if cleanup_verified {
+                reason
+            } else {
+                format!("{reason}; recovered process-group cleanup was not verified")
             };
             sink.post_terminal("run_failed", None, Some(reason)).await;
             return;
@@ -869,6 +955,10 @@ struct OmpStreamProjection {
     native_error: Option<String>,
     /// OMP refused the prompt before accepting it: no run will follow.
     rpc_rejected: bool,
+    /// OMP accepted the prompt (its `response`, or the run it started). A
+    /// prompt that is written and never acknowledged is not a turn: nothing
+    /// will follow, whatever the provider process is doing.
+    prompt_acknowledged: bool,
 }
 
 impl OmpStreamProjection {
@@ -884,6 +974,7 @@ impl OmpStreamProjection {
                 self.identity_confirmed = true;
             }
             Some("agent_start") => {
+                self.prompt_acknowledged = true;
                 self.turn_settled = false;
                 self.final_assistant_id = None;
                 self.final_stop_reason = None;
@@ -950,6 +1041,8 @@ impl OmpStreamProjection {
                     );
                     self.provider_thread_id = Some(observed.to_string());
                     self.identity_confirmed = true;
+                } else if event.get("command").and_then(Value::as_str) == Some("prompt") && ok {
+                    self.prompt_acknowledged = true;
                 } else if event.get("command").and_then(Value::as_str) == Some("prompt") && !ok {
                     self.rpc_rejected = true;
                     self.native_error = Some(
@@ -2193,5 +2286,307 @@ for line in sys.stdin:
                 std::env::remove_var("LONGHOUSE_HOME");
             }
         }
+    }
+
+    /// A stock OMP whose startup takes a moment, with the two behaviours seen on
+    /// 2026-10-01. `mode` is one of:
+    /// - `wedge_if_early`: bytes already pending on stdin when it starts make it
+    ///   answer `get_state` and then never read stdin again (what stock OMP 18.4.5
+    ///   does on macOS); commands written after `ready` work.
+    /// - `never_acknowledge`: it answers `get_state` and reads the prompt but
+    ///   never responds to it and never starts a run.
+    fn write_stalling_fake_omp(path: &Path, mode: &str) {
+        std::fs::write(
+            path,
+            format!(
+                r##"#!/usr/bin/env python3
+import json
+import os
+import select
+import sys
+import time
+
+MODE = "{mode}"
+args = sys.argv[1:]
+source = args[args.index("--resume") + 1]
+native_id = "01a08857-826d-72f6-b816-672b54116504"
+def out(event):
+    print(json.dumps(event, separators=(",", ":")), flush=True)
+time.sleep(1.0)
+early = bool(select.select([sys.stdin], [], [], 0)[0])
+# Stock OMP creates its native session file (header first) while starting.
+if not os.path.exists(source) or os.path.getsize(source) == 0:
+    os.makedirs(os.path.dirname(source), exist_ok=True)
+    with open(source, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps({{"type":"session","version":3,"id":native_id,"timestamp":"2026-09-09T22:43:51.533Z","cwd":os.getcwd()}}) + "\n")
+out({{"type":"ready"}})
+for line in sys.stdin:
+    command = json.loads(line)
+    kind = command["type"]
+    if kind == "get_state":
+        out({{"id":command.get("id"),"type":"response","command":"get_state","success":True,"data":{{"sessionId":native_id}}}})
+        if MODE == "wedge_if_early" and early:
+            time.sleep(3600)
+    elif kind == "prompt":
+        if MODE == "never_acknowledge":
+            time.sleep(3600)
+        prompt = command["message"]
+        out({{"id":command.get("id"),"type":"response","command":"prompt","success":True}})
+        with open(source, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps({{"type":"message","id":"u1","message":{{"role":"user","content":[{{"type":"text","text":prompt}}]}}}}) + "\n")
+            stream.write(json.dumps({{"type":"message","id":"a1","message":{{"role":"assistant","content":[{{"type":"text","text":"ok"}}],"stopReason":"stop"}}}}) + "\n")
+        for event in [
+            {{"type":"agent_start"}},
+            {{"type":"message_start","message":{{"role":"assistant","content":[]}}}},
+            {{"type":"message_end","message":{{"role":"assistant","content":[{{"type":"text","text":"ok"}}],"stopReason":"stop"}}}},
+            {{"type":"agent_end","isTerminal":True,"willContinue":False}},
+            {{"type":"session_settled"}},
+        ]:
+            out(event)
+"##
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn stalling_fake_config(
+        temp: &Path,
+        mode: &str,
+        prompt: String,
+    ) -> (OmpPrintRunConfig, String) {
+        let fake_omp = temp.join("omp");
+        write_stalling_fake_omp(&fake_omp, mode);
+        let run_id = Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        (
+            OmpPrintRunConfig {
+                session_id,
+                thread_id,
+                turn_id: None,
+                run_id: run_id.clone(),
+                client_request_id: Some("omp-stall".into()),
+                cwd: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .to_path_buf(),
+                omp_bin: fake_omp.to_string_lossy().into_owned(),
+                prompt,
+                image_paths: Vec::new(),
+                model: None,
+                profile: None,
+                session_dir: Some(temp.join("omp-sessions")),
+                resume_provider_thread_id: None,
+                resume_session_file: None,
+                permission_mode: "provider_local".into(),
+                machine_name: "omp-test".into(),
+                local_db_path: Some(temp.join("agent.db")),
+            },
+            run_id,
+        )
+    }
+
+    fn set_test_longhouse_home(path: PathBuf) -> Option<std::ffi::OsString> {
+        let previous = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", path);
+        }
+        previous
+    }
+
+    fn restore_test_longhouse_home(previous: Option<std::ffi::OsString>) {
+        match previous {
+            Some(home) => unsafe { std::env::set_var("LONGHOUSE_HOME", home) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_large_prompt_is_not_written_until_omp_reports_ready() {
+        // The 2026-10-01 incident: a 617 KB image prompt written at spawn wedged a
+        // stock OMP's stdin for good (reproduced on the bench, 450 KB, OMP 18.4.5).
+        // The fake wedges exactly when bytes are pending before `ready`, so this only
+        // completes if the adapter holds every command until the `ready` frame.
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let (config, run_id) =
+            stalling_fake_config(temp.path(), "wedge_if_early", "x".repeat(300_000));
+
+        let started = start_omp_print_turn(config).await.unwrap();
+        let claim = wait_for_terminal(&run_id).await;
+
+        assert_eq!(
+            claim.result.as_ref().unwrap()["terminal_state"],
+            "run_completed",
+            "{:?}",
+            claim.error
+        );
+        assert_eq!(
+            started.provider_thread_id.as_deref(),
+            Some("01a08857-826d-72f6-b816-672b54116504")
+        );
+        restore_test_longhouse_home(previous);
+    }
+
+    #[tokio::test]
+    async fn a_prompt_omp_never_acknowledges_fails_the_turn_instead_of_thinking_forever() {
+        // The same incident, other half: the provider stayed alive and idle, no
+        // response to the prompt ever came, and the run read Thinking for 1h47m.
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let (config, run_id) =
+            stalling_fake_config(temp.path(), "never_acknowledge", "hello".into());
+
+        let started = start_omp_print_turn(config).await.unwrap();
+        let claim = wait_for_terminal(&run_id).await;
+
+        assert_eq!(
+            claim.result.as_ref().unwrap()["terminal_state"],
+            "run_failed"
+        );
+        assert!(
+            claim
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("did not acknowledge the prompt"),
+            "{claim:?}"
+        );
+        // The idle provider is not left running behind a failed turn.
+        assert_ne!(unsafe { libc::killpg(started.process_group_id, 0) }, 0);
+        restore_test_longhouse_home(previous);
+    }
+
+    #[test]
+    fn prompt_acknowledgement_is_the_response_or_the_run_it_started() {
+        let mut by_response = OmpStreamProjection::default();
+        assert!(!by_response.prompt_acknowledged);
+        by_response
+            .apply(None, &json!({"id": "longhouse-prompt", "type": "response", "command": "prompt", "success": true}))
+            .unwrap();
+        assert!(by_response.prompt_acknowledged);
+        assert!(!by_response.rpc_rejected);
+
+        let mut by_run = OmpStreamProjection::default();
+        by_run.apply(None, &json!({"type": "agent_start"})).unwrap();
+        assert!(by_run.prompt_acknowledged);
+
+        // The identity response is not the prompt's.
+        let mut identity_only = OmpStreamProjection::default();
+        identity_only
+            .apply(None, &json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "response", "command": "get_state", "success": true, "data": {"sessionId": "s"}}))
+            .unwrap();
+        assert!(!identity_only.prompt_acknowledged);
+    }
+
+    #[test]
+    fn an_unacknowledged_prompt_is_overdue_only_past_its_deadline_and_only_unsettled() {
+        use crate::console_rpc::{prompt_ack_overdue, PROMPT_ACK_DEADLINE};
+        let past = PROMPT_ACK_DEADLINE + Duration::from_secs(1);
+        assert!(prompt_ack_overdue(false, false, past));
+        assert!(!prompt_ack_overdue(false, false, Duration::ZERO));
+        assert!(!prompt_ack_overdue(true, false, past), "acknowledged");
+        assert!(
+            !prompt_ack_overdue(false, true, past),
+            "rejected, already terminal"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recovered_turn_whose_prompt_was_never_acknowledged_is_failed_not_re_asserted() {
+        // A Machine Agent restart found the wedged run's provider alive and
+        // re-posted `thinking` for it every time, which the host kept vouching for.
+        use std::os::unix::process::CommandExt;
+
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = set_test_longhouse_home(temp.path().join("longhouse"));
+        let registry = crate::turn_claims::default_registry().unwrap();
+        let run_id = Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let stdout_path = temp.path().join("stdout.log");
+        std::fs::write(
+            &stdout_path,
+            "{\"type\":\"ready\"}\n{\"id\":\"longhouse-identity\",\"type\":\"response\",\"command\":\"get_state\",\"success\":true,\"data\":{\"sessionId\":\"s\"}}\n",
+        )
+        .unwrap();
+        let mut provider = Command::new("sleep");
+        provider.arg("30");
+        unsafe {
+            provider.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut provider = provider.spawn().unwrap();
+        let pid = provider.id().unwrap();
+        let process_group_id = i32::try_from(pid).unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                pid,
+                process_group_id,
+                crate::turn_claims::process_start_time_for_pid(Some(pid)),
+                OMP_PRINT_ADAPTER,
+                "launch",
+                None,
+                &stdout_path.to_string_lossy(),
+                "/tmp/stderr.log",
+                json!({}),
+            )
+            .unwrap();
+        refresh_owned_processes(&run_id);
+        let mut claim = registry.read(&run_id).unwrap();
+        claim.claimed_at = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        let sink = OmpPrintSink {
+            session_id,
+            thread_id,
+            turn_id: None,
+            run_id: run_id.clone(),
+            client_request_id: None,
+            launch_id: "launch".into(),
+            process_group_id: Some(process_group_id),
+            stdout_path,
+            session_dir: temp.path().to_path_buf(),
+            session_file: temp.path().join("session.jsonl"),
+            provider_thread_id: None,
+            source_start_len: 0,
+            binding_emitted: true,
+            machine_name: "omp-test".into(),
+            local_db_path: Some(temp.path().join("agent.db")),
+            runtime_events_outbox_dir: temp.path().join("runtime-events"),
+        };
+        std::fs::create_dir_all(&sink.runtime_events_outbox_dir).unwrap();
+
+        monitor_recovered_omp_claim(claim, temp.path().join("stderr.log"), sink).await;
+
+        let settled = registry.read(&run_id).unwrap();
+        assert_eq!(settled.state, "terminal");
+        assert_eq!(
+            settled.result.as_ref().unwrap()["terminal_state"],
+            "run_failed"
+        );
+        assert!(settled
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("did not acknowledge the prompt"));
+        let _ = provider.wait().await;
+        restore_test_longhouse_home(previous);
     }
 }
