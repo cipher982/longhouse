@@ -2759,7 +2759,9 @@ fn strip_omp_image_file_tags(text: &str) -> String {
     let mut rest = text;
     while let Some(start) = rest.find(OPEN) {
         let after_open = &rest[start..];
-        let Some(tag_end) = after_open.find("\">") else { break };
+        let Some(tag_end) = after_open.find("\">") else {
+            break;
+        };
         let body = &after_open[tag_end + 2..];
         let Some(close) = body.find(CLOSE) else { break };
         if !body[..close].starts_with("[Image:") {
@@ -4266,8 +4268,8 @@ fn antigravity_is_invoke_subagent(name: &str) -> bool {
 /// The INVOKE_SUBAGENT result is prose followed by one or more JSON objects.
 /// Parse only objects that carry the provider's own child identity; never use
 /// the log URI as a path to read another transcript.
-fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
-    fn collect(value: &Value, source: &str, children: &mut Vec<Value>) {
+fn antigravity_spawn_children(text: &str, source: &str, parent_tool_call_id: &str) -> Vec<Value> {
+    fn collect(value: &Value, source: &str, parent_tool_call_id: &str, children: &mut Vec<Value>) {
         let Some(object) = value.as_object() else {
             return;
         };
@@ -4292,11 +4294,12 @@ fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
             }
             children.push(json!({
                 "provider_session_id": conversation_id,
+                "parent_tool_call_id": parent_tool_call_id,
                 "metadata": metadata,
             }));
         }
         for nested in object.values() {
-            collect(nested, source, children);
+            collect(nested, source, parent_tool_call_id, children);
             if children.len() >= 64 {
                 break;
             }
@@ -4314,7 +4317,7 @@ fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
         };
         let consumed = stream.byte_offset();
         cursor = start.saturating_add(consumed.max(1));
-        collect(&value, source, &mut children);
+        collect(&value, source, parent_tool_call_id, &mut children);
         if children.len() >= 64 {
             break;
         }
@@ -4446,11 +4449,11 @@ fn extract_antigravity_events(
         if text.is_empty() {
             return;
         }
-        if result_call
+        if let Some(call) = result_call
             .as_ref()
-            .is_some_and(|call| antigravity_is_invoke_subagent(&call.name))
+            .filter(|call| antigravity_is_invoke_subagent(&call.name))
         {
-            let children = antigravity_spawn_children(text, source);
+            let children = antigravity_spawn_children(text, source, &call.id);
             if !children.is_empty() {
                 if let Some(at) = obj
                     .created_at
@@ -9373,6 +9376,12 @@ mod tests {
                 "88888888-8888-4888-8888-888888888888"
             ]
         );
+        for child in fact.payload["children"].as_array().unwrap() {
+            assert_eq!(
+                child["parent_tool_call_id"].as_str(),
+                Some("antigravity-10-0")
+            );
+        }
         assert!(result
             .events
             .iter()

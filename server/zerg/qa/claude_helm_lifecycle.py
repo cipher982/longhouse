@@ -1042,6 +1042,11 @@ def run_lifecycle(
             else:
                 if scenario_prompt is None:
                     raise ScenarioError("background scenario capture requires a prompt")
+                initial_parent_read = {
+                    "captured_at": now_iso(),
+                    "served_path": "canonical_session_detail",
+                    "state": _served_state(args.api_url, args.agents_token, session_id),
+                }
                 session.submit_line(scenario_prompt)
                 scenario_result = scenario_capture(
                     args=args,
@@ -1053,6 +1058,7 @@ def run_lifecycle(
                     root=root,
                     environment=environment,
                     hook_capture_dir=hook_capture_dir,
+                    initial_parent_read=initial_parent_read,
                     prompt=scenario_prompt,
                 )
                 if not isinstance(scenario_result, dict):

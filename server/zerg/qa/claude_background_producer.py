@@ -308,6 +308,7 @@ def _capture_background(
     root: Path,
     environment: Mapping[str, str],
     hook_capture_dir: Path | None,
+    initial_parent_read: Mapping[str, Any],
     prompt: str,
 ) -> dict[str, Any]:
     del session, environment
@@ -331,7 +332,7 @@ def _capture_background(
         "markers": {"parent": parent_marker, "child": child_marker, "shell": shell_marker},
         "native_session_id": native_session_id,
         "source": {},
-        "canonical_parent_reads": [],
+        "canonical_parent_reads": [dict(initial_parent_read)],
         "assertions": {name: False for name in ASSERTIONS},
     }
 
@@ -341,7 +342,6 @@ def _capture_background(
             observation["canonical_parent_reads"].append(
                 {"captured_at": now_iso(), "served_path": "canonical_session_detail", "state": state}
             )
-            observation["canonical_parent_reads"] = observation["canonical_parent_reads"][-20:]
             return state
         return {}
 
@@ -351,7 +351,7 @@ def _capture_background(
         return records, source
 
     try:
-        initial_state = read_state()
+        initial_state = _mapping(initial_parent_read.get("state"))
         helm.wait_until(
             lambda: (bounds := helm._turn_bounds(rows(), parent_marker)) is not None and bounds[1] is not None,
             timeout=args.response_timeout_secs,
@@ -409,7 +409,7 @@ def _capture_background(
         observation["source"] = {**observation["source"], **source}
         empty_index = source.get("explicit_empty_record_index")
         observation["initial_served_active"] = _served_active(initial_state)
-        observation["canonical_identity_ok"] = bool(
+        observation["canonical_parent_observed"] = bool(
             native_session_id and any(_mapping(sample.get("state")) for sample in observation["canonical_parent_reads"])
         )
         if (
@@ -440,7 +440,7 @@ def _capture_background(
             callback_tool_replaced = callback_tool_replaced or any(child_id in text for child_id in child_ids for text in strings)
         observation["child_callback_replaced_parent_tool"] = callback_tool_replaced
         callbacks_scoped = (
-            observation.get("canonical_identity_ok") is True
+            observation.get("canonical_parent_observed") is True
             and source.get("native_callbacks_matched") is True
             and observation.get("initial_served_active") is not True
             and not callback_tool_replaced

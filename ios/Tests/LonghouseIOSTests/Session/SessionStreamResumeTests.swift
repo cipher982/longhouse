@@ -69,6 +69,43 @@ struct SessionStreamResumeTests {
     }
 
     @Test
+    func childArrivingAfterOpenBecomesNavigableOnParentWake() async throws {
+        let workspace = try TestWorkspaceFactory.make(eventId: 30, content: "Retained parent tail")
+        let api = FakeStreamResumeClient(workspaces: [workspace, workspace])
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, cursor, fingerprint in
+                recorder.make(sinceSeq: cursor, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            snapshotStore: Self.isolatedSnapshotStore()
+        )
+        defer { model.stop() }
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForStartCount(recorder, atLeast: 1)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: waitBudget)
+        while await api.subagentReadCount() == 0, clock.now < deadline {
+            await Task.yield()
+        }
+        #expect(await api.subagentReadCount() > 0)
+        #expect(model.subagents.isEmpty)
+        let child = SessionSubagent(
+            sessionId: "native-child", provider: "antigravity", parentToolCallId: "antigravity-10-0",
+            runId: nil, startedAt: "2026-09-30T12:00:00Z", lastActivityAt: "2026-09-30T12:00:02Z",
+            endedAt: nil, userMessages: 1, assistantMessages: 1, toolCalls: 2,
+            title: "Native child", firstUserMessagePreview: "Inspect", lastVisibleTextPreview: "Inspecting"
+        )
+        await api.setSubagents([child])
+        recorder.emitChanged(latestEventId: 31, pubsubSeq: 778)
+        #expect(await waitUntil { model.subagents == [child] })
+        #expect(Subagents.children(from: model.subagents, toolCallId: "antigravity-10-0", toolOutputText: nil) == [child])
+    }
+
+    @Test
     func pausingReleasesTheProducerAndResumeOwnsOnlyOneStream() async throws {
         let workspace = try TestWorkspaceFactory.make(eventId: 30, content: "Retained tail")
         let api = FakeStreamResumeClient(workspaces: [workspace, workspace])
@@ -836,12 +873,25 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
     private var workspaces: [SessionWorkspaceResponse]
     private var tailRequests = 0
     private var tailFailuresRemaining = 0
+    private var subagents: [SessionSubagent] = []
+    private var subagentReads = 0
 
     init(workspaces: [SessionWorkspaceResponse]) {
         self.workspaces = workspaces
     }
 
     func tailRequestCount() -> Int { tailRequests }
+
+    func subagentReadCount() -> Int { subagentReads }
+
+    func setSubagents(_ children: [SessionSubagent]) {
+        subagents = children
+    }
+
+    func sessionSubagents(id: String) async throws -> SessionSubagentsResponse {
+        subagentReads += 1
+        return SessionSubagentsResponse(sessionId: id, children: subagents)
+    }
 
     private var tailDelayNanoseconds: UInt64 = 0
 

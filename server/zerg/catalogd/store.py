@@ -1593,13 +1593,13 @@ def _bind_spawn_child(
                 storage.c.provider == parent_provider,
                 storage.c.owner_id == str(parent_owner_id),
                 storage.c.machine_id == parent_machine_id,
+                storage.c.is_subagent == 1,
                 storage.c.subagent_parent_provider_session_id.in_(parent_native_ids),
             )
         ).all()
-        # A raw child without its own native alias is only safe to bind when
-        # this scoped parent pointer identifies one durable child. Multiple
-        # children sharing a parent remain unresolved rather than receiving a
-        # tool edge intended for another child.
+        # A native-less row must already identify itself as a worker. A plain
+        # fork's parent pointer is ancestry, not evidence it is the spawned
+        # worker. Multiple workers sharing the pointer remain unresolved.
         if len(pointer_rows) == 1:
             child_session_ids.add(str(pointer_rows[0][0]))
     child_session_ids.discard(parent_session_id)
@@ -1616,12 +1616,31 @@ def _bind_spawn_child(
         existing_parent_session = str(child_row["subagent_parent_session_id"] or "").strip() or None
         if existing_parent_native not in (None, parent_native_id) or existing_parent_session not in (None, parent_session_id):
             continue
-        values: dict[str, Any] = {"subagent_parent_session_id": parent_session_id, "updated_at": commit_time, "commit_seq": commit_seq}
+        hidden = int(evaluate_origin_visibility(SessionVisibilityFacts(is_subagent=True)).system_hidden)
+        values: dict[str, Any] = {
+            "subagent_parent_session_id": parent_session_id,
+            "is_subagent": 1,
+            "hidden_from_default_timeline": hidden,
+            "updated_at": commit_time,
+            "commit_seq": commit_seq,
+        }
         if parent_native_id is not None:
             values["subagent_parent_provider_session_id"] = parent_native_id
         if parent_tool_call_id is not None and child_row["subagent_parent_tool_call_id"] is None:
             values["subagent_parent_tool_call_id"] = parent_tool_call_id
         bound += int(connection.execute(update(storage).where(storage.c.session_id == child_session_id).values(**values)).rowcount or 0)
+        for policy_table in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__):
+            connection.execute(
+                update(policy_table)
+                .where(policy_table.c.session_id == child_session_id)
+                .values(hidden_from_default_timeline=hidden, updated_at=commit_time)
+            )
+        thread = LiveSessionThread.__table__
+        connection.execute(
+            update(thread)
+            .where(thread.c.session_id == child_session_id, thread.c.is_primary == 1)
+            .values(hidden_from_default_timeline=hidden, updated_at=commit_time)
+        )
     return bound
 
 
@@ -9896,7 +9915,9 @@ class CatalogStore:
                     cwd=session_values.get("cwd"),
                     machine_id=machine_id,
                     primary_thread_is_worker_only=primary_branch_kind == "subagent",
-                    is_subagent=bool(session_values.get("is_subagent")),
+                    is_subagent=bool(
+                        session_values.get("is_subagent", existing_session.get("is_subagent") if existing_session is not None else False)
+                    ),
                 )
             ).system_hidden
             session_values["hidden_from_default_timeline"] = int(canonical_hidden)

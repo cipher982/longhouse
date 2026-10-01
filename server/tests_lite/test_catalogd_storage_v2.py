@@ -4562,16 +4562,18 @@ async def test_omp_absolute_parent_session_commits_in_both_arrival_orders(daemon
 
 
 @pytest.mark.parametrize("child_first", [True, False])
+@pytest.mark.parametrize("provider", ["opencode", "antigravity"])
 @pytest.mark.asyncio
-async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(daemon_paths, child_first):
-    """A parent native id in spawn metadata links the real commit path late."""
+async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(daemon_paths, child_first, provider):
+    """An exact native spawn binds a worker even without a child-side parent."""
 
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     child_id = uuid4()
     parent_id = uuid4()
-    parent_native_id = "ses_parent_opencode_native"
-    child_native_id = "ses_child_opencode_native"
+    parent_native_id = "ses_parent_opencode_native" if provider == "opencode" else "66666666-6666-4666-8666-666666666666"
+    child_native_id = "ses_child_opencode_native" if provider == "opencode" else "77777777-7777-4777-8777-777777777777"
+    parent_tool_call_id = "call_parent_opencode" if provider == "opencode" else "antigravity-10-0"
     parent_epoch = uuid4()
     child_epoch = uuid4()
     spawn_fact = {
@@ -4582,11 +4584,12 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
             "children": [
                 {
                     "provider_session_id": child_native_id,
-                    "parent_tool_call_id": "call_parent_opencode",
-                    "metadata": {
-                        "parentSessionId": parent_native_id,
-                        "sessionId": child_native_id,
-                    },
+                    "parent_tool_call_id": parent_tool_call_id,
+                    "metadata": (
+                        {"parentSessionId": parent_native_id, "sessionId": child_native_id}
+                        if provider == "opencode"
+                        else {"conversationId": child_native_id, "logAbsoluteUri": "file:///native/child.log"}
+                    ),
                 }
             ]
         },
@@ -4598,7 +4601,8 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
         end=10,
         records=(b"opencode-parent",),
         sealed_at=now,
-        provider="opencode",
+        provider=provider,
+        provider_session_id=parent_native_id if provider == "antigravity" else None,
         opaque_source_id="path-sha256:opencode-parent",
         provider_facts=(spawn_fact,),
     )
@@ -4609,7 +4613,7 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
             source_epoch=parent_epoch,
             seed=b"opencode-parent-render",
             opaque_source_id="path-sha256:opencode-parent",
-            provider="opencode",
+            provider=provider,
         ),
     )
     child = _raw_params(
@@ -4619,9 +4623,10 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
         end=10,
         records=(b"opencode-child",),
         sealed_at=now,
-        provider="opencode",
+        provider=provider,
+        provider_session_id=child_native_id if provider == "antigravity" else None,
         opaque_source_id="path-sha256:opencode-child",
-        subagent={"is_subagent": True, "parent_provider_session_id": parent_native_id},
+        subagent={"is_subagent": True, "parent_provider_session_id": parent_native_id} if provider == "opencode" else None,
     )
     child.update(
         render_state="ready",
@@ -4630,9 +4635,44 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
             source_epoch=child_epoch,
             seed=b"opencode-child-render",
             opaque_source_id="path-sha256:opencode-child",
-            provider="opencode",
+            provider=provider,
         ),
     )
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    thread_id = str(uuid4())
+    with Session(engine) as db:
+        materialized = {
+            "session_id": str(child_id),
+            "provider": provider,
+            "environment": "local",
+            "project": "longhouse",
+            "device_id": "cinder",
+            "cwd": "/workspace/longhouse",
+            "started_at": now,
+            "last_activity_at": now,
+            "origin_kind": "shadow",
+            "hidden_from_default_timeline": 0,
+            "updated_at": now,
+        }
+        db.add(LiveSessionCatalog(**materialized, primary_thread_id=thread_id, created_at=now))
+        db.add(LiveTimelineCard(**materialized, parser_revision="test"))
+        db.add(
+            LiveSessionThread(
+                id=thread_id,
+                session_id=str(child_id),
+                provider=provider,
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                branch_kind="root",
+                is_primary=1,
+                hidden_from_default_timeline=0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+    engine.dispose()
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
@@ -4640,6 +4680,20 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
     try:
         for raw in (child, parent) if child_first else (parent, child):
             await client.call("storage.raw_object.commit.v2", raw)
+        later_child = _raw_params(
+            epoch=child_epoch,
+            session_id=child_id,
+            start=10,
+            end=20,
+            records=(b"later-child",),
+            sealed_at=now + timedelta(seconds=1),
+            provider=provider,
+            provider_session_id=child_native_id if provider == "antigravity" else None,
+            opaque_source_id="path-sha256:opencode-child",
+        )
+        later_child["epoch_opened_at"] = child["epoch_opened_at"]
+        later_receipt = await client.call("storage.raw_object.commit.v2", later_child)
+        assert later_receipt["delegation_parent_session_id"] == str(parent_id)
     finally:
         await client.close()
         await daemon.close()
@@ -4649,11 +4703,16 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
         child_row = db.get(StorageSession, str(child_id))
         assert child_row.subagent_parent_session_id == str(parent_id)
         assert child_row.subagent_parent_provider_session_id == parent_native_id
-        assert child_row.subagent_parent_tool_call_id == "call_parent_opencode"
+        assert child_row.subagent_parent_tool_call_id == parent_tool_call_id
+        assert child_row.is_subagent == 1
         assert child_row.hidden_from_default_timeline == 1
+        assert db.get(LiveSessionCatalog, str(child_id)).hidden_from_default_timeline == 1
+        assert db.get(LiveTimelineCard, str(child_id)).hidden_from_default_timeline == 1
+        assert db.get(LiveSessionThread, thread_id).hidden_from_default_timeline == 1
+        assert db.get(StorageSession, str(parent_id)).hidden_from_default_timeline == 0
         served = CatalogStore(engine).list_session_subagents(session_id=str(parent_id), owner_id="42")
         assert served["children"][0]["session_id"] == str(child_id)
-        assert served["children"][0]["parent_tool_call_id"] == "call_parent_opencode"
+        assert served["children"][0]["parent_tool_call_id"] == parent_tool_call_id
         assert served["child_references"][0]["session_id"] == str(child_id)
     engine.dispose()
 
@@ -4796,3 +4855,72 @@ async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_pa
         assert CatalogStore(engine).ensure_known_projector_states()["advanced_render_consumers"] == 0
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("child_first", [True, False])
+@pytest.mark.asyncio
+async def test_spawn_reference_cannot_promote_a_native_less_fork_to_worker(daemon_paths, child_first):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    parent_id, fork_id = uuid4(), uuid4()
+    parent_native_id = "66666666-6666-4666-8666-666666666666"
+    spawned_native_id = "77777777-7777-4777-8777-777777777777"
+    parent = _raw_params(
+        epoch=uuid4(),
+        session_id=parent_id,
+        start=0,
+        end=10,
+        records=(b"parent-spawn",),
+        sealed_at=now,
+        provider="antigravity",
+        provider_session_id=parent_native_id,
+        opaque_source_id="path-sha256:parent",
+        provider_facts=(
+            {
+                "kind": "delegation.spawn",
+                "at": now.isoformat(),
+                "source_position": 6,
+                "payload": {
+                    "children": [
+                        {
+                            "provider_session_id": spawned_native_id,
+                            "parent_tool_call_id": "antigravity-10-0",
+                            "metadata": {"conversationId": spawned_native_id},
+                        }
+                    ]
+                },
+            },
+        ),
+    )
+    fork = _raw_params(
+        epoch=uuid4(),
+        session_id=fork_id,
+        start=0,
+        end=10,
+        records=(b"history-fork",),
+        sealed_at=now,
+        provider="antigravity",
+        opaque_source_id="path-sha256:fork",
+        subagent={"is_subagent": False, "parent_provider_session_id": parent_native_id},
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = _catalog_client(socket_path)
+    try:
+        for raw in (fork, parent) if child_first else (parent, fork):
+            await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        fork_row = db.get(StorageSession, str(fork_id))
+        assert fork_row.subagent_parent_session_id == str(parent_id)
+        assert fork_row.subagent_parent_tool_call_id is None
+        assert not fork_row.is_subagent
+        assert fork_row.hidden_from_default_timeline == 0
+        graph = CatalogStore(engine).list_session_subagents(session_id=str(parent_id), owner_id="42")
+        reference = next(row for row in graph["child_references"] if row["provider_session_id"] == spawned_native_id)
+        assert reference["session_id"] is None
+    engine.dispose()

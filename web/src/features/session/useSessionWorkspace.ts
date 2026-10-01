@@ -271,6 +271,7 @@ export function useSessionWorkspace(
       ["agent-session-projection-infinite", sessionId],
       ["agent-session-events", sessionId],
       ["agent-session-events-infinite", sessionId],
+      ["session-subagents", sessionId],
     ] as const;
     // Two independent coalescing lanes. Every wake refreshes the workspace
     // snapshot; only transcript mutations also refresh the transcript. Each

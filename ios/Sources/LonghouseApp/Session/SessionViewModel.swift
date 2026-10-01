@@ -2316,6 +2316,7 @@ final class SessionViewModel: ObservableObject {
         do {
             try await refreshTail(api: api, sessionId: sessionId)
             guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return false }
+            loadSubagents(api: api, sessionId: sessionId)
             realtimeRefreshFailureCount = 0
             realtimeRefreshRetryTask?.cancel()
             realtimeRefreshRetryTask = nil

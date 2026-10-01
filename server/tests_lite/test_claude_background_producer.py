@@ -213,9 +213,9 @@ def _capture_scenario(
             json.dumps({"schema_version": 1, "fault": oracle.FAULT, "session_id": "managed-1", "fired_at": "now", "detail": {}}) + "\n"
         )
         unknown = {"delegation": {"state": "unknown"}}
-        states = iter([unknown, unknown, unknown])
+        states = iter([unknown, unknown])
     else:
-        states = iter([empty, active, final_state if final_state is not None else empty])
+        states = iter([active, final_state if final_state is not None else empty])
     monkeypatch.setattr(oracle.helm, "_transcript_rows", lambda *_args: transcript)
     monkeypatch.setattr(oracle.helm, "_hosted_assistant_texts", lambda *_args: [parent_marker])
     monkeypatch.setattr(oracle.helm, "_served_state", lambda *_args: next(states, final_state if final_state is not None else empty))
@@ -250,6 +250,7 @@ def _capture_scenario(
         environment={},
         hook_capture_dir=tmp_path,
         prompt=prompt,
+        initial_parent_read={"captured_at": "2026-09-30T11:59:58+00:00", "served_path": "canonical_session_detail", "state": empty},
     )
 
 
