@@ -328,3 +328,48 @@ def test_native_empty_source_cannot_certify_unknown_served_registry(monkeypatch:
     assert result["assertions"]["claude_background_explicit_empty"] is True
     assert result["assertions"]["claude_background_registry_served"] is False
     assert result["status"] == "fail"
+
+
+def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_key_apart(
+    monkeypatch: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The factory compares ``variant`` with the cell's authored variant (none); a typed setup failure must
+    not be refused as a malformed result before anyone reads its failure code."""
+
+    engine = tmp_path / "longhouse-engine"
+    claude = tmp_path / "claude"
+    for path in (engine, claude):
+        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        path.chmod(0o700)
+
+    def boom(_args: Any) -> dict[str, Any]:
+        raise RuntimeError("setup exploded")
+
+    monkeypatch.setattr(oracle, "require_disposable_runtime", lambda _url: None)
+    monkeypatch.setattr(oracle, "_run_direct", boom)
+    variant = oracle._VARIANTS[0]
+
+    code = oracle.main(
+        [
+            "--variant",
+            variant,
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--repo-root",
+            str(tmp_path),
+            "--engine",
+            str(engine),
+            "--provider-bin",
+            str(claude),
+            "--api-url",
+            "http://127.0.0.1:1",
+            "--agents-token",
+            "token",
+        ]
+    )
+
+    assert code == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["failure_code"] == "claude_background_setup_failed"
+    assert result["variant"] is None
+    assert result["execution_variant"] == variant

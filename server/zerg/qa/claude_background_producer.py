@@ -681,7 +681,9 @@ def main(argv: list[str] | None = None) -> int:
             "provider": "claude",
             "profile": PROFILE,
             "scenario_id": SCENARIO_ID,
-            "variant": getattr(args, "variant", None),
+            # The authored variant axis (none) is what the factory compares; the execution key is kept apart.
+            "variant": None,
+            "execution_variant": getattr(args, "variant", None),
             "status": "inconclusive" if args.negative_control else "fail",
             "failure_code": "claude_background_setup_failed",
             "error": f"{type(exc).__name__}: {exc}",
