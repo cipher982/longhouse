@@ -477,8 +477,7 @@ def test_the_scenario_result_reports_the_authored_variant_axis_not_the_execution
     variants = [
         value
         for node in ast.walk(tree)
-        if isinstance(node, ast.Dict)
-        and any(isinstance(key, ast.Constant) and key.value == "artifact_kind" for key in node.keys)
+        if isinstance(node, ast.Dict) and any(isinstance(key, ast.Constant) and key.value == "artifact_kind" for key in node.keys)
         for key, value in zip(node.keys, node.values)
         if isinstance(key, ast.Constant) and key.value == "variant"
     ]
