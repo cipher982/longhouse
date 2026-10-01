@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import claude_background_producer as oracle
 
 
@@ -373,3 +374,8 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
     assert result["failure_code"] == "claude_background_setup_failed"
     assert result["variant"] is None
     assert result["execution_variant"] == variant
+    # Known gap, pinned so that fixing it is noticed: the setup-failure result carries an assertions map but no
+    # generated_at, artifact_manifest, scenario_revision or evidence_class, so the factory refuses it as malformed
+    # ("invalid generated_at") instead of reporting claude_background_setup_failed.
+    with pytest.raises(AssertionError, match="invalid generated_at"):
+        assert_result_conforms(oracle, result, variant=variant)

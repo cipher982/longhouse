@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests_lite._factory_envelope import assert_result_conforms
+
 
 class _FakeProcess:
     pid = 321
@@ -130,9 +132,12 @@ def test_claude_entrypoint_retains_send_before_native_late_failure(monkeypatch, 
     monkeypatch.setattr(producer, "wait_until", lambda predicate, **kwargs: True)
     monkeypatch.setattr(producer, "_post", lambda *a, **k: {"accepted": True})
 
-    result = producer.run_lifecycle(_args(tmp_path, binary))
+    # The factory passes each cell's execution key as --variant, never the authored variant.
+    variant = producer._VARIANTS[0]
+    result = producer.run_lifecycle(_args(tmp_path, binary, variant=variant))
     report = _json(tmp_path / "evidence" / "lifecycle-report.json")
     payload = _json(tmp_path / "evidence" / "result.json")
+    assert_result_conforms(producer, payload, variant=variant)
 
     assert result["status"] == "fail"
     assert payload["status"] == "fail"
@@ -202,8 +207,10 @@ def test_codex_entrypoint_retains_rollout_before_native_late_failure(monkeypatch
         lambda *a, **k: {"verification": {"verified": True, "socket_absent": True, "owned_processes_dead": True}, "evidence": {}},
     )
     monkeypatch.setattr(producer, "sha256_file", lambda path: "digest")
-    result = producer.run_codex_helm_lifecycle(_args(tmp_path, binary))
+    variant = producer._VARIANTS[0]
+    result = producer.run_codex_helm_lifecycle(_args(tmp_path, binary, variant=variant))
     payload = _json(tmp_path / "evidence" / "result.json")
+    assert_result_conforms(producer, payload, variant=variant)
     cleanup = _json(tmp_path / "evidence" / "cleanup-receipt.json")
 
     assert result["status"] == "fail"
@@ -293,7 +300,16 @@ def test_cursor_entrypoint_retains_product_report_before_runtime_failure(monkeyp
     monkeypatch.setattr(producer, "bound_terminal_recordings", lambda *a, **k: None)
     monkeypatch.setattr(producer, "secret_scan", lambda *a, **k: [])
 
-    result = producer.run_lifecycle(_args(tmp_path, binary, longhouse_cli=binary))
+    from zerg.qa.resume_assurance import execution_variant_key
+
+    variant = execution_variant_key(
+        provider="cursor",
+        assertion_id=producer.REGISTRATION.assertion_cells[0][0],
+        scenario_id=producer.REGISTRATION.scenario_id,
+        variant=None,
+    )
+    result = producer.run_lifecycle(_args(tmp_path, binary, longhouse_cli=binary, variant=variant))
+    assert_result_conforms(producer, _json(tmp_path / "evidence" / "result.json"), variant=variant)
     report = _json(tmp_path / "evidence" / "product-e2e-report.json")
     product = _json(tmp_path / "evidence" / "product-e2e" / "product-e2e.json")
 
@@ -404,8 +420,10 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
         lambda *a, **k: {"status": "pass", "hidden": True, "archived": True, "present_in_served_inventory": False},
     )
 
-    result = producer.run_opencode_helm_lifecycle(_args(tmp_path, binary))
+    variant = producer._VARIANTS[0]
+    result = producer.run_opencode_helm_lifecycle(_args(tmp_path, binary, variant=variant))
     payload = _json(tmp_path / "evidence" / "result.json")
+    assert_result_conforms(producer, payload, variant=variant)
     observation = payload["observation"]
 
     assert result["status"] == "fail"
@@ -558,8 +576,10 @@ def test_pi_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_
     monkeypatch.setattr(producer, "_wait_recorded_execution_owners_dead", lambda *a, **k: None)
     monkeypatch.setattr(producer, "sha256_file", lambda path: "digest")
 
-    result = producer.run_pi_helm_lifecycle(_args(tmp_path, binary))
+    variant = producer._VARIANTS[0]
+    result = producer.run_pi_helm_lifecycle(_args(tmp_path, binary, variant=variant))
     payload = _json(tmp_path / "evidence" / "result.json")
+    assert_result_conforms(producer, payload, variant=variant)
 
     assert result["status"] == "fail"
     assert payload["status"] == "fail"
@@ -723,6 +743,14 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
         ]
     )
     payload = _json(tmp_path / "evidence" / "result.json")
+    if background:
+        # Known gap, pinned so that fixing it is noticed: omp_background_producer.main() answers an exception with
+        # a result that carries no variant, scenario_revision, evidence_class, generated_at or artifact_manifest,
+        # which the factory refuses as malformed and so reports "invalid generated_at" instead of the cause.
+        with pytest.raises(AssertionError, match="invalid generated_at"):
+            assert_result_conforms(entrypoint, payload, variant=args.variant)
+    else:
+        assert_result_conforms(entrypoint, payload, variant=args.variant)
 
     assert exit_code == 1
     assert payload["status"] == "fail"

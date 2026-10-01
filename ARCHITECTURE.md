@@ -155,7 +155,7 @@ Where things live. Every backticked path in this section must exist;
 | `ios/` | SwiftUI iOS app, widget and Live Activity (read/steer client) |
 | `desktop/` | macOS Desktop App menu bar (Swift package `desktop/LonghouseMenuBarHarness/`) |
 | `runner/` | TypeScript optional WebSocket command executor |
-| `schemas/` | Source-of-truth contracts: `schemas/managed_providers.yml`, `schemas/session_state_contract.yml`, WS protocol, transcript shapes |
+| `schemas/` | Source-of-truth contracts: `schemas/managed_providers.yml`, `schemas/session_state_contract.yml`, WS protocol, transcript shapes; `schemas/factory_producers.yml` mirrors the private provider factory's producer registry, and `make validate-factory-registration` fails a release-gate row it has no producer for |
 | `config/` | Checked-in config: `config/models.json`, `config/tool-tiers.json`, `config/provider-brands.json`, fixtures |
 | `tests/fixtures/` | Cross-client fixtures that server, web and iOS tests all read |
 | `e2e/` | Playwright end-to-end suites and probes |
