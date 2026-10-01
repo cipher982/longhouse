@@ -748,7 +748,7 @@ def test_the_busy_sampler_and_the_idle_watch_survive_a_status_read_that_keeps_fa
     def flaky(_state):
         reads["count"] += 1
         if reads["count"] <= 2:
-            raise http.client.RemoteDisconnected("closed")
+            raise http.client.BadStatusLine("")  # an HTTPException that is not an OSError
         return False
 
     monkeypatch.setattr(producer, "_session_busy", flaky)
