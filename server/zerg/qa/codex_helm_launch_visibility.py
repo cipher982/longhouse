@@ -14,6 +14,7 @@ import copy
 import http.server
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -567,6 +568,65 @@ def _stop_launch(
     }
 
 
+_ANSI_RE = re.compile(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+# Codex 0.156.1 and later open a picker on first start when its bundled catalog supersedes
+# the configured model ("Meet GPT-6 Luna", `1. Try new model  2. Use existing model`). The
+# terminal text loses its spaces to cursor movement, so match with whitespace removed.
+_MODEL_MIGRATION_DIALOG = "useexistingmodel"
+# With no picker the composer's status line names the model and effort ("GPT-5.6-Luna default").
+_COMPOSER_READY = re.compile(r"gpt-?[\w.\-]*(?:default|minimal|low|medium|high)")
+_MAX_STARTUP_DIALOGS = 3
+# The picker was drawn 3.0, 3.2 and 5.4 s after the TUI started (Codex 0.159.3 on clifford at a
+# load average of 4.8, 2026-10-01), after 2.4 s with no output at all, so a quiet terminal is not a
+# ready one. 12 s is 2.2 times the slowest of those.
+_STARTUP_DIALOG_WAIT_SECONDS = 12.0
+
+
+def _startup_dialog_text(terminal: Path, offset: int) -> str:
+    try:
+        raw = terminal.read_bytes()[offset:]
+    except OSError:
+        return ""
+    return re.sub(r"\s+", "", _ANSI_RE.sub(b"", raw).decode("utf-8", "replace")).lower()
+
+
+def _answer_startup_dialogs(tui: ProviderPtySession, *, timeout: float = _STARTUP_DIALOG_WAIT_SECONDS) -> list[dict[str, Any]]:
+    """Answer the provider's own first-start pickers before anything is typed into the composer.
+
+    A picker takes the typed seed and its Enter for itself: on 2026-09-23 Codex 0.156.1 began
+    opening the model-migration picker, the seed became the picker's answer ("Model changed to
+    gpt-6-luna medium"), the turn was never submitted and this cell failed on every tick after
+    (about 220 in a row). Wait until the picker is showing or the composer's status line says it
+    will not (``timeout`` bounds the wait; after it the seed goes in as it always did), and
+    choose "2. Use existing model" while a picker shows: the factory's model is a pin, not a
+    suggestion. Frames drawn before an answer are not read again.
+    """
+
+    answered: list[dict[str, Any]] = []
+    started = time.monotonic()
+    deadline = started + timeout
+    offset = 0
+    last_answer = float("-inf")
+    while time.monotonic() < deadline:
+        if not tui.alive():
+            raise RuntimeError(f"Codex TUI exited before seeding its rollout ({tui.process.returncode})")
+        text = _startup_dialog_text(tui.terminal_path, offset)
+        if _COMPOSER_READY.search(text):
+            break
+        # A frame still showing the picker just after an answer is the redraw before the
+        # answer lands, not a second picker.
+        if _MODEL_MIGRATION_DIALOG in text and time.monotonic() - last_answer > 1.0:
+            if len(answered) >= _MAX_STARTUP_DIALOGS:
+                raise RuntimeError("Codex startup pickers did not clear")
+            offset = tui.terminal_path.stat().st_size
+            tui.write(b"2")
+            last_answer = time.monotonic()
+            answered.append({"dialog": "model_migration", "answer": "use_existing_model", "after_seconds": round(last_answer - started, 2)})
+            continue
+        time.sleep(0.2)
+    return answered
+
+
 def _seed_codex_rollout(
     tui: ProviderPtySession,
     *,
@@ -576,6 +636,7 @@ def _seed_codex_rollout(
 ) -> dict[str, Any]:
     """Create the provider history that a cold Resume is required to retain."""
 
+    startup_dialogs = _answer_startup_dialogs(tui)
     tui.submit_line(f"Reply with exactly {marker}")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -588,6 +649,7 @@ def _seed_codex_rollout(
                     "rollout_path": str(path),
                     "rollout_size": path.stat().st_size,
                     "assistant_marker_observed": True,
+                    "startup_dialogs": startup_dialogs,
                 }
         time.sleep(0.25)
     raise RuntimeError("Codex TUI did not persist the seed turn before cold Resume")

@@ -291,3 +291,130 @@ def test_stop_launch_refuses_a_stop_without_a_published_terminal_event(tmp_path,
     finally:
         if process.poll() is None:
             close()
+
+
+# The picker as the terminal log carries it (cursor movement eats the spaces), captured from a real
+# Codex 0.159.3 first start on 2026-10-01 under a PTY with the factory's model.
+_MIGRATION_PICKER = (
+    b"\x1b[2J\x1b[H>_ OpenAI Codex (v0.159.3)\x1b[3;1H\xe2\x80\xba Ask Codex to do anything\x1b[5;1H"
+    b"Meet GPT-6 Luna\x1b[6;1HOur latest Luna is significantly more efficient\x1b[8;1H"
+    b"\xe2\x80\xba 1. Try new model\x1b[9;1H  2.\x1b[1CUse\x1b[1Cexisting\x1b[1Cmodel\x1b[10;1Henter/esc confirm"
+)
+_COMPOSER = b"\x1b[2J\x1b[H>_ OpenAI Codex (v0.159.3)\x1b[3;1H\xe2\x80\xba Ask Codex to do anything\x1b[9;1HGPT-5.6-Luna default"
+
+
+class _FakeCodexTui:
+    """An owned PTY stand-in: the terminal log is a file, a key press can append a reply frame."""
+
+    def __init__(self, tmp_path: Path, *, initial: bytes, replies: dict[bytes, bytes] | None = None, reply_delay: float = 0.0) -> None:
+        self.reply_delay = reply_delay
+        self.terminal_path = tmp_path / "terminal.log"
+        self.terminal_path.write_bytes(initial)
+        self.process = SimpleNamespace(returncode=None, pid=1)
+        self.replies = replies or {}
+        self.events: list[tuple[str, bytes | str]] = []
+
+    def alive(self) -> bool:
+        return True
+
+    def write(self, value: bytes) -> None:
+        self.events.append(("write", value))
+        reply = self.replies.get(value, b"")
+
+        def append() -> None:
+            with self.terminal_path.open("ab") as handle:
+                handle.write(reply)
+
+        if self.reply_delay:
+            threading.Timer(self.reply_delay, append).start()
+        else:
+            append()
+
+    def submit_line(self, text: str) -> None:
+        self.events.append(("submit", text))
+
+
+def test_the_model_migration_picker_is_answered_before_the_seed_is_typed(tmp_path):
+    tui = _FakeCodexTui(tmp_path, initial=_MIGRATION_PICKER, replies={b"2": _COMPOSER})
+
+    answered = launch._answer_startup_dialogs(tui, timeout=10)
+
+    assert tui.events == [("write", b"2")]
+    assert [item["dialog"] for item in answered] == ["model_migration"]
+    assert answered[0]["answer"] == "use_existing_model"
+
+
+def test_a_codex_without_the_picker_is_left_alone_as_soon_as_its_composer_is_ready(tmp_path):
+    tui = _FakeCodexTui(tmp_path, initial=_COMPOSER)
+
+    started = time.monotonic()
+    assert launch._answer_startup_dialogs(tui, timeout=10) == []
+
+    assert tui.events == []
+    assert time.monotonic() - started < 2.0, "a ready composer must not wait out the picker's window"
+
+
+def test_a_terminal_that_never_says_anything_is_waited_on_once_and_not_failed(tmp_path):
+    """The seed goes in as it always did when neither the picker nor the status line ever shows."""
+
+    tui = _FakeCodexTui(tmp_path, initial=b"\x1b[2J starting")
+
+    assert launch._answer_startup_dialogs(tui, timeout=0.6) == []
+    assert tui.events == []
+
+
+def test_the_picker_arrives_after_a_quiet_start_and_is_still_answered(tmp_path):
+    """Observed on Codex 0.159.3: 2.4 s with no output, then the picker at 3.0 s."""
+
+    tui = _FakeCodexTui(tmp_path, initial=b"\x1b[2J loading", replies={b"2": _COMPOSER})
+    threading.Timer(1.0, lambda: tui.terminal_path.open("ab").write(_MIGRATION_PICKER)).start()
+
+    answered = launch._answer_startup_dialogs(tui, timeout=10)
+
+    assert len(answered) == 1
+    assert answered[0]["after_seconds"] >= 1.0
+
+
+def test_a_second_picker_drawn_after_the_first_answer_is_answered_too(tmp_path):
+    tui = _FakeCodexTui(tmp_path, initial=_MIGRATION_PICKER, reply_delay=1.3)
+    original_write = tui.write
+    calls = {"count": 0}
+
+    def write(value: bytes) -> None:
+        calls["count"] += 1
+        tui.replies = {b"2": _MIGRATION_PICKER if calls["count"] == 1 else _COMPOSER}
+        original_write(value)
+
+    tui.write = write
+
+    answered = launch._answer_startup_dialogs(tui, timeout=20)
+
+    assert len(answered) == 2
+    assert [event for event in tui.events if event[0] == "write"] == [("write", b"2")] * 2
+
+
+def test_an_answered_picker_frame_is_not_read_again(tmp_path):
+    """The reply frame can still hold the picker's text; the composer after it decides."""
+
+    tui = _FakeCodexTui(tmp_path, initial=_MIGRATION_PICKER, replies={b"2": _MIGRATION_PICKER + _COMPOSER})
+
+    answered = launch._answer_startup_dialogs(tui, timeout=10)
+
+    assert len(answered) == 1
+    assert tui.events == [("write", b"2")]
+
+
+def test_the_seed_goes_in_only_after_the_picker_is_answered(tmp_path, monkeypatch):
+    tui = _FakeCodexTui(tmp_path, initial=_MIGRATION_PICKER, replies={b"2": _COMPOSER})
+    monkeypatch.setattr(launch.bridge_canary, "_assistant_transcript_contains", lambda *_a, **_k: True)
+    codex_home = tmp_path / "codex-home"
+    rollout = codex_home / "sessions" / "2026" / "rollout.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text("{}\n")
+
+    receipt = launch._seed_codex_rollout(tui, codex_home=codex_home, marker="MARK", timeout=5)
+
+    assert [event[0] for event in tui.events] == ["write", "submit"]
+    assert tui.events[1] == ("submit", "Reply with exactly MARK")
+    assert receipt["status"] == "pass"
+    assert [item["dialog"] for item in receipt["startup_dialogs"]] == ["model_migration"]
