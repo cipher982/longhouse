@@ -89,6 +89,16 @@ export function getSessionCardText(
   // summary drifts. Prefer it; the ladder below is only for pre-anchor payloads.
   const resolved = compactText(session.timeline_title);
   if (preferGenerated && resolved) {
+    // With no title model the server's headline is the first prompt cut to a few
+    // words. Showing it above the whole prompt printed the same sentence twice
+    // on every row; show the prompt once, as the title.
+    if (firstUser && isTruncationOf(resolved, firstUser)) {
+      return {
+        title: truncateText(firstUser, titleMaxChars),
+        titleSource: "prompt",
+        subheading: null,
+      };
+    }
     return {
       title: truncateText(resolved, titleMaxChars),
       titleSource: "generated",
@@ -160,6 +170,12 @@ export function getBranchLabel(
 
 function compactText(value: string | null | undefined): string {
   return (value || "").trim().replace(/\s+/g, " ");
+}
+
+/** True when `title` is `text` itself or `text` cut short (with or without an ellipsis). */
+function isTruncationOf(title: string, text: string): boolean {
+  const head = title.replace(/(\u2026|\.{3})+$/, "").trimEnd();
+  return head.length > 0 && text.startsWith(head);
 }
 
 function truncateText(value: string, maxChars: number): string {

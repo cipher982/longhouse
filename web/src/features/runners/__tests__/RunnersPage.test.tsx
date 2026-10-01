@@ -4,12 +4,21 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes, useLocation } from "react-router";
 import * as reactRouterDom from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Runner } from "@/shared/api/index";
+import type { MachineDirectoryEntry, Runner } from "@/shared/api/index";
 import { TestRouter } from "@/shared/test/test-utils";
 import RunnersPage from "../RunnersPage";
 
 const runnerHookMocks = vi.hoisted(() => ({
   useRunners: vi.fn(),
+}));
+
+const machineApiMocks = vi.hoisted(() => ({
+  listMachines: vi.fn(),
+}));
+
+vi.mock("@/shared/api/index", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/shared/api/index")>()),
+  listMachines: machineApiMocks.listMachines,
 }));
 
 vi.mock("../useRunners", () => ({
@@ -52,6 +61,21 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
     updated_at: now,
     ...overrides,
   };
+}
+
+function makeMachine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirectoryEntry {
+  return {
+    device_id: "alex-macbook",
+    machine_name: "alex-macbook",
+    online: true,
+    control_channel_status: "connected",
+    last_seen_at: new Date().toISOString(),
+    connected_since: new Date(Date.now() - 4 * 60_000).toISOString(),
+    engine_build: "cd506ebf",
+    provider_readiness: {},
+    launch: { blocked_by: null, providers: [], default_provider: null, unavailable_providers: [] },
+    ...overrides,
+  } as MachineDirectoryEntry;
 }
 
 function createQueryClient() {
@@ -105,10 +129,80 @@ describe("RunnersPage", () => {
       isLoading: false,
       error: null,
     });
+    machineApiMocks.listMachines.mockResolvedValue({ machines: [] });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("lists a connected Machine Agent instead of saying there is nothing here", async () => {
+    machineApiMocks.listMachines.mockResolvedValue({
+      machines: [
+        makeMachine({
+          provider_readiness: { claude: { state: "not_authenticated", remediation: "Sign in to claude on this machine" } },
+        }),
+      ],
+    });
+
+    renderRunnersPage();
+
+    const card = await screen.findByTestId("machine-agent-alex-macbook");
+    expect(card).toHaveTextContent("alex-macbook");
+    expect(card).toHaveTextContent("Online · connected 4 minutes ago");
+    expect(card).toHaveTextContent("Agent cd506ebf");
+    expect(card).toHaveTextContent("Sign in to claude on this machine to start sessions from Longhouse.");
+    // The machine is here, so the page no longer claims nothing is connected.
+    expect(screen.queryByText("No machines connected yet")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No Runners yet/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("runners-none")).toHaveTextContent("A Runner is an optional extra");
+  });
+
+  it("does not nag about a missing provider CLI while the machine can still start sessions", async () => {
+    machineApiMocks.listMachines.mockResolvedValue({
+      machines: [
+        makeMachine({
+          provider_readiness: {
+            claude: { state: "ready" },
+            codex: { state: "cli_missing", remediation: "Install codex on this machine" },
+          },
+          launch: { blocked_by: null, providers: [{ provider: "claude" }], default_provider: "claude", unavailable_providers: [] },
+        }),
+      ],
+    });
+
+    renderRunnersPage();
+
+    const card = await screen.findByTestId("machine-agent-alex-macbook");
+    expect(card).not.toHaveTextContent("Install codex");
+    expect(card).not.toHaveTextContent("to start sessions from Longhouse");
+  });
+
+  it("shows an offline machine with when it was last seen", async () => {
+    machineApiMocks.listMachines.mockResolvedValue({
+      machines: [
+        makeMachine({
+          online: false,
+          control_channel_status: "disconnected",
+          connected_since: null,
+          last_seen_at: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+        }),
+      ],
+    });
+
+    renderRunnersPage();
+
+    const card = await screen.findByTestId("machine-agent-alex-macbook");
+    expect(card).toHaveAttribute("data-online", "false");
+    expect(card).toHaveTextContent("Offline · Last seen 3 hours ago");
+  });
+
+  it("guides a first-time host to connect a machine, and only once the lookup has settled", async () => {
+    renderRunnersPage();
+
+    expect(await screen.findByText("No machines connected yet")).toBeInTheDocument();
+    expect(screen.getByTestId("runners-add-first-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("machine-agents")).not.toBeInTheDocument();
   });
 
   it("does not render inline launch actions on runner cards anymore", () => {

@@ -1,0 +1,76 @@
+@layer pages {
+  .login-page {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-6) var(--space-4);
+    background: var(--color-void, #120b09);
+    color: var(--color-text-secondary);
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 22rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-4);
+    padding: var(--space-8) var(--space-6);
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-lg);
+    text-align: center;
+  }
+
+  .login-brand {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+
+  .login-wordmark {
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-2xl, 1.5rem);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.02em;
+    color: var(--color-text-primary);
+  }
+
+  .login-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    text-align: left;
+  }
+
+  .login-label {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+  }
+
+  .login-message {
+    margin: 0;
+    font-size: var(--font-size-base);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .login-message--error {
+    color: var(--color-intent-error);
+  }
+
+  .login-or {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+
+  .login-google {
+    display: flex;
+    justify-content: center;
+  }
+}

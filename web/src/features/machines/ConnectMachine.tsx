@@ -33,8 +33,8 @@ export default function ConnectMachine() {
         </Button>
       </div>
       <p className="connect-machine-hint">
-        It installs Longhouse and opens this site so you can approve the machine. Your past sessions appear here
-        a few minutes later.
+        It installs Longhouse and opens this site so you can approve the machine. Your past sessions appear
+        here as they import.
       </p>
       <p className="connect-machine-hint">
         No browser on that machine? <Link to="/settings/devices">Create a server command</Link> in Settings →

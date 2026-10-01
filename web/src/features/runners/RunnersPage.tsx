@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useRunners } from "./useRunners";
-import type { Runner } from "@/shared/api/index";
+import { listMachines, type Runner } from "@/shared/api/index";
+import MachineAgents from "@/features/machines/MachineAgents";
 import AddRunnerModal from "./AddRunnerModal";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import {
@@ -60,10 +62,18 @@ function fallbackStatusSummary(status: string): string {
 export default function RunnersPage() {
   const navigate = useNavigate();
   const { data: runners, isLoading, error } = useRunners({ refetchInterval: 10_000 });
+  // The Machine Agents connected to this Runtime Host: what "my machine" means
+  // to a newcomer. A failed lookup shows no list rather than an error page.
+  const { data: machineDirectory, isLoading: machinesLoading } = useQuery({
+    queryKey: ["machine-directory"],
+    queryFn: listMachines,
+    refetchInterval: 10_000,
+  });
+  const machines = machineDirectory?.machines ?? [];
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Ready signal - indicates page is interactive (even if empty)
-  useReadinessFlag({ ready: !isLoading });
+  useReadinessFlag({ ready: !isLoading && !machinesLoading });
 
   if (isLoading) {
     return (
@@ -94,7 +104,7 @@ export default function RunnersPage() {
       <div className="runners-page">
         <SectionHeader
           title="Machines"
-          description="Choose where Longhouse should start sessions and execute commands."
+          description="The machines Longhouse imports sessions from and starts sessions on."
           actions={
             <Button variant="primary" data-testid="runners-add-button" onClick={() => setShowAddModal(true)}>
               <PlusIcon />
@@ -103,16 +113,25 @@ export default function RunnersPage() {
           }
         />
 
-        {runners && runners.length === 0 ? (
-          <EmptyState
-            title="No Runners yet"
-            description="Connected machines appear in the timeline and the session launcher. A Runner is an optional extra for running shell commands on one from the browser."
+        {machines.length > 0 && <MachineAgents machines={machines} />}
+        {machines.length > 0 && <h3 className="runners-subheading">Runners</h3>}
+
+        {machines.length === 0 && runners && runners.length === 0 ? (
+          // Held until the machine lookup settles, so a connected machine never
+          // flashes "No machines connected yet" on its way in.
+          machinesLoading ? null : <EmptyState
+            title="No machines connected yet"
+            description="Connect a machine and the Claude Code, Codex and Antigravity sessions it already has import here. A Runner is an optional extra for running shell commands on one from the browser."
             action={
               <Button variant="primary" size="lg" data-testid="runners-add-first-button" onClick={() => setShowAddModal(true)}>
                 Connect a machine
               </Button>
             }
           />
+        ) : runners && runners.length === 0 ? (
+          <p className="runners-none" data-testid="runners-none">
+            No Runners. A Runner is an optional extra for running shell commands on a machine from the browser.
+          </p>
         ) : (
           <div className="runners-grid">
             {runners?.map((runner) => (

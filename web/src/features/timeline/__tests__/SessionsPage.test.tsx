@@ -54,12 +54,6 @@ vi.mock("@/shared/lib/readiness-contract", () => ({
   useReadinessFlag: vi.fn(),
 }));
 
-vi.mock("@/shared/lib/config", () => ({
-  config: {
-    llmAvailable: true,
-  },
-}));
-
 const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFilters, useRecall: mockUseRecall } = hookMocks;
 const { useRunners: mockUseRunners } = runnerHookMocks;
 const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStreamMocks;
@@ -420,6 +414,19 @@ describe("SessionsPage", () => {
     });
     renderSessionsPage();
     expect(screen.queryByText(/Importing history/)).not.toBeInTheDocument();
+  });
+
+  it("does not nag about an LLM provider: a host without one is healthy and titles fall back to the prompt", () => {
+    // window.__LLM_AVAILABLE__ is unset here, which is every fresh host.
+    mockUseAgentSessions.mockReturnValue({
+      data: makeSessionsResponse(),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage();
+    expect(screen.queryByText(/LLM provider/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Configure in Settings/)).not.toBeInTheDocument();
   });
 
   it("shows lexical rebuild coverage for search hits and misses only while incomplete", () => {

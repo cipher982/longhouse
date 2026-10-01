@@ -9,7 +9,6 @@ declare global {
     __APP_MODE__?: string;
     __SINGLE_TENANT__?: boolean;
     __GOOGLE_CLIENT_ID__?: string;
-    __LLM_AVAILABLE__?: boolean;
     __EMBEDDINGS_AVAILABLE__?: boolean;
     __UMAMI_WEBSITE_ID__?: string;
     __UMAMI_SCRIPT_SRC__?: string;
@@ -61,8 +60,6 @@ export interface AppConfig {
   isProduction: boolean;
   isTesting: boolean;
 
-  // LLM availability (quick signal from /config.js, env-var only)
-  llmAvailable: boolean;
   embeddingsAvailable: boolean;
 
   // Analytics
@@ -201,8 +198,6 @@ function loadConfig(): AppConfig {
     demoMode,
     singleTenant: typeof window !== 'undefined' && window.__SINGLE_TENANT__ === true,
 
-    // LLM availability (quick signal from /config.js)
-    llmAvailable: typeof window !== 'undefined' && window.__LLM_AVAILABLE__ === true,
     embeddingsAvailable: typeof window !== 'undefined' && window.__EMBEDDINGS_AVAILABLE__ === true,
 
     // Analytics

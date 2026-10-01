@@ -55,6 +55,7 @@ import {
   type SessionTone,
 } from "../ui-fixtures/sessionDetailStress";
 import { buildProviderCertificationFixture } from "../ui-fixtures/providerCertification";
+import { buildFirstRunMachineFixture, FIRST_RUN_NOW } from "../ui-fixtures/firstRun";
 import { buildTimelineCardStressFixture } from "../ui-fixtures/timelineCardStress";
 import { buildTimelineHearthFixture, buildTimelineHearthStreamBatch } from "../ui-fixtures/timelineHearth";
 import {
@@ -79,11 +80,15 @@ const PAGE_DEFINITIONS = {
   // app shell's API calls are answered by fixtures, not proxied to a real host.
   security: { path: "/security" },
   privacy: { path: "/privacy" },
+  // The self-host password sign-in. Only the `login` scene can render it.
+  login: { path: "/login" },
 } as const;
 type PageName = keyof typeof PAGE_DEFINITIONS;
 const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
 const PUBLIC_PAGES: readonly PageName[] = ["landing", "security", "privacy"];
-const ALL_CAPTURE_PAGES = PAGES.filter((pageName) => pageName !== "session-detail" && !PUBLIC_PAGES.includes(pageName));
+const ALL_CAPTURE_PAGES = PAGES.filter(
+  (pageName) => pageName !== "session-detail" && pageName !== "login" && !PUBLIC_PAGES.includes(pageName),
+);
 
 const SCENES = [
   "empty",
@@ -110,6 +115,8 @@ const SCENES = [
   "landing-session",
   "provider-certification",
   "first-run",
+  "first-run-machine",
+  "login",
   "devices-revoke",
 ] as const;
 type SceneName = (typeof SCENES)[number];
@@ -124,6 +131,11 @@ const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landi
 // A brand-new Runtime Host: no sessions, no machines. The timeline shows its
 // connect command; the machines page opens its Connect a machine sheet.
 const FIRST_RUN_SCENE: SceneName = "first-run";
+// The same host a moment later: one Machine Agent online and five imported
+// sessions with no live evidence. Timeline and Machines show it.
+const FIRST_RUN_MACHINE_SCENE: SceneName = "first-run-machine";
+// The self-host password sign-in, signed out, with password auth configured.
+const LOGIN_SCENE: SceneName = "login";
 // The Devices page with a machine holding two valid tokens (each `longhouse
 // auth` mints one) and a revoked one, framed on the revoke-machine confirmation.
 const DEVICES_REVOKE_SCENE: SceneName = "devices-revoke";
@@ -299,6 +311,8 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-tones" ||
     scene === "session-background-notices" ||
     scene === FIRST_RUN_SCENE ||
+    scene === FIRST_RUN_MACHINE_SCENE ||
+    scene === LOGIN_SCENE ||
     scene === DEVICES_REVOKE_SCENE
   );
 }
@@ -309,6 +323,12 @@ function validateOptions(opts: Options): void {
   }
   if (opts.scene === DEVICES_REVOKE_SCENE && opts.page !== "devices") {
     throw new Error(`--scene=${DEVICES_REVOKE_SCENE} captures PAGE=devices only.`);
+  }
+  if ((opts.scene === LOGIN_SCENE) !== (opts.page === "login")) {
+    throw new Error(`PAGE=login and --scene=${LOGIN_SCENE} capture only each other.`);
+  }
+  if (opts.scene === FIRST_RUN_MACHINE_SCENE && opts.page !== "timeline" && opts.page !== "machines") {
+    throw new Error(`--scene=${FIRST_RUN_MACHINE_SCENE} captures PAGE=timeline or PAGE=machines.`);
   }
   if (opts.page === "session-detail" && !SESSION_DETAIL_SCENES.includes(opts.scene)) {
     throw new Error(`session-detail requires one of: ${SESSION_DETAIL_SCENES.map((s) => `--scene=${s}`).join(", ")}.`);
@@ -669,6 +689,30 @@ async function installSceneMocks(
     return;
   }
 
+  if (scene === FIRST_RUN_MACHINE_SCENE || scene === LOGIN_SCENE) {
+    const firstRun = buildFirstRunMachineFixture();
+    const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    await context.route(`${appOrigin}/api/**`, async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (scene === LOGIN_SCENE) {
+        // Signed out, password auth only: what a self-hosted Runtime Host serves
+        // a browser with no session. A refused refresh means "no session", not "down".
+        if (pathname === "/api/auth/status") return route.fulfill(json({ authenticated: false, user: null }));
+        if (pathname === "/api/auth/methods") return route.fulfill(json({ google: false, password: true, sso: false, sso_url: null }));
+        if (pathname === "/api/auth/refresh") return route.fulfill({ status: 401, contentType: "application/json", body: "{}" });
+      } else {
+        if (pathname === "/api/timeline/sessions") return route.fulfill(json(firstRun.sessions));
+        if (pathname === "/api/timeline/filters") return route.fulfill(json(firstRun.filters));
+        if (pathname === "/api/timeline/machines") return route.fulfill(json(firstRun.machines));
+        if (pathname === "/api/runners/" || pathname === "/api/runners") return route.fulfill(json(firstRun.runners));
+        if (pathname === "/api/runners/status") return route.fulfill(json({ total: 0, online: 0, offline: 0, runners: [] }));
+        if (pathname === "/api/timeline/sessions/stream") return route.fulfill({ status: 204, body: "" });
+      }
+      await sealOrFallback(route, scene, pathname);
+    });
+    return;
+  }
+
   if (scene === PROVIDER_CERTIFICATION_SCENE) {
     const certification = buildProviderCertificationFixture();
     await context.route(`${appOrigin}/api/**`, async (route) => {
@@ -994,7 +1038,7 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
 
   const fixtureNowIso = SESSION_DETAIL_SCENES.includes(scene)
     ? SESSION_DETAIL_STRESS_NOW
-    : "2026-04-15T16:12:00Z";
+    : new Date(FIRST_RUN_NOW).toISOString();
   await page.addInitScript((nowIso) => {
     const fixtureNow = Date.parse(nowIso);
     Date.now = () => fixtureNow;
@@ -1034,11 +1078,20 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     }, SESSION_DETAIL_STRESS_SESSION_ID);
   }
 
+  if (scene === LOGIN_SCENE) {
+    // Without a backend /config.js the dev server reads as auth-disabled and
+    // /login redirects to the timeline; say this is a host that requires sign-in.
+    await page.addInitScript(() => {
+      (window as unknown as { __APP_MODE__?: string }).__APP_MODE__ = "production";
+    });
+  }
+
   if (
     scene === "timeline-card-stress" ||
     scene === "launch-unavailable" ||
     scene === "launch-no-machines" ||
     scene === FIRST_RUN_SCENE ||
+    scene === FIRST_RUN_MACHINE_SCENE ||
     LANDING_TIMELINE_SCENES.includes(scene)
   ) {
     await page.addInitScript(() => {

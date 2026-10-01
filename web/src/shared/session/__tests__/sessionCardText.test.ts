@@ -49,6 +49,29 @@ describe("getSessionCardText", () => {
     );
   });
 
+  it("shows the prompt once when the headline is only the prompt cut short", () => {
+    // No title model: the server's headline is the first six words plus an ellipsis.
+    const prompt = "Add rate limiting to the public API and cover it with tests";
+    const text = getSessionCardText(
+      makeSession({ timeline_title: "Add rate limiting to the public\u2026", first_user_message: prompt }),
+    );
+    expect(text.title).toBe(prompt);
+    expect(text.titleSource).toBe("prompt");
+    expect(text.subheading).toBeNull();
+
+    const exact = getSessionCardText(makeSession({ timeline_title: prompt, first_user_message: prompt }));
+    expect(exact.title).toBe(prompt);
+    expect(exact.subheading).toBeNull();
+  });
+
+  it("keeps the prompt as the subheading under a real generated title", () => {
+    const text = getSessionCardText(
+      makeSession({ timeline_title: "Rate Limit The Public API", first_user_message: "Add rate limiting to the public API" }),
+    );
+    expect(text.title).toBe("Rate Limit The Public API");
+    expect(text.subheading).toBe("Add rate limiting to the public API");
+  });
+
   it("renders the server-owned empty-session projection verbatim", () => {
     const text = getSessionCardText(makeSession({ timeline_title: "zerg · Empty session" }));
     expect(text.title).toBe("zerg · Empty session");

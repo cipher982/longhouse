@@ -4,6 +4,10 @@ import { clearLogoutBarrier, markLoginAttempt } from './auth-refresh';
 import { sanitizeReturnTo } from './loginRedirect';
 import config from '@/shared/lib/config';
 import { clearLogoutIntent, hasLogoutIntent, useAuth, useAuthMethods } from './auth';
+import { Button, Input } from '@/shared/ui';
+import { useReadinessFlag } from '@/shared/lib/readiness-contract';
+import { SwarmLogo } from '@/shared/ui/SwarmLogo';
+import './login.css';
 
 export default function LoginPage() {
   const [params] = useSearchParams();
@@ -51,6 +55,7 @@ export default function LoginPage() {
     : null;
 
   loginRef.current = login;
+  useReadinessFlag({ ready: !methodsLoading && !authLoading });
 
   useEffect(() => {
     if (!authMethods?.google || !config.googleClientId || !googleButtonRef.current) return;
@@ -156,82 +161,76 @@ export default function LoginPage() {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: '#120B09',
-        display: 'flex',
-        alignItems: 'center',
-        color: 'rgba(243, 234, 217, 0.7)',
-        fontSize: '1rem',
-        textAlign: 'center',
-        padding: '2rem',
-      }}
-    >
-      <div>
+    <div className="login-page">
+      <main className="login-card">
+        <div className="login-brand">
+          <SwarmLogo size={44} />
+          <span className="login-wordmark">Longhouse</span>
+        </div>
         {errorMessage ? (
           <>
-            <p role="alert">{errorMessage}</p>
-            <button type="button" onClick={beginLogin}>
+            <p role="alert" className="login-message login-message--error">{errorMessage}</p>
+            <Button variant="primary" onClick={beginLogin}>
               Try signing in again
-            </button>
+            </Button>
           </>
         ) : logoutSuppressed ? (
           <>
-            <p role="status">You are signed out.</p>
-            <button type="button" onClick={beginLogin}>
+            <p role="status" className="login-message">You are signed out.</p>
+            <Button variant="primary" onClick={beginLogin}>
               Sign in again
-            </button>
+            </Button>
           </>
         ) : authUnavailable ? (
           <>
-            <p role="alert">Authentication is temporarily unavailable.</p>
-            <button type="button" onClick={() => void refreshAuth()}>
+            <p role="alert" className="login-message login-message--error">Authentication is temporarily unavailable.</p>
+            <Button variant="primary" onClick={() => void refreshAuth()}>
               Try again
-            </button>
+            </Button>
           </>
         ) : methodsLoading ? (
-          'Loading…'
+          <p className="login-message">Loading…</p>
         ) : methodsError ? (
           <>
-            <p role="alert">Longhouse is temporarily unavailable. Try again.</p>
-            <button type="button" onClick={() => void refetchAuthMethods()}>
+            <p role="alert" className="login-message login-message--error">Longhouse is temporarily unavailable. Try again.</p>
+            <Button variant="primary" onClick={() => void refetchAuthMethods()}>
               Try again
-            </button>
+            </Button>
           </>
         ) : authMethods?.sso ? (
-          'Taking you to your Longhouse account…'
+          <p className="login-message">Taking you to your Longhouse account…</p>
         ) : authMethods?.password || authMethods?.google ? (
           <>
             {authMethods.password && (
-              <form onSubmit={submitPassword} style={{ display: 'grid', gap: '0.75rem', minWidth: '18rem' }}>
-                <label htmlFor="longhouse-password">Instance password</label>
-                <input
+              <form onSubmit={submitPassword} className="login-form">
+                <label htmlFor="longhouse-password" className="login-label">Instance password</label>
+                <Input
                   id="longhouse-password"
                   type="password"
                   autoComplete="current-password"
+                  autoFocus
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   disabled={passwordSubmitting}
                   required
                 />
-                <button type="submit" disabled={passwordSubmitting}>
+                <Button type="submit" variant="primary" disabled={passwordSubmitting}>
                   {passwordSubmitting ? 'Signing in…' : 'Sign in'}
-                </button>
-                {passwordError ? <p role="alert">{passwordError}</p> : null}
+                </Button>
+                {passwordError ? <p role="alert" className="login-message login-message--error">{passwordError}</p> : null}
               </form>
             )}
             {authMethods.google && (
               <>
-                {authMethods.password ? <p>or</p> : null}
-                <div ref={googleButtonRef} />
+                {authMethods.password ? <p className="login-or">or</p> : null}
+                <div ref={googleButtonRef} className="login-google" />
               </>
             )}
           </>
         ) : (
-          'Sign-in is not configured for this instance.'
+          <p className="login-message">Sign-in is not configured for this instance.</p>
         )}
-      </div>
+      </main>
     </div>
   );
 }

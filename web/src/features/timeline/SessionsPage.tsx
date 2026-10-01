@@ -11,10 +11,9 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useNavigate, useSearchParams, useLocation, Link } from "react-router";
+import { useNavigate, useSearchParams, useLocation } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
-import { config } from "@/shared/lib/config";
 import { useAgentSessions, useAgentFilters } from "@/shared/api/useAgentSessions";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
 import { useAmbientSessionAttentionCue } from "./useAmbientSessionAttentionCue";
@@ -524,13 +523,6 @@ export default function SessionsPage() {
             <span>
               Link this machine with native auth and start its Machine Agent, then launch managed sessions with Longhouse when you want control after launch.
             </span>
-          </div>
-        )}
-
-        {!config.llmAvailable && sessions.length > 0 && (
-          <div className="sessions-llm-hint">
-            Session summaries require an LLM provider.{" "}
-            <Link to="/settings">Configure in Settings</Link>
           </div>
         )}
 

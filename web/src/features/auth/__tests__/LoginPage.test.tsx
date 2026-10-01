@@ -68,6 +68,29 @@ describe("LoginPage", () => {
     refreshMocks.markLoginAttempt.mockReset();
   });
 
+  it("brands the self-host password form and submits the password", () => {
+    authMocks.hasLogoutIntent.mockReturnValue(false);
+    authMocks.useAuthMethods.mockReturnValue({
+      data: { google: false, password: true, sso: false },
+      isLoading: false,
+      isError: false,
+      refetch: authMocks.refetchAuthMethods,
+    });
+    authMocks.loginPassword.mockResolvedValue(undefined);
+    renderLogin();
+
+    // The product name and mark come first, so the page is recognisably Longhouse.
+    expect(screen.getByText("Longhouse")).toBeInTheDocument();
+    expect(screen.getByAltText("Longhouse")).toBeInTheDocument();
+    const field = screen.getByLabelText("Instance password");
+    expect(field).toHaveClass("ui-input");
+
+    fireEvent.change(field, { target: { value: "hunter2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(authMocks.loginPassword).toHaveBeenCalledWith("hunter2");
+  });
+
   it("clears the logout barrier before starting sign-in again", () => {
     renderLogin();
     fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
