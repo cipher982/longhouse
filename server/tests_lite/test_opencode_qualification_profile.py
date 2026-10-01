@@ -8,6 +8,7 @@ import pytest
 
 from zerg.qa.opencode_qualification_profile import configured_openrouter_model
 from zerg.qa.opencode_qualification_profile import prepare_opencode_qualification_profile
+from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
 
 
 @pytest.mark.parametrize(
@@ -45,7 +46,9 @@ def test_prepare_profile_registers_the_exact_model_without_a_credential(tmp_path
         "enabled_providers": ["openrouter"],
         "model": "openrouter/deepseek/deepseek-v4-flash",
         "small_model": "openrouter/deepseek/deepseek-v4-flash",
-        "provider": {"openrouter": {"models": {"deepseek/deepseek-v4-flash": {}}}},
+        # The model's requests carry the qualification routing: one slow OpenRouter
+        # host stalled five OpenCode Helm cells on 2026-09-30.
+        "provider": {"openrouter": {"models": {"deepseek/deepseek-v4-flash": {"options": {"provider": OPENROUTER_QUALIFICATION_ROUTING}}}}},
     }
     assert "not-written-to-profile" not in config_path.read_text(encoding="utf-8")
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
@@ -57,4 +60,5 @@ def test_prepare_profile_registers_the_exact_model_without_a_credential(tmp_path
         "config_path": str(config_path),
         "selection_authority": "disposable_profile_and_runtime_override",
         "credential_authority": "process_environment:OPENROUTER_API_KEY",
+        "routing": OPENROUTER_QUALIFICATION_ROUTING,
     }

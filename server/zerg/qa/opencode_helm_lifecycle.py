@@ -32,7 +32,6 @@ failed with its typed failure code.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import signal
@@ -232,22 +231,11 @@ def _runtime_input(url: str, token: str, session_id: str, text: str, *, intent: 
 
 
 def _opencode_get(state: dict[str, Any], path: str, *, directory: bool = True) -> Any:
-    url = f"{str(state['server_url']).rstrip('/')}{path}"
-    cwd = str(state.get("cwd") or "")
-    if directory and cwd:
-        from urllib.parse import urlencode
-
-        url = f"{url}?{urlencode({'directory': cwd})}"
-    credentials = base64.b64encode(f"{state.get('username') or 'opencode'}:{state.get('password') or ''}".encode()).decode()
-    request = Request(url, headers={"Authorization": f"Basic {credentials}", "Accept": "application/json"})
-    with urlopen(request, timeout=15) as response:
-        return json.loads(response.read().decode("utf-8") or "null")
+    return live_session_toolkit.opencode_get(state, path, directory=directory)
 
 
 def _session_busy(state: dict[str, Any]) -> bool:
-    statuses = _opencode_get(state, "/session/status")
-    entry = statuses.get(state["provider_session_id"]) if isinstance(statuses, dict) else None
-    return isinstance(entry, dict) and entry.get("type") not in {None, "idle"}
+    return live_session_toolkit.opencode_session_busy(state)
 
 
 def _messages(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -372,6 +360,34 @@ def _wait_marker_answer(state: dict[str, Any], user_text: str, marker: str, *, t
         return rows if any(marker in row["text"] and row["finish"] == "stop" for row in chain) and not _session_busy(state) else None
 
     return _wait(observe, timeout=timeout, description=f"assistant answer {marker}")
+
+
+def _write_stall_snapshot(root: Path, state: dict[str, Any]) -> dict[str, Any]:
+    """Keep what OpenCode itself knew when a wait gave up, before cleanup kills it.
+
+    A timed-out wait says only that something did not happen. The provider's own
+    session status and message store say what did: whether the turn was still busy,
+    which request was open, whether a tool call ever started. Best effort, never
+    raised: this is evidence, not a verdict.
+    """
+
+    if not state.get("server_url") or not state.get("provider_session_id"):
+        return {"file": None, "error": "provider_server_unavailable"}
+    snapshot: dict[str, Any] = {"taken_at": round(time.time(), 2)}
+    try:
+        snapshot["session_status"] = _opencode_get(state, "/session/status")
+    except Exception as exc:  # noqa: BLE001 - the server may be the thing that stalled
+        snapshot["session_status_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        snapshot["messages"] = _summarize(_messages(state))
+    except Exception as exc:  # noqa: BLE001
+        snapshot["messages_error"] = f"{type(exc).__name__}: {exc}"
+    _write_json(root / "native-messages-at-failure.json", snapshot)
+    return {
+        "file": "native-messages-at-failure.json",
+        "message_count": len(snapshot.get("messages") or []),
+        "session_status": snapshot.get("session_status"),
+    }
 
 
 # --- oracle ------------------------------------------------------------------
@@ -519,6 +535,19 @@ def failure_codes(assertions: dict[str, bool], observation: dict[str, Any]) -> d
         if not assertions.get(assertion) and assertion not in codes:
             codes[assertion] = "assertion_failed"
     return codes
+
+
+def control_run_assertions(assertions: dict[str, bool], codes: dict[str, str], target: str | None) -> dict[str, bool]:
+    """What a negative-control run reports: the assertions it actually evaluated.
+
+    A control stops at its target (``opencode_send_noop`` never reaches steer or abort),
+    and a phase that never ran reads False with the code ``not_reached``. Reported as
+    failures, those made the factory refuse to certify the control while another
+    assertion of the same summary was false (``producer_summary_disagrees``). The target
+    always stays: a control that never reached its own target must read as failed there.
+    """
+
+    return {name: value for name, value in assertions.items() if name == target or codes.get(name) != "not_reached"}
 
 
 # --- scenario ------------------------------------------------------------------
@@ -721,6 +750,7 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - keep the causal failure beside cleanup evidence
         failure = exc
         observation["error"] = f"{type(exc).__name__}: {exc}"
+        observation["stall_snapshot"] = _write_stall_snapshot(root, state)
     finally:
         session_id = str(state.get("session_id") or "")
         if failure is not None and session_id:
@@ -742,6 +772,12 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             [str(state.get(key) or "") for key in ("session_id", "provider_session_id", "server_url")]
         )
         final_cleanup["session_orphans"] = session_orphans
+        # The server's log lives in the sandbox home and goes with it: keep its tail.
+        observation["serve_log"] = live_session_toolkit.retain_opencode_serve_log(
+            root / "opencode-serve.log",
+            state,
+            live_session_toolkit.qualification_secrets(environment, str(args.agents_token)),
+        )
         if shipper is not None:
             try:
                 observation["shipper_flush"] = shipper.flush("opencode-helm-cleanup")
@@ -822,7 +858,7 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         "evidence_class": "live_token",
         "observation_scope": "scenario",
         "generated_at": now(),
-        "assertions": assertions,
+        "assertions": control_run_assertions(assertions, codes, control_target) if args.negative_control else assertions,
         "failure_codes": codes,
         "observation": observation,
         "provider_binary": provider_receipt,

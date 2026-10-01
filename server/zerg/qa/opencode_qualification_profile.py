@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Mapping
 
+from zerg.qa.openrouter_routing import openrouter_qualification_routing
+
 QUALIFICATION_MODEL_ENV = "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"
 RUNTIME_MODEL_ENV = "LONGHOUSE_OPENCODE_MODEL"
 
@@ -38,10 +40,13 @@ def prepare_opencode_qualification_profile(home: Path, environment: dict[str, st
 
     The profile contains no credential. OpenCode continues to read the
     OpenRouter key from the process environment, while both the server bridge
-    and attached TUI resolve one explicit, catalogue-valid model identity.
+    and attached TUI resolve one explicit, catalogue-valid model identity. The
+    model's requests carry the qualification routing (``openrouter_routing``),
+    so one slow OpenRouter host cannot stall a cell.
     """
 
     full_model, model_id = configured_openrouter_model(environment)
+    routing = openrouter_qualification_routing()
     config_dir = home / ".config" / "opencode"
     config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     config_path = config_dir / "opencode.json"
@@ -53,7 +58,9 @@ def prepare_opencode_qualification_profile(home: Path, environment: dict[str, st
         # work. Keep every model-backed action in this disposable probe on the
         # same declared credential/model authority.
         "small_model": full_model,
-        "provider": {"openrouter": {"models": {model_id: {}}}},
+        # OpenCode sends a model's ``options.provider`` as the request's OpenRouter
+        # routing object (verified against 1.18.30 with a local capture server).
+        "provider": {"openrouter": {"models": {model_id: {"options": {"provider": routing}}}}},
     }
     temporary = config_path.with_name(f".{config_path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -67,6 +74,7 @@ def prepare_opencode_qualification_profile(home: Path, environment: dict[str, st
         "config_path": str(config_path),
         "selection_authority": "disposable_profile_and_runtime_override",
         "credential_authority": "process_environment:OPENROUTER_API_KEY",
+        "routing": routing,
     }
 
 

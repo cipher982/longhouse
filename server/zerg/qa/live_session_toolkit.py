@@ -14,6 +14,7 @@ this module.
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
 import hashlib
 import http
@@ -1490,6 +1491,84 @@ def _opencode_tui_is_connected(terminal: str) -> bool:
     if re.search(r"\b(?:longhouse|opencode)\s+connected(?=\s|lsp|$)", normalized) is not None:
         return True
     return re.search(r"\bopencode\b", normalized) is not None and re.search(r"(?<!dis)\bconnected\b", normalized) is not None
+
+
+# --- OpenCode's own server: the authority on whether a session is busy ---------
+
+OPENCODE_SERVE_LOG_RETAINED_BYTES = 256 * 1024
+
+
+def opencode_get(state: dict[str, Any], path: str, *, directory: bool = True) -> Any:
+    """GET one route of the session's own ``opencode serve``, with its bridge credentials."""
+
+    url = f"{str(state['server_url']).rstrip('/')}{path}"
+    cwd = str(state.get("cwd") or "")
+    if directory and cwd:
+        url = f"{url}?{urllib.parse.urlencode({'directory': cwd})}"
+    credentials = base64.b64encode(f"{state.get('username') or 'opencode'}:{state.get('password') or ''}".encode()).decode()
+    request = urllib.request.Request(url, headers={"Authorization": f"Basic {credentials}", "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8") or "null")
+
+
+def opencode_session_busy(state: dict[str, Any]) -> bool:
+    """True while OpenCode's ``/session/status`` lists the session as anything but idle.
+
+    OpenCode drops an idle session from that map. The TUI is not the authority: its
+    reasoning spinner can keep redrawing after the reply rendered and the server
+    already reports idle (upstream anomalyco/opencode 16646 and 17680, and the
+    factory's 2026-09-30 03:58Z turn-boundary failure).
+    """
+
+    statuses = opencode_get(state, "/session/status")
+    entry = statuses.get(state["provider_session_id"]) if isinstance(statuses, dict) else None
+    return isinstance(entry, dict) and entry.get("type") not in {None, "idle"}
+
+
+def retain_opencode_serve_log(
+    destination: Path,
+    state: dict[str, Any],
+    secrets: Collection[str],
+    *,
+    max_bytes: int = OPENCODE_SERVE_LOG_RETAINED_BYTES,
+) -> dict[str, Any]:
+    """Keep the tail of ``opencode serve``'s own log in the evidence.
+
+    The server runs inside the disposable provider home and its log is removed with
+    it, so without this a stalled turn can only be attributed from OpenRouter's side.
+    Credentials are removed in memory before anything is written, so the evidence scan
+    has nothing to flag. A missing or unreadable log is reported in the receipt, never
+    raised: this is evidence, not a verdict.
+    """
+
+    receipt: dict[str, Any] = {
+        "file": destination.name,
+        "source": None,
+        "bytes_total": None,
+        "bytes_retained": 0,
+        "truncated": False,
+        "error": None,
+    }
+    source = str(state.get("log_path") or "").strip()
+    if not source:
+        receipt["error"] = "log_path_unavailable"
+        return receipt
+    receipt["source"] = Path(source).name
+    try:
+        total = Path(source).stat().st_size
+        with Path(source).open("rb") as handle:
+            if total > max_bytes:
+                handle.seek(total - max_bytes)
+            data = handle.read(max_bytes)
+    except OSError as exc:
+        receipt["error"] = f"{type(exc).__name__}: {exc}"
+        return receipt
+    for secret in {*secrets, str(state.get("password") or "")}:
+        if secret:
+            data = data.replace(secret.encode(), b"<redacted>")
+    destination.write_bytes(data)
+    receipt.update({"bytes_total": total, "bytes_retained": len(data), "truncated": total > max_bytes})
+    return receipt
 
 
 def prepare_claude_profile(

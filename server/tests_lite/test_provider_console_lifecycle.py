@@ -238,6 +238,25 @@ def test_codex_model_argument_controls_spawned_machine_agent_environment(monkeyp
     assert environment["XDG_CONFIG_HOME"] == str(tmp_path / "home" / ".config")
 
 
+def test_pi_console_routes_its_model_through_the_qualification_routing(tmp_path):
+    import json
+
+    from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
+
+    args = argparse.Namespace(
+        engine=tmp_path / "longhouse-engine",
+        provider_bin=tmp_path / "pi",
+        model="deepseek/deepseek-v4.1-flash:off",
+    )
+
+    environment = lifecycle._provider_environment("pi", args, tmp_path / "home")
+
+    models = json.loads((tmp_path / "home" / ".pi" / "models.json").read_text(encoding="utf-8"))
+    assert environment["PI_CODING_AGENT_DIR"] == str(tmp_path / "home" / ".pi")
+    override = models["providers"]["openrouter"]["modelOverrides"]["deepseek/deepseek-v4.1-flash"]
+    assert override["compat"]["openRouterRouting"] == OPENROUTER_QUALIFICATION_ROUTING
+
+
 def test_claude_console_configures_the_real_staged_lifecycle_hook(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()

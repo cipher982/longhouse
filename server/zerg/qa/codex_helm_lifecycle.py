@@ -266,6 +266,21 @@ def codex_helm_lifecycle_assertions(observations: dict[str, Any], records: list[
     }
 
 
+def control_run_assertions(assertions: dict[str, bool], target: str) -> dict[str, bool]:
+    """What a negative-control run reports: the assertions it actually evaluated.
+
+    A control runs one phase (``--negative-control send|steer|abort``) and always the
+    terminate check. The other two phases never ran, so their assertions read False
+    for want of an observation. Reported as failures, those made the factory refuse to
+    certify every Codex control (``producer_summary_disagrees``: another assertion of the
+    same summary was false), although the fault only ever touched its target. Observed
+    on the live shadow runs of 2026-09-30: ``{abort_native: false, send_idle: false,
+    steer_active: false, terminate_owned: true}`` for ``codex_interrupt_noop``.
+    """
+
+    return {name: value for name, value in assertions.items() if name in (target, TERMINATE_OWNED)}
+
+
 # --- driver ----------------------------------------------------------------
 
 
@@ -508,7 +523,7 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         "evidence_class": "live_token",
         "observation_scope": "scenario",
         "generated_at": now(),
-        "assertions": assertions,
+        "assertions": control_run_assertions(assertions, NEGATIVE_CONTROLS[negative][1]) if negative else assertions,
         "observation": observations,
         "provider_binary": provider_receipt,
     }

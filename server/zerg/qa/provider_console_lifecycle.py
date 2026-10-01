@@ -40,6 +40,7 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
 from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -223,6 +224,9 @@ def _provider_environment(provider: str, args: argparse.Namespace, home: Path) -
     if provider == "pi":
         environment["PI_CODING_AGENT_DIR"] = str(home / ".pi")
         environment["LONGHOUSE_PI_QUALIFICATION_MODEL"] = args.model
+        if args.model:
+            # One slow OpenRouter host must not stall a cell: pin the model's requests.
+            prepare_pi_openrouter_routing(home / ".pi", args.model)
     if provider == "omp":
         environment["XDG_DATA_HOME"] = str(home / ".local" / "share")
         environment["LONGHOUSE_OMP_DATA_DIR"] = str(home / ".local" / "share" / "omp")

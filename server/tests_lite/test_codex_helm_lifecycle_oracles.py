@@ -93,3 +93,25 @@ def test_terminate_requires_recorded_pids_dead():
     verified = {"verified": True, "socket_absent": True, "owned_processes_dead": True}
     assert lifecycle.terminate_owned_holds({"stop_verification": verified, "recorded_pids": [10, 11], "recorded_pids_alive": []})
     assert not lifecycle.terminate_owned_holds({"stop_verification": verified, "recorded_pids": [10], "recorded_pids_alive": [10]})
+
+
+def test_a_control_reports_its_target_and_terminate_not_the_phases_it_never_ran():
+    """The live shape of 2026-09-30: three Codex controls were all `producer_summary_disagrees`."""
+
+    # codex_interrupt_noop runs the abort phase and the terminate check only; send and steer
+    # have no observation, so their assertions read False.
+    observations = {"abort": {"aborted_turn_id": "t1"}, "terminate": {"stop_verification": {"verified": True}}}
+    assertions = lifecycle.codex_helm_lifecycle_assertions(observations, [])
+    assert assertions[lifecycle.SEND_IDLE] is False and assertions[lifecycle.STEER_ACTIVE] is False
+
+    reported = lifecycle.control_run_assertions(assertions, lifecycle.ABORT_NATIVE)
+
+    assert set(reported) == {lifecycle.ABORT_NATIVE, lifecycle.TERMINATE_OWNED}
+    assert reported[lifecycle.ABORT_NATIVE] is False
+
+
+def test_every_negative_control_keeps_its_own_target_in_the_report():
+    for _fault, target in lifecycle.NEGATIVE_CONTROLS.values():
+        reported = lifecycle.control_run_assertions({name: False for name in lifecycle.ASSERTIONS}, target)
+        assert target in reported and lifecycle.TERMINATE_OWNED in reported
+        assert len(reported) == 2

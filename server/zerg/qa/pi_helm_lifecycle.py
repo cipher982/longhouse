@@ -32,6 +32,7 @@ from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.openrouter_routing import prepare_pi_openrouter_routing
 from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
 from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
 from zerg.qa.pi_family_turn_oracle import fault_name
@@ -1154,6 +1155,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         if negative_control:
             env["LONGHOUSE_QA_FAULT"] = fault_name("pi", negative_control)
             env["LONGHOUSE_QA_FAULT_RECEIPT"] = str(root / "qa-fault-receipt.jsonl")
+        # One slow OpenRouter host must not stall a cell: pin the model's requests.
+        _write_json(root / "openrouter-routing-receipt.json", prepare_pi_openrouter_routing(provider_home / ".pi", args.model))
     except BaseException:
         shutil.rmtree(isolation)
         raise

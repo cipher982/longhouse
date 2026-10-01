@@ -39,8 +39,8 @@ oracle_source values); ``oracle_entrypoint`` names the local function that
 actually performs the judgment. Flag this mismatch for human review before
 wiring this producer in.
 
-IMPORTANT — "quiescent" here means observed terminal/served-turn quiescence,
-not the internal ``ActivityState`` literal: the served facts type
+IMPORTANT — "quiescent" here is OpenCode's own word for it, not the internal
+``ActivityState`` literal: the served facts type
 (``server/zerg/services/session_state_contract.py``:
 ``ActivityState = Literal["thinking", "executing", "quiescent", ...]``) is
 the internal vocabulary this assertion's name borrows, but that field is not
@@ -48,12 +48,20 @@ exposed on the ``/api/agents/*`` machine surface this producer runs under
 (``MachineSessionResponse`` — see ``session_views.py`` — deliberately narrows
 out control/activity state; the browser-shaped ``SessionResponse`` that does
 carry ``session_state.activity`` requires browser cookie auth, not the
-``X-Agents-Token`` this sandbox provides). This producer instead proves
-quiescence operationally: the owned PTY genuinely stops rendering new bytes
-around a turn whose completion is independently correlated against the
-Runtime Host's served transcript. A human should confirm whether that
-operational proxy is what the capability is meant to certify, or whether a
-new machine-surface field is the intended (bigger) fix.
+``X-Agents-Token`` this sandbox provides). Quiescence is therefore proved from
+the provider's authority on it: the session's own ``/session/status`` on the
+``opencode serve`` it owns (the route the engine's control path and the Helm
+lifecycle producer already use) reads busy while the turn runs and idle, and
+stays idle, once it completes, with the turn's completion independently
+correlated against the Runtime Host's served transcript. Owned-terminal byte
+stability was the proxy before revision 4 and is not an oracle: OpenCode's
+reasoning spinner can keep redrawing after the reply rendered and the server
+already reads idle (upstream anomalyco/opencode 16646 and 17680), which failed
+this cell once in 162 runs (2026-09-30 03:58Z, the first finding the factory
+mailed). The terminal's behaviour is still recorded, as evidence beside the
+verdict. A human should confirm whether provider status is what the capability
+is meant to certify, or whether a new machine-surface field is the intended
+(bigger) fix.
 """
 
 from __future__ import annotations
@@ -75,10 +83,12 @@ from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import assistant_event_digests
 from zerg.qa.live_session_toolkit import isolated_provider_home
 from zerg.qa.live_session_toolkit import launch_command
+from zerg.qa.live_session_toolkit import opencode_session_busy
 from zerg.qa.live_session_toolkit import provider_process_pid
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
+from zerg.qa.live_session_toolkit import retain_opencode_serve_log
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import stop_session
 from zerg.qa.live_session_toolkit import wait_assistant_response_after_marker
@@ -94,10 +104,13 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 
 _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
+# The session must read idle, continuously, for this long to count as quiescent, and
+# must read idle for this long again afterwards to count as having stayed so.
+_QUIESCENCE_STABLE_SECONDS = 2.0
 
 REGISTRATION = ProducerRegistration(
     producer_id="opencode.turn_boundary_quiescent.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id="opencode_turn_boundary_quiescent",
     scenario_revision=2,
     # The schema declares no "variant" key for this assertion cell, so the
@@ -222,29 +235,57 @@ def _wait_terminal_growth(process: PtyProcess, recording: Path, *, baseline: int
     return _pump_until(process, recording, timeout=timeout, predicate=lambda size: size > baseline)
 
 
-def _wait_terminal_quiescence(
+def _wait_session_quiescence(
     process: PtyProcess,
-    recording: Path,
+    state: dict[str, Any],
     *,
     timeout: float,
-    stable_seconds: float = 2.0,
-) -> float | None:
-    deadline = time.monotonic() + timeout
-    last_size = -1
-    unchanged_since = time.monotonic()
+    stable_seconds: float | None = None,
+    poll_seconds: float = 0.2,
+) -> tuple[float | None, list[list[Any]]]:
+    """Wait until OpenCode's own ``/session/status`` reads idle and stays idle.
+
+    Returns when the session first read idle in the window that lasted
+    ``stable_seconds`` (None on timeout) and the busy/idle transitions seen, as
+    ``[seconds since the first sample, "busy" | "idle"]``. The owned PTY is still
+    drained: it is a pipe the provider's TUI writes to, and nothing may leave it full.
+    """
+
+    stable_seconds = _QUIESCENCE_STABLE_SECONDS if stable_seconds is None else stable_seconds
+    started = time.monotonic()
+    deadline = started + timeout
+    idle_since: float | None = None
+    last_busy: bool | None = None
+    transitions: list[list[Any]] = []
     while time.monotonic() < deadline:
         process.drain()
         if process.process.poll() is not None:
             raise RuntimeError("opencode Helm process exited before turn-boundary quiescence")
-        size = _terminal_size(recording)
+        busy = opencode_session_busy(state)
         now = time.monotonic()
-        if size != last_size:
-            last_size = size
-            unchanged_since = now
-        elif now - unchanged_since >= stable_seconds:
-            return now
-        time.sleep(0.1)
-    return None
+        if busy != last_busy:
+            transitions.append([round(now - started, 2), "busy" if busy else "idle"])
+            last_busy = busy
+        if busy:
+            idle_since = None
+        elif idle_since is None:
+            idle_since = now
+        if idle_since is not None and now - idle_since >= stable_seconds:
+            return idle_since, transitions
+        time.sleep(poll_seconds)
+    return None, transitions
+
+
+def _session_stays_idle(process: PtyProcess, state: dict[str, Any], *, seconds: float, poll_seconds: float = 0.2) -> bool:
+    """True when every status sample over ``seconds`` reads idle."""
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        process.drain()
+        if opencode_session_busy(state):
+            return False
+        time.sleep(poll_seconds)
+    return True
 
 
 def _cleanup_receipt(stop_result: dict[str, Any]) -> dict[str, Any]:
@@ -337,15 +378,13 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.live_send_timeout_secs,
         )
         activity_left_quiescent_during_turn = left_quiescence_at is not None
-        write_json(
-            root / "turn-activity-receipt.json",
-            {
-                "marker": marker,
-                "pre_send_terminal_bytes": pre_send_size,
-                "activity_left_quiescent_during_turn": activity_left_quiescent_during_turn,
-                "left_quiescence_after_seconds": ((left_quiescence_at - submitted_at) if left_quiescence_at is not None else None),
-            },
-        )
+        activity_receipt: dict[str, Any] = {
+            "marker": marker,
+            "pre_send_terminal_bytes": pre_send_size,
+            "activity_left_quiescent_during_turn": activity_left_quiescent_during_turn,
+            "left_quiescence_after_seconds": ((left_quiescence_at - submitted_at) if left_quiescence_at is not None else None),
+        }
+        write_json(root / "turn-activity-receipt.json", activity_receipt)
 
         _tail, correlation = wait_assistant_response_after_marker(
             args.api_url,
@@ -361,19 +400,27 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         )
         write_json(root / "turn-correlation-receipt.json", correlation)
 
-        settled_at = _wait_terminal_quiescence(
+        settled_at, status_transitions = _wait_session_quiescence(
             initial,
-            root / "initial.tty",
+            initial_state,
             timeout=args.live_send_timeout_secs,
-            stable_seconds=2.0,
         )
         activity_returned_to_quiescent_after_turn = settled_at is not None
         settle_duration_seconds = (settled_at - submitted_at) if settled_at is not None else None
 
-        remained_quiescent_size = _terminal_size(root / "initial.tty")
-        time.sleep(2.0)
-        initial.drain()
-        activity_remained_quiescent_post_turn = _terminal_size(root / "initial.tty") == remained_quiescent_size
+        # The terminal is evidence beside the verdict, not part of it: whether its bytes
+        # kept changing after the provider reported idle is what a spinner flake looks like.
+        terminal_size_at_idle = _terminal_size(root / "initial.tty")
+        activity_remained_quiescent_post_turn = _session_stays_idle(initial, initial_state, seconds=_QUIESCENCE_STABLE_SECONDS)
+        activity_receipt.update(
+            {
+                "quiescence_authority": "opencode_session_status",
+                "session_status_transitions": status_transitions,
+                "stable_window_seconds": _QUIESCENCE_STABLE_SECONDS,
+                "terminal_bytes_after_idle": _terminal_size(root / "initial.tty") - terminal_size_at_idle,
+            }
+        )
+        write_json(root / "turn-activity-receipt.json", activity_receipt)
 
         stop_result = stop_session(spec, args, initial_state, initial, force=False, environment=environment, stop_phase="initial")
         managed_opencode_process_exited = bool(stop_result.get("clean") is True)
@@ -384,6 +431,10 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
 
+        # The server's log lives in the sandbox home and goes with it: keep its tail.
+        serve_log = retain_opencode_serve_log(
+            root / "opencode-serve.log", initial_state, qualification_secrets(os.environ, args.agents_token)
+        )
         redacted_secret_files = _redact_retained_secrets(
             root,
             list(qualification_secrets(os.environ, args.agents_token)),
@@ -402,6 +453,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "managed_opencode_process_exited": managed_opencode_process_exited,
             "no_orphan_provider_processes": no_orphan_provider_processes,
             "artifact_secret_scan_passed": not redacted_secret_files,
+            "serve_log": serve_log,
         }
         assertions = turn_boundary_quiescent_assertions(observation)
 
@@ -440,6 +492,13 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
                 write_json(root / "cleanup-receipt.json", _cleanup_receipt(stop_result))
             except Exception:  # noqa: BLE001 - best-effort teardown during failure handling
                 pass
+        serve_log = (
+            retain_opencode_serve_log(
+                root / "opencode-serve.log", initial_state, qualification_secrets(os.environ, getattr(args, "agents_token", ""))
+            )
+            if initial_state is not None
+            else None
+        )
         redacted_secret_files = _redact_retained_secrets(
             root,
             list(qualification_secrets(os.environ, getattr(args, "agents_token", ""))),
@@ -457,6 +516,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "direct_turn_boundary_quiescent_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            "serve_log": serve_log,
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": artifact_manifest(root),
         }

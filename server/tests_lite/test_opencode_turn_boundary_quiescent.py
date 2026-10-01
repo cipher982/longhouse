@@ -34,7 +34,7 @@ def test_registration_matches_the_schema_declared_cell_exactly() -> None:
     assert m.REGISTRATION.providers == ("opencode",)
     assert m.REGISTRATION.executable is True
     assert m.REGISTRATION.executable_module == "zerg.qa.opencode_turn_boundary_quiescent"
-    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.producer_revision == 4
     assert m.REGISTRATION.scenario_revision == 2
     assert "opencode_model_profile_receipt" in m.REGISTRATION.required_artifacts
     # The schema-declared oracle_source is intentionally reproduced verbatim
@@ -138,30 +138,95 @@ def test_wait_terminal_growth_times_out_without_growth(tmp_path: Path) -> None:
     assert result is None
 
 
-def test_wait_terminal_quiescence_requires_a_stable_window(tmp_path: Path) -> None:
-    recording = tmp_path / "terminal.tty"
-    # Growth happens on the first couple of drains, then nothing: the
-    # helper must wait out stable_seconds after the LAST byte before
-    # declaring quiescence, not just after any single unchanged poll.
-    process = _FakePtyProcess(recording, [b"a", b"b"])
-    result = m._wait_terminal_quiescence(process, recording, timeout=2.0, stable_seconds=0.2)
-    assert result is not None
-    assert recording.read_bytes() == b"ab"
+_REAL_WAIT_SESSION_QUIESCENCE = m._wait_session_quiescence
+_REAL_SESSION_STAYS_IDLE = m._session_stays_idle
 
 
-def test_wait_terminal_quiescence_raises_if_the_process_exits(tmp_path: Path) -> None:
-    recording = tmp_path / "terminal.tty"
-    process = _FakePtyProcess(recording, [])
+class _SpinnerPtyProcess(_FakePtyProcess):
+    """A TUI whose reasoning spinner keeps redrawing: every drain produces bytes."""
+
+    def __init__(self, recording: Path) -> None:
+        super().__init__(recording, [])
+        self.drains = 0
+
+    def drain(self) -> bytes:
+        self.drains += 1
+        with self.recording.open("ab") as handle:
+            handle.write(b"\x1b[7;6H\xe2\xa0\x8b Thinking")
+        return b"x"
+
+
+def _status_script(monkeypatch: pytest.MonkeyPatch, *readings: bool) -> list[bool]:
+    """Feed ``opencode_session_busy`` a script; the last reading repeats."""
+
+    remaining = list(readings)
+    seen: list[bool] = []
+
+    def busy(_state: dict[str, Any]) -> bool:
+        value = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        seen.append(value)
+        return value
+
+    monkeypatch.setattr(m, "opencode_session_busy", busy)
+    return seen
+
+
+def test_session_quiescence_waits_for_a_stable_idle_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    process = _FakePtyProcess(tmp_path / "terminal.tty", [])
+    # busy, a one-sample idle blip, busy again, then idle for good
+    _status_script(monkeypatch, True, False, True, False)
+
+    settled_at, transitions = m._wait_session_quiescence(process, {}, timeout=5.0, stable_seconds=0.3, poll_seconds=0.05)
+
+    assert settled_at is not None
+    assert [kind for _t, kind in transitions] == ["busy", "idle", "busy", "idle"]
+
+
+def test_session_quiescence_ignores_a_spinner_that_never_stops_redrawing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-09-30 03:58Z: the reply rendered, the server read idle, the spinner redrew 2,152 times."""
+
+    process = _SpinnerPtyProcess(tmp_path / "terminal.tty")
+    _status_script(monkeypatch, True, True, False)
+
+    settled_at, _transitions = m._wait_session_quiescence(process, {}, timeout=5.0, stable_seconds=0.3, poll_seconds=0.05)
+
+    assert settled_at is not None
+    assert process.drains > 3
+    assert process.recording.stat().st_size > 0
+
+
+def test_session_quiescence_times_out_while_the_provider_stays_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    process = _FakePtyProcess(tmp_path / "terminal.tty", [])
+    _status_script(monkeypatch, True)
+
+    settled_at, transitions = m._wait_session_quiescence(process, {}, timeout=0.3, stable_seconds=0.1, poll_seconds=0.05)
+
+    assert settled_at is None
+    assert transitions == [[transitions[0][0], "busy"]]
+
+
+def test_session_quiescence_raises_if_the_process_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    process = _FakePtyProcess(tmp_path / "terminal.tty", [])
     process.process = argparse.Namespace(poll=lambda: 1)
+    _status_script(monkeypatch, False)
     with pytest.raises(RuntimeError):
-        m._wait_terminal_quiescence(process, recording, timeout=1.0, stable_seconds=0.1)
+        m._wait_session_quiescence(process, {}, timeout=1.0, stable_seconds=0.1)
+
+
+def test_session_stays_idle_fails_on_any_busy_sample(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    process = _FakePtyProcess(tmp_path / "terminal.tty", [])
+    _status_script(monkeypatch, False, False, True)
+    assert m._session_stays_idle(process, {}, seconds=0.5, poll_seconds=0.05) is False
+
+    _status_script(monkeypatch, False)
+    assert m._session_stays_idle(process, {}, seconds=0.2, poll_seconds=0.05) is True
 
 
 class _FakeLaunchedProcess:
     """PtyProcess stand-in matching the real constructor signature.
 
     Writes nothing on its own -- ``_wait_terminal_growth``/
-    ``_wait_terminal_quiescence`` are monkeypatched separately in the
+    ``_wait_session_quiescence`` are monkeypatched separately in the
     end-to-end tests below, so this fake only needs to satisfy the small
     surface ``run_turn_boundary_quiescent`` calls directly: ``.process.poll()``,
     ``.drain()``, ``.send()``, ``.pid``, ``.close()``.
@@ -240,7 +305,8 @@ def _install_common_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, co
         ),
     )
     monkeypatch.setattr(m, "_wait_terminal_growth", lambda *a, **k: 1.0)
-    monkeypatch.setattr(m, "_wait_terminal_quiescence", lambda *a, **k: 2.0)
+    monkeypatch.setattr(m, "_wait_session_quiescence", lambda *a, **k: (2.0, [[0.0, "busy"], [1.5, "idle"]]))
+    monkeypatch.setattr(m, "_session_stays_idle", lambda *a, **k: True)
     monkeypatch.setattr(m, "stop_session", lambda *a, **k: {"dead": True, "clean": True, "provider_process_dead": True})
     monkeypatch.setattr(m, "qualification_secrets", lambda *a, **k: ())
 
@@ -287,6 +353,9 @@ def test_run_turn_boundary_quiescent_end_to_end_admissible_pass(tmp_path: Path, 
         "cleanup-receipt.json",
     ):
         assert (args.evidence_root / relative).is_file(), relative
+    activity = json.loads((args.evidence_root / "turn-activity-receipt.json").read_text())
+    assert activity["quiescence_authority"] == "opencode_session_status"
+    assert activity["session_status_transitions"] == [[0.0, "busy"], [1.5, "idle"]]
     cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
     assert cleanup["status"] == "pass"
     assert cleanup["orphan_count"] == 0
@@ -384,3 +453,110 @@ def test_main_requires_the_provider_binary_to_exist(
     assert exit_code == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["failure_code"] == "opencode_binary_missing"
+
+
+def test_run_turn_boundary_quiescent_retains_the_serve_log_without_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server's log goes with the sandbox home; the evidence keeps its tail, redacted."""
+
+    _install_common_fakes(monkeypatch, tmp_path, correlation_timed_out=False)
+    log = tmp_path / "serve.log"
+    log.write_bytes(b"old line\n" * 100_000 + b"stream started key=sk-or-secret password=bridge-pass end\n")
+    monkeypatch.setattr(m, "qualification_secrets", lambda *a, **k: ("sk-or-secret",))
+    monkeypatch.setattr(
+        m,
+        "wait_state",
+        lambda *a, **k: {
+            "session_id": "sess-1",
+            "provider_session_id": "psess-1",
+            "pid": 4242,
+            "log_path": str(log),
+            "password": "bridge-pass",
+        },
+    )
+    args = _args(tmp_path)
+
+    result = m.run_turn_boundary_quiescent(args)
+
+    retained = (args.evidence_root / "opencode-serve.log").read_bytes()
+    assert retained.endswith(b"stream started key=<redacted> password=<redacted> end\n")
+    # The tail is bounded at 256 KiB of the original; redaction only shortens it.
+    assert 256 * 1024 - 64 <= len(retained) <= 256 * 1024
+    assert b"sk-or-secret" not in retained and b"bridge-pass" not in retained
+    assert result["observation"]["serve_log"] == {
+        "file": "opencode-serve.log",
+        "source": "serve.log",
+        "bytes_total": log.stat().st_size,
+        "bytes_retained": len(retained),
+        "truncated": True,
+        "error": None,
+    }
+    # Retaining it redacted in memory means the evidence scan has nothing to flag.
+    assert result["observation"]["artifact_secret_scan_passed"] is True
+
+
+def test_the_serve_log_is_retained_on_a_failed_run_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_common_fakes(monkeypatch, tmp_path, correlation_timed_out=False)
+    log = tmp_path / "serve.log"
+    log.write_text("stream started and never finished\n")
+    monkeypatch.setattr(
+        m, "wait_state", lambda *a, **k: {"session_id": "sess-1", "provider_session_id": "psess-1", "pid": 4242, "log_path": str(log)}
+    )
+
+    def _explode(*_a: object, **_k: object) -> None:
+        raise RuntimeError("timed out waiting for the assistant reply")
+
+    monkeypatch.setattr(m, "wait_assistant_response_after_marker", _explode)
+    args = _args(tmp_path)
+
+    result = m.run_turn_boundary_quiescent(args)
+
+    assert result["status"] == "fail"
+    assert (args.evidence_root / "opencode-serve.log").read_text() == "stream started and never finished\n"
+    assert result["serve_log"]["bytes_retained"] == len("stream started and never finished\n")
+
+
+def test_a_missing_serve_log_is_reported_not_raised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_common_fakes(monkeypatch, tmp_path, correlation_timed_out=False)
+    monkeypatch.setattr(
+        m,
+        "wait_state",
+        lambda *a, **k: {"session_id": "sess-1", "provider_session_id": "psess-1", "pid": 4242, "log_path": str(tmp_path / "gone.log")},
+    )
+    args = _args(tmp_path)
+
+    result = m.run_turn_boundary_quiescent(args)
+
+    assert result["status"] == "pass"
+    assert result["observation"]["serve_log"]["error"].startswith("FileNotFoundError")
+    assert not (args.evidence_root / "opencode-serve.log").exists()
+
+
+def test_a_turn_whose_spinner_never_stops_still_passes_when_the_provider_reads_idle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 2026-09-30 03:58Z shape end to end: bytes keep arriving, OpenCode says idle."""
+
+    _install_common_fakes(monkeypatch, tmp_path, correlation_timed_out=False)
+    monkeypatch.setattr(m, "_QUIESCENCE_STABLE_SECONDS", 0.2)
+    # The common fakes stub the two status waits; this test runs the real ones.
+    monkeypatch.setattr(m, "_wait_session_quiescence", _REAL_WAIT_SESSION_QUIESCENCE)
+    monkeypatch.setattr(m, "_session_stays_idle", _REAL_SESSION_STAYS_IDLE)
+    _status_script(monkeypatch, True, True, False)
+
+    class _Spinner(_FakeLaunchedProcess):
+        def drain(self) -> bytes:
+            with self.recording.open("ab") as handle:
+                handle.write(b"\xe2\xa0\x8b Thinking")
+            return b"x"
+
+    monkeypatch.setattr(m, "PtyProcess", _Spinner)
+    args = _args(tmp_path)
+
+    result = m.run_turn_boundary_quiescent(args)
+
+    assert result["status"] == "pass"
+    assert result["observation"]["activity_returned_to_quiescent_after_turn"] is True
+    assert result["observation"]["activity_remained_quiescent_post_turn"] is True
+    activity = json.loads((args.evidence_root / "turn-activity-receipt.json").read_text())
+    # The terminal never settled; it is evidence, and it did not decide the verdict.
+    assert activity["terminal_bytes_after_idle"] > 0

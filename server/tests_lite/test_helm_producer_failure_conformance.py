@@ -310,14 +310,19 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
     from zerg.qa import opencode_qualification_profile
 
     binary = _binary(tmp_path, "opencode")
+    serve_log = tmp_path / "opencode-serve.log"
+    serve_log.write_text("stream started and never finished\n", encoding="utf-8")
     state = {
         "session_id": "opencode-session",
         "provider_session_id": "native-opencode",
         "run_id": "run-1",
         "server_url": "http://server",
+        "log_path": str(serve_log),
         "ready": True,
     }
     home = tmp_path / "home"
+    # The failure snapshot reads the provider's own session status; no network here.
+    monkeypatch.setattr(producer, "_opencode_get", lambda *a, **k: {"native-opencode": {"type": "busy"}})
     monkeypatch.setattr(producer.live_session_toolkit, "require_disposable_runtime", lambda *a, **k: None)
     monkeypatch.setattr(producer, "sha256_file", lambda path: "digest")
     monkeypatch.setattr(producer.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "opencode 1.2.3\n", ""))
@@ -414,6 +419,18 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
     assert observation["cleanup"]["shipper_stopped"] is True
     assert observation["cleanup"]["status"] == "pass"
     assert calls["count"] >= 2
+    # What OpenCode itself knew when the scenario gave up, and its server's log, are kept:
+    # before this the 2026-09-30 stall could only be attributed from OpenRouter's side.
+    snapshot = _json(tmp_path / "evidence" / "native-messages-at-failure.json")
+    assert snapshot["session_status"] == {"native-opencode": {"type": "busy"}}
+    assert [row["id"] for row in snapshot["messages"]] == ["user-task", "assistant-tool"]
+    assert observation["stall_snapshot"] == {
+        "file": "native-messages-at-failure.json",
+        "message_count": 2,
+        "session_status": {"native-opencode": {"type": "busy"}},
+    }
+    assert (tmp_path / "evidence" / "opencode-serve.log").read_text(encoding="utf-8") == "stream started and never finished\n"
+    assert observation["serve_log"]["bytes_retained"] == len("stream started and never finished\n")
 
 
 def test_pi_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_path) -> None:
@@ -534,6 +551,12 @@ def test_pi_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_
     assert payload["diagnostic_observation"]["send_idle"] is True
     assert payload["error"] == "RuntimeError: late Pi native follow-up failure"
     assert _json(tmp_path / "evidence" / "cleanup-receipt.json")["status"] == "fail"
+    # The lane's requests carry the qualification routing, and the receipt says so.
+    from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
+
+    routing = _json(tmp_path / "evidence" / "openrouter-routing-receipt.json")
+    assert routing["model_id"] == "fixture-model"
+    assert routing["routing"] == OPENROUTER_QUALIFICATION_ROUTING
 
 
 @pytest.mark.parametrize("background", [False, True])

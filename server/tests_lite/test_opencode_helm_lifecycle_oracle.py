@@ -9,6 +9,7 @@ real provider; these keep the oracle honest between those runs.
 from __future__ import annotations
 
 from zerg.qa.opencode_helm_lifecycle import abort_observation
+from zerg.qa.opencode_helm_lifecycle import control_run_assertions
 from zerg.qa.opencode_helm_lifecycle import failure_codes
 from zerg.qa.opencode_helm_lifecycle import opencode_helm_lifecycle_assertions
 from zerg.qa.opencode_helm_lifecycle import steer_observation
@@ -216,3 +217,46 @@ def test_terminate_that_left_owners_alive_is_typed_for_its_control() -> None:
 
     assert assertions["opencode_helm_terminate_owned"] is False
     assert failure_codes(assertions, observation)["opencode_helm_terminate_owned"] == "terminate_left_owners_alive"
+
+
+def test_a_control_that_stops_at_its_target_does_not_report_the_phases_it_never_ran() -> None:
+    """opencode_send_noop reaches neither steer nor abort; they read False and were reported as failures."""
+
+    observation = {
+        "launch": {
+            "session_id": "s",
+            "provider_session_id": "p",
+            "run_id": "r",
+            "connection_id": "c",
+            "tui_ready": True,
+            "runtime_input_accepted": True,
+        },
+        "send": {"dispatch_accepted": True, "idle_before_send": True, "answered": False},
+        "terminate": {"dispatch_accepted": True, "launcher_exited": True, "cleanup_verified": True, "forced_cleanup": False},
+    }
+    assertions = opencode_helm_lifecycle_assertions(observation)
+    codes = failure_codes(assertions, observation)
+    assert assertions["opencode_helm_steer_active"] is False and assertions["opencode_helm_abort_native"] is False
+
+    reported = control_run_assertions(assertions, codes, "opencode_helm_send_idle")
+
+    assert reported == {
+        "opencode_helm_launch_registration": True,
+        "opencode_helm_send_idle": False,
+        "opencode_helm_terminate_owned": True,
+    }
+    assert codes["opencode_helm_send_idle"] == "send_accepted_without_a_turn"
+
+
+def test_a_control_that_never_reached_its_own_target_still_reads_failed_there() -> None:
+    observation = {"launch": {}, "send": {}}
+    assertions = opencode_helm_lifecycle_assertions(observation)
+    codes = failure_codes(assertions, observation)
+
+    reported = control_run_assertions(assertions, codes, "opencode_helm_steer_active")
+
+    assert reported["opencode_helm_steer_active"] is False
+    assert codes["opencode_helm_steer_active"] == "not_reached"
+    # Everything else the run never reached is left out; what it did evaluate stays.
+    assert "opencode_helm_abort_native" not in reported
+    assert reported["opencode_helm_launch_registration"] is False
