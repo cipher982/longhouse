@@ -4921,6 +4921,7 @@ async def test_spawn_reference_cannot_promote_a_native_less_fork_to_worker(daemo
         assert not fork_row.is_subagent
         assert fork_row.hidden_from_default_timeline == 0
         graph = CatalogStore(engine).list_session_subagents(session_id=str(parent_id), owner_id="42")
+        assert graph["children"] == []
         reference = next(row for row in graph["child_references"] if row["provider_session_id"] == spawned_native_id)
         assert reference["session_id"] is None
     engine.dispose()

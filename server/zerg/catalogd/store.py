@@ -8401,6 +8401,10 @@ class CatalogStore:
                     )
                     .where(
                         session_table.c.subagent_parent_session_id == session_id,
+                        or_(
+                            session_table.c.is_subagent == 1,
+                            primary_worker_only_clause(session_table, LiveSessionThread.__table__),
+                        ),
                         session_table.c.owner_id == owner_id,
                         session_table.c.machine_id == parent["machine_id"],
                         session_table.c.provider == parent["provider"],
