@@ -2225,9 +2225,7 @@ fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
             "Free local disk space, then rerun: longhouse local-health --json".to_string()
         }
         "stop_managed_bridge" => "Inspect the exact managed bridge before stopping it.".to_string(),
-        "inspect_archive" => {
-            "Inspect archive repair state with: longhouse-server archive status".to_string()
-        }
+        "inspect_archive" => "Inspect archive repair state with: longhouse local-health --json".to_string(),
         "inspect_provider" => {
             "Inspect the installed provider and its supported Longhouse surface.".to_string()
         }
