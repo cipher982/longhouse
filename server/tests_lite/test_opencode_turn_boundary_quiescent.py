@@ -479,7 +479,7 @@ def test_run_turn_boundary_quiescent_retains_the_serve_log_without_credentials(t
 
     retained = (args.evidence_root / "opencode-serve.log").read_bytes()
     assert retained.endswith(b"stream started key=<redacted> password=<redacted> end\n")
-    # The tail is bounded at 256 KiB of the original; redaction only shortens it.
+    # Bounded at 256 KiB of what is kept, after the credentials are removed.
     assert 256 * 1024 - 64 <= len(retained) <= 256 * 1024
     assert b"sk-or-secret" not in retained and b"bridge-pass" not in retained
     assert result["observation"]["serve_log"] == {
@@ -560,3 +560,35 @@ def test_a_turn_whose_spinner_never_stops_still_passes_when_the_provider_reads_i
     activity = json.loads((args.evidence_root / "turn-activity-receipt.json").read_text())
     # The terminal never settled; it is evidence, and it did not decide the verdict.
     assert activity["terminal_bytes_after_idle"] > 0
+
+
+def test_a_transient_status_error_neither_counts_as_idle_nor_fails_the_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    process = _FakePtyProcess(tmp_path / "terminal.tty", [])
+    readings: list[object] = [True, OSError("connection reset"), False, False]
+
+    def busy(_state: dict[str, Any]) -> bool:
+        value = readings.pop(0) if len(readings) > 1 else readings[0]
+        if isinstance(value, Exception):
+            raise value
+        return bool(value)
+
+    monkeypatch.setattr(m, "opencode_session_busy", busy)
+
+    settled_at, transitions = m._wait_session_quiescence(process, {}, timeout=5.0, stable_seconds=0.2, poll_seconds=0.05)
+
+    assert settled_at is not None
+    assert [kind for _t, kind in transitions] == ["busy", "idle"]
+
+
+def test_a_status_endpoint_that_stays_unreadable_is_a_failure_to_observe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    process = _FakePtyProcess(tmp_path / "terminal.tty", [])
+
+    def gone(_state: dict[str, Any]) -> bool:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(m, "opencode_session_busy", gone)
+
+    with pytest.raises(RuntimeError, match="unreadable"):
+        m._wait_session_quiescence(process, {}, timeout=5.0, stable_seconds=0.2, poll_seconds=0.01)
+    with pytest.raises(RuntimeError, match="unreadable"):
+        m._session_stays_idle(process, {}, seconds=5.0, poll_seconds=0.01)

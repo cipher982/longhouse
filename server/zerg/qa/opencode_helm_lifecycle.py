@@ -382,7 +382,10 @@ def _write_stall_snapshot(root: Path, state: dict[str, Any]) -> dict[str, Any]:
         snapshot["messages"] = _summarize(_messages(state))
     except Exception as exc:  # noqa: BLE001
         snapshot["messages_error"] = f"{type(exc).__name__}: {exc}"
-    _write_json(root / "native-messages-at-failure.json", snapshot)
+    try:
+        _write_json(root / "native-messages-at-failure.json", snapshot)
+    except OSError as exc:
+        return {"file": None, "error": f"{type(exc).__name__}: {exc}"}
     return {
         "file": "native-messages-at-failure.json",
         "message_count": len(snapshot.get("messages") or []),

@@ -1566,6 +1566,8 @@ def retain_opencode_serve_log(
     for secret in {*secrets, str(state.get("password") or "")}:
         if secret:
             data = data.replace(secret.encode(), b"<redacted>")
+    # A secret shorter than the marker lengthens the text: bound what is kept, not what was read.
+    data = data[-max_bytes:]
     destination.write_bytes(data)
     receipt.update({"bytes_total": total, "bytes_retained": len(data), "truncated": total > max_bytes})
     return receipt

@@ -33,7 +33,10 @@ is served by Together, and with ``together`` ignored the next in ``order``
 (Novita) serves it.
 
 The routing is data, not policy for production: it applies only to the disposable
-profiles these producers build.
+profiles these producers build. It was measured for this one model. Hosts that do not
+serve another model are skipped by OpenRouter (``order`` falls through, an unknown
+``ignore`` entry matches nothing), so a model change is harmless but unmeasured:
+re-measure the same way when the factory's model changes.
 """
 
 from __future__ import annotations

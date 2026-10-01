@@ -72,6 +72,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import uuid
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,9 @@ _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
 # The session must read idle, continuously, for this long to count as quiescent, and
 # must read idle for this long again afterwards to count as having stayed so.
 _QUIESCENCE_STABLE_SECONDS = 2.0
+# A localhost status read that fails is not evidence of idle or of busy; this many in a row is
+# a provider server that is gone, which is a failure to observe, not a quiet turn.
+_MAX_CONSECUTIVE_STATUS_ERRORS = 5
 
 REGISTRATION = ProducerRegistration(
     producer_id="opencode.turn_boundary_quiescent.v1",
@@ -235,6 +239,20 @@ def _wait_terminal_growth(process: PtyProcess, recording: Path, *, baseline: int
     return _pump_until(process, recording, timeout=timeout, predicate=lambda size: size > baseline)
 
 
+def _read_busy(state: dict[str, Any], errors: list[int]) -> bool | None:
+    """One status read: busy or idle, or None when the read itself failed (a transient error)."""
+
+    try:
+        busy = opencode_session_busy(state)
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        errors[0] += 1
+        if errors[0] >= _MAX_CONSECUTIVE_STATUS_ERRORS:
+            raise RuntimeError(f"opencode /session/status unreadable {errors[0]} times in a row: {type(exc).__name__}: {exc}") from exc
+        return None
+    errors[0] = 0
+    return busy
+
+
 def _wait_session_quiescence(
     process: PtyProcess,
     state: dict[str, Any],
@@ -247,8 +265,9 @@ def _wait_session_quiescence(
 
     Returns when the session first read idle in the window that lasted
     ``stable_seconds`` (None on timeout) and the busy/idle transitions seen, as
-    ``[seconds since the first sample, "busy" | "idle"]``. The owned PTY is still
-    drained: it is a pipe the provider's TUI writes to, and nothing may leave it full.
+    ``[seconds since the first sample, "busy" | "idle"]``. A failed read neither
+    counts as idle nor ends the window's wait; it restarts the window. The owned PTY is
+    still drained: it is a pipe the provider's TUI writes to, and nothing may leave it full.
     """
 
     stable_seconds = _QUIESCENCE_STABLE_SECONDS if stable_seconds is None else stable_seconds
@@ -257,32 +276,37 @@ def _wait_session_quiescence(
     idle_since: float | None = None
     last_busy: bool | None = None
     transitions: list[list[Any]] = []
+    errors = [0]
     while time.monotonic() < deadline:
         process.drain()
         if process.process.poll() is not None:
             raise RuntimeError("opencode Helm process exited before turn-boundary quiescence")
-        busy = opencode_session_busy(state)
+        busy = _read_busy(state, errors)
         now = time.monotonic()
-        if busy != last_busy:
-            transitions.append([round(now - started, 2), "busy" if busy else "idle"])
-            last_busy = busy
-        if busy:
+        if busy is None:
             idle_since = None
-        elif idle_since is None:
-            idle_since = now
-        if idle_since is not None and now - idle_since >= stable_seconds:
-            return idle_since, transitions
+        else:
+            if busy != last_busy:
+                transitions.append([round(now - started, 2), "busy" if busy else "idle"])
+                last_busy = busy
+            if busy:
+                idle_since = None
+            elif idle_since is None:
+                idle_since = now
+            if idle_since is not None and now - idle_since >= stable_seconds:
+                return idle_since, transitions
         time.sleep(poll_seconds)
     return None, transitions
 
 
 def _session_stays_idle(process: PtyProcess, state: dict[str, Any], *, seconds: float, poll_seconds: float = 0.2) -> bool:
-    """True when every status sample over ``seconds`` reads idle."""
+    """True when no status sample over ``seconds`` reads busy (a failed read is skipped, not idle)."""
 
     deadline = time.monotonic() + seconds
+    errors = [0]
     while time.monotonic() < deadline:
         process.drain()
-        if opencode_session_busy(state):
+        if _read_busy(state, errors):
             return False
         time.sleep(poll_seconds)
     return True

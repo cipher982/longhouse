@@ -433,6 +433,21 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
     assert observation["serve_log"]["bytes_retained"] == len("stream started and never finished\n")
 
 
+def test_a_failed_snapshot_write_is_reported_and_never_masks_the_failure(monkeypatch, tmp_path) -> None:
+    from zerg.qa import opencode_helm_lifecycle as producer
+
+    monkeypatch.setattr(producer, "_opencode_get", lambda *a, **k: {})
+    monkeypatch.setattr(producer, "_messages", lambda *a, **k: [])
+
+    def refuse(*_a: object, **_k: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(producer, "_write_json", refuse)
+    state = {"server_url": "http://server", "provider_session_id": "native-opencode"}
+
+    assert producer._write_stall_snapshot(tmp_path, state) == {"file": None, "error": "OSError: disk full"}
+
+
 def test_pi_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp_path) -> None:
     from zerg.qa import pi_helm_lifecycle as producer
 
