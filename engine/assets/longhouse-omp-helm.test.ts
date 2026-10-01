@@ -552,6 +552,12 @@ describe("subagent sessions", () => {
       // written to a ready channel.
       await handlers.session_start({ type: "session_start" }, parent);
       await waitForFrame((frame) => frame.kind === "session_start");
+      expect(
+        await handlers.session_before_switch({ type: "session_before_switch" }, subagent),
+      ).toBeUndefined();
+      expect(
+        await handlers.session_before_branch({ type: "session_before_branch" }, subagent),
+      ).toBeUndefined();
 
       await handlers.agent_start({ type: "agent_start" }, parent);
       await handlers.agent_end({ type: "agent_end", willContinue: true }, parent);
