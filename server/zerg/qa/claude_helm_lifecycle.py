@@ -19,13 +19,16 @@ broken oracle.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -511,6 +514,138 @@ def _post(api_url: str, token: str, path: str, body: dict[str, Any] | None = Non
             time.sleep(0.5)
 
 
+_HOOK_CAPTURE_SCRIPT = r"""#!/usr/bin/env python3
+from __future__ import annotations
+
+import datetime
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import uuid
+from pathlib import Path
+
+
+def _atomic_bytes(path: Path, payload: bytes) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _atomic_json(path: Path, payload: object) -> None:
+    _atomic_bytes(path, (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
+
+
+capture_dir = Path(sys.argv[1])
+engine = sys.argv[2]
+engine_argv = sys.argv[3:]
+capture_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+raw = sys.stdin.buffer.read()
+try:
+    source = json.loads(raw)
+except (UnicodeDecodeError, json.JSONDecodeError):
+    source = {}
+event = source.get("hook_event_name") if isinstance(source, dict) else None
+event = str(event).strip() if isinstance(event, str) else "unknown"
+event = "".join(character if character.isalnum() or character in "-_" else "_" for character in event) or "unknown"
+source_name = f"{event}-{uuid.uuid4().hex}.stdin"
+source_path = capture_dir / source_name
+_atomic_bytes(source_path, raw)
+digest = hashlib.sha256(raw).hexdigest()
+_atomic_json(
+    source_path.with_name(source_path.name + ".meta.json"),
+    {
+        "path": str(source_path),
+        "event": event,
+        "bytes": len(raw),
+        "sha256": f"sha256:{digest}",
+        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "session_id": source.get("session_id") if isinstance(source, dict) else None,
+    },
+)
+completed = subprocess.run([engine, *engine_argv], input=raw, capture_output=True, check=False)
+sys.stdout.buffer.write(completed.stdout)
+sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+"""
+
+
+def _prepare_hook_capture(*, engine: Path, root: Path, isolation_root: Path) -> tuple[Path, Path]:
+    """Route the real native hook command through an exact stdin recorder.
+
+    ``claude-lifecycle-hook`` consumes stdin and only emits a reduced outbox
+    payload. The recorder is therefore installed as the paired engine wrapper,
+    so it sees the provider-authored bytes before the real engine does. Every
+    other engine subcommand is exec'd unchanged; the live Helm launcher remains
+    the stock one.
+    """
+
+    capture_dir = root / "raw" / "claude-hook-stdin"
+    capture_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    capture_script = isolation_root / "capture-claude-hook.py"
+    capture_script.write_text(_HOOK_CAPTURE_SCRIPT, encoding="utf-8")
+    capture_script.chmod(0o700)
+    wrapper = isolation_root / "longhouse-engine-hook-capture"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "claude-lifecycle-hook" ]; then\n'
+        f"  exec {shlex.quote(sys.executable)} {shlex.quote(str(capture_script))} "
+        f'{shlex.quote(str(capture_dir))} {shlex.quote(str(engine))} "$@"\n'
+        "fi\n"
+        f'exec {shlex.quote(str(engine))} "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+    return wrapper, capture_dir
+
+
+def _hook_capture_receipt(capture_dir: Path | None) -> dict[str, Any]:
+    if capture_dir is None:
+        return {"enabled": False, "records": [], "valid": False}
+    records: list[dict[str, Any]] = []
+    for source_path in sorted(capture_dir.glob("*.stdin")):
+        try:
+            raw = source_path.read_bytes()
+        except OSError as exc:
+            records.append({"path": str(source_path), "valid": False, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        observed = f"sha256:{hashlib.sha256(raw).hexdigest()}"
+        metadata_path = source_path.with_name(source_path.name + ".meta.json")
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            metadata = {}
+        source: dict[str, Any] = {
+            "path": str(source_path),
+            "metadata_path": str(metadata_path),
+            "bytes": len(raw),
+            "sha256": observed,
+            "event": metadata.get("event"),
+            "session_id": metadata.get("session_id"),
+            "captured_at": metadata.get("captured_at"),
+            "expected_sha256": metadata.get("sha256"),
+        }
+        source["valid"] = (
+            metadata.get("path") == str(source_path) and metadata.get("bytes") == len(raw) and metadata.get("sha256") == observed
+        )
+        records.append(source)
+    return {
+        "enabled": True,
+        "capture_dir": str(capture_dir),
+        "records": records,
+        "record_count": len(records),
+        "valid": bool(records) and all(record.get("valid") is True for record in records),
+    }
+
+
 def _slow_echo(seconds: int, marker: str) -> str:
     return f"python3 -c \"import os, select; pid=os.getpid(); select.select([], [], [], {seconds}); print('{marker} pid=' + str(pid))\""
 
@@ -812,21 +947,39 @@ def _drive_lifecycle(
     }
 
 
-def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+def run_lifecycle(
+    args: argparse.Namespace,
+    *,
+    registration: ProducerRegistration = REGISTRATION,
+    artifact_kind: str | None = None,
+    scenario_prompt: str | None = None,
+    scenario_capture: Callable[..., dict[str, Any]] | None = None,
+    capture_hook_stdin: bool = False,
+) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     isolation_root = Path(tempfile.mkdtemp(prefix="lhx-claude-helm-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     fault = args.negative_control
-    saved = {name: os.environ.get(name) for name in ("LONGHOUSE_CLAUDE_BIN", "LH_QA_FAULT", "PATH")}
+    saved = {
+        name: os.environ.get(name)
+        for name in (
+            "LONGHOUSE_CLAUDE_BIN",
+            "LH_QA_FAULT",
+            "LONGHOUSE_QA_FAULT",
+            "LONGHOUSE_QA_FAULT_RECEIPT",
+            "PATH",
+        )
+    }
     shipper = None
     session = None
     session_id: str | None = None
     lifecycle: dict[str, Any] = {}
     error: str | None = None
     close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
-    artifact_kind = "negative_control_result" if fault else _ARTIFACT_KIND
+    hook_capture_dir: Path | None = None
+    artifact_kind = artifact_kind or ("negative_control_result" if fault else _ARTIFACT_KIND)
     try:
         home, longhouse_home = isolation_paths(isolation_root)
         # The Machine Agent grants control from the provider binary it can see
@@ -836,8 +989,12 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             os.environ["PATH"] = f"{args.longhouse_cli.resolve().parent}{os.pathsep}{os.environ.get('PATH', '')}"
         if fault:
             os.environ["LH_QA_FAULT"] = fault
+            os.environ["LONGHOUSE_QA_FAULT"] = fault
+            os.environ["LONGHOUSE_QA_FAULT_RECEIPT"] = str(root / "qa-fault-receipt.jsonl")
         else:
             os.environ.pop("LH_QA_FAULT", None)
+            os.environ.pop("LONGHOUSE_QA_FAULT", None)
+            os.environ.pop("LONGHOUSE_QA_FAULT_RECEIPT", None)
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         onboarding = prepare_claude_profile(
@@ -848,10 +1005,13 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             recording=root / "claude-onboarding.tty",
         )
         write_json(root / "claude-onboarding-receipt.json", onboarding)
+        launch_engine = args.engine
+        if capture_hook_stdin:
+            launch_engine, hook_capture_dir = _prepare_hook_capture(engine=args.engine, root=root, isolation_root=isolation_root)
         launch_env = claude_launch_environment(
             environment,
             claude_bin=args.provider_bin,
-            engine=args.engine,
+            engine=launch_engine,
             model=args.model,
             longhouse_home=longhouse_home,
         )
@@ -865,15 +1025,36 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         )
         write_json(root / "session-launch-receipt.json", {"session_id": session_id, "workspace": str(workspace)})
         try:
-            _drive_lifecycle(
-                args,
-                session=session,
-                session_id=session_id,
-                lookup_id=transcript_lookup_id(session_id, provider_session_id),
-                home=home,
-                fault=fault,
-                lifecycle=lifecycle,
-            )
+            lookup_id = transcript_lookup_id(session_id, provider_session_id)
+            if scenario_capture is None:
+                _drive_lifecycle(
+                    args,
+                    session=session,
+                    session_id=session_id,
+                    lookup_id=lookup_id,
+                    home=home,
+                    fault=fault,
+                    lifecycle=lifecycle,
+                )
+            else:
+                if scenario_prompt is None:
+                    raise ScenarioError("background scenario capture requires a prompt")
+                session.submit_line(scenario_prompt)
+                scenario_result = scenario_capture(
+                    args=args,
+                    session=session,
+                    session_id=session_id,
+                    provider_session_id=provider_session_id,
+                    lookup_id=lookup_id,
+                    home=home,
+                    root=root,
+                    environment=environment,
+                    hook_capture_dir=hook_capture_dir,
+                    prompt=scenario_prompt,
+                )
+                if not isinstance(scenario_result, dict):
+                    raise ScenarioError("background scenario capture returned a non-object result")
+                lifecycle["scenario"] = scenario_result
         except Exception as exc:  # noqa: BLE001 - the report keeps partial observations
             error = f"{type(exc).__name__}: {exc}"
         finally:
@@ -900,11 +1081,13 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             else:
                 os.environ[name] = previous
 
+    hook_source = _hook_capture_receipt(hook_capture_dir)
+    write_json(root / "claude-hook-source-receipt.json", hook_source)
     cleanup_ok = close_receipt.get("alive_after_close") is False and "shipper_stop_error" not in close_receipt
     write_claude_cleanup_aggregate(
         root,
-        producer_id=REGISTRATION.producer_id,
-        required_cleanup=REGISTRATION.required_cleanup,
+        producer_id=registration.producer_id,
+        required_cleanup=registration.required_cleanup,
         outcomes={"claude_helm_process_exited": cleanup_ok},
         diagnostics={"session": close_receipt},
     )
@@ -913,19 +1096,31 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     result: dict[str, Any] = {
         "schema_version": 1,
         "artifact_kind": artifact_kind,
-        "producer": REGISTRATION.to_dict(),
+        "producer": registration.to_dict(),
         "provider": "claude",
-        "variant": None,
-        "scenario_id": REGISTRATION.scenario_id,
-        "scenario_revision": REGISTRATION.scenario_revision,
+        "variant": getattr(args, "variant", None),
+        "scenario_id": registration.scenario_id,
+        "scenario_revision": registration.scenario_revision,
         "evidence_class": "live_token",
         "observation_scope": "scenario",
         "generated_at": now_iso(),
         "session_id": session_id,
-        "observation": {"lifecycle": lifecycle, "error": error, "claude_helm_process_exited": cleanup_ok},
+        "observation": {
+            "lifecycle": lifecycle,
+            "error": error,
+            "claude_helm_process_exited": cleanup_ok,
+            "native_hook_source": hook_source,
+        },
         "redacted_secret_files": redacted,
     }
-    if fault:
+    if scenario_capture is not None:
+        scenario = lifecycle.get("scenario") if isinstance(lifecycle.get("scenario"), dict) else {}
+        assertions = scenario.get("assertions") if isinstance(scenario.get("assertions"), dict) else {}
+        result["assertions"] = assertions
+        result["status"] = "pass" if error is None and cleanup_ok and bool(assertions) and all(assertions.values()) else "fail"
+        if result["status"] == "fail":
+            result["failure_code"] = str(scenario.get("failure_code") or "claude_background_scenario_failed")
+    elif fault:
         target, _codes = NEGATIVE_CONTROLS[fault]
         observed = lifecycle.get("steer_active" if target == "claude_helm_steer_active" else "abort_native") or {}
         verdict = negative_control_verdict(lifecycle, fault=fault, fault_receipt=observed.get("qa_fault_receipt"))

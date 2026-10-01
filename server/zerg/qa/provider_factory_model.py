@@ -195,6 +195,7 @@ PRODUCER_MODULES: tuple[str, ...] = (
     "zerg.qa.pi_console_tool_producer",
     "zerg.qa.pi_helm_lifecycle",
     "zerg.qa.omp_background_producer",
+    "zerg.qa.claude_background_producer",
     "zerg.qa.omp_console_producer",
     "zerg.qa.omp_helm_lifecycle",
     "zerg.qa.product_console_lifecycle",

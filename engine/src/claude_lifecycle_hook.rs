@@ -175,6 +175,23 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         managed_session_id.is_some(),
         provider_session_id.as_deref(),
     );
+    if crate::qa_fault::claude_background_writer_disabled()
+        && (payload.get("delegation").is_some() || payload.get("delegation_update").is_some())
+    {
+        crate::qa_fault::record_fired_named(
+            "claude_background_writer_disabled",
+            &session_id,
+            json!({
+                "hook_event_name": event,
+                "had_registry": payload.get("delegation").is_some(),
+                "had_lifecycle_update": payload.get("delegation_update").is_some(),
+            }),
+        );
+        if let Some(fields) = payload.as_object_mut() {
+            fields.remove("delegation");
+            fields.remove("delegation_update");
+        }
+    }
     if managed_session_id.is_none() {
         if let Some((provider_pid, provider_process_start_time)) = unmanaged_provider_identity() {
             payload["provider_pid"] = json!(provider_pid);
@@ -1755,6 +1772,67 @@ mod tests {
             "carrier and snapshot must share the hook observation clock"
         );
         assert_eq!(payload["delegation"]["items"][0]["status"], "mystery");
+    }
+
+    #[test]
+    fn background_writer_fault_preserves_foreground_and_provider_binding() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let home = tempfile::tempdir().unwrap();
+        let receipt = home.path().join("fault.jsonl");
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(home.path().to_str().unwrap())),
+                ("LONGHOUSE_MANAGED_PROVIDER", None),
+                ("LONGHOUSE_MANAGED_SESSION_ID", None),
+                (
+                    "LONGHOUSE_QA_FAULT",
+                    Some("claude_background_writer_disabled"),
+                ),
+                (
+                    "LONGHOUSE_QA_FAULT_RECEIPT",
+                    Some(receipt.to_str().unwrap()),
+                ),
+            ],
+            || {
+                handle_input(&json!({
+                    "hook_event_name": "Stop",
+                    "session_id": "fault-parent-native",
+                    "background_tasks": [{
+                        "id": "native-worker", "type": "subagent", "status": "running"
+                    }],
+                }))
+                .unwrap();
+                let files: Vec<_> = home
+                    .path()
+                    .join("agent/outbox")
+                    .read_dir()
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect();
+                let payload: Value =
+                    serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+                assert_eq!(payload["session_id"], "fault-parent-native");
+                assert_eq!(payload["provider"], "claude");
+                assert_eq!(payload["state"], "idle");
+                if cfg!(feature = "qa-fault-injection") {
+                    assert!(payload.get("delegation").is_none());
+                    let fired: Value = serde_json::from_str(
+                        std::fs::read_to_string(&receipt)
+                            .unwrap()
+                            .lines()
+                            .next()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(fired["fault"], "claude_background_writer_disabled");
+                    assert_eq!(fired["session_id"], "fault-parent-native");
+                    assert_eq!(fired["detail"]["had_registry"], true);
+                } else {
+                    assert_eq!(payload["delegation"]["count"], 1);
+                    assert!(!receipt.exists());
+                }
+            },
+        );
     }
 
     #[test]

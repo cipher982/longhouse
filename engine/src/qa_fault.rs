@@ -87,6 +87,17 @@ pub fn console_steer_noop() -> bool {
     false
 }
 
+/// Remove only Claude background membership at the parent lifecycle writer.
+#[cfg(feature = "qa-fault-injection")]
+pub fn claude_background_writer_disabled() -> bool {
+    std::env::var("LONGHOUSE_QA_FAULT").ok().as_deref() == Some("claude_background_writer_disabled")
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn claude_background_writer_disabled() -> bool {
+    false
+}
+
 /// Ingest fault: the Machine Agent ships the transcript normally but blanks one
 /// marker token out of every render record before the envelope is persisted.
 /// The raw bytes, envelope identity and acknowledgement are untouched, so the

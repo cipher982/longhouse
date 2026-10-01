@@ -1996,6 +1996,11 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                     "state": redact_state_for_evidence(initial_channel_state),
                     "control_identity": initial_control_receipt,
                     "detail": _runtime_get(str(args.api_url), str(args.agents_token), f"/api/agents/sessions/{current_session_id}"),
+                    "workspace": _runtime_get(
+                        str(args.api_url),
+                        str(args.agents_token),
+                        f"/api/agents/sessions/{current_session_id}/workspace?limit=1",
+                    ),
                 },
             )
         runtime_convergence = {"initial": initial_convergence}

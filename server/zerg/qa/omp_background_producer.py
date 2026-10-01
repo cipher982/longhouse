@@ -208,7 +208,8 @@ def _served_terminal_pairs(root: Path, identity: Mapping[str, str] | None) -> se
         receipt = json.loads((root / "omp-background-served-receipt.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return set()
-    detail = receipt.get("detail") or {}
+    workspace = receipt.get("workspace") or {}
+    detail = workspace.get("session") or {}
     if detail.get("id") != identity["session_id"]:
         return set()
     delegation = (detail.get("session_state") or {}).get("delegation") or {}
@@ -349,6 +350,7 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
     result.update(
         {
             "scenario_id": SCENARIO_ID,
+            "scenario_revision": REGISTRATION.scenario_revision,
             "producer": REGISTRATION.to_dict(),
             "requested_assertion": requested_assertion,
             "assertions": assertions,
@@ -395,6 +397,7 @@ def run_omp_background(args: argparse.Namespace) -> dict[str, Any]:
             ),
         }
     result["status"] = "pass" if native_run_healthy and all(assertions.values()) else "fail"
+    result["artifact_manifest"] = identity.artifact_manifest(root)
     helm.lifecycle.write_json(root / "result.json", result)
     return result
 

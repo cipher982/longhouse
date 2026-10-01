@@ -23,6 +23,14 @@ acceptance, retaining attested metadata rather than copying evidence bytes.
 Existing inline proofs remain immutable and readable. Evidence downloads require
 owner-capable authentication; managed-session credentials cannot read them.
 
+Live background qualification uses `claude_background_v1` and
+`omp_background_v1` through the existing provider qualification dispatcher.
+The oracles retain native source, read canonical workspace state rather than
+summary DTOs, and publish exhaustive artifact manifests. Writer-disabled
+controls require a matching fired receipt and healthy unrelated source,
+identity and cleanup observations; missing source is never a passing control.
+Claude's native fault seam is compiled only with `qa-fault-injection`.
+
 ## Archived child identity
 
 Storage-v2 retains the source descriptor's native session ID even when a Shadow

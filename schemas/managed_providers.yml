@@ -914,6 +914,30 @@ providers:
         minimum_scenario_revision: 5
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
+    session.delegation.background:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.delegation_background
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - &claude_background_assertion
+        id: claude_background_native_source
+        scenario_id: claude_background_jobs
+        oracle_source: server/zerg/qa/claude_background_producer.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - <<: *claude_background_assertion
+        id: claude_background_parent_turn_boundary
+      - <<: *claude_background_assertion
+        id: claude_background_registry_served
+      - <<: *claude_background_assertion
+        id: claude_background_callbacks_scoped
+      - <<: *claude_background_assertion
+        id: claude_background_explicit_empty
 
   can_resume: true
   turn_start: true

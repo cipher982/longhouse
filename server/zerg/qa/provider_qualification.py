@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import antigravity_release_identity
+from zerg.qa import claude_background_producer
 from zerg.qa import claude_real_print_qualification
 from zerg.qa import claude_release_identity
 from zerg.qa import codex_helm_interrupt
@@ -35,6 +36,7 @@ _PROFILES = {
     ("antigravity", antigravity_release_identity.PROFILE): antigravity_release_identity.run,
     ("antigravity", antigravity_hook_qualification.PROFILE): antigravity_hook_qualification.run,
     ("claude", claude_release_identity.PROFILE): claude_release_identity.run,
+    ("claude", claude_background_producer.PROFILE): claude_background_producer.run,
     ("claude", claude_real_print_qualification.PROFILE): claude_real_print_qualification.run,
     ("codex", codex_release_identity.PROFILE): codex_release_identity.run,
     ("codex", codex_helm_interrupt.PROFILE): codex_helm_interrupt.run,
@@ -62,6 +64,7 @@ _PROFILES = {
 }
 _IDENTITY_PROFILES = {
     ("pi", pi_qualification.PROFILE): pi_qualification._PROFILE,
+    ("claude", claude_background_producer.PROFILE): claude_background_producer._PROFILE,
     ("pi", pi_console_tool_producer.PROFILE): pi_console_tool_producer._PROFILE,
     ("pi", pi_helm_lifecycle.PROFILE): pi_helm_lifecycle._PROFILE,
     ("omp", omp_background_producer.PROFILE): omp_background_producer.identity.IdentityProfile(
