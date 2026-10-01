@@ -50,6 +50,9 @@ OMP's launch-scoped coordination authority belongs to the main managed session.
 Native subagents cannot use it to send as their parent; they report blockers and
 results through OMP's native parent channel. The extension checks the calling
 agent context before making a coordination request.
+Child lifecycle events leave the parent's turn identity and settlement unchanged.
+Child switch/branch operations stay provider-owned and bypass the managed
+parent's transition handshake.
 
 ## iOS session opening
 

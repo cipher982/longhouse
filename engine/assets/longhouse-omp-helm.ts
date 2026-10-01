@@ -400,6 +400,8 @@ const sessionFileOf = (ctx: unknown): string | undefined => {
 /// the launcher is the authority on a provider moving its own session, and
 /// refusing an unknown file here would silence a live one.
 function subagentSessionContext(ctx: unknown): boolean {
+  // OMP 18.4.5 exposes authoritative agent identity, including depth-0 clones:
+  // https://github.com/can1357/oh-my-pi/blob/v18.4.5/packages/coding-agent/src/extensibility/extensions/types.ts#L439-L492
   if (isRecord(ctx) && isRecord(ctx.agent) && ctx.agent.kind === "sub") {
     return true;
   }
@@ -578,6 +580,8 @@ export default function (pi: any) {
       label: `Longhouse ${name}`,
       description,
       parameters: jsonSchema(parameters),
+      // Native OMP's ToolDefinition.execute passes ctx as its fifth argument:
+      // https://github.com/can1357/oh-my-pi/blob/v18.4.5/packages/coding-agent/src/extensibility/extensions/wrapper.ts#L106-L134
       async execute(
         _toolCallId: string,
         params: ToolParams,
@@ -1345,6 +1349,7 @@ export default function (pi: any) {
     }
   });
   pi.on("session_before_switch", async (event: Frame, ctx: any) => {
+    if (subagentSessionContext(ctx)) return;
     const completed = await waitForReplacement(
       "session_before_switch",
       event,
@@ -1353,10 +1358,12 @@ export default function (pi: any) {
     return completed ? undefined : { cancel: true };
   });
   pi.on("session_switch", async (event: Frame, ctx: any) => {
+    if (subagentSessionContext(ctx)) return;
     lastAgentEndTerminal = undefined;
     lifecycle("session_switch", event, ctx);
   });
   pi.on("session_before_branch", async (event: Frame, ctx: any) => {
+    if (subagentSessionContext(ctx)) return;
     const completed = await waitForReplacement(
       "session_before_branch",
       event,
@@ -1365,6 +1372,7 @@ export default function (pi: any) {
     return completed ? undefined : { cancel: true };
   });
   pi.on("session_branch", async (event: Frame, ctx: any) => {
+    if (subagentSessionContext(ctx)) return;
     lastAgentEndTerminal = undefined;
     lifecycle("session_branch", event, ctx);
   });
@@ -1382,6 +1390,7 @@ export default function (pi: any) {
     lifecycle("title_change", event, ctx),
   );
   pi.on("agent_start", async (event: Frame, ctx: any) => {
+    if (subagentSessionContext(ctx)) return;
     turnGeneration += 1;
     lastAgentEndTerminal = undefined;
     lifecycle("agent_start", event, ctx);
@@ -1405,6 +1414,7 @@ export default function (pi: any) {
     lifecycle("message_update", event, ctx),
   );
   pi.on("agent_end", async (event: Frame, ctx: any) => {
+    if (subagentSessionContext(ctx)) return;
     lastAgentEndTerminal = agentEndIsTerminal(event);
     lifecycle("agent_end", event, ctx);
   });

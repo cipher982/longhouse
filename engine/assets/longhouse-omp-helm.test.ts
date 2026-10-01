@@ -449,6 +449,31 @@ describe("coordination tools", () => {
 });
 
 describe("subagent sessions", () => {
+  it("does not cancel a native child's own switch or branch", async () => {
+    const handlers: Record<
+      string,
+      (event: Record<string, unknown>, ctx: unknown) => Promise<unknown>
+    > = {};
+    registerExtension({
+      on: (name: string, handler: (typeof handlers)[string]) => {
+        handlers[name] = handler;
+      },
+    });
+    const child = {
+      agent: { kind: "sub", depth: 0 },
+      sessionManager: {
+        getSessionId: () => "native-clone",
+        getSessionFile: () => join(channelDir, "clone.jsonl"),
+      },
+    };
+    expect(
+      await handlers.session_before_switch({ type: "session_before_switch" }, child),
+    ).toBeUndefined();
+    expect(
+      await handlers.session_before_branch({ type: "session_before_branch" }, child),
+    ).toBeUndefined();
+  });
+
   it("keeps a subagent's context off this launch's channel", async () => {
     // The reconnect test removes the shared channel directory; each test owns
     // the socket path it listens on.
@@ -527,6 +552,32 @@ describe("subagent sessions", () => {
       // written to a ready channel.
       await handlers.session_start({ type: "session_start" }, parent);
       await waitForFrame((frame) => frame.kind === "session_start");
+
+      await handlers.agent_start({ type: "agent_start" }, parent);
+      await handlers.agent_end({ type: "agent_end", willContinue: true }, parent);
+      await waitForFrame((frame) => frame.kind === "agent_end");
+
+      // The main continuation's wire state must survive every child event,
+      // not merely suppress frames carrying the child's native session id.
+      const childEvents: Array<[string, Record<string, unknown>]> = [
+        ["agent_start", { type: "agent_start" }],
+        ["agent_end", { type: "agent_end", willContinue: false }],
+        ["session_switch", { type: "session_switch" }],
+        ["session_branch", { type: "session_branch" }],
+      ];
+      for (const [name, event] of childEvents) {
+        const before = frames.filter((frame) => frame.kind === "message_end").length;
+        await handlers[name](event, subagent);
+        await handlers.message_end({ type: "message_end" }, parent);
+        await waitForFrame(
+          (frame) =>
+            frame.kind === "message_end" &&
+            frames.filter((candidate) => candidate.kind === "message_end").length > before,
+        );
+        const snapshot = frames.findLast((frame) => frame.kind === "message_end")!;
+        expect(snapshot.turn_generation).toBe(1);
+        expect(snapshot.agent_end_terminal).toBe(false);
+      }
 
       // Older OMP contexts lack agent.kind; their native artifact path still
       // prevents a task child from sending as the managed parent.
