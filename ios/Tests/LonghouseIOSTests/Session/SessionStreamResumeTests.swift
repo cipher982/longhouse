@@ -85,6 +85,15 @@ struct SessionStreamResumeTests {
         )
         defer { model.stop() }
         await model.start(sessionId: "session-1", appState: appState)
+        model.recordTranscriptFrameRendered(
+            WebTranscriptRenderReceipt(
+                contentRevision: model.transcriptRevision,
+                transcriptReadThrough: model.transcriptReadThrough,
+                payloadFingerprint: "parent-before-child",
+                latestItemId: model.items.last?.id
+            )
+        )
+        model.transcriptFrameDidBecomeReady(sessionId: "session-1", appState: appState)
         await waitForStartCount(recorder, atLeast: 1)
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: waitBudget)

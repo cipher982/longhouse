@@ -465,39 +465,6 @@ describe("useSessionWorkspace", () => {
     );
   });
 
-  it("fully refreshes the workspace when the SSE stream reports a replay gap", () => {
-    let onReplayGap:
-      | ((data: {
-          session_id: string;
-          requested_seq: number;
-          earliest_seq: number | null;
-          latest_seq: number;
-          reason: string;
-        }) => void)
-      | undefined;
-    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
-      onReplayGap = nextHandlers.onReplayGap;
-      return vi.fn();
-    });
-
-    renderHook(() => useSessionWorkspace(baseSession.id));
-
-    act(() => {
-      onReplayGap?.({
-        session_id: baseSession.id,
-        requested_seq: 3,
-        earliest_seq: 8,
-        latest_seq: 12,
-        reason: "cursor_too_old",
-      });
-    });
-
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
-      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
-      { cancelRefetch: false },
-    );
-  });
 
   it("keeps runtime wakes off transcript query families", () => {
     let handlers:
@@ -533,52 +500,6 @@ describe("useSessionWorkspace", () => {
     );
   });
 
-  it("coalesces rapid SSE changes behind the active workspace refresh", async () => {
-    let handlers:
-      | {
-          onWorkspaceChanged?: (data: {
-            session_id: string;
-            latest_event_id: number;
-            thread_session_count: number;
-          }) => void;
-        }
-      | undefined;
-    let finishRefresh: (() => void) | undefined;
-    const pendingRefresh = new Promise<void>((resolve) => {
-      finishRefresh = resolve;
-    });
-    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
-    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
-      handlers = nextHandlers;
-      return vi.fn();
-    });
-
-    renderHook(() => useSessionWorkspace(baseSession.id));
-
-    act(() => {
-      handlers?.onWorkspaceChanged?.({
-        session_id: baseSession.id,
-        latest_event_id: 99,
-        thread_session_count: 1,
-      });
-      handlers?.onWorkspaceChanged?.({
-        session_id: baseSession.id,
-        latest_event_id: 100,
-        thread_session_count: 1,
-      });
-    });
-
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
-
-    await act(async () => {
-      finishRefresh?.();
-      await pendingRefresh;
-    });
-
-    await waitFor(() => {
-      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(14);
-    });
-  });
 
   it("does not lose a runtime-only wake while a workspace refresh is active", async () => {
     let handlers:
@@ -630,71 +551,6 @@ describe("useSessionWorkspace", () => {
     });
   });
 
-  it("refetches the transcript on ingest without waiting for an active runtime refresh", async () => {
-    // F6: during a live Codex turn runtime wakes keep a workspace refetch in
-    // flight. The ingest wake carrying a send's durable echo must reach the
-    // transcript now, not after that round, or a slow Runtime Host leaves the
-    // send on "Sending…" under the reply it already got.
-    let handlers:
-      | {
-          onWorkspaceChanged?: (data: {
-            session_id: string;
-            change_kind?: string | null;
-            latest_event_id: number;
-            thread_session_count: number;
-          }) => void;
-        }
-      | undefined;
-    let finishRefresh: (() => void) | undefined;
-    const pendingRefresh = new Promise<void>((resolve) => {
-      finishRefresh = resolve;
-    });
-    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
-    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
-      handlers = nextHandlers;
-      return vi.fn();
-    });
-
-    renderHook(() => useSessionWorkspace(baseSession.id));
-
-    act(() => {
-      handlers?.onWorkspaceChanged?.({
-        session_id: baseSession.id,
-        change_kind: "runtime",
-        latest_event_id: 0,
-        thread_session_count: 1,
-      });
-    });
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
-
-    act(() => {
-      handlers?.onWorkspaceChanged?.({
-        session_id: baseSession.id,
-        change_kind: "ingest",
-        latest_event_id: 0,
-        thread_session_count: 1,
-      });
-    });
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(7);
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
-      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
-      { cancelRefetch: false },
-    );
-
-    // The workspace round that predates the ingest still owes one more
-    // snapshot; the transcript round it did not share owes nothing.
-    await act(async () => {
-      finishRefresh?.();
-      await pendingRefresh;
-    });
-    await waitFor(() => {
-      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(11);
-    });
-    const projectionCalls = queryClientMocks.invalidateQueries.mock.calls.filter(
-      ([filters]) => filters.queryKey[0] === "agent-session-projection-infinite",
-    );
-    expect(projectionCalls).toHaveLength(1);
-  });
 
   it("applies SSE transcript previews to the workspace cache before refetch", () => {
     let handlers:

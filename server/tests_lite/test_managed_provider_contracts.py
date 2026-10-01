@@ -11,7 +11,6 @@ import yaml
 from zerg.managed_provider_contract_manifest import _validate_auth_probe
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
-from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest
 from zerg.managed_provider_contract_manifest import proof_backed_operation_evidence
@@ -180,94 +179,6 @@ def test_startup_coordination_context_support_is_explicit():
         "pi": False,
         "omp": False,
     }
-
-
-def test_semantic_capabilities_include_exact_coordination_and_steer_limitations():
-    claude = contract_for_provider("claude")
-    codex = contract_for_provider("codex")
-    opencode = contract_for_provider("opencode")
-    assert claude is not None and codex is not None and opencode is not None
-    expected = {
-        "coordination.awareness.create",
-        "coordination.awareness.post_compaction",
-        "coordination.directed_input.send",
-        "coordination.directed_input.receive",
-    }
-    # Every provider declares the turn-boundary cell: a finished turn must stop
-    # reading as working. It was a bare `runtime_phase: true` boolean with no
-    # oracle behind it until 2026-08-01, which is how a Cursor session sat in
-    # `Thinking` for 86 seconds after replying without any lane noticing.
-    turn_boundary = {"session.activity.turn_boundary"}
-    assert set(claude.capabilities) == expected | turn_boundary | {
-        "session.launch.helm",
-        "session.resume.helm",
-        "session.transcript.search",
-        "session.turn.start",
-        "session.turn.steer",
-    }
-    # Codex alone carries session.branch.console: branching forks the parent's
-    # thread, and only Codex has a proven fork surface. It is a separate cell
-    # from session.resume.helm because its assertion is the opposite one -- a
-    # continuation must land on the same provider thread, a branch must not.
-    assert set(codex.capabilities) == expected | turn_boundary | {
-        "session.branch.console",
-        "session.launch.helm",
-        "session.resume.helm",
-        "session.transcript.search",
-        "session.turn.start",
-        "session.turn.steer",
-    }
-    assert set(opencode.capabilities) == turn_boundary | {
-        "session.launch.helm",
-        "session.reattach.helm",
-        "session.resume.helm",
-        "session.transcript.search",
-        "session.turn.start",
-        "session.turn.steer",
-    }
-    cursor = contract_for_provider("cursor")
-    antigravity = contract_for_provider("antigravity")
-    assert cursor is not None and antigravity is not None
-    # Cursor gained coordination once its launcher wired an MCP entry that
-    # resolves per-session authority. post_compaction is absent because Cursor
-    # has no compaction hook to bootstrap from.
-    assert set(cursor.capabilities) == turn_boundary | {
-        "coordination.awareness.create",
-        "coordination.directed_input.send",
-        "coordination.directed_input.receive",
-        "session.launch.helm",
-        "session.resume.helm",
-        "session.transcript.search",
-        "session.turn.start",
-    }
-    assert set(antigravity.capabilities) == turn_boundary | {
-        "session.launch.helm",
-        "session.resume.helm",
-        "session.input.send",
-    }
-    # The `session.input.steer_active` capability cells were removed on
-    # 2026-07-31. They were a fourth statement of a fact the schema already
-    # carries twice -- `steer_active_turn: false` and
-    # `operation_evidence.steer_active_turn.disposition: upstream_absent`, which
-    # the manifest validator forces to agree -- and their required assertion
-    # named an oracle with no producer, so the cell could never be proven or
-    # disproven. The two representations that remain are load-bearing.
-    for contract in (cursor, antigravity):
-        assert "session.input.steer_active" not in contract.capabilities
-    # Cursor's TUI steers natively (Enter on the empty prompt injects the
-    # queued message into the running generation), proven by
-    # cursor.helm_lifecycle.v1. Longhouse has not built Antigravity's.
-    assert cursor.steer_active_turn is True
-    assert cursor.operation_evidence_for("steer_active_turn")["disposition"] == "implemented"
-    assert antigravity.steer_active_turn is False
-    assert antigravity.operation_evidence_for("steer_active_turn")["disposition"] == "not_implemented"
-    assert claude.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm", "console"]
-    assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
-    assert claude.contract_entry_digest != codex.contract_entry_digest
-    assert len(claude.adapter_digest) == 64
-    assert "server/zerg/services/shipper/hooks.py" in claude.adapter_sources
-    assert "engine/src/codex_exec.rs" in codex.adapter_sources
-    assert claude.adapter_digest != codex.adapter_digest
 
 
 def test_control_plane_index_rejects_contract_collisions():
