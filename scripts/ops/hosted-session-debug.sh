@@ -128,7 +128,11 @@ lh_hosted_get_instance "$LH_INSTANCE_ID"
 INSTANCE_URL="$LH_INSTANCE_URL"
 CONTAINER_NAME="${LH_INSTANCE_CONTAINER_NAME:-}"
 HOST_DATA_PATH="${LH_INSTANCE_DATA_PATH:-/var/app-data/longhouse/${INSTANCE_SUBDOMAIN}}"
-HOST_DB_PATH="${HOST_DATA_PATH%/}/longhouse-live.db"
+# The served-state catalog this script reads. The archive database
+# (longhouse.db) sits beside it and is not what is queried below.
+DB_FILENAME="longhouse-live.db"
+HOST_DB_PATH="${HOST_DATA_PATH%/}/${DB_FILENAME}"
+CONTAINER_DB_PATH="/data/${DB_FILENAME}"
 
 if [[ -z "$CONTAINER_NAME" ]]; then
   echo "Control-plane response did not include a container name for $INSTANCE_SUBDOMAIN" >&2
@@ -445,12 +449,24 @@ if [[ "$SHOW_LOGS" == "true" ]]; then
 fi
 
 if [[ "$OUTPUT_MODE" == "json" ]]; then
-  python3 - "$INSTANCE_SUBDOMAIN" "$LH_INSTANCE_ID" "$INSTANCE_URL" "${LH_INSTANCE_STATUS:-unknown}" "$CONTAINER_NAME" "$HOST_DATA_PATH" "$SQLITE_FILE" "$COUNTS_FILE" "${LOGS_FILE:-}" <<'PY'
+  python3 - "$INSTANCE_SUBDOMAIN" "$LH_INSTANCE_ID" "$INSTANCE_URL" "${LH_INSTANCE_STATUS:-unknown}" "$CONTAINER_NAME" "$HOST_DATA_PATH" "$HOST_DB_PATH" "$CONTAINER_DB_PATH" "$SQLITE_FILE" "$COUNTS_FILE" "${LOGS_FILE:-}" <<'PY'
 import json
 import pathlib
 import sys
 
-subdomain, instance_id, url, status, container_name, host_data_path, sqlite_file, counts_file, logs_file = sys.argv[1:]
+(
+    subdomain,
+    instance_id,
+    url,
+    status,
+    container_name,
+    host_data_path,
+    host_db_path,
+    container_db_path,
+    sqlite_file,
+    counts_file,
+    logs_file,
+) = sys.argv[1:]
 
 
 def load_json(path: str, default):
@@ -476,8 +492,8 @@ payload = {
         "status": status,
         "container": container_name,
         "host_data_path": host_data_path,
-        "host_db_path": f"{host_data_path.rstrip('/')}/longhouse.db",
-        "container_db_path": "/data/longhouse.db",
+        "host_db_path": host_db_path,
+        "container_db_path": container_db_path,
     },
     "database": load_json(sqlite_file, {}),
     "log_counts": load_json(counts_file, {}),
@@ -498,7 +514,7 @@ status: ${LH_INSTANCE_STATUS:-unknown}
 container: ${CONTAINER_NAME}
 host_data_path: ${HOST_DATA_PATH}
 host_db_path: ${HOST_DB_PATH}
-container_db_path: /data/longhouse.db
+container_db_path: ${CONTAINER_DB_PATH}
 EOF
 
 python3 - "$SQLITE_FILE" "$COUNTS_FILE" "${LOGS_FILE:-}" <<'PY'

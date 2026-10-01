@@ -39,7 +39,7 @@ if [[ "$target" != "fake-zerg" ]]; then
 fi
 if [[ "$cmd" == python3\ -* ]]; then
   printf '%s' '{
-    "db_path": "/srv/longhouse/demo/longhouse.db",
+    "db_path": "/srv/longhouse/demo/longhouse-live.db",
     "session_id": "sess-1",
         "tables": {
           "sessions": true,
@@ -133,6 +133,16 @@ if ! grep -q "host_data_path: /srv/longhouse/demo" "$TEXT_OUTPUT"; then
   exit 1
 fi
 
+if ! grep -q "host_db_path: /srv/longhouse/demo/longhouse-live.db" "$TEXT_OUTPUT"; then
+  echo "Expected text output to name the live catalog database"
+  exit 1
+fi
+
+if ! grep -q "container_db_path: /data/longhouse-live.db" "$TEXT_OUTPUT"; then
+  echo "Expected text output to name the container's live catalog path"
+  exit 1
+fi
+
 if ! grep -q "managed_transport: claude_channel_bridge" "$TEXT_OUTPUT"; then
   echo "Expected text output to include session management fields"
   exit 1
@@ -156,6 +166,9 @@ import sys
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert payload["instance"]["subdomain"] == "demo"
 assert payload["instance"]["host_data_path"] == "/srv/longhouse/demo"
+# The JSON names the database the script actually opened, not the archive beside it.
+assert payload["instance"]["host_db_path"] == "/srv/longhouse/demo/longhouse-live.db"
+assert payload["instance"]["container_db_path"] == "/data/longhouse-live.db"
 assert payload["database"]["session"]["id"] == "sess-1"
 assert payload["database"]["runtime_state"]["phase"] == "running"
 assert payload["log_counts"]["agents_ingest"] == 1
