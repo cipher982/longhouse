@@ -21,5 +21,7 @@ What we most want to know: does it install cleanly, do your sessions show up, an
 notes = """
 Longhouse is a client for a user's own Longhouse server (self-hosted or hosted). No account is needed to review it: on the first screen tap "Explore the demo". That opens the public demo at https://longhouse.ai with synthetic sessions and no sign-in. Browse the timeline, open a session to read its transcript, and try search.
 
+The app's Info.plist declares two App Transport Security exceptions and a Local Network usage string. They exist so a user can point the app at their own self-hosted Longhouse server: (1) NSExceptionDomains for ts.net allows plain http to a server on the user's own Tailscale network, where WireGuard encrypts the transport; (2) NSAllowsLocalNetworking and NSLocalNetworkUsageDescription allow a server on the user's LAN, which the app reaches over plain http only after the user turns on "Allow plain http on my local network" for that address (a LAN address without the toggle is refused). Plain http to any public host is refused in the app. The demo and hosted servers use https, and nothing contacts a local address unless the user enters one; you will not see a Local Network prompt during review.
+
 Real accounts sign in through Longhouse's own account service (control.longhouse.ai) in a system web sign-in sheet; there is no third-party social-login button inside the app. Hosted accounts are invite-only during the private alpha. Push notifications and Live Activities are optional and only apply to a signed-in server.
 """
