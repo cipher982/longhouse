@@ -300,7 +300,9 @@ _MIGRATION_PICKER = (
     b"Meet GPT-6 Luna\x1b[6;1HOur latest Luna is significantly more efficient\x1b[8;1H"
     b"\xe2\x80\xba 1. Try new model\x1b[9;1H  2.\x1b[1CUse\x1b[1Cexisting\x1b[1Cmodel\x1b[10;1Henter/esc confirm"
 )
-_COMPOSER = b"\x1b[2J\x1b[H>_ OpenAI Codex (v0.159.3)\x1b[3;1H\xe2\x80\xba Ask Codex to do anything\x1b[9;1HGPT-5.6-Luna default"
+_COMPOSER = (
+    b"\x1b[2J\x1b[H>_ OpenAI Codex (v0.159.3)\x1b[3;1H\xe2\x80\xba Ask Codex to do anything\x1b[9;1HGPT-5.6-Luna default \xc2\xb7 ~/work"
+)
 
 
 class _FakeCodexTui:
@@ -418,3 +420,56 @@ def test_the_seed_goes_in_only_after_the_picker_is_answered(tmp_path, monkeypatc
     assert tui.events[1] == ("submit", "Reply with exactly MARK")
     assert receipt["status"] == "pass"
     assert [item["dialog"] for item in receipt["startup_dialogs"]] == ["model_migration"]
+
+
+def test_a_picker_whose_text_looks_like_a_status_line_is_still_answered(tmp_path):
+    """The picker is what is on screen when its text is the last thing drawn."""
+
+    lookalike = (
+        b"\x1b[2J\x1b[H\xe2\x80\xba Ask Codex to do anything\x1b[3;1HGPT-6 Luna medium reasoning is the default\x1b[5;1H"
+        b"Meet GPT-6 Luna\x1b[8;1H\xe2\x80\xba 1. Try new model\x1b[9;1H  2.\x1b[1CUse\x1b[1Cexisting\x1b[1Cmodel"
+    )
+    tui = _FakeCodexTui(tmp_path, initial=lookalike, replies={b"2": _COMPOSER})
+
+    answered = launch._answer_startup_dialogs(tui, timeout=10)
+
+    assert len(answered) == 1
+    assert tui.events == [("write", b"2")]
+
+
+def test_a_status_line_word_is_not_a_composer_unless_the_directory_follows(tmp_path):
+    tui = _FakeCodexTui(tmp_path, initial=b"\x1b[2J GPT-5.6-Luna default model notes")
+
+    assert launch._answer_startup_dialogs(tui, timeout=0.6) == []
+    assert tui.events == []
+
+
+def test_a_key_the_picker_dropped_is_sent_again_and_only_then(tmp_path):
+    """Seen once in 13 starts under load: the picker was drawn, the first "2" repainted nothing."""
+
+    tui = _FakeCodexTui(tmp_path, initial=_MIGRATION_PICKER)
+    original_write = tui.write
+    calls = {"count": 0}
+
+    def write(value: bytes) -> None:
+        calls["count"] += 1
+        tui.replies = {b"2": b"" if calls["count"] == 1 else _COMPOSER}
+        original_write(value)
+
+    tui.write = write
+
+    answered = launch._answer_startup_dialogs(tui, timeout=20)
+
+    assert len(answered) == 2
+    assert [event for event in tui.events if event[0] == "write"] == [("write", b"2")] * 2
+
+
+def test_a_key_that_repainted_something_is_not_sent_again(tmp_path):
+    """Whatever the TUI drew after the key, even a screen the composer marker does not recognise, ends the retries."""
+
+    tui = _FakeCodexTui(tmp_path, initial=_MIGRATION_PICKER, replies={b"2": b"\x1b[2J some other screen"})
+
+    answered = launch._answer_startup_dialogs(tui, timeout=4)
+
+    assert len(answered) == 1
+    assert tui.events == [("write", b"2")]

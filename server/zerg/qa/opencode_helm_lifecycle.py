@@ -32,6 +32,7 @@ failed with its typed failure code.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import signal
@@ -313,7 +314,7 @@ class _BusySampler:
         while not self._stop.is_set():
             try:
                 self.samples.append({"t": round(time.time(), 2), "busy": _session_busy(self.state)})
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, http.client.HTTPException) as exc:
                 self.samples.append({"t": round(time.time(), 2), "error": f"{type(exc).__name__}: {exc}"})
             self._stop.wait(0.4)
 
@@ -333,7 +334,15 @@ def _watch_until_idle(state: dict[str, Any], *, timeout: float) -> list[dict[str
     deadline = time.monotonic() + timeout
     idle_streak = 0
     while time.monotonic() < deadline:
-        busy = _session_busy(state)
+        try:
+            busy = _session_busy(state)
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            # A read that failed (after the shared retries) says nothing about idle: it breaks the
+            # streak and is kept as evidence, and the deadline still ends the wait.
+            samples.append({"t": round(time.time(), 2), "error": f"{type(exc).__name__}: {exc}"})
+            idle_streak = 0
+            time.sleep(0.5)
+            continue
         samples.append({"t": round(time.time(), 2), "busy": busy})
         idle_streak = 0 if busy else idle_streak + 1
         if idle_streak >= 4:

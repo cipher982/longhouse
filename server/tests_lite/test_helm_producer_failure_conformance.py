@@ -736,3 +736,33 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
     cleanup = _json(tmp_path / "evidence" / "cleanup-receipt.json")
     assert cleanup["status"] == "fail"
     assert payload["observation"]["cleanup"] == cleanup
+
+
+def test_the_busy_sampler_and_the_idle_watch_survive_a_status_read_that_keeps_failing(monkeypatch) -> None:
+    import http.client
+
+    from zerg.qa import opencode_helm_lifecycle as producer
+
+    reads = {"count": 0}
+
+    def flaky(_state):
+        reads["count"] += 1
+        if reads["count"] <= 2:
+            raise http.client.RemoteDisconnected("closed")
+        return False
+
+    monkeypatch.setattr(producer, "_session_busy", flaky)
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+
+    samples = producer._watch_until_idle({"provider_session_id": "p"}, timeout=5)
+
+    assert [("error" in sample) for sample in samples[:2]] == [True, True]
+    assert sum(1 for sample in samples if sample.get("busy") is False) >= 4
+    # A failed read is evidence and never counts toward the idle streak.
+    assert all("busy" not in sample for sample in samples if "error" in sample)
+
+    reads["count"] = 0
+    sampler = producer._BusySampler({"provider_session_id": "p"})
+    monkeypatch.setattr(sampler._stop, "wait", lambda _s: sampler._stop.is_set() or sampler._stop.set())
+    sampler._run()
+    assert "error" in sampler.samples[0]

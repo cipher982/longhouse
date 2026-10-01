@@ -573,8 +573,9 @@ _ANSI_RE = re.compile(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|
 # the configured model ("Meet GPT-6 Luna", `1. Try new model  2. Use existing model`). The
 # terminal text loses its spaces to cursor movement, so match with whitespace removed.
 _MODEL_MIGRATION_DIALOG = "useexistingmodel"
-# With no picker the composer's status line names the model and effort ("GPT-5.6-Luna default").
-_COMPOSER_READY = re.compile(r"gpt-?[\w.\-]*(?:default|minimal|low|medium|high)")
+# With no picker the composer's status line names the model and effort, then the directory
+# ("GPT-5.6-Luna default · ~/work"); whitespace is gone, so the middle dot is what ends it.
+_COMPOSER_READY = re.compile(r"gpt-?[\w.\-]*(?:default|minimal|low|medium|high)\u00b7")
 _MAX_STARTUP_DIALOGS = 3
 # The picker was drawn 3.0, 3.2 and 5.4 s after the TUI started (Codex 0.159.3 on clifford at a
 # load average of 4.8, 2026-10-01), after 2.4 s with no output at all, so a quiet terminal is not a
@@ -611,14 +612,28 @@ def _answer_startup_dialogs(tui: ProviderPtySession, *, timeout: float = _STARTU
         if not tui.alive():
             raise RuntimeError(f"Codex TUI exited before seeding its rollout ({tui.process.returncode})")
         text = _startup_dialog_text(tui.terminal_path, offset)
-        if _COMPOSER_READY.search(text):
+        # What is on screen is decided by the last thing drawn: a picker frame can hold wording
+        # that looks like a status line, and a redraw before the answer lands can follow the
+        # composer in the log. The picker is showing when its text comes after the last composer
+        # marker, and the composer is ready when a marker comes after the picker's text.
+        picker_at = text.rfind(_MODEL_MIGRATION_DIALOG)
+        composer = list(_COMPOSER_READY.finditer(text))
+        composer_at = composer[-1].end() if composer else -1
+        if composer_at > picker_at:
             break
-        # A frame still showing the picker just after an answer is the redraw before the
-        # answer lands, not a second picker.
-        if _MODEL_MIGRATION_DIALOG in text and time.monotonic() - last_answer > 1.0:
+        now = time.monotonic()
+        try:
+            size = tui.terminal_path.stat().st_size
+        except OSError:
+            size = 0
+        # A key the TUI processed repaints it. A picker drawn a moment before its input handler
+        # is live drops the key and nothing is drawn after it (seen once in 13 starts under load);
+        # that is the only silence that is answered again.
+        dropped_key = bool(answered) and picker_at < 0 and size == offset and now - last_answer > 2.0
+        if (picker_at >= 0 and now - last_answer > 1.0) or dropped_key:
             if len(answered) >= _MAX_STARTUP_DIALOGS:
                 raise RuntimeError("Codex startup pickers did not clear")
-            offset = tui.terminal_path.stat().st_size
+            offset = size
             tui.write(b"2")
             last_answer = time.monotonic()
             answered.append({"dialog": "model_migration", "answer": "use_existing_model", "after_seconds": round(last_answer - started, 2)})
