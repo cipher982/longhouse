@@ -1,6 +1,6 @@
 """Regression tests for the public safety gate (PR1: B1 + B8 + B9).
 
-B1: `longhouse serve` must refuse to bind a public interface with auth
+B1: `longhouse-server serve` must refuse to bind a public interface with auth
     disabled, unless the operator passes --allow-public-no-auth.
 B8: the destructive /api/system/* routes must require an admin and must not
     be reachable unauthenticated.
