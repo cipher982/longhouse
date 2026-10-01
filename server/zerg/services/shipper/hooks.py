@@ -75,7 +75,7 @@ COORDINATION_BOOTSTRAP = (
 HOOK_SCRIPT = """\
 #!/bin/bash
 # Longhouse unified Claude hook — presence/runtime outbox
-# Installed by: longhouse connect --install
+# Installed by: Longhouse
 # Registered on: SessionStart, Stop, UserPromptSubmit, PreToolUse,
 #                PostToolUse, PostToolUseFailure, PermissionRequest, Notification
 # All events: local-only outbox write. The daemon persists durable bindings.
@@ -218,7 +218,7 @@ exit 0
 CODEX_HOOK_SCRIPT = """\
 #!/bin/bash
 # Longhouse Codex hook — presence outbox
-# Installed by: longhouse connect --install
+# Installed by: Longhouse
 # Registered on: UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest,
 #                Stop (via ~/.codex/hooks.json)
 # All events: local-only presence outbox write. The daemon persists durable bindings.

@@ -362,7 +362,7 @@ struct LaunchSessionSheet: View {
                 .foregroundStyle(.secondary)
             Text("No enrolled machines yet.")
                 .font(.headline)
-            Text("Install Longhouse on a machine with `longhouse connect` first.")
+            Text("Install Longhouse on a machine first: run `curl -fsSL https://get.longhouse.ai/install.sh | bash` in its terminal.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)

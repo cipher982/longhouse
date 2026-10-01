@@ -478,11 +478,11 @@ def reconcile_local_runtime(
     )
 
     if not resolved_url:
-        repair_hint = "Run `longhouse connect --install` once to configure this machine."
+        repair_hint = "Run `longhouse auth --url <your-longhouse-url>`, then `longhouse machine repair --repair-service`."
         message = f"Machine state missing runtime_url at {state_path}. {repair_hint}"
         raise RuntimeError(message)
     if not resolved_name:
-        repair_hint = "Run `longhouse connect --install` once to configure this machine."
+        repair_hint = "Run `longhouse auth --url <your-longhouse-url>`, then `longhouse machine repair --repair-service`."
         message = f"Machine state missing machine_name at {state_path}. {repair_hint}"
         raise RuntimeError(message)
 

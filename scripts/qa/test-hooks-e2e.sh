@@ -47,7 +47,7 @@ command -v curl >/dev/null 2>&1 && pass "curl available"    || { fail "curl not 
 DAEMON_RUNNING=$(launchctl list 2>/dev/null | grep -c "com.longhouse.shipper" || true)
 [ "$DAEMON_RUNNING" -gt 0 ] \
   && pass "daemon running (com.longhouse.shipper)" \
-  || { fail "daemon not running — start with: longhouse connect"; exit 1; }
+  || { fail "daemon not running — start with: longhouse machine repair --repair-service"; exit 1; }
 
 [ -f "$STATE_FILE" ] && pass "state.json present"   || { fail "missing $STATE_FILE"; exit 1; }
 [ -f "$TOKEN_FILE" ] && pass "device-token present" || { fail "missing $TOKEN_FILE"; exit 1; }

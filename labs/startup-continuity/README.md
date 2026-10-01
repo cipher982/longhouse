@@ -9,7 +9,7 @@ cross-provider memory.
 
 This is **not** part of the launch product. It:
 
-- is not installed by default with `longhouse connect --install`
+- is not installed by the default Longhouse install
 - is not advertised on the landing page or in user docs
 - can be removed without deprecation
 
@@ -55,13 +55,14 @@ python labs/startup-continuity/install.py --check # report status, no writes
 
 This rewrites `~/.claude/hooks/longhouse-hook.sh` and
 `~/.codex/hooks/longhouse-codex-hook.sh` in place, adding the SessionStart
-fetch/inject path. The default install (`longhouse connect --install`) leaves
-this path out.
+fetch/inject path. The default install leaves this path out.
 
 ## Disabling
 
-Re-run `longhouse connect --install` to restore the default (presence-only)
-hook scripts.
+Re-run `longhouse-server onboard` to rewrite the default (presence-only) Codex
+hook script. Claude's shell hook no longer exists (the installer deletes
+`longhouse-hook.sh` in favor of native hooks), so there is nothing for this lab
+to patch there.
 
 ## Non-Goals
 
