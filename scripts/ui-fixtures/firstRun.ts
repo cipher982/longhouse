@@ -136,6 +136,7 @@ export function buildFirstRunMachineFixture() {
       summary_title: title,
       anchor_title: null,
       timeline_title: title,
+      title_source: "prompt",
       first_user_message: spec.prompt,
       origin_label: "local",
       home_label: null,

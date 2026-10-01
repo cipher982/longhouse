@@ -74,6 +74,8 @@ export interface AgentSession {
   } | null;
   /** Server-resolved headline to render verbatim (no client fallback ladder). */
   timeline_title?: string | null;
+  /** Where the headline came from: ai | provider | prompt | project. */
+  title_source?: string | null;
   summary_status?:
     | "ready"
     | "pending"

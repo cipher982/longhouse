@@ -49,27 +49,31 @@ describe("getSessionCardText", () => {
     );
   });
 
-  it("shows the prompt once when the headline is only the prompt cut short", () => {
+  it("shows the prompt once when the server says the headline is the prompt cut short", () => {
     // No title model: the server's headline is the first six words plus an ellipsis.
     const prompt = "Add rate limiting to the public API and cover it with tests";
     const text = getSessionCardText(
-      makeSession({ timeline_title: "Add rate limiting to the public\u2026", first_user_message: prompt }),
+      makeSession({
+        timeline_title: "Add rate limiting to the public\u2026",
+        title_source: "prompt",
+        first_user_message: prompt,
+      }),
     );
     expect(text.title).toBe(prompt);
     expect(text.titleSource).toBe("prompt");
     expect(text.subheading).toBeNull();
-
-    const exact = getSessionCardText(makeSession({ timeline_title: prompt, first_user_message: prompt }));
-    expect(exact.title).toBe(prompt);
-    expect(exact.subheading).toBeNull();
   });
 
-  it("keeps the prompt as the subheading under a real generated title", () => {
+  it("keeps the prompt as the subheading under a generated title, even one that opens with the prompt's words", () => {
     const text = getSessionCardText(
-      makeSession({ timeline_title: "Rate Limit The Public API", first_user_message: "Add rate limiting to the public API" }),
+      makeSession({
+        timeline_title: "Fix login bug",
+        title_source: "ai",
+        first_user_message: "Fix login bug in the auth module and add a regression test",
+      }),
     );
-    expect(text.title).toBe("Rate Limit The Public API");
-    expect(text.subheading).toBe("Add rate limiting to the public API");
+    expect(text.title).toBe("Fix login bug");
+    expect(text.subheading).toBe("Fix login bug in the auth module and add a regression test");
   });
 
   it("renders the server-owned empty-session projection verbatim", () => {

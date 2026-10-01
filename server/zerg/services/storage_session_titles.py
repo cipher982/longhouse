@@ -35,28 +35,23 @@ _client_close_tasks: set[asyncio.Task[None]] = set()
 _scheduled_workers_peak = 0
 
 
-def _title_egress_off() -> bool:
-    return get_settings().llm_disabled or not ai_titles_and_summaries_enabled()
-
-
 def title_generation_off_reason() -> str | None:
     """Why no AI title can be written on this host, or None when one can.
 
-    Off is a normal, healthy state: titles fall back to the first prompt. The
+    Off is a normal, healthy state and the default everywhere (transcript egress
+    is opt-in): no provider is needed, titles fall back to the first prompt. The
     obligation rows it leaves behind (every imported session is one) are not an
-    outage, so health must not grade them. A provider that IS configured and
-    failing is a different thing: it opens a dependency incident and still
-    surfaces, because this returns None for it.
+    outage, so health must not grade them, and the worker must not charge them a
+    failed attempt: one definition of "off" serves the worker, the reconciler
+    and both health surfaces. An operator who opted in is expecting titles, so a
+    provider that is missing its credential or failing then opens a dependency
+    incident and still surfaces; this returns None for it.
     """
-
-    from zerg.models_config import resolve_use_case_runtime_identity
 
     if get_settings().llm_disabled:
         return "llm_disabled"
     if not ai_titles_and_summaries_enabled():
         return "transcript_egress_not_enabled"
-    if resolve_use_case_runtime_identity("session_title").credential is None:
-        return "no_provider_configured"
     return None
 
 
@@ -158,7 +153,7 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
     try:
         await _model_slots.acquire()
         slot_acquired = True
-        if _title_egress_off():
+        if title_generation_off_reason() is not None:
             # Off is a capability state, not a failed attempt. Without this the
             # chokepoint gate in generate_initial_session_title returns None,
             # sanitize_timeline_title returns None, and the row below is charged
@@ -363,7 +358,7 @@ async def run_storage_title_reconciler(
     interval_seconds: float = 0.5,
     batch_size: int = STORAGE_TITLE_CANDIDATE_LOOKAHEAD,
 ) -> None:
-    if _title_egress_off():
+    if title_generation_off_reason() is not None:
         # Nothing to reconcile: no candidate can produce a title while
         # transcript egress is off, so do not run the 0.5s loop at all.
         return

@@ -74,8 +74,8 @@ async def test_title_worker_is_silent_when_transcript_egress_is_off(monkeypatch)
     assert calls == []
 
 
-def test_title_generation_off_reason_names_every_normal_off_state(monkeypatch):
-    """No provider, no egress opt-in and llm_disabled are healthy states; a configured provider is not off."""
+def test_title_generation_off_reason_is_off_by_default_and_not_for_an_opted_in_operator(monkeypatch):
+    """No egress opt-in and llm_disabled are healthy off states; an opted-in host is graded."""
 
     import zerg.services.storage_session_titles as storage_titles
 
@@ -84,14 +84,14 @@ def test_title_generation_off_reason_names_every_normal_off_state(monkeypatch):
 
     monkeypatch.setattr(storage_titles, "get_settings", lambda: SimpleNamespace(llm_disabled=False))
     monkeypatch.delenv("AI_TITLES_AND_SUMMARIES_ENABLED", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    # The default: no provider, no opt-in. Not an outage.
     assert storage_titles.title_generation_off_reason() == "transcript_egress_not_enabled"
 
+    # Opted in but no credential is a misconfiguration the worker records as a
+    # dependency incident (pinned by the missing-credential test below), so it
+    # is not "off" and still surfaces.
     monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    assert storage_titles.title_generation_off_reason() == "no_provider_configured"
-
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     assert storage_titles.title_generation_off_reason() is None
 
 

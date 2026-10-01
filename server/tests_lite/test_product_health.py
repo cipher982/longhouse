@@ -277,11 +277,11 @@ def test_product_health_degrades_on_aged_title_backlog_with_healthy_dependency(t
     assert check.signals["oldest_overdue_age_seconds"] == 600
 
 
-def test_product_health_session_titles_is_ok_when_no_provider_is_configured(tmp_path, monkeypatch):
+def test_product_health_session_titles_is_ok_when_titles_are_off(tmp_path, monkeypatch):
     """Titles off is a normal state; the imported-session backlog it leaves is not an outage."""
 
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
-    monkeypatch.setattr(storage_session_titles, "title_generation_off_reason", lambda: "no_provider_configured")
+    monkeypatch.setattr(storage_session_titles, "title_generation_off_reason", lambda: "transcript_egress_not_enabled")
 
     def _must_not_grade_the_backlog():
         raise AssertionError("graded a title backlog on a host that cannot generate titles")
@@ -295,7 +295,7 @@ def test_product_health_session_titles_is_ok_when_no_provider_is_configured(tmp_
     check = _check(payload, "session_titles")
     assert check.verdict == "ok"
     assert check.coverage == "full"
-    assert check.signals == {"titles_off_reason": "no_provider_configured"}
+    assert check.signals == {"titles_off_reason": "transcript_egress_not_enabled"}
 
 
 def test_machine_connected_unknown_without_recent_heartbeats(tmp_path, monkeypatch):
