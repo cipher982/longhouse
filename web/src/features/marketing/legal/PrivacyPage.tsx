@@ -64,9 +64,10 @@ export default function PrivacyPage() {
             that value is stored too. Treat your session history as sensitive, because it is.
           </p>
 
-          <h3>Integration Credentials</h3>
+          <h3>Device Tokens</h3>
           <p>
-            When you connect integrations, your credentials are stored encrypted.
+            Each machine you connect gets its own device token. The server stores only a SHA-256
+            hash of it, never the token itself.
           </p>
 
           <h3>Install Pings</h3>
@@ -180,7 +181,7 @@ export default function PrivacyPage() {
           <h2>Your Other Rights</h2>
           <ul>
             <li><strong>Access</strong> your data through the timeline</li>
-            <li><strong>Revoke</strong> integrations at any time</li>
+            <li><strong>Revoke</strong> a machine's device tokens at any time in Settings &rarr; Devices</li>
           </ul>
 
           <h2>Cookies</h2>
