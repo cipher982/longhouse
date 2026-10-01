@@ -66,7 +66,7 @@ class Repo:
 
     def commits(self, base: str, head: str = "HEAD") -> list[dict]:
         out = []
-        for sha in self.git("rev-list", "--reverse", f"{base}..{head}").split():
+        for sha in self.git("rev-list", "--reverse", "--no-merges", f"{base}..{head}").split():  # as review-hub lists them
             patch = subprocess.run(["git", "show", "--no-color", "--no-ext-diff", "--patch", sha], cwd=self.dir,
                                    capture_output=True, text=True).stdout
             pid = subprocess.run(["git", "patch-id", "--stable"], cwd=self.dir, input=patch,
@@ -88,6 +88,55 @@ class Repo:
             "partial_phases": [], "verdict": "ready", "findings": list(findings),
         })
         return rid
+
+    def merge_receipt(self, sha: str, *, state: str = "complete", findings=(), reasons=(), flagged: bool = True) -> str:
+        """Append the receipt `hatch review --merge <sha>` writes: one commit entry, keyed to the merge SHA, flagged `merge`."""
+        n = len([e for e in gate.load_events(self.dir) if e["type"] == "review"]) + 1
+        rid = f"rv-fixture-merge-{n}"
+        parents = self.git("rev-list", "--parents", "-n", "1", sha).split()[1:]
+        entry = {"sha": sha, "patch_id": None, "subject": "", "parents": parents}
+        if flagged:
+            entry["merge"] = True
+        gate.append_event(self.dir, {
+            "type": "review", "id": rid, "at": "2026-09-30T00:00:00Z", "mode": "merge",
+            "repo": {"toplevel": str(self.dir), "origin": None},
+            "base": parents[0], "head": sha, "commits": [entry], "surface": "openrouter deepseek-v4.1-flash",
+            "runs": {"blind": "b", "final": "f"}, "state": state, "state_reasons": list(reasons),
+            "partial_phases": [], "verdict": "ready", "findings": list(findings),
+        })
+        return rid
+
+    def conflicted_merge(self, path: str = "server/zerg/auth/tokens.py", resolution: str | None = "resolved by hand\n",
+                         branch: str = "topic") -> dict:
+        """A real conflict. main and a topic branch both rewrite line 3 of `path`; the topic merges main and
+        resolves it (`resolution` is the file's whole content; None takes main's side wholesale). Leaves the
+        topic branch checked out and origin/main on main's commit."""
+        text = "".join(f"line {i}\n" for i in range(10))
+        fork = self.commit("add tokens", {path: text})
+        self.git("update-ref", "refs/remotes/origin/main", fork)
+        main_edit = self.commit("main edits line 3", {path: text.replace("line 3", "main 3")})
+        self.git("update-ref", "refs/remotes/origin/main", main_edit)
+        self.git("checkout", "-q", "-b", branch, fork)
+        topic = self.commit("topic edits line 3", {path: text.replace("line 3", "topic 3")})
+        merged = subprocess.run(["git", "merge", "--no-ff", "-m", "Merge main into topic", "main"], cwd=self.dir, capture_output=True, text=True)
+        assert merged.returncode != 0 and "CONFLICT" in merged.stdout, merged.stdout  # the fixture is a real conflict
+        (self.dir / path).write_text(resolution if resolution is not None else text.replace("line 3", "main 3"))
+        self.git("add", path)
+        self.git("commit", "-q", "--no-edit")
+        return {"fork": fork, "main": main_edit, "topic": topic, "merge": self.git("rev-parse", "HEAD")}
+
+    def clean_merge_of_one_file(self, path: str = "server/zerg/auth/tokens.py") -> dict:
+        """main and a topic branch edit different lines of one file: git merges it with no conflict, and the result
+        differs from both parents as a whole (which is what a file-level `--cc` listing mistakes for a resolution)."""
+        text = "".join(f"line {i}\n" for i in range(10))
+        fork = self.commit("add tokens", {path: text})
+        self.git("update-ref", "refs/remotes/origin/main", fork)
+        main_edit = self.commit("main edits line 1", {path: text.replace("line 1", "main 1")})
+        self.git("update-ref", "refs/remotes/origin/main", main_edit)
+        self.git("checkout", "-q", "-b", "topic", fork)
+        topic = self.commit("topic edits line 8", {path: text.replace("line 8", "topic 8")})
+        self.git("merge", "-q", "--no-ff", "-m", "Merge main into topic", "main")
+        return {"fork": fork, "main": main_edit, "topic": topic, "merge": self.git("rev-parse", "HEAD")}
 
     def disposition(self, rid: str, finding: str, disposition: str) -> None:
         gate.append_event(self.dir, {"type": "disposition", "receipt": rid, "finding": finding,
@@ -498,7 +547,12 @@ class PushRuleTests(unittest.TestCase):
         self.assertEqual([v.commit.sha for v in self.push()], [second])
         self.assertNotEqual(first, second)
 
-    def test_a_clean_merge_asks_for_nothing_and_a_merge_with_changes_of_its_own_is_refused(self):
+    # --- merge commits: judged by what they add to a clean merge of their parents (git show --remerge-diff) ---
+
+    def merges(self):
+        return [v for v in self.push() if v.commit.merge]
+
+    def test_a_clean_merge_asks_for_nothing(self):
         repo = self.repo
         repo.git("checkout", "-q", "-b", "side")
         repo.commit("side work", {"docs/side.md": "1", "server/zerg/auth/tokens.py": "side\n"})
@@ -508,21 +562,107 @@ class PushRuleTests(unittest.TestCase):
         repo.git("checkout", "-q", "-b", "topic", "main")
         repo.git("merge", "-q", "--no-ff", "-m", "clean merge", "side")  # brings a reviewed-elsewhere auth change in
         (clean,) = [c for c in gate.commits_in(self.tmp.name, "main..topic") if c.merge]
-        self.assertEqual(clean.files, [])  # --cc: nothing of its own
-        # an evil merge: conflicting edits to an auth file, resolved by hand
-        repo.git("checkout", "-q", "main")
-        repo.commit("main edits auth", {"server/zerg/auth/tokens.py": "main\n"})
-        repo.git("update-ref", "refs/remotes/origin/main", "main")
-        repo.git("checkout", "-q", "-b", "topic2", "main~1")
-        repo.commit("topic edits auth", {"server/zerg/auth/tokens.py": "topic\n"})
-        subprocess.run(["git", "merge", "-q", "--no-ff", "-m", "resolve", "main"], cwd=self.tmp.name, capture_output=True)
-        (Path(self.tmp.name) / "server/zerg/auth/tokens.py").write_text("resolved by hand\n")
-        repo.git("add", "server/zerg/auth/tokens.py")
-        repo.git("commit", "-q", "--no-edit")
-        merges = [v for v in gate.push_verdicts(self.tmp.name, self.policy, "origin/main", "topic2") if v.commit.merge]
-        self.assertEqual(len(merges), 1)
-        self.assertEqual(merges[0].areas, ["auth"])
-        self.assertIn("rebase", merges[0].reasons[0])
+        self.assertEqual(clean.files, [])
+        self.assertEqual(self.merges(), [])
+
+    def test_a_clean_merge_of_two_edits_to_one_file_is_not_mistaken_for_a_resolution(self):
+        # The regression: landed merge dd48da29b took both sides' edits to one generated JSON file with no
+        # conflict, and a file-level `--cc` listing called that "conflict resolution" nothing could ever clear.
+        merge = self.repo.clean_merge_of_one_file()["merge"]
+        (commit,) = [c for c in gate.commits_in(self.tmp.name, "origin/main..topic") if c.merge]
+        self.assertEqual((commit.sha, commit.files), (merge, []))
+        self.assertEqual(self.merges(), [])
+        result = self.repo.run("status", "--range", "origin/main..topic")
+        self.assertIn("exempt", [line for line in result.stdout.splitlines() if line.startswith(merge[:12])][0])
+
+    def test_a_merge_with_a_conflict_resolution_needs_a_receipt_of_its_own(self):
+        m = self.repo.conflicted_merge()
+        self.repo.receipt(m["fork"], m["topic"])  # the commits it brings in, reviewed as a range
+        (verdict,) = self.merges()
+        self.assertEqual((verdict.commit.sha, verdict.commit.files, verdict.areas), (m["merge"], ["server/zerg/auth/tokens.py"], ["auth"]))
+        self.assertTrue(verdict.needs_receipt)
+        self.assertIn("no review receipt for the merge's own changes", verdict.reasons[0])
+        # the range receipt does not cover it, and neither does an entry that was not written by `--merge`
+        self.assertEqual(len(self.merges()), 1)
+        self.repo.merge_receipt(m["merge"], flagged=False)
+        self.assertEqual(len(self.merges()), 1)
+        self.repo.merge_receipt(m["merge"])
+        self.assertEqual(self.merges(), [])
+
+    def test_a_merge_receipt_is_keyed_to_the_exact_merge(self):
+        m = self.repo.conflicted_merge()
+        self.repo.receipt(m["fork"], m["topic"])
+        rid = self.repo.merge_receipt(m["merge"])
+        self.assertEqual(self.push(), [])
+        # re-resolve the same conflict differently: a new merge SHA, so the old review does not cover it
+        self.repo.git("reset", "-q", "--hard", m["topic"])
+        subprocess.run(["git", "merge", "--no-ff", "-m", "Merge main into topic", "main"], cwd=self.tmp.name, capture_output=True)
+        (Path(self.tmp.name) / "server/zerg/auth/tokens.py").write_text("resolved another way\n")
+        self.repo.git("add", "server/zerg/auth/tokens.py")
+        self.repo.git("commit", "-q", "--no-edit")
+        (verdict,) = self.merges()
+        self.assertNotEqual(verdict.commit.sha, m["merge"])
+        self.assertIn("no review receipt", verdict.reasons[0])
+        self.assertTrue(rid)
+
+    def test_merge_receipts_follow_the_same_state_and_finding_rules(self):
+        m = self.repo.conflicted_merge()
+        self.repo.receipt(m["fork"], m["topic"])
+        self.repo.merge_receipt(m["merge"], state="partial", reasons=["pass hit its time budget: final"])
+        (verdict,) = self.merges()
+        self.assertIn("only a partial review", verdict.reasons[0])
+        rid = self.repo.merge_receipt(m["merge"], findings=[finding("F1", "material", "dropped main's edit")])
+        (verdict,) = self.merges()
+        self.assertIn(f"unresolved material finding {rid} F1", verdict.reasons[0])
+        self.repo.disposition(rid, "F1", "rejected")
+        self.assertEqual(self.merges(), [])
+
+    def test_taking_one_side_wholesale_is_still_a_change_of_the_merge(self):
+        # Dropping the topic's edit by taking main's file is exactly what a review must see, and a combined diff of the
+        # result against its parents cannot (the result equals one parent).
+        m = self.repo.conflicted_merge(resolution=None)
+        self.assertEqual(self.repo.git("diff", "--name-only", m["main"], m["merge"]), "")
+        (verdict,) = self.merges()
+        self.assertEqual(verdict.commit.files, ["server/zerg/auth/tokens.py"])
+
+    def test_content_added_by_hand_to_a_clean_merge_is_the_merges_own_change(self):
+        m = self.repo.clean_merge_of_one_file()
+        (Path(self.tmp.name) / "server/zerg/auth/backdoor.py").parent.mkdir(parents=True, exist_ok=True)
+        (Path(self.tmp.name) / "server/zerg/auth/backdoor.py").write_text("allow = True\n")
+        self.repo.git("add", "server/zerg/auth/backdoor.py")
+        self.repo.git("commit", "-q", "--amend", "--no-edit")
+        merge = self.repo.git("rev-parse", "HEAD")
+        self.assertNotEqual(merge, m["merge"])
+        (verdict,) = self.merges()
+        self.assertEqual((verdict.commit.files, verdict.areas), (["server/zerg/auth/backdoor.py"], ["auth"]))
+
+    def test_a_resolution_confined_to_docs_needs_no_review(self):
+        m = self.repo.conflicted_merge(path="docs/notes.md", resolution="merged notes\n")
+        self.assertEqual(self.merges(), [])  # blocking-list rule: docs are not on it
+        self.assertEqual(m["merge"], self.repo.git("rev-parse", "HEAD"))
+
+    def test_an_octopus_merge_cannot_be_measured_so_the_gate_cannot_decide(self):
+        repo = self.repo
+        for branch in ("a", "b"):
+            repo.git("checkout", "-q", "-b", branch, "main")
+            repo.commit(branch, {f"docs/{branch}.md": branch})
+        repo.git("checkout", "-q", "-b", "octopus", "main")
+        repo.git("merge", "-q", "--no-ff", "a", "b", "-m", "octopus")
+        with self.assertRaises(gate.GateError) as caught:
+            gate.commits_in(self.tmp.name, "main..octopus")
+        self.assertIn("octopus", str(caught.exception))
+        result = self.repo.run("push", "--base", "main", "--head", "octopus")
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_the_refusal_names_the_merge_review_command_not_a_range_review(self):
+        m = self.repo.conflicted_merge()
+        self.repo.receipt(m["fork"], m["topic"])
+        result = self.repo.run("push", "--base", "origin/main", "--head", "topic")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(f"hatch review -C {Path(self.tmp.name).resolve()} --merge {m['merge'][:12]}", result.stderr)
+        self.assertNotIn("--base", result.stderr)  # the topic commit is covered; only the merge is unreviewed
+        self.repo.merge_receipt(m["merge"])
+        self.assertEqual(self.repo.run("push", "--base", "origin/main", "--head", "topic").returncode, 0)
 
     def test_events_the_gate_cannot_index_are_skipped_not_fatal(self):
         gate.append_event(self.tmp.name, {"type": "review", "state": "complete", "commits": [{"sha": "a"}]})  # no id
@@ -592,6 +732,20 @@ class PromotionRuleTests(unittest.TestCase):
         self.repo.commit("tests", {"server/tests_lite/test_a.py": "1"})
         self.repo.commit("Bump version to 0.1.61", {"server/pyproject.toml": "v"})
         self.assertEqual(self.promote(), [])
+
+    def test_a_merge_is_asked_about_only_for_its_own_changes(self):
+        clean = self.repo.clean_merge_of_one_file(path="server/zerg/shared.py")
+        self.repo.receipt(self.served, clean["merge"])  # every non-merge commit of the range
+        self.assertEqual(self.promote(target=clean["merge"]), [])  # the clean merge is not a commit to review
+        self.repo.git("checkout", "-q", "main")
+        self.repo.git("reset", "-q", "--hard", self.policy_commit)
+        m = self.repo.conflicted_merge(path="server/zerg/shared.py", branch="topic2")
+        self.repo.receipt(self.served, m["merge"])
+        (verdict,) = self.promote(target=m["merge"])
+        self.assertEqual((verdict.commit.sha, verdict.commit.merge), (m["merge"], True))
+        self.assertTrue(verdict.needs_receipt)
+        self.repo.merge_receipt(m["merge"])
+        self.assertEqual(self.promote(target=m["merge"]), [])
 
     def test_every_unreviewed_code_commit_is_listed_not_only_blocking_ones(self):
         a = self.repo.commit("feature a", {"server/zerg/a.py": "1"})

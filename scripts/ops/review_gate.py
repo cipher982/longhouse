@@ -21,6 +21,12 @@ control-plane/docs/specs/review-receipts.md. A receipt covers a commit when it
 lists the commit's SHA or its stable patch-id, so a rebase after review keeps the
 review; a change to the patch itself (amend, conflict resolution) does not.
 
+A merge commit is judged by what it adds to a clean merge of its parents, not by the
+commits it brings in (those are reviewed on their own): its own changes are
+`git show --remerge-diff`, the conflict resolutions and any hand-added content. A merge
+with none asks for nothing. A merge with some needs a receipt keyed to the merge SHA,
+written by `hatch review --merge <sha>`, which reviews exactly that diff.
+
   review_gate.py push [--base origin/main]
   review_gate.py pre-push REMOTE [URL]        (the git hook; stdin is git's list of refs being pushed)
   review_gate.py promotion --target SHA (--served SHA | --served-url URL)
@@ -161,11 +167,13 @@ class Policy:
 class Commit:
     sha: str
     subject: str
-    files: list[str]
+    files: list[str]  # for a merge: the files of its own changes (merge_own_files), not of the commits it brings in
     merge: bool = False
     _patch_id: str | None = field(default=None, repr=False)
 
     def patch_id(self, repo: str | Path) -> str | None:
+        if self.merge:
+            return None  # a merge is covered by its exact SHA only; its patch is not a stable thing to match
         if self._patch_id is None:
             diff = git(repo, "show", "--no-color", "--no-ext-diff", "--no-renames", "--patch", self.sha)
             out = git(repo, "patch-id", "--stable", stdin=diff).split()
@@ -173,18 +181,36 @@ class Commit:
         return self._patch_id or None
 
 
+def merge_own_files(repo: str | Path, sha: str, parents: list[str]) -> list[str]:
+    """The files a merge commit changes beyond a clean automatic merge of its parents: its conflict
+    resolutions and anything added by hand (`git show --remerge-diff`, git >= 2.36). Empty for a clean merge.
+
+    Not `--cc`: that lists a file whenever the merged result differs from both parents as a whole, which any
+    clean merge of two edits to one file does, and it omits a conflict resolved by taking one side wholesale."""
+    if len(parents) > 2:
+        raise GateError(f"{sha[:12]} is an octopus merge ({len(parents)} parents): git cannot remerge-diff it, so its own "
+                        "changes cannot be measured; merge the branches pairwise")
+    try:
+        out = git(repo, "show", "--remerge-diff", "--no-renames", "--name-only", "--format=", sha)
+    except GateError as exc:
+        raise GateError(f"cannot compute the own changes of merge {sha[:12]} (needs git >= 2.36 for --remerge-diff): {exc}")
+    return [n for n in out.splitlines() if n.strip()]
+
+
 def commits_in(repo: str | Path, *revs: str) -> list[Commit]:
     # --no-renames: a rename lists both its source and destination, so moving a file out of
     # (or into) a blocking path or docs cannot hide it from the path rules.
-    # --cc: a merge lists only the files whose merged result differs from every parent (its own
-    # conflict resolutions); a clean merge lists none, so it asks for nothing.
-    out = git(repo, "log", "--cc", "--reverse", "--no-renames", "--name-only", "--format=%x01%H%x02%P%x02%s", *revs)
+    # --diff-merges=off: a merge lists no files here whatever log.diffMerges says; its own changes are
+    # asked of git separately (merge_own_files), so a clean merge lists none and asks for nothing.
+    out = git(repo, "log", "--diff-merges=off", "--reverse", "--no-renames", "--name-only", "--format=%x01%H%x02%P%x02%s", *revs)
     commits = []
     for chunk in out.split("\x01")[1:]:
         header, _, names = chunk.partition("\n")
         sha, parents, subject = header.split("\x02", 2)
-        commits.append(Commit(sha, subject.strip(), [n for n in names.splitlines() if n.strip()],
-                              merge=len(parents.split()) > 1))
+        parent_list = parents.split()
+        merge = len(parent_list) > 1
+        files = merge_own_files(repo, sha, parent_list) if merge else [n for n in names.splitlines() if n.strip()]
+        commits.append(Commit(sha, subject.strip(), files, merge=merge))
     return commits
 
 
@@ -258,42 +284,51 @@ class Verdict:
     commit: Commit
     reasons: list[str]  # empty = fine
     areas: list[str] = field(default_factory=list)
+    needs_receipt: bool = False  # a review would clear it (no receipt, or only a partial one)
 
 
 def check_commits(repo: str | Path, commits: list[Commit], events: list[dict]) -> list[Verdict]:
     """Coverage of each commit by review receipts: needs a complete receipt that lists its
-    SHA (or patch-id), and no covering receipt may hold an unresolved gated finding."""
+    SHA (or patch-id), and no covering receipt may hold an unresolved gated finding.
+    A merge is covered only by a receipt entry flagged `merge` (`hatch review --merge`, which
+    reviewed the merge's own changes) under the merge's exact SHA."""
     reviews = [e for e in events if e.get("type") == "review"]
     by_sha: dict[str, list[dict]] = {}
+    by_merge: dict[str, list[dict]] = {}
     by_patch: dict[str, list[dict]] = {}
     for r in reviews:
         for c in r.get("commits", []):
             by_sha.setdefault(c.get("sha"), []).append(r)
+            if c.get("merge"):
+                by_merge.setdefault(c.get("sha"), []).append(r)
             if c.get("patch_id"):
                 by_patch.setdefault(c["patch_id"], []).append(r)
     verdicts = []
     for commit in commits:
-        covering = list(by_sha.get(commit.sha, []))
-        if by_patch and not any(r.get("state") == "complete" for r in covering):
+        covering = list((by_merge if commit.merge else by_sha).get(commit.sha, []))
+        if by_patch and not commit.merge and not any(r.get("state") == "complete" for r in covering):
             # Not reviewed under this exact SHA: a rebased copy of the same patch counts.
             seen = {r["id"] for r in covering}
             covering += [r for r in by_patch.get(commit.patch_id(repo) or "", []) if r["id"] not in seen]
         reasons = []
+        needs_receipt = False
         complete = [r for r in covering if r.get("state") == "complete"]
         if not complete:
+            needs_receipt = True
             if covering:
                 latest = covering[-1]
                 why = "; ".join(latest.get("state_reasons") or []) or "not complete"
                 reasons.append(f"only a partial review ({latest['id']}: {why})")
             elif commit.merge:
-                reasons.append("a merge commit with changes of its own (conflict resolution); receipts cover "
-                               "non-merge commits, so rebase onto the target instead of merging")
+                reasons.append("no review receipt for the merge's own changes (conflict resolution or content beyond "
+                               "a clean merge of its parents): " + ", ".join(commit.files[:5])
+                               + (", ..." if len(commit.files) > 5 else ""))
             else:
                 reasons.append("no review receipt")
         for r in covering:
             for f in open_findings(events, r):
                 reasons.append(f"unresolved {f['severity']} finding {r['id']} {f['id']}: {f.get('summary', '')[:140]}")
-        verdicts.append(Verdict(commit, reasons))
+        verdicts.append(Verdict(commit, reasons, needs_receipt=needs_receipt))
     return verdicts
 
 
@@ -389,7 +424,8 @@ def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict]) -> str:
         area = f" [{', '.join(v.areas)}]" if v.areas else ""
         lines.append(f"  {v.commit.sha[:12]} {v.commit.subject[:80]}{area}")
         lines.extend(f"      - {reason}" for reason in v.reasons)
-    unreviewed = [v.commit.sha for v in verdicts if any(r.startswith(("no review", "only a partial")) for r in v.reasons)]
+    unreviewed = [v.commit.sha for v in verdicts if v.needs_receipt and not v.commit.merge]
+    merges = [v.commit.sha for v in verdicts if v.needs_receipt and v.commit.merge]
     lines.append("")
     if unreviewed:
         first, last = unreviewed[0], unreviewed[-1]
@@ -398,6 +434,10 @@ def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict]) -> str:
             f"  hatch review -C {repo} --base {first[:12]}^ --head {last[:12]} --no-intent",
             "A rebase after review keeps the receipt. A partial review (a pass hit its budget) does not count.",
         ]
+    if merges:
+        lines.append("A merge is covered by a review of its own changes, the diff against a clean merge of its parents "
+                     "(`git show --remerge-diff`), keyed to the merge SHA; a range review does not cover it:")
+        lines += [f"  hatch review -C {repo} --merge {sha[:12]} --no-intent" for sha in merges]
     lines += [
         "Then record what you did about each blocking/material finding:",
         '  hatch review disposition <receipt> F1[,F2] fixed|rejected --reason "..."   # `hatch review receipts --open` lists them',
@@ -476,8 +516,11 @@ def main(argv: list[str] | None = None) -> int:
                 v = check_commits(repo, [c], load_events(repo))[0]
                 areas = policy.blocking_areas(c.files)
                 exempt = policy.exempt_commit(c.subject, c.files)
-                print(f"{c.sha[:12]} {'exempt' if exempt else 'reviewed' if not v.reasons else 'NOT OK '} "
-                      f"{','.join(areas) or '-'} {c.subject[:60]} {'; '.join(v.reasons)}")
+                label = "exempt (clean merge)" if exempt and c.merge and not c.files else "exempt" if exempt \
+                    else "reviewed" if not v.reasons else "NOT OK "
+                # No gate asks about an exempt commit, so its coverage reasons would only be noise.
+                print(f"{c.sha[:12]} {label} {','.join(areas) or '-'} {c.subject[:60]} "
+                      f"{'' if exempt else '; '.join(v.reasons)}".rstrip())
             return 0
     except GateError as exc:
         print(f"review-gate: {exc}", file=sys.stderr)
