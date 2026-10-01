@@ -247,6 +247,7 @@ enum QueuedInputIndicator {
     /// the same person is not another sender; an agent's `continue`, the web and
     /// directed input each mint ids of their own.
     static func isFromAnotherSender(_ clientRequestId: String?, ownClientRequestIds: Set<String>) -> Bool {
+        // This app always sends an id, so a row without one was not sent by it.
         guard let id = clientRequestId else { return true }
         return !(ownClientRequestIds.contains(id) || id.hasPrefix("ios-"))
     }

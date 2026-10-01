@@ -2354,6 +2354,7 @@ providers:
   - engine/src/managed_pi_helm_scan.rs
   - engine/assets/longhouse-pi-helm.ts
   - engine/src/pi_print.rs
+  - engine/src/console_rpc.rs
   - engine/src/pi_session.rs
   - server/zerg/qa/provider_adapters/pi.py
   - server/zerg/qa/pi_native.py
@@ -2739,6 +2740,7 @@ providers:
   - engine/src/omp_helm_control.rs
   - engine/assets/longhouse-omp-helm.ts
   - engine/src/omp_print.rs
+  - engine/src/console_rpc.rs
   - server/zerg/services/session_live_previews.py
   - server/zerg/services/session_runtime.py
   - server/zerg/services/provider_interaction_semantics.py
