@@ -653,7 +653,7 @@ check-push-readiness: ## Before pushing: stale duplicate commits on main, and bl
 install-push-gate: ## Once per clone: a pre-push hook so a bare `git push origin HEAD:main` asks the review gate too
 	@./scripts/ops/install-push-gate.sh
 
-test-ci: ## Broad pre-release CI check (~20min; not required for every push)
+test-ci: ## Broad pre-release CI check (about 7 min in the release guest; not required for every push)
 	$(MAKE) validate
 	$(MAKE) import-smoke
 	$(MAKE) test
@@ -1237,7 +1237,7 @@ reprovision: ## Reprovision an explicit immutable image (SUBDOMAIN=..., IMAGE=..
 		lh_hosted_reprovision "$$LH_INSTANCE_ID" "$$TARGET_IMAGE"'
 
 .PHONY: promote-dogfood
-promote-dogfood: ## Promote a canary-verified runtime image to the dogfood instance (SHA=newest verified main)
+promote-dogfood: ## Promote a canary-verified runtime image to the dogfood instance (SHA=<full sha> required)
 	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(SHA)
 
 # The old interface was VERSION=vX.Y.Z. Make would swallow it and promote whatever dogfood serves, so refuse it.
@@ -1317,7 +1317,7 @@ qa-visual-compare: ## Compare current app screenshots against baselines; set SKI
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=chromium tests/visual_compare.spec.ts --workers=1
 
-menubar-harness: ## macOS menu bar harness (MODE=test|fixtures|live|smoke|full|window|menubar)
+menubar-harness: ## macOS menu bar harness, dispatched to a hosted macOS VM (MODE=test|render-fixtures|render-trust-states|smoke|xcuitest)
 	@./scripts/qa/menubar-harness.sh $(or $(MODE),test)
 
 qa-oss: ## Full OSS QA (prepared isolated workspace + onboarding)

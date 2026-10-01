@@ -18,9 +18,10 @@ Cuts a stable Longhouse release:
    2. Commits the versioned candidate locally and runs the full validation
       (`make test-ci`) under the shared heavy-build lock. Only this step holds
       the lock; the rest of the release waits on GitHub, so other agents' builds
-      are not blocked for the ~half hour that takes.
+      are not blocked for the few minutes that takes.
    3. Pushes the validated candidate to main.
-   4. Waits for exact-SHA CI, deploy (including hosted QA), installer, and live-surface gates.
+   4. Waits for exact-SHA CI, deploy, installer, and live-surface gates (hosted QA runs
+      asynchronously and gates production promotion, not the release).
    5. Creates the GitHub release with tag VERSION (fires publish.yml + local-runtime-release.yml).
    6. Waits for both release workflows to finish. Notarization can take up to ~330m in the worst case.
    7. Verifies the release has the expected artifacts and that macOS notarization is notarized.
@@ -209,7 +210,7 @@ if git -C "$ROOT" merge-base --is-ancestor "$BUMP_SHA" origin/main; then
 # Race-safe: only push if origin/main hasn't moved since the clean check above.
 # If another agent pushed in between, bail out so they can land and we retry.
 elif echo "Pushing versioned candidate to main..." && ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
-  # Other agents land on main during the ~20 min validation. When the bump
+  # Other agents land on main during the validation. When the bump
   # commit is the only local commit, replay it onto origin/main: that only
   # adds already-pushed work, and the exact-SHA CI and deploy gates below run
   # on the rebased candidate before any release is created.
