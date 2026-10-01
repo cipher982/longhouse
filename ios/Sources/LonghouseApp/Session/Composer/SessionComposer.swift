@@ -38,6 +38,22 @@ enum SessionComposerControlState {
         }
     }
 
+    /// The queue is shared by every sender into a session. The phone shows a
+    /// bubble only for what it sent, so a message another sender parked is named
+    /// rather than counted silently ("two queued" beside one bubble read as a bug).
+    static func queuedIndicatorText(total: Int, elsewhere: Int) -> String {
+        let base = total == 1 ? "1 message queued" : "\(total) messages queued"
+        let origin: String
+        if elsewhere <= 0 {
+            origin = ""
+        } else if elsewhere >= total {
+            origin = " (from another sender)"
+        } else {
+            origin = " (\(elsewhere) from another sender)"
+        }
+        return "\(base)\(origin) — will send at next turn boundary."
+    }
+
     static func placeholder(for detail: SessionDetail, asOf now: Date) -> String {
         detail.stateFacts.activityEvidenceIsLive(asOf: now) ? detail.composerPlaceholder : "Message"
     }
@@ -136,6 +152,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     @State private var evidenceNow = Date()
     let failedInputCount: Int
     let queuedInputCount: Int
+    let queuedElsewhereCount: Int
     let lastSendOutcome: SessionInputOutcome?
     let isSending: Bool
     let attachmentIsEmpty: Bool
@@ -164,6 +181,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         onModelTap: @escaping () -> Void = {},
         failedInputCount: Int = 0,
         queuedInputCount: Int = 0,
+        queuedElsewhereCount: Int = 0,
         lastSendOutcome: SessionInputOutcome? = nil,
         isSending: Bool = false,
         attachmentIsEmpty: Bool = true,
@@ -191,6 +209,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         _focused = focused
         self.failedInputCount = failedInputCount
         self.queuedInputCount = queuedInputCount
+        self.queuedElsewhereCount = queuedElsewhereCount
         self.lastSendOutcome = lastSendOutcome
         self.isSending = isSending
         self.attachmentIsEmpty = attachmentIsEmpty
@@ -224,9 +243,10 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
             }
 
             if queuedInputCount > 0 {
-                Text(queuedInputCount == 1
-                     ? "1 message queued — will send at next turn boundary."
-                     : "\(queuedInputCount) messages queued — will send at next turn boundary.")
+                Text(SessionComposerControlState.queuedIndicatorText(
+                    total: queuedInputCount,
+                    elsewhere: queuedElsewhereCount
+                ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("session-chat-queued-indicator")

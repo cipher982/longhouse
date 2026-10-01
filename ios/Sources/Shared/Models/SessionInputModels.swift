@@ -43,6 +43,11 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
 
     let archiveInputId: Int?
     let liveInputId: String?
+    /// The identity of the operation that created this row. A message another
+    /// sender queued (an agent's `continue`, the web, a second phone) carries one
+    /// this client never minted, which is how a queue count is split into what
+    /// this phone sent and what it did not.
+    let clientRequestId: String?
     let text: String
     let intent: SessionInputIntent
     let status: SessionInputStatus
@@ -52,6 +57,7 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case archiveInputId = "id"
         case liveInputId
+        case clientRequestId
         case text
         case intent
         case status
@@ -62,6 +68,7 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
     init(
         id: Int?,
         liveInputId: String? = nil,
+        clientRequestId: String? = nil,
         text: String,
         intent: SessionInputIntent,
         status: SessionInputStatus,
@@ -70,6 +77,7 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
     ) {
         self.archiveInputId = id
         self.liveInputId = liveInputId
+        self.clientRequestId = clientRequestId
         self.text = text
         self.intent = intent
         self.status = status
@@ -142,9 +150,32 @@ struct SessionInputResponse: Codable, Sendable {
         queued.filter { $0.status == .queued }.count
     }
 
+    /// Queued messages this client did not submit. The queue is shared by every
+    /// sender into a session, so a count that includes an agent's parked message
+    /// reads as a phantom: one message sent, "two queued", and only one visible.
+    func queuedElsewhereCount(excluding ownClientRequestIds: Set<String>) -> Int {
+        queued.filter { row in
+            row.status == .queued
+                && QueuedInputIndicator.isFromAnotherSender(row.clientRequestId, ownClientRequestIds: ownClientRequestIds)
+        }.count
+    }
+
     var visibleFailedInputCount: Int {
         queued.filter { row in
             row.status == .failed && !(row.intent == .steer && row.lastError == "turn_ended")
+        }.count
+    }
+
+    /// The failures this client's user should be told about: the ones this
+    /// client sent. The recent window holds every sender's rows, and another
+    /// sender's message that expired unread (an agent's `continue` to a turn that
+    /// never ended) is that sender's failure, not "a queued message failed to send"
+    /// in this person's composer.
+    func visibleFailedInputCount(ownClientRequestIds: Set<String>) -> Int {
+        queued.filter { row in
+            row.status == .failed
+                && !(row.intent == .steer && row.lastError == "turn_ended")
+                && !QueuedInputIndicator.isFromAnotherSender(row.clientRequestId, ownClientRequestIds: ownClientRequestIds)
         }.count
     }
 }
@@ -193,6 +224,32 @@ struct SessionInputReceipt: Codable, Hashable, Sendable {
     let createdAt: String?
     /// The durable user event this send became, once ingest linked it.
     let eventId: String?
+}
+
+/// The composer's "N messages queued" line, read from the served receipts.
+///
+/// The queue is shared by every sender into a session. Counting it once at send
+/// time left the line stale after the queue drained, and counting an agent's
+/// parked message beside one bubble read as a phantom ("two queued, I sent one").
+enum QueuedInputIndicator {
+    static func counts(
+        receipts: [SessionInputReceipt],
+        ownClientRequestIds: Set<String>
+    ) -> (total: Int, elsewhere: Int) {
+        let queued = receipts.filter { $0.status == SessionInputStatus.queued.rawValue }
+        let elsewhere = queued.filter {
+            isFromAnotherSender($0.clientRequestId, ownClientRequestIds: ownClientRequestIds)
+        }
+        return (queued.count, elsewhere.count)
+    }
+
+    /// This app mints every id it sends as "ios-<uuid>", so another phone of
+    /// the same person is not another sender; an agent's `continue`, the web and
+    /// directed input each mint ids of their own.
+    static func isFromAnotherSender(_ clientRequestId: String?, ownClientRequestIds: Set<String>) -> Bool {
+        guard let id = clientRequestId else { return true }
+        return !(ownClientRequestIds.contains(id) || id.hasPrefix("ios-"))
+    }
 }
 
 enum SessionInputReceiptDisposition: String, Codable, Sendable {

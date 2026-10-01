@@ -551,6 +551,7 @@ extension APIQueuedInputSummary {
         QueuedInputSummary(
             id: id,
             liveInputId: liveInputId,
+            clientRequestId: clientRequestId,
             text: text,
             intent: SessionInputIntent(rawValue: intent) ?? .auto,
             status: SessionInputStatus(rawValue: status) ?? .queued,

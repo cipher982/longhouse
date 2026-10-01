@@ -1761,6 +1761,119 @@ struct SessionModelsTests {
         #expect(response.visibleFailedInputCount == 0)
     }
 
+    /// 2026-10-01: one message sent from the phone, "2 messages queued". The
+    /// second was the release coordinator's `continue` to the same session, parked
+    /// since 01:19 and invisible on the phone. The count was right and said nothing
+    /// about whose message the other one was.
+    @Test
+    func queueCountNamesTheMessagesAnotherSenderParked() throws {
+        let json = """
+        {
+          "outcome": "queued",
+          "client_request_id": "ios-FF4C5568-6033-4EC8-AC2C-6D90BDACD37B",
+          "intent": "queue",
+          "queued": [
+            {
+              "live_input_id": "90088d2b-db7f-4abb-8642-b1e857d67f87",
+              "client_request_id": "ios-FF4C5568-6033-4EC8-AC2C-6D90BDACD37B",
+              "text": "When does the verbose bg agent text dump issue get fixed on my phone.",
+              "intent": "queue",
+              "status": "queued",
+              "created_at": "2026-10-01T01:45:33Z"
+            },
+            {
+              "live_input_id": "472dd94e-4612-4563-842c-18010e78858e",
+              "client_request_id": "d978c0f2b6fc47d8acd8e24fc687cbab",
+              "text": "Coordinator (acf5fa9e): your OMP background work landed.",
+              "intent": "queue",
+              "status": "queued",
+              "created_at": "2026-10-01T01:19:05Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
+        #expect(response.pendingInputCount == 2)
+        #expect(response.queuedElsewhereCount(excluding: ["ios-FF4C5568-6033-4EC8-AC2C-6D90BDACD37B"]) == 1)
+        #expect(
+            SessionComposerControlState.queuedIndicatorText(total: 2, elsewhere: 1)
+                == "2 messages queued (1 from another sender) — will send at next turn boundary."
+        )
+        #expect(
+            SessionComposerControlState.queuedIndicatorText(total: 1, elsewhere: 1)
+                == "1 message queued (from another sender) — will send at next turn boundary."
+        )
+        #expect(
+            SessionComposerControlState.queuedIndicatorText(total: 1, elsewhere: 0)
+                == "1 message queued — will send at next turn boundary."
+        )
+    }
+
+    /// The g55 composer on 2026-10-01 would have read "1 queued message failed to
+    /// send" for the duplicate "Stop it all" the coordinator relayed and that
+    /// expired unread: not a message this phone sent.
+    @Test
+    func anotherSendersExpiredMessageIsNotThisPhonesFailedSend() throws {
+        let json = """
+        {
+          "outcome": "sent",
+          "intent": "auto",
+          "queued": [
+            {
+              "live_input_id": "15c448e2-f217-4a87-b310-6105a269cca5",
+              "client_request_id": "893b955584e040dd96de308470c0c9e0",
+              "text": "Stop it all.",
+              "intent": "queue",
+              "status": "failed",
+              "last_error": "delivery_expired: session input expired before delivery",
+              "created_at": "2026-10-01T04:32:53Z"
+            },
+            {
+              "live_input_id": "7ce135aa-3236-43f1-af46-c81d5dc3aaf6",
+              "client_request_id": "ios-FA93E7FD-2ADB-494D-A494-2173D6312602",
+              "text": "Stop it all.",
+              "intent": "auto",
+              "status": "failed",
+              "last_error": "send failed",
+              "created_at": "2026-10-01T04:04:58Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
+        #expect(response.visibleFailedInputCount == 2)
+        #expect(response.visibleFailedInputCount(ownClientRequestIds: []) == 1)
+    }
+
+    @Test
+    func queuedIndicatorFollowsTheServedReceiptsNotTheLastSend() {
+        func receipt(_ id: String?, _ status: String) -> SessionInputReceipt {
+            SessionInputReceipt(clientRequestId: id, intent: "queue", status: status, createdAt: nil, eventId: nil)
+        }
+        let queued = QueuedInputIndicator.counts(
+            receipts: [
+                receipt("ios-A", "queued"),
+                receipt("d978c0f2b6fc47d8acd8e24fc687cbab", "queued"),
+                receipt("ios-B", "delivered"),
+                receipt("directed-input-1996", "failed"),
+            ],
+            ownClientRequestIds: ["ios-A"]
+        )
+        #expect(queued.total == 2)
+        #expect(queued.elsewhere == 1)
+
+        // The agent's message expired and this phone's was delivered: nothing is
+        // left to claim, however many were queued when the last send returned.
+        let drained = QueuedInputIndicator.counts(
+            receipts: [receipt("ios-A", "delivered"), receipt("d978c0f2b6fc47d8acd8e24fc687cbab", "failed")],
+            ownClientRequestIds: ["ios-A"]
+        )
+        #expect(drained.total == 0)
+        #expect(drained.elsewhere == 0)
+    }
+
     @Test
     func sessionInputResponseDoesNotCountUnknownDeliveryAsQueued() throws {
         let json = """

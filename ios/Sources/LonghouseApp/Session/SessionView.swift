@@ -600,6 +600,7 @@ struct SessionView: View {
             },
             failedInputCount: viewModel.failedInputCount,
             queuedInputCount: viewModel.queuedInputCount,
+            queuedElsewhereCount: viewModel.queuedElsewhereCount,
             lastSendOutcome: viewModel.lastSendOutcome,
             isSending: viewModel.isSending,
             attachmentIsEmpty: attachmentStore.isEmpty,

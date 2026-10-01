@@ -17,7 +17,9 @@ final class SessionViewModel: ObservableObject {
         "draining",
     ]
 
-    @Published var detail: SessionDetail?
+    @Published var detail: SessionDetail? {
+        didSet { refreshQueuedIndicator() }
+    }
     /// Viewer transport only. A connected stream is not provider liveness.
     @Published private(set) var realtimeConnection: SessionRealtimeConnection = .disconnected
     // Benchmark-only attribution. These deliberately are not @Published: the
@@ -95,6 +97,10 @@ final class SessionViewModel: ObservableObject {
     /// dispatch from a queued input without pretending the latter was sent.
     @Published var lastSendOutcome: SessionInputOutcome?
     @Published var queuedInputCount: Int = 0
+    /// How many of those were queued by someone other than this phone (an
+    /// agent's `continue`, the web, another device): real, but not visible as a
+    /// bubble here, so the count needs to say so.
+    @Published var queuedElsewhereCount: Int = 0
     @Published var failedInputCount: Int = 0
     @Published var submittedInputs: [SubmittedInput] = [] { didSet { transcriptRevision &+= 1 } }
     /// Identity-bound prompt for the one rejected steer awaiting an explicit
@@ -880,6 +886,7 @@ final class SessionViewModel: ObservableObject {
             "recent_item_ids": Array(items.suffix(20).map(\.id)),
             "submitted_input_count": submittedInputs.count,
             "queued_input_count": queuedInputCount,
+            "queued_elsewhere_count": queuedElsewhereCount,
             "failed_input_count": failedInputCount,
             "captured_at": ISO8601DateFormatter().string(from: Date()),
             "session_id": sessionId,
@@ -1351,7 +1358,9 @@ final class SessionViewModel: ObservableObject {
                 }
             }()
             queuedInputCount = response.pendingInputCount
-            failedInputCount = response.visibleFailedInputCount
+            let ownClientRequestIds = Set(submittedInputs.map(\.clientRequestId))
+            queuedElsewhereCount = response.queuedElsewhereCount(excluding: ownClientRequestIds)
+            failedInputCount = response.visibleFailedInputCount(ownClientRequestIds: ownClientRequestIds)
             switch response.disposition {
             case .unknown:
                 updateSubmittedInput(
@@ -3263,6 +3272,19 @@ final class SessionViewModel: ObservableObject {
                 workspaceRevisionFingerprint: lastWorkspaceRevisionFingerprint
             )
         )
+    }
+
+    /// Re-read the queue line from the served receipts, so it follows the queue
+    /// draining or expiring instead of keeping the count from the last send.
+    /// Console shows each queued turn as its own bubble and keeps no line.
+    private func refreshQueuedIndicator() {
+        guard let detail, let receipts = detail.inputReceipts, detail.stateFacts.mode != "console" else { return }
+        let counts = QueuedInputIndicator.counts(
+            receipts: receipts,
+            ownClientRequestIds: Set(submittedInputs.map(\.clientRequestId))
+        )
+        if queuedInputCount != counts.total { queuedInputCount = counts.total }
+        if queuedElsewhereCount != counts.elsewhere { queuedElsewhereCount = counts.elsewhere }
     }
 
     private func updateSubmittedInput(
