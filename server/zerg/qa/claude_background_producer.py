@@ -365,6 +365,7 @@ def _capture_background(
         if bounds is None or bounds[1] is None:
             raise ScenarioError("Claude background parent turn boundary disappeared")
         end_row = rows()[bounds[1]]
+        parent_start_at = helm._timestamp(rows()[bounds[0]])
         parent_end_at = helm._timestamp(end_row)
         parent_archived = any(
             helm.replied_with(text, parent_marker) for text in helm._hosted_assistant_texts(args.api_url, args.agents_token, session_id)
@@ -382,20 +383,19 @@ def _capture_background(
         source_records, source = source_snapshot()
         observation["source"] = source
         active_index = source.get("active_registry_record_index")
-        empty_index = source.get("explicit_empty_record_index")
-        source_after_parent = False
+        source_at_parent_end = False
         if isinstance(active_index, int) and parent_end_at is not None and active_index < len(source_records):
             active_record = source_records[active_index]
             active_at = _parse_timestamp(active_record.get("captured_at"))
             if active_at is None:
                 active_at = active_record.get("captured_mtime_ns", 0) / 1_000_000_000
             observation["source"]["active_registry_captured_at"] = active_record.get("captured_at") or active_at
-            # The native Stop hook is Claude's parent-turn boundary.  Its
-            # authoritative registry snapshot therefore proves work was
-            # active at turn end even if transcript and hook clocks are
-            # ordered a few milliseconds apart.
-            source_after_parent = active_record.get("event") == "Stop"
-        observation["source"]["active_registry_after_parent_turn"] = source_after_parent
+            # Stop is the native parent-turn boundary; reject retained
+            # snapshots captured before this turn started.
+            source_at_parent_end = bool(
+                active_record.get("event") == "Stop" and parent_start_at is not None and active_at >= parent_start_at
+            )
+        observation["source"]["active_registry_at_parent_turn_end"] = source_at_parent_end
         served_active = False
         deadline = time.monotonic() + args.response_timeout_secs
         while time.monotonic() < deadline:
@@ -412,13 +412,6 @@ def _capture_background(
         source_records, source = source_snapshot()
         observation["source"] = {**observation["source"], **source}
         empty_index = source.get("explicit_empty_record_index")
-        child_ids = set(source.get("subagent_start_ids") or []) | set(source.get("subagent_stop_ids") or [])
-        callback_tool_replaced = False
-        for sample in observation["canonical_parent_reads"]:
-            state = _mapping(sample.get("state"))
-            activity = _mapping(state.get("activity"))
-            strings = _nested_strings(activity) + _nested_strings(state.get("active_tool"))
-            callback_tool_replaced = callback_tool_replaced or any(child_id in text for child_id in child_ids for text in strings)
         observation["initial_served_active"] = _served_active(initial_state)
         observation["canonical_identity_ok"] = bool(
             native_session_id and any(_mapping(sample.get("state")) for sample in observation["canonical_parent_reads"])
@@ -437,16 +430,24 @@ def _capture_background(
             while time.monotonic() < deadline:
                 current = read_state()
                 empty_served = _served_empty(current)
-                if empty_served:
+                if empty_served or (getattr(args, "negative_control", None) == FAULT and _fault_receipts(root, FAULT, session_id)):
                     break
                 time.sleep(0.5)
         source_records, source = source_snapshot()
         observation["source"] = {**observation["source"], **source}
+        child_ids = set(source.get("subagent_start_ids") or []) | set(source.get("subagent_stop_ids") or [])
+        callback_tool_replaced = False
+        for sample in observation["canonical_parent_reads"]:
+            state = _mapping(sample.get("state"))
+            activity = _mapping(state.get("activity"))
+            strings = _nested_strings(activity) + _nested_strings(state.get("active_tool"))
+            callback_tool_replaced = callback_tool_replaced or any(child_id in text for child_id in child_ids for text in strings)
+        observation["child_callback_replaced_parent_tool"] = callback_tool_replaced
         callbacks_scoped = (
             observation.get("canonical_identity_ok") is True
             and source.get("native_callbacks_matched") is True
             and observation.get("initial_served_active") is not True
-            and observation.get("child_callback_replaced_parent_tool") is not True
+            and not callback_tool_replaced
         )
         observation["served_empty"] = empty_served
         observation["assertions"] = {
@@ -457,7 +458,7 @@ def _capture_background(
                 and set(source.get("active_registry_kinds") or []) >= {"subagent", "shell"}
             ),
             "claude_background_parent_turn_boundary": bool(
-                parent_archived and parent_end_at is not None and source.get("active_registry_observed") is True and source_after_parent
+                parent_archived and parent_end_at is not None and source.get("active_registry_observed") is True and source_at_parent_end
             ),
             "claude_background_registry_served": bool(served_active and empty_served),
             "claude_background_callbacks_scoped": callbacks_scoped,

@@ -11,6 +11,8 @@ from argparse import Namespace
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from zerg.qa import claude_background_producer as oracle
 
 
@@ -188,3 +190,98 @@ def test_negative_control_cleanup_failure_is_inconclusive(monkeypatch: Any, tmp_
 
     assert result["status"] == "inconclusive"
     assert result["failure_code"] == "claude_background_negative_control_inconclusive"
+
+
+def _capture_scenario(
+    monkeypatch: Any,
+    tmp_path: Path,
+    *,
+    final_state: dict[str, Any] | None = None,
+    parent_start: str = "2026-09-30T11:59:59+00:00",
+    fault_fired: bool = False,
+) -> dict[str, Any]:
+    parent_marker = "LONGHOUSE_CLAUDE_BG_PARENT_beef"
+    prompt = oracle._background_prompt(parent_marker, "LONGHOUSE_CLAUDE_BG_CHILD_beef", "LONGHOUSE_CLAUDE_BG_SHELL_beef")
+    transcript = [
+        {"type": "user", "message": {"content": prompt}, "timestamp": parent_start},
+        {"type": "system", "subtype": "turn_duration", "timestamp": "2026-09-30T12:00:02+00:00"},
+    ]
+    empty = {"delegation": {"state": "none", "count": 0, "items": []}}
+    active = {"delegation": {"state": "pending", "count": 2}}
+    if fault_fired:
+        (tmp_path / "qa-fault-receipt.jsonl").write_text(
+            json.dumps({"schema_version": 1, "fault": oracle.FAULT, "session_id": "managed-1", "fired_at": "now", "detail": {}}) + "\n"
+        )
+        unknown = {"delegation": {"state": "unknown"}}
+        states = iter([unknown, unknown, unknown])
+    else:
+        states = iter([empty, active, final_state if final_state is not None else empty])
+    monkeypatch.setattr(oracle.helm, "_transcript_rows", lambda *_args: transcript)
+    monkeypatch.setattr(oracle.helm, "_hosted_assistant_texts", lambda *_args: [parent_marker])
+    monkeypatch.setattr(oracle.helm, "_served_state", lambda *_args: next(states))
+    monkeypatch.setattr(oracle, "_capture_records", lambda *_args: _native_records())
+
+    def wait_until(predicate: Any, **_kwargs: Any) -> None:
+        assert predicate()
+
+    def unexpected_poll(_seconds: float) -> None:
+        raise AssertionError("completed source or fired fault must not consume another polling deadline")
+
+    monkeypatch.setattr(oracle.helm, "wait_until", wait_until)
+    monkeypatch.setattr(oracle.time, "sleep", unexpected_poll)
+    return oracle._capture_background(
+        args=Namespace(
+            api_url="http://127.0.0.1",
+            agents_token="fixture",
+            response_timeout_secs=1,
+            negative_control=oracle.FAULT if fault_fired else None,
+        ),
+        session=None,
+        session_id="managed-1",
+        provider_session_id="native-1",
+        lookup_id="managed-1",
+        home=tmp_path,
+        root=tmp_path,
+        environment={},
+        hook_capture_dir=tmp_path,
+        prompt=prompt,
+    )
+
+
+@pytest.mark.parametrize("field", ["activity", "active_tool"])
+def test_child_callback_replacement_rejects_parent_even_at_final_empty_read(monkeypatch: Any, tmp_path: Path, field: str) -> None:
+    result = _capture_scenario(
+        monkeypatch,
+        tmp_path,
+        final_state={"delegation": {"state": "none", "count": 0}, field: {"tool_id": "agent-1"}},
+    )
+
+    assert result["assertions"]["claude_background_registry_served"] is True
+    assert result["child_callback_replaced_parent_tool"] is True
+    assert result["assertions"]["claude_background_callbacks_scoped"] is False
+    assert result["status"] == "fail"
+
+
+def test_active_stop_before_requested_parent_turn_cannot_certify_its_boundary(monkeypatch: Any, tmp_path: Path) -> None:
+    result = _capture_scenario(monkeypatch, tmp_path, parent_start="2026-09-30T12:00:01+00:00")
+
+    assert result["assertions"]["claude_background_registry_served"] is True
+    assert result["assertions"]["claude_background_parent_turn_boundary"] is False
+    assert result["status"] == "fail"
+
+
+def test_parent_stop_in_requested_turn_can_certify_background_lifecycle(monkeypatch: Any, tmp_path: Path) -> None:
+    result = _capture_scenario(monkeypatch, tmp_path)
+
+    assert result["assertions"] == dict.fromkeys(oracle.ASSERTIONS, True)
+    assert result["child_callback_replaced_parent_tool"] is False
+    assert result["status"] == "pass"
+
+
+def test_fired_writer_fault_rejects_registry_without_waiting_for_impossible_empty_state(monkeypatch: Any, tmp_path: Path) -> None:
+    result = _capture_scenario(monkeypatch, tmp_path, fault_fired=True)
+
+    assert result["assertions"]["claude_background_registry_served"] is False
+    assert all(value for name, value in result["assertions"].items() if name != "claude_background_registry_served")
+    assert result["status"] == "fail"
+    assert "error" not in result
