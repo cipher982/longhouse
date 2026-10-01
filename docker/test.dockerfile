@@ -12,7 +12,7 @@
 ARG PLAYWRIGHT_VERSION=1.57.0
 ARG TEST_MANIFEST_SHA
 FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS rust
-FROM oven/bun:1.2.20@sha256:78f46b81b82d767ee8d729411f6f95089a403c21f17c20a5789df00263d7c5b5 AS bun
+FROM oven/bun:1.2.23@sha256:6ebf306367da43ad75c4d5119563e24de9b66372929ad4fa31546be053a16f74 AS bun
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS python
 # The Playwright image below is built on Ubuntu noble; lean uses noble too.
 FROM ubuntu:noble@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 AS ubuntu
@@ -117,7 +117,7 @@ ENV PATH=/usr/local/cargo/bin:$PATH
 ENV UV_OFFLINE=1 UV_NO_SYNC=1 CARGO_NET_OFFLINE=true
 
 # --- full (default) -----------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.57.0-noble@sha256:3bed4b1a12f2338642f3d8cba28e291deef3c66bd4a964bbeb3e57bbff511dbd
+FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
 ARG PLAYWRIGHT_VERSION
 ARG TEST_MANIFEST_SHA
 LABEL ai.longhouse.test-isolation.manifest-sha256=$TEST_MANIFEST_SHA
