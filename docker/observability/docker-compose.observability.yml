@@ -14,7 +14,7 @@
 #   open http://localhost:3001   (Grafana; admin / ${GRAFANA_ADMIN_PASSWORD:-admin})
 #
 # RUNTIME_METRICS_TARGET defaults to host.docker.internal:8080 (a local
-# `longhouse serve`). Override for the dev compose backend or a remote host.
+# `longhouse-server serve`). Override for the dev compose backend or a remote host.
 
 services:
   prometheus:

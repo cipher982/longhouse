@@ -51,7 +51,7 @@ def _format_error(exc: Exception, api_url: str) -> str:
         return json.dumps(
             {
                 "error": f"Cannot connect to Longhouse at {api_url}",
-                "hint": "Is the server running? Try: longhouse serve",
+                "hint": "Is the server running? Try: longhouse-server serve",
             }
         )
     msg = str(exc)

@@ -10,6 +10,7 @@ import {
 } from "@/shared/api/index";
 import { Button, Spinner } from "@/shared/ui";
 import { getProviderLabel } from "@/shared/lib/providers";
+import ConnectMachine from "@/features/machines/ConnectMachine";
 import ProviderSignInList from "./ProviderSignInList";
 import ModelPicker from "./ModelPicker";
 
@@ -385,10 +386,7 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
     return (
       <div className="modal-empty-state" data-testid="launch-no-machines">
         <p>No enrolled machines yet.</p>
-        <p>
-          Install Longhouse on a machine with <code>longhouse connect</code> first. It will show up here once
-          it reports in.
-        </p>
+        <ConnectMachine />
       </div>
     );
   }

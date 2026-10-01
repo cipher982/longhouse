@@ -127,7 +127,7 @@ else
   (
     cd "${ROOT_DIR}/server"
     HOME="$QA_HOME" AUTH_DISABLED=1 ENVIRONMENT="test:vibetest" DATABASE_URL="sqlite:///${DEMO_DB}" \
-      uv run longhouse serve --demo-fresh --host 127.0.0.1 --port "$PORT"
+      uv run longhouse-server serve --demo-fresh --host 127.0.0.1 --port "$PORT"
   ) >"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
 

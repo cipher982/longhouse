@@ -27,7 +27,7 @@ from zerg.models.types import GUID
 class DeviceToken(Base):
     """A per-device authentication token.
 
-    Tokens are issued during `zerg connect` and validated on each API call.
+    Tokens are issued when a machine connects (`longhouse auth`) and validated on each API call.
     The plain token is only shown once during creation; we store a SHA-256
     hash for validation.
     """

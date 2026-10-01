@@ -76,8 +76,8 @@ COMMON_SERVICE_PATH_SUFFIXES = (
     "/sbin",
 )
 
-# Legacy service names that were installed directly (before longhouse connect
-# --install managed the engine). Detected and superseded on install.
+# Legacy service names that were installed directly (before the Longhouse
+# installer managed the engine). Detected and superseded on install.
 _LEGACY_ENGINE_PLIST_NAME = "com.longhouse.engine.plist"
 _LEGACY_SYSTEMD_UNIT_NAME = "longhouse-engine.service"
 
@@ -544,8 +544,8 @@ def _install_launchd(config: ServiceConfig) -> dict:
     plist_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Supersede the legacy engine plist (com.longhouse.engine) if present.
-    # It was installed directly before longhouse connect --install managed
-    # the engine. Unload and remove it so only one engine runs.
+    # It was installed directly before the Longhouse installer managed the
+    # engine. Unload and remove it so only one engine runs.
     legacy_plist = _get_legacy_engine_plist_path()
     if legacy_plist.exists():
         try:

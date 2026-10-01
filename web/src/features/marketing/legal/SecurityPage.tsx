@@ -12,7 +12,7 @@ export default function SecurityPage() {
   usePageMeta({
     title: "Security - Longhouse",
     description:
-      "How Longhouse protects your data: TLS on the hosted service, secure authentication, encrypted credentials, revocable device tokens, how long we keep transcripts, and responsible disclosure.",
+      "How Longhouse protects your data: TLS on the hosted service, secure authentication, hashed and revocable device tokens, how long we keep transcripts, and responsible disclosure.",
   });
 
   return (
@@ -57,8 +57,8 @@ export default function SecurityPage() {
             <div className="security-highlight-icon">
               <KeyIcon width={24} height={24} />
             </div>
-            <h3>Secure Credentials</h3>
-            <p>Integration credentials encrypted</p>
+            <h3>Hashed Device Tokens</h3>
+            <p>The server stores a hash, not the token</p>
           </div>
           <div className="security-highlight">
             <div className="security-highlight-icon">
@@ -90,10 +90,11 @@ export default function SecurityPage() {
             supports OAuth providers. Longhouse never stores third-party passwords.
           </p>
 
-          <h2>Integration Credentials</h2>
+          <h2>Device Tokens</h2>
           <p>
-            When you connect integrations (Slack, Discord, GitHub, etc.), your credentials are stored
-            encrypted and only used to connect to those services on your behalf.
+            Each machine you connect gets its own device token. The server stores only a SHA-256
+            hash of it, never the token itself, and you can revoke a machine's tokens at any time in
+            Settings &rarr; Devices.
           </p>
 
           <h2>What Sessions Contain</h2>
@@ -133,7 +134,7 @@ export default function SecurityPage() {
           <p>You have control over your data:</p>
           <ul>
             <li><strong>View</strong> - See your sessions and timeline data</li>
-            <li><strong>Revoke</strong> - Revoke a device token, or disconnect an integration and delete its credentials</li>
+            <li><strong>Revoke</strong> - Revoke a machine's device tokens in Settings &rarr; Devices</li>
             <li><strong>Delete</strong> - Delete a session or your whole history. There is no delete button in the app yet, so email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a> from your account address and we run it</li>
           </ul>
 

@@ -6,7 +6,7 @@ This is the artifact layer for local Longhouse runtime components:
 - the macOS ambient Longhouse.app bundle
 - the optional window-host binary used for debugging from source
 
-Higher-level installers (`connect --install`, the shell installer, and future
+Higher-level installers (the shell installer, `longhouse machine repair`, and future
 desktop packaging) should delegate binary acquisition here instead of baking in
 release-URL logic or local-path heuristics independently.
 """

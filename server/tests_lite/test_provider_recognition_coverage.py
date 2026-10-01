@@ -4,7 +4,7 @@ Two hand-written provider lists silently excluded Cursor for a month:
 
 - `local_health/process.py` `_provider_for_cmdline` had no cursor branch, so no
   running `cursor-agent` -- managed Helm or bare Shadow -- ever appeared in
-  local-health process evidence, which is what `longhouse doctor` uses to
+  local-health process evidence, which is what `longhouse local-health` uses to
   reconcile what is running against what Longhouse believes.
 - `session_turns.py` filtered managed turns on a control-plane tuple that
   predated Cursor, so every Cursor Helm managed turn was missing from

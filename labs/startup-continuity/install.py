@@ -108,7 +108,7 @@ def enable() -> int:
         print(f"[{label}] enabled startup-continuity in {hook_path}")
 
     if not any_written:
-        print("No hooks changed. Re-run `longhouse connect --install` first if needed.")
+        print("No hooks changed. `longhouse-server onboard` writes the Codex hook script this lab patches; Claude's shell hook no longer exists.")
     return 0
 
 

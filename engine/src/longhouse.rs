@@ -1502,8 +1502,8 @@ fn ensure_antigravity_hook_installed() -> anyhow::Result<()> {
     let script = antigravity_hook_script_path()?;
     if !script.is_file() {
         anyhow::bail!(
-            "Antigravity hook is not installed at {}. Run `longhouse connect --install` (or \
-             `longhouse machine repair`) before launching a managed Antigravity session.",
+            "Antigravity hook is not installed at {}. Run `longhouse-server onboard` to install \
+             it before launching a managed Antigravity session.",
             script.display()
         );
     }
@@ -1517,8 +1517,8 @@ fn ensure_antigravity_hook_installed() -> anyhow::Result<()> {
         .is_some_and(|raw| raw.contains("longhouse-runtime"));
     if !registered {
         anyhow::bail!(
-            "Antigravity hooks are not registered in {}. Run `longhouse connect --install` before \
-             launching a managed Antigravity session.",
+            "Antigravity hooks are not registered in {}. Run `longhouse-server onboard` to \
+             register them before launching a managed Antigravity session.",
             hooks.display()
         );
     }

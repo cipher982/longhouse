@@ -2225,7 +2225,7 @@ fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
             "Free local disk space, then rerun: longhouse local-health --json".to_string()
         }
         "stop_managed_bridge" => "Inspect the exact managed bridge before stopping it.".to_string(),
-        "inspect_archive" => "Inspect archive repair state with: longhouse doctor".to_string(),
+        "inspect_archive" => "Inspect archive repair state with: longhouse local-health --json".to_string(),
         "inspect_provider" => {
             "Inspect the installed provider and its supported Longhouse surface.".to_string()
         }
@@ -9460,7 +9460,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
     /// The degraded-launch receipt writer and this health reader are in
     /// different binaries and only agree by convention. If either side changes
     /// the directory or the `recovery_exhausted` key, a degraded launch stops
-    /// being visible in the menu bar and `longhouse doctor` while still being
+    /// being visible in the menu bar and `longhouse local-health` while still being
     /// degraded, which is the exact failure this contract exists to prevent.
     #[test]
     fn a_receipt_for_a_session_the_machine_no_longer_sees_is_not_a_current_fault() {

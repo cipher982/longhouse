@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 DEMO_PROVIDER_SESSION_PREFIX = "demo-"
 
 # This is the public capture contract. Keep it in the shared seed service so
-# `longhouse serve --demo`, admin seeding, and screenshot generation agree.
+# `longhouse-server serve --demo`, admin seeding, and screenshot generation agree.
 DEMO_PRESENTATION = {
     "demo-claude-01": (
         "Ship semantic search across 12,000 sessions",

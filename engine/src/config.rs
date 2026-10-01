@@ -18,7 +18,7 @@ pub struct ShipperConfig {
     pub workers: usize,
     pub max_batch_bytes: u64,
     pub timeout_seconds: u64,
-    /// Human-readable machine label (set by user during `longhouse connect --install`).
+    /// Human-readable machine label (set when the machine connects with `longhouse auth`).
     /// Stored in `~/.longhouse/machine/state.json`. Defaults to hostname.
     pub machine_name: String,
 }

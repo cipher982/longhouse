@@ -26,7 +26,7 @@ ProgressReporter = Callable[[str], None]
 def recommended_machine_repair_command(*, can_reconcile_from_state: bool) -> str:
     if can_reconcile_from_state:
         return "Run: longhouse machine repair"
-    return "Run: longhouse connect --install"
+    return "Run: longhouse auth --url <your-longhouse-url>, then longhouse machine repair --repair-service"
 
 
 def can_repair_machine_from_state(
@@ -150,7 +150,7 @@ def replay_machine_backlog(
         return SpoolReplayResult(
             attempted=True,
             success=False,
-            warning="Queued shipping could not be replayed immediately. Run `longhouse ship` if backlog stays stuck.",
+            warning="Queued shipping could not be replayed immediately. Run `longhouse-server ship` if backlog stays stuck.",
         )
 
     summary = _extract_ship_summary(completed.stdout)
@@ -176,7 +176,7 @@ def replay_machine_backlog(
         attempted=True,
         success=False,
         summary=summary,
-        warning="Queued shipping could not be replayed immediately. Run `longhouse ship` if backlog stays stuck.",
+        warning="Queued shipping could not be replayed immediately. Run `longhouse-server ship` if backlog stays stuck.",
     )
 
 
