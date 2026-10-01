@@ -3281,7 +3281,10 @@ final class SessionViewModel: ObservableObject {
         guard let detail, let receipts = detail.inputReceipts, detail.stateFacts.mode != "console" else { return }
         let counts = QueuedInputIndicator.counts(
             receipts: receipts,
-            ownClientRequestIds: Set(submittedInputs.map(\.clientRequestId))
+            ownClientRequestIds: Set(submittedInputs.map(\.clientRequestId)),
+            ownQueuedClientRequestIds: Set(
+                submittedInputs.filter { $0.phase == .queued && $0.turnId == nil }.map(\.clientRequestId)
+            )
         )
         if queuedInputCount != counts.total { queuedInputCount = counts.total }
         if queuedElsewhereCount != counts.elsewhere { queuedElsewhereCount = counts.elsewhere }

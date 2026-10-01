@@ -1851,6 +1851,29 @@ struct SessionModelsTests {
     }
 
     @Test
+    func aDetailFetchedBeforeASendDoesNotZeroTheQueueLine() {
+        // The send was accepted as queued; the next detail refresh was fetched
+        // before it landed and does not hold the receipt yet.
+        let counts = QueuedInputIndicator.counts(
+            receipts: [],
+            ownClientRequestIds: ["ios-A"],
+            ownQueuedClientRequestIds: ["ios-A"]
+        )
+        #expect(counts.total == 1)
+        #expect(counts.elsewhere == 0)
+
+        // Once the receipt is served it is counted once, not twice.
+        let served = QueuedInputIndicator.counts(
+            receipts: [
+                SessionInputReceipt(clientRequestId: "ios-A", intent: "queue", status: "queued", createdAt: nil, eventId: nil),
+            ],
+            ownClientRequestIds: ["ios-A"],
+            ownQueuedClientRequestIds: ["ios-A"]
+        )
+        #expect(served.total == 1)
+    }
+
+    @Test
     func queuedIndicatorFollowsTheServedReceiptsNotTheLastSend() {
         func receipt(_ id: String?, _ status: String) -> SessionInputReceipt {
             SessionInputReceipt(clientRequestId: id, intent: "queue", status: status, createdAt: nil, eventId: nil)

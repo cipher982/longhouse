@@ -232,15 +232,22 @@ struct SessionInputReceipt: Codable, Hashable, Sendable {
 /// time left the line stale after the queue drained, and counting an agent's
 /// parked message beside one bubble read as a phantom ("two queued, I sent one").
 enum QueuedInputIndicator {
+    /// `ownQueuedClientRequestIds` are this client's sends the server has accepted
+    /// as queued. A detail fetched before one of them can lack it, and the line
+    /// must not drop to zero for an instant after a send, so any the receipts do
+    /// not yet hold are added back.
     static func counts(
         receipts: [SessionInputReceipt],
-        ownClientRequestIds: Set<String>
+        ownClientRequestIds: Set<String>,
+        ownQueuedClientRequestIds: Set<String> = []
     ) -> (total: Int, elsewhere: Int) {
         let queued = receipts.filter { $0.status == SessionInputStatus.queued.rawValue }
         let elsewhere = queued.filter {
             isFromAnotherSender($0.clientRequestId, ownClientRequestIds: ownClientRequestIds)
         }
-        return (queued.count, elsewhere.count)
+        let served = Set(receipts.compactMap(\.clientRequestId))
+        let notYetServed = ownQueuedClientRequestIds.subtracting(served).count
+        return (queued.count + notYetServed, elsewhere.count)
     }
 
     /// A row is this client's when this client sent it: every send is held in

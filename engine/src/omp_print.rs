@@ -682,8 +682,13 @@ async fn monitor_recovered_omp_claim(
     // one is as old as the claim. `thinking` is posted only for a turn the
     // provider accepted, or one still inside the time it has to accept: a
     // restart used to re-assert Thinking for a run that never began, for ever.
-    let claimed_age =
-        || crate::console_rpc::age_since_rfc3339(&claim.claimed_at).unwrap_or(Duration::ZERO);
+    // A claim time that cannot be read is unknown evidence, not a fresh claim:
+    // it counts as overdue, so an unacknowledged prompt fails instead of reading
+    // Thinking for ever. The engine writes the field itself, as RFC 3339.
+    let claimed_age = || {
+        crate::console_rpc::age_since_rfc3339(&claim.claimed_at)
+            .unwrap_or(crate::console_rpc::PROMPT_ACK_DEADLINE)
+    };
     let mut thinking_posted = false;
     if projection.prompt_acknowledged
         || !crate::console_rpc::prompt_ack_overdue(false, false, claimed_age())
@@ -2505,6 +2510,18 @@ for line in sys.stdin:
     async fn a_recovered_turn_whose_prompt_was_never_acknowledged_is_failed_not_re_asserted() {
         // A Machine Agent restart found the wedged run's provider alive and
         // re-posted `thinking` for it every time, which the host kept vouching for.
+        settle_recovered_unacknowledged_claim(
+            (Utc::now() - chrono::Duration::hours(2)).to_rfc3339(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_recovered_claim_with_an_unreadable_time_is_not_trusted_to_be_fresh() {
+        settle_recovered_unacknowledged_claim("not a time".to_string()).await;
+    }
+
+    async fn settle_recovered_unacknowledged_claim(claimed_at: String) {
         use std::os::unix::process::CommandExt;
 
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
@@ -2552,7 +2569,7 @@ for line in sys.stdin:
             .unwrap();
         refresh_owned_processes(&run_id);
         let mut claim = registry.read(&run_id).unwrap();
-        claim.claimed_at = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        claim.claimed_at = claimed_at;
         let sink = OmpPrintSink {
             session_id,
             thread_id,

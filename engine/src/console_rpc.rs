@@ -147,7 +147,9 @@ pub fn stdout_has_ready(stdout_path: &Path) -> bool {
         return false;
     };
     let mut head = Vec::new();
-    if file.take(64 * 1024).read_to_end(&mut head).is_err() {
+    // `ready` is the first frame a provider prints; a megabyte is far past any
+    // startup burst measured (advisor and command-list frames total ~35 KB).
+    if file.take(1024 * 1024).read_to_end(&mut head).is_err() {
         return false;
     }
     head.split(|byte| *byte == b'\n')
