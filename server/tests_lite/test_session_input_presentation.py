@@ -296,3 +296,48 @@ def test_executing_console_session_offers_steer_only_with_a_console_steer_adapte
         provider="cursor",
     )
     assert cursor.can_steer_active_turn is False
+
+
+def test_thinking_helm_turn_is_steerable_so_the_composer_does_what_its_placeholder_says():
+    """2026-10-01 phone report, case 3: a Helm session in the middle of a long
+    `thinking` turn (an OMP worker, here its steer-capable Claude counterpart) showed
+    "Steer this turn" while the phone sent a *queue*.
+
+    The base capability said "Steer this turn" (it counts thinking as running), but
+    the state-derived projection that clients actually read demanded `executing`, so
+    `can_steer_active_turn` was false, `default_input_intent` was `auto`, and the
+    composer fell through to the queue. A queued message to a turn that does not end
+    expires unread after 30 minutes. Thinking is a running turn.
+    """
+
+    session = _session(provider="claude", managed_transport="claude_channel_bridge")
+    state = _state(activity_state="thinking")
+
+    response = _projected_response(session, state)
+
+    assert response.composer_placeholder == "Steer this turn"
+    assert response.can_steer_active_turn is True
+    assert response.can_queue_next_input is True
+
+
+def test_steer_is_not_offered_without_a_running_turn_or_a_steering_control_path():
+    claude = _session(provider="claude", managed_transport="claude_channel_bridge")
+
+    # No evidence of a running turn: queueing is available, steering is not.
+    for activity in ("quiescent", "unknown"):
+        response = _projected_response(claude, _state(activity_state=activity))
+        assert response.can_steer_active_turn is False, activity
+        assert response.can_queue_next_input is True, activity
+
+    # A control path that cannot enter a running turn never offers it, whatever
+    # the phase.
+    session = _session(provider="claude", managed_transport="claude_channel_bridge")
+    state = _state(activity_state="thinking")
+    flags = replace(build_session_capabilities(session), control_plane="control_plane_without_steer")
+    assert flags.can_steer_active_turn is False
+    response = project_compat_capabilities_from_state(
+        build_session_capabilities_response(session=session, capability_flags=flags, session_state=state),
+        state,
+    )
+    assert response.can_steer_active_turn is False
+    assert response.can_queue_next_input is True

@@ -30,17 +30,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cyc
     from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
 
 logger = logging.getLogger(__name__)
-# The drain's predicate: exactly the states in which `claim_queued_input` will
-# dispatch an input. Anything else — including a session the catalog cannot
-# project at all — is not a turn boundary, and SEND parks rather than
-# dispatching into a turn whose state is unknown. Whether a *present* activity
-# observation is still fresh is the head reducer's decision, and this gate
-# inherits it rather than second-guessing it.
-SEND_DISPATCHABLE_ACTIVITY_STATES = frozenset({"quiescent", "blocked"})
-# A turn that STEER can enter, the same two states `send_affordance` treats as
-# "this target is executing", so the composer's steer choice and the router's
-# delivery gate cannot disagree.
-STEERABLE_ACTIVITY_STATES = frozenset({"thinking", "executing"})
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
 _CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor", "antigravity", "pi", "omp"})
 # The live-control capabilities this module can authorize, and the reducer

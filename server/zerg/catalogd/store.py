@@ -6268,6 +6268,7 @@ class CatalogStore:
         """
 
         from zerg.services.live_control_catalog import load_live_control_session
+        from zerg.services.session_state_contract import input_activity_state
 
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
@@ -6288,7 +6289,7 @@ class CatalogStore:
             return {
                 "found": True,
                 "observed_at": observed_at.isoformat(),
-                "activity_state": None if projection is None else projection.activity.state,
+                "activity_state": None if projection is None else input_activity_state(projection),
             }
 
     def claim_queued_input(
@@ -6304,6 +6305,8 @@ class CatalogStore:
         from zerg.services.live_session_inputs import _snapshot
         from zerg.services.live_session_inputs import claim_next_live_queued_receipt
         from zerg.services.live_session_inputs import expire_stale_live_receipts
+        from zerg.services.session_state_contract import SEND_DISPATCHABLE_ACTIVITY_STATES
+        from zerg.services.session_state_contract import input_activity_state
 
         observed_at = datetime.now(UTC)
         with _write_transaction(self.engine) as connection:
@@ -6345,7 +6348,7 @@ class CatalogStore:
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
                 projection = self._served_session_projection(connection, session, observed_at=observed_at)
-                if projection is None or projection.activity.state not in {"quiescent", "blocked"}:
+                if projection is None or input_activity_state(projection) not in SEND_DISPATCHABLE_ACTIVITY_STATES:
                     orm.rollback()
                     return {
                         "claimed": False,

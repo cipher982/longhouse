@@ -220,6 +220,50 @@ def _replace_activity_head(engine, session_id, *, kind: str):
         db.commit()
 
 
+def _replace_expired_activity_head(engine, session_id, *, kind: str, age: timedelta = timedelta(minutes=10)):
+    """An observation the Machine Agent made `age` ago and has not restated since.
+
+    The head's lease is anchored on when the host received it, so a hook provider
+    that went quiet after its last transition reads as `unknown` once the short
+    activity lease lapses, however fresh the control lease still is.
+    """
+
+    observed_at = datetime.now(UTC).replace(microsecond=0) - age
+    with Session(engine) as db:
+        run = db.query(LiveSessionRun).one()
+        value = {
+            "authority_class": "provider_runtime",
+            "provider": "codex",
+            "session_id": str(session_id),
+            "run_id": str(run.id),
+            "kind": kind,
+            "raw_kind": kind,
+            "source": "provider_runtime",
+            "observed_at": observed_at.isoformat(),
+            "valid_until": (observed_at + timedelta(seconds=15)).isoformat(),
+        }
+        reduce_fact_batch(
+            db.connection(),
+            [
+                ReducerFact(
+                    family="activity",
+                    subject_key=f"run:{run.id}",
+                    source="provider_runtime",
+                    source_epoch=str(run.id),
+                    source_seq=3,
+                    dedupe_key=canonical_evidence_hash({"kind": kind, "seq": 3, "expired": True}),
+                    evidence_hash=canonical_evidence_hash(value),
+                    value=value,
+                    observed_at=observed_at,
+                    session_id=str(session_id),
+                    valid_until=observed_at + timedelta(seconds=15),
+                )
+            ],
+            received_at=observed_at,
+        )
+        db.commit()
+
+
 def _replace_control_grants(engine, session_id, *, granted_operations: list[str]):
     observed_at = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1)
     with Session(engine) as db:
@@ -574,6 +618,67 @@ def test_catalogd_blocked_activity_can_drain_directed_input(tmp_path):
     )
 
     assert result["claimed"] is True
+    engine.dispose()
+
+
+def test_catalogd_idle_observation_that_lapsed_still_drains_while_control_is_live(tmp_path):
+    """The phone sent "Stop it all" to an idle Claude session and the composer said
+    "1 message queued -- will send at next turn boundary" for two minutes.
+
+    The session's last hook was `idle` ten minutes before the send. A hook provider
+    is silent between transitions, so that observation's 15 s activity lease lapsed
+    and the served activity state read `unknown` while the headline, which already
+    knows a live control lease keeps a Helm idle, said "Idle". The drain asked the
+    narrower question and waited for a turn boundary that was never coming.
+    """
+
+    engine = create_catalog_engine(tmp_path / "lapsed-idle.db")
+    initialize_catalog_schema(engine)
+    session_id, receipt_id = _seed_queue(engine, client_request_id="ios-FA93E7FD")
+    _replace_expired_activity_head(engine, session_id, kind="idle")
+    store = CatalogStore(engine)
+
+    assert store.read_session_activity(session_id=str(session_id))["activity_state"] == "quiescent"
+    result = store.claim_queued_input(session_id=str(session_id), delivery_request_id="lapsed-idle")
+
+    assert result["claimed"] is True
+    assert result["receipt"]["id"] == receipt_id
+    engine.dispose()
+
+
+@pytest.mark.parametrize(("kind", "held_as"), [("thinking", "thinking"), ("running", "executing")])
+def test_catalogd_running_observation_that_lapsed_is_still_not_a_turn_boundary(tmp_path, kind, held_as):
+    """The inverse holds: a *running* phase that went quiet proves nothing about the
+    turn having ended. A Helm session's live control lease holds it as running (the
+    owning process is alive and its hooks report every way out of the turn), so SEND
+    keeps waiting instead of dispatching into it."""
+
+    engine = create_catalog_engine(tmp_path / f"lapsed-{kind}.db")
+    initialize_catalog_schema(engine)
+    session_id, _receipt_id = _seed_queue(engine)
+    _replace_expired_activity_head(engine, session_id, kind=kind)
+    store = CatalogStore(engine)
+
+    assert store.read_session_activity(session_id=str(session_id))["activity_state"] == held_as
+    result = store.claim_queued_input(session_id=str(session_id), delivery_request_id=f"lapsed-{kind}")
+
+    assert result["claimed"] is False
+    assert result["reason"] == "activity_not_drainable"
+    engine.dispose()
+
+
+def test_catalogd_lapsed_idle_does_not_drain_once_control_is_gone(tmp_path):
+    engine = create_catalog_engine(tmp_path / "lapsed-idle-no-control.db")
+    initialize_catalog_schema(engine)
+    session_id, _receipt_id = _seed_queue(engine)
+    _replace_expired_activity_head(engine, session_id, kind="idle")
+    _delete_control_heads(engine)
+    store = CatalogStore(engine)
+
+    assert store.read_session_activity(session_id=str(session_id))["activity_state"] == "unknown"
+    result = store.claim_queued_input(session_id=str(session_id), delivery_request_id="lapsed-no-control")
+
+    assert result["claimed"] is False
     engine.dispose()
 
 

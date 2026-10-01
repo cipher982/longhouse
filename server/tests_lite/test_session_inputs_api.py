@@ -151,6 +151,7 @@ def _machine_evidence(
     now: datetime,
     activity_kind: str = "idle",
     activity_seq: int = 1,
+    activity_age: timedelta = timedelta(0),
 ) -> dict:
     """The typed facts the provider adapter reports through the heartbeat.
 
@@ -160,7 +161,9 @@ def _machine_evidence(
     uncontrollable. The activity fact is what makes the session quiescent, and
     a queue drain will not claim a receipt for a session that is mid-turn; pass
     ``activity_kind="running"`` to seed a session that is mid-turn, which is the
-    only state STEER accepts.
+    only state STEER accepts. ``activity_age`` backdates that observation: a hook
+    provider says nothing between transitions, so a session that finished a turn
+    some time ago holds an old observation next to a fresh control lease.
     """
 
     from zerg.machine_evidence import canonical_evidence_hash
@@ -176,8 +179,8 @@ def _machine_evidence(
         "raw_kind": activity_kind,
         "tool_name": "Bash" if activity_kind == "running" else None,
         "source": "provider_runtime",
-        "observed_at": now.isoformat(),
-        "valid_until": (now + timedelta(minutes=5)).isoformat(),
+        "observed_at": (now - activity_age).isoformat(),
+        "valid_until": (now - activity_age + timedelta(minutes=5)).isoformat(),
     }
     control = {
         "authority_class": "provider_control",
@@ -232,6 +235,7 @@ def _seed_live_catalog_session(
     device_id: str = LIVE_CATALOG_DEVICE_ID,
     launch_surface: str = "cli",
     activity_kind: str = "idle",
+    activity_age: timedelta = timedelta(0),
 ) -> str:
     """Launch one Helm session in the live catalog and bring its control online.
 
@@ -306,6 +310,7 @@ def _seed_live_catalog_session(
                 run_id=run_id,
                 now=now,
                 activity_kind=activity_kind,
+                activity_age=activity_age,
             ),
             "managed_leases": [
                 {
@@ -2648,6 +2653,78 @@ def test_mid_turn_auto_send_parks_instead_of_dispatching(live_catalog, live_cata
         resp = live_catalog_client.post(
             f"/sessions/{session_id}/input",
             json={"text": "run this", "intent": "auto", "client_request_id": "auto-midturn-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["outcome"] == "queued"
+        assert websocket.sent == []
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_send_to_an_idle_helm_session_whose_idle_observation_lapsed_starts_a_turn_at_once(
+    live_catalog,
+    live_catalog_client,  # noqa: F811
+):
+    """Case 2 of the 2026-10-01 phone report: "Stop it all" to an idle Claude session.
+
+    The turn finished minutes earlier and the hook provider said nothing since, so
+    the idle observation's own lease had lapsed while the control lease was live.
+    The headline read "Idle"; the router read `unknown`, parked the message and
+    the composer promised a turn boundary that never came (it was delivered when
+    something unrelated happened to refresh the session). An idle session must
+    start the turn now.
+    """
+
+    email = "live-lapsed-idle@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, activity_age=timedelta(minutes=10))
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+
+    try:
+        observed = live_catalog.rpc("session.input.activity.read.v2", {"owner_id": owner_id, "session_id": session_id})
+        assert observed["activity_state"] == "quiescent", observed
+
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "Stop it all. I\u2019m going to sleep.", "intent": "auto", "client_request_id": "ios-lapsed-idle-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["outcome"] == "sent"
+        assert [frame["command_type"] for frame in websocket.sent] == ["session.send_text"]
+
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="ios-lapsed-idle-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_send_to_a_helm_session_whose_running_observation_lapsed_still_parks(live_catalog, live_catalog_client):  # noqa: F811
+    """The same silence after a *running* phase is not a turn boundary."""
+
+    email = "live-lapsed-running@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        activity_kind="running",
+        activity_age=timedelta(minutes=10),
+    )
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "run this", "intent": "auto", "client_request_id": "auto-lapsed-running-1"},
             cookies=cookies,
         )
         assert resp.status_code == 200, resp.text

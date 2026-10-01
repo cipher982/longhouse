@@ -1041,6 +1041,61 @@ def _delegation_label(delegation: SessionDelegationFacts) -> str:
     return "Background · " + (" · ".join(parts) if parts else fallback)
 
 
+def helm_idle_persists(
+    *,
+    mode: SessionMode,
+    run: SessionRunFacts | None,
+    activity: SessionActivityFacts,
+    control: SessionControlFacts | None,
+) -> bool:
+    """Whether an expired idle/needs_user observation still stands for a Helm run.
+
+    A managed Helm session reports every turn start through its hooks or channel,
+    so while its control lease or terminal attachment is live, an idle observation
+    whose own short lease lapsed has not been contradicted: Longhouse would have
+    seen a new turn begin. The headline ("Idle") and the input gate (SEND, the
+    queue drain) both ask this one question; answering it twice is how a session
+    headlined Idle parked a message for a turn boundary that was never coming.
+    """
+
+    return (
+        run is not None
+        and mode == "helm"
+        and control is not None
+        and activity.state == "unknown"
+        and activity.raw_kind in _HELM_PERSISTENT_IDLE_KINDS
+        and (control.connection in {"connected", "degraded"} or control.terminal_attached is True)
+    )
+
+
+# The activity states the SEND queue drain dispatches into: a turn boundary.
+# Anything else, including a session the catalog cannot project at all, is not
+# one, and SEND parks rather than dispatching into a turn whose state is unknown.
+# Whether a *present* activity observation is still fresh is the head reducer's
+# decision, and this gate inherits it rather than second-guessing it.
+SEND_DISPATCHABLE_ACTIVITY_STATES = frozenset({"quiescent", "blocked"})
+# A turn that STEER can enter. The composer's steer capability, the router's
+# delivery gate and `send_affordance`'s "this target is executing" all read this
+# one set, so the phone cannot offer a steer the server would refuse (or, the
+# 2026-10-01 case, queue a message the placeholder said it was steering).
+STEERABLE_ACTIVITY_STATES = frozenset({"thinking", "executing"})
+
+
+def input_activity_state(facts: SessionStateFacts) -> str:
+    """The activity state SEND and the queue drain gate on.
+
+    It is the served activity state, except that an idle Helm session whose idle
+    observation expired reads as ``quiescent`` exactly where the headline reads
+    "Idle" (``helm_idle_persists``). Anything else stays what the head reducer
+    decided, including ``unknown``: a running phase that went stale is not a turn
+    boundary, and a session with no activity evidence at all is not one either.
+    """
+
+    if helm_idle_persists(mode=facts.mode, run=facts.run, activity=facts.activity, control=facts.control):
+        return "quiescent"
+    return facts.activity.state
+
+
 def _primary(
     *,
     mode: SessionMode,
@@ -1140,13 +1195,7 @@ def _primary(
     # liveness evidence itself going stale should demote it further down. This
     # must run before the generic cross-axis block below, which would otherwise
     # read the same expired activity as "Last observed idle".
-    if (
-        run is not None
-        and mode == "helm"
-        and activity.state == "unknown"
-        and activity.raw_kind in _HELM_PERSISTENT_IDLE_KINDS
-        and (control.connection in {"connected", "degraded"} or control.terminal_attached is True)
-    ):
+    if helm_idle_persists(mode=mode, run=run, activity=activity, control=control):
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     # Cross-axis composition: the activity axis is `unknown` (its evidence
     # expired), but we still hold the expired observation and the control lease

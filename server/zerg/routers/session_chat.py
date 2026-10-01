@@ -2554,9 +2554,9 @@ async def _create_catalog_session_input_response(
                 ),
             )
 
-    from zerg.services.live_control_catalog import SEND_DISPATCHABLE_ACTIVITY_STATES
-    from zerg.services.live_control_catalog import STEERABLE_ACTIVITY_STATES
     from zerg.services.live_control_catalog import live_control_session_activity_state
+    from zerg.services.session_state_contract import SEND_DISPATCHABLE_ACTIVITY_STATES
+    from zerg.services.session_state_contract import STEERABLE_ACTIVITY_STATES
 
     activity_state = await live_control_session_activity_state(source_session.id, owner_id=owner_id)
     at_turn_boundary = activity_state in SEND_DISPATCHABLE_ACTIVITY_STATES

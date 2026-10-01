@@ -58,6 +58,7 @@ from zerg.services.session_runtime_display import SignalTier
 from zerg.services.session_runtime_display import TerminalReason
 from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
+from zerg.services.session_state_contract import STEERABLE_ACTIVITY_STATES
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.utils.time import UTCBaseModel
@@ -129,7 +130,7 @@ def build_session_capabilities_response(
         provider_label=_provider_label(session),
         session_mode=session_mode,
         lifecycle=lifecycle,
-        is_executing=session_state.activity.state in {"thinking", "executing"},
+        is_executing=session_state.activity.state in STEERABLE_ACTIVITY_STATES,
         host_state=host_state,
         can_start_turn=bool(kernel_capabilities.can_start_turn) if kernel_capabilities is not None else False,
         start_turn_blocked_by=(kernel_capabilities.start_turn_blocked_by if kernel_capabilities is not None else None),
@@ -507,10 +508,15 @@ def project_compat_capabilities_from_state(
             "can_queue_next_input": send_available,
             # A Console turn is steerable only through its provider's Console
             # steer adapter; offering it otherwise ends in a refusal.
+            # Steerable while a turn is running, which includes the model
+            # thinking: `thinking` is the most common phase of a turn, and this
+            # used to demand `executing` (a tool in flight), so the phone's
+            # composer read "Steer this turn" while offering only a queue. The
+            # phase set is the one the router gates STEER on.
             "can_steer_active_turn": (
                 send_available
-                and session_state.activity.state == "executing"
-                and (not console or console_provider_supports_steer(provider))
+                and session_state.activity.state in STEERABLE_ACTIVITY_STATES
+                and (console_provider_supports_steer(provider) if console else capabilities.can_steer_active_turn)
             ),
             "display_label": compatibility_label,
             "display_detail": (
