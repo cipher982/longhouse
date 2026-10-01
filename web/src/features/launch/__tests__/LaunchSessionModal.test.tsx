@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import LaunchSessionModal from "../LaunchSessionModal";
 import type { MachineDirectoryEntry } from "@/shared/api/index";
@@ -36,7 +37,9 @@ function renderModal(props: Partial<React.ComponentProps<typeof LaunchSessionMod
   };
   return render(
     <QueryClientProvider client={queryClient}>
-      <LaunchSessionModal {...defaultProps} />
+      <MemoryRouter>
+        <LaunchSessionModal {...defaultProps} />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -89,6 +92,10 @@ describe("LaunchSessionModal", () => {
     renderModal();
 
     expect(await screen.findByTestId("launch-no-machines")).toBeInTheDocument();
+    // The install command is the one the Devices page offers, never a retired verb.
+    const command = screen.getByTestId("connect-machine-command").textContent ?? "";
+    expect(command).toContain("curl -fsSL https://get.longhouse.ai/install.sh");
+    expect(command).not.toContain("longhouse connect");
   });
 
   it("shows offline-only state when no launchable machines are available", async () => {

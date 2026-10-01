@@ -75,10 +75,15 @@ const PAGE_DEFINITIONS = {
   admin: { path: "/admin" },
   // The public marketing page (always reachable, even when authenticated).
   landing: { path: "/landing" },
+  // Public legal pages: static copy. Capture them with SCENE=first-run so the
+  // app shell's API calls are answered by fixtures, not proxied to a real host.
+  security: { path: "/security" },
+  privacy: { path: "/privacy" },
 } as const;
 type PageName = keyof typeof PAGE_DEFINITIONS;
 const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
-const ALL_CAPTURE_PAGES = PAGES.filter((pageName) => pageName !== "session-detail" && pageName !== "landing");
+const PUBLIC_PAGES: readonly PageName[] = ["landing", "security", "privacy"];
+const ALL_CAPTURE_PAGES = PAGES.filter((pageName) => pageName !== "session-detail" && !PUBLIC_PAGES.includes(pageName));
 
 const SCENES = [
   "empty",
@@ -88,6 +93,7 @@ const SCENES = [
   "timeline-card-stress",
   "timeline-hearth",
   "launch-unavailable",
+  "launch-no-machines",
   "launch-model-picker",
   "launch-model-picked",
   "session-detail-stress",
@@ -277,6 +283,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "timeline-card-stress" ||
     scene === "timeline-hearth" ||
     scene === "launch-unavailable" ||
+    scene === "launch-no-machines" ||
     scene === "launch-model-picker" ||
     scene === "launch-model-picked" ||
     LANDING_TIMELINE_SCENES.includes(scene) ||
@@ -782,6 +789,11 @@ async function installSceneMocks(
       return;
     }
 
+    if (scene === "launch-no-machines" && pathname === "/api/timeline/machines") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ machines: [] }) });
+      return;
+    }
+
     if (scene === "launch-unavailable" && pathname === "/api/timeline/machines") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LAUNCH_UNAVAILABLE_MACHINES) });
       return;
@@ -1025,6 +1037,7 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
   if (
     scene === "timeline-card-stress" ||
     scene === "launch-unavailable" ||
+    scene === "launch-no-machines" ||
     scene === FIRST_RUN_SCENE ||
     LANDING_TIMELINE_SCENES.includes(scene)
   ) {
@@ -1081,6 +1094,13 @@ async function captureBundle(
   if (scene === PROVIDER_CERTIFICATION_SCENE) {
     await page.waitForSelector("#providers [data-certification='certified']", { timeout: 5000 });
     await page.evaluate("document.getElementById('providers').scrollIntoView()");
+  }
+
+  // A host with sessions but no enrolled machine: the launch sheet explains
+  // how to connect one.
+  if (scene === "launch-no-machines") {
+    await page.click("[data-testid='sessions-start-session']");
+    await page.waitForSelector("[data-testid='launch-no-machines']", { timeout: 5000 });
   }
 
   if (scene === "launch-unavailable") {
