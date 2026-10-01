@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -743,27 +744,36 @@ def test_omp_entrypoint_retains_send_before_native_late_failure(monkeypatch, tmp
         ]
     )
     payload = _json(tmp_path / "evidence" / "result.json")
-    if background:
-        # Known gap, pinned so that fixing it is noticed: omp_background_producer.main() answers an exception with
-        # a result that carries no variant, scenario_revision, evidence_class, generated_at or artifact_manifest,
-        # which the factory refuses as malformed and so reports "invalid generated_at" instead of the cause.
-        with pytest.raises(AssertionError, match="invalid generated_at"):
-            assert_result_conforms(entrypoint, payload, variant=args.variant)
-    else:
-        assert_result_conforms(entrypoint, payload, variant=args.variant)
+    assert_result_conforms(entrypoint, payload, variant=args.variant)
 
     assert exit_code == 1
     assert payload["status"] == "fail"
-    assert payload["observation"]["send_idle"] is True
+    observation = payload["partial_observation"] if background else payload["observation"]
+    assert observation["send_idle"] is True
     if background:
-        assert all(value is False for value in payload["assertions"].values())
+        assert payload["failure_code"] == "omp_background_failed"
+        assert "observation" not in payload
+        assert "assertions" not in payload
+        assert datetime.fromisoformat(payload["generated_at"].replace("Z", "+00:00")).tzinfo is not None
+        manifest_paths = {item["path"] for item in payload["artifact_manifest"]}
+        assert manifest_paths == {
+            path.relative_to(args.evidence_root).as_posix()
+            for path in args.evidence_root.rglob("*")
+            if path.is_file() and path.name != "result.json"
+        }
+        failures = [
+            json.loads((args.evidence_root / item["path"]).read_text())
+            for item in payload["artifact_manifest"]
+            if item["path"].endswith(".json")
+        ]
+        assert any(isinstance(item, dict) and item.get("error") == "RuntimeError: late OMP native follow-up failure" for item in failures)
     else:
         assert payload["assertions"]["omp_helm_send_idle"] is True
         assert payload["assertions"]["omp_helm_follow_up_native"] is False
     assert payload["error"] == "RuntimeError: late OMP native follow-up failure"
     cleanup = _json(tmp_path / "evidence" / "cleanup-receipt.json")
     assert cleanup["status"] == "fail"
-    assert payload["observation"]["cleanup"] == cleanup
+    assert observation["cleanup"] == cleanup
 
 
 def test_the_busy_sampler_and_the_idle_watch_survive_a_status_read_that_keeps_failing(monkeypatch) -> None:

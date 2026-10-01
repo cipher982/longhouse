@@ -681,14 +681,20 @@ def main(argv: list[str] | None = None) -> int:
             "provider": "claude",
             "profile": PROFILE,
             "scenario_id": SCENARIO_ID,
+            "scenario_revision": REGISTRATION.scenario_revision,
+            "evidence_class": "live_token",
+            "generated_at": now_iso(),
             # The authored variant axis (none) is what the factory compares; the execution key is kept apart.
             "variant": None,
             "execution_variant": getattr(args, "variant", None),
-            "status": "inconclusive" if args.negative_control else "fail",
+            "status": "fail",
             "failure_code": "claude_background_setup_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "assertions": {name: False for name in ASSERTIONS},
         }
+        if args.negative_control:
+            result["negative_control"] = {"fault": args.negative_control, "status": "inconclusive"}
+        helm.write_json(root / "claude-background-failure.json", result)
+        result["artifact_manifest"] = artifact_manifest(root)
         helm.write_json(root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1

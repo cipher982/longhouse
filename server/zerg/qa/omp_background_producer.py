@@ -487,16 +487,25 @@ def main(argv: list[str] | None = None) -> int:
             observation["cleanup"] = cleanup
         result = {
             "schema_version": 1,
+            "artifact_kind": "omp_background_jobs_result",
             "producer": REGISTRATION.to_dict(),
             "provider": "omp",
+            "profile": PROFILE,
             "scenario_id": SCENARIO_ID,
+            "scenario_revision": REGISTRATION.scenario_revision,
+            "variant": None,
+            "execution_variant": getattr(args, "variant", None),
+            "evidence_class": "live_token",
+            "generated_at": identity.now(),
             "status": "fail",
-            "observation": observation,
-            "assertions": {name: False for name in ASSERTIONS},
+            "failure_code": "omp_background_failed",
+            "partial_observation": observation,
             "error": f"{type(exc).__name__}: {exc}",
         }
         if args.negative_control:
             result["negative_control"] = {"fault": args.negative_control, "status": "inconclusive"}
+        helm.lifecycle.write_json(args.evidence_root / "omp-background-failure.json", result)
+        result["artifact_manifest"] = identity.artifact_manifest(args.evidence_root)
         helm.lifecycle.write_json(args.evidence_root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1

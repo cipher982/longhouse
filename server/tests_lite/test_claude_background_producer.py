@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -331,8 +332,9 @@ def test_native_empty_source_cannot_certify_unknown_served_registry(monkeypatch:
     assert result["status"] == "fail"
 
 
+@pytest.mark.parametrize("negative_control", [None, oracle.FAULT])
 def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_key_apart(
-    monkeypatch: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str], negative_control: str | None
 ) -> None:
     """The factory compares ``variant`` with the cell's authored variant (none); a typed setup failure must
     not be refused as a malformed result before anyone reads its failure code."""
@@ -366,6 +368,7 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
             "http://127.0.0.1:1",
             "--agents-token",
             "token",
+            *(["--negative-control", negative_control] if negative_control else []),
         ]
     )
 
@@ -374,8 +377,20 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
     assert result["failure_code"] == "claude_background_setup_failed"
     assert result["variant"] is None
     assert result["execution_variant"] == variant
-    # Known gap, pinned so that fixing it is noticed: the setup-failure result carries an assertions map but no
-    # generated_at, artifact_manifest, scenario_revision or evidence_class, so the factory refuses it as malformed
-    # ("invalid generated_at") instead of reporting claude_background_setup_failed.
-    with pytest.raises(AssertionError, match="invalid generated_at"):
-        assert_result_conforms(oracle, result, variant=variant)
+    assert_result_conforms(oracle, result, variant=variant)
+    assert result["status"] == "fail"
+    assert result["error"] == "RuntimeError: setup exploded"
+    assert "observation" not in result
+    assert "assertions" not in result
+    assert datetime.fromisoformat(result["generated_at"].replace("Z", "+00:00")).tzinfo is not None
+    evidence_root = tmp_path / "evidence"
+    manifest_paths = {item["path"] for item in result["artifact_manifest"]}
+    assert manifest_paths == {
+        path.relative_to(evidence_root).as_posix() for path in evidence_root.rglob("*") if path.is_file() and path.name != "result.json"
+    }
+    failures = [
+        json.loads((evidence_root / item["path"]).read_text()) for item in result["artifact_manifest"] if item["path"].endswith(".json")
+    ]
+    assert any(isinstance(item, dict) and item.get("error") == "RuntimeError: setup exploded" for item in failures)
+    if negative_control:
+        assert result["negative_control"]["status"] == "inconclusive"
