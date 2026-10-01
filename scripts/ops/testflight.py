@@ -102,6 +102,12 @@ def _token() -> str:
     )
 
 
+def _scrub(text: str) -> str:
+    """Error text ends up in a public workflow log: no tester address may be in it."""
+    text = re.sub(r"filter\[email\]=[^&\s]*", "filter[email]=<redacted>", text)
+    return re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "<email>", text)
+
+
 def call(method: str, path: str, body: dict | None = None, *, ok_conflict: bool = False) -> dict:
     """One API call with a fresh token and bounded retries on throttling/5xx."""
     url = path if path.startswith("http") else f"{API}{path}"
@@ -137,7 +143,18 @@ def call(method: str, path: str, body: dict | None = None, *, ok_conflict: bool 
                 time.sleep(2 * (attempt + 1))
                 continue
             break
-    raise AscError(last)
+    raise AscError(_scrub(last))
+
+
+def call_all(path: str) -> list[dict]:
+    """Every item of a list endpoint, following Apple's pagination."""
+    items: list[dict] = []
+    url: str | None = path
+    while url:
+        page = call("GET", url)
+        items += page.get("data", [])
+        url = page.get("links", {}).get("next")
+    return items
 
 
 def q(**params: str) -> str:
@@ -207,11 +224,11 @@ def cmd_status(_: argparse.Namespace) -> None:
     for g in groups.get("data", []):
         a = g["attributes"]
         if a["isInternalGroup"]:
-            testers = call("GET", f"/v1/betaGroups/{g['id']}/betaTesters" + q(limit="200"))["data"]
-            available = _group_builds(g["id"])
+            testers = call_all(f"/v1/betaGroups/{g['id']}/betaTesters" + q(limit="200"))
+            available = [b["attributes"]["version"] for b in call_all(f"/v1/betaGroups/{g['id']}/builds" + q(limit="200"))]
             print(
                 f"group {a['name']!r}: internal all_builds={a.get('hasAccessToAllBuilds')} "
-                f"testers={len(testers)} builds={sorted(available.values(), key=int, reverse=True)}"
+                f"testers={len(testers)} builds={sorted(available, key=int, reverse=True)}"
             )
             continue
         link = a.get("publicLink") if a.get("publicLinkEnabled") else "(public link off)"
@@ -350,10 +367,10 @@ def _ensure_public_group(app_id: str, config: dict) -> dict:
     return call("GET", f"/v1/betaGroups/{match['id']}")["data"]
 
 
-def _group_builds(group_id: str) -> dict[str, str]:
-    """build id -> build number for every build the group can install."""
-    result = call("GET", f"/v1/betaGroups/{group_id}/builds" + q(limit="200"))
-    return {b["id"]: b["attributes"]["version"] for b in result.get("data", [])}
+def _in_group(app_id: str, group_id: str, build: str) -> bool:
+    """Whether the group can install this build number (a filtered read, so history length never matters)."""
+    params = {"filter[app]": app_id, "filter[betaGroups]": group_id, "filter[version]": build, "limit": "5"}
+    return bool(call("GET", "/v1/builds" + q(**params)).get("data"))
 
 
 def _ensure_internal_group(app_id: str, config: dict) -> dict:
@@ -392,8 +409,8 @@ def _ensure_internal_group(app_id: str, config: dict) -> dict:
 
 def _ensure_internal_testers(group_id: str) -> int:
     """Every App Store Connect account holder/admin is in the group; returns how many testers it has."""
-    users = call("GET", "/v1/users" + q(limit="200"))["data"]
-    members = call("GET", f"/v1/betaGroups/{group_id}/betaTesters" + q(limit="200"))["data"]
+    users = call_all("/v1/users" + q(limit="200"))
+    members = call_all(f"/v1/betaGroups/{group_id}/betaTesters" + q(limit="200"))
     have = {m["attributes"]["email"].lower() for m in members}
     for user in users:
         attrs = user["attributes"]
@@ -506,14 +523,19 @@ def cmd_publish(args: argparse.Namespace) -> None:
 
     # Internal testers need no Beta App Review. The group's all-builds flag attaches the build
     # (an explicit attach is refused by App Store Connect), so this ensures the group and checks the build is in it.
-    internal = _ensure_internal_group(app_id, config)
-    internal_testers = _ensure_internal_testers(internal["id"])
-    for attempt in range(POLL_ATTEMPTS):
-        if build_id in _group_builds(internal["id"]):
-            break
-        if attempt == POLL_ATTEMPTS - 1:
-            die(f"build {args.build} is not available to internal group {config['internal_group_name']!r} after {POLL_ATTEMPTS * POLL_DELAY}s")
-        time.sleep(POLL_DELAY)
+    internal_testers = 0
+    internal_error = None
+    try:
+        internal = _ensure_internal_group(app_id, config)
+        internal_testers = _ensure_internal_testers(internal["id"])
+        for attempt in range(POLL_ATTEMPTS):
+            if _in_group(app_id, internal["id"], args.build):
+                break
+            if attempt == POLL_ATTEMPTS - 1:
+                raise AscError(f"build {args.build} is not available to internal group {config['internal_group_name']!r} after {POLL_ATTEMPTS * POLL_DELAY}s")
+            time.sleep(POLL_DELAY)
+    except AscError as error:
+        internal_error = str(error)
 
     group = call("GET", f"/v1/betaGroups/{group['id']}")["data"]
     result = {
@@ -522,7 +544,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
         "external_build_state": external,
         "submitted_this_run": submitted,
         "internal_group_testers": internal_testers,
-        "internal_build_available": True,
+        "internal_build_available": internal_error is None,
         "public_link": group["attributes"].get("publicLink"),
     }
     print(json.dumps(result, indent=2))
@@ -533,6 +555,9 @@ def cmd_publish(args: argparse.Namespace) -> None:
             f"the group's public link is {result['public_link']} but the landing page advertises {advertised}; "
             "update IOS_TESTFLIGHT_URL in web/src/features/marketing/landing/links.ts and the link in README.md"
         )
+    if internal_error:
+        # The public work above is done and reported; this is the owner's fast lane, so it still fails the run.
+        die(f"internal group: {internal_error}")
 
 
 def main() -> None:
