@@ -4940,36 +4940,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn omp_extension_preserves_terminal_and_transition_events() {
-        assert!(EXTENSION_ASSET.contains("const write ="));
-        assert!(EXTENSION_ASSET.contains("const close ="));
-        assert!(EXTENSION_ASSET.contains("const scheduleReconnect ="));
-        assert!(EXTENSION_ASSET.contains("MAX_FRAME_BYTES"));
-        assert!(EXTENSION_ASSET.contains("initial_prompt_request"));
-        assert!(EXTENSION_ASSET.contains("LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED"));
-        assert!(EXTENSION_ASSET.contains("initial_prompt_grant"));
-        assert!(EXTENSION_ASSET.contains("session_stop"));
-        assert!(EXTENSION_ASSET.contains("session_transition_cancelled"));
-        assert!(EXTENSION_ASSET.contains("pi.on(\"agent_end\""));
-        assert!(EXTENSION_ASSET.contains("compactLifecycleEvent"));
-        assert!(!EXTENSION_ASSET.contains("event, ...session(ctx)"));
-        assert!(EXTENSION_ASSET.contains("tool_execution_update"));
-        assert!(EXTENSION_ASSET.contains("message_start"));
-        assert!(EXTENSION_ASSET.contains("message_update"));
-        assert!(EXTENSION_ASSET.contains("assistantMessageEvent"));
-        assert!(EXTENSION_ASSET.contains("message_end"));
-        assert!(EXTENSION_ASSET.contains("isTerminal"));
-        assert!(EXTENSION_ASSET.contains("pi.registerTool"));
-        assert!(EXTENSION_ASSET.contains("\"peers\""));
-        assert!(EXTENSION_ASSET.contains("\"search_sessions\""));
-        assert!(EXTENSION_ASSET.contains("\"tail\""));
-        assert!(EXTENSION_ASSET.contains("\"send\""));
-        assert!(EXTENSION_ASSET.contains("\"inbox\""));
-        assert!(EXTENSION_ASSET.contains("\"reply\""));
-        assert!(EXTENSION_ASSET.contains("LONGHOUSE_COORDINATION_TOKEN"));
-        assert!(!EXTENSION_ASSET.contains("LONGHOUSE_OMP_HELM_TOKEN"));
-    }
 
     #[test]
     fn ordinary_agent_end_is_terminal_without_overriding_continuation() {

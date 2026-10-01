@@ -400,6 +400,9 @@ const sessionFileOf = (ctx: unknown): string | undefined => {
 /// the launcher is the authority on a provider moving its own session, and
 /// refusing an unknown file here would silence a live one.
 function subagentSessionContext(ctx: unknown): boolean {
+  if (isRecord(ctx) && isRecord(ctx.agent) && ctx.agent.kind === "sub") {
+    return true;
+  }
   const file = sessionFileOf(ctx);
   if (!file || ownedSessionFiles.has(file)) return false;
   for (const owned of ownedSessionFiles) {
@@ -579,7 +582,18 @@ export default function (pi: any) {
         _toolCallId: string,
         params: ToolParams,
         signal: AbortSignal,
+        _onUpdate: unknown,
+        ctx: unknown,
       ) {
+        if (subagentSessionContext(ctx)) {
+          return result(
+            {
+              error:
+                "Native subagents cannot use their parent's Longhouse coordination authority. Contact your parent with write agent://Main.",
+            },
+            true,
+          );
+        }
         try {
           const value = await execute(params ?? {}, signal);
           return result(value, isRecord(value) && "error" in value);

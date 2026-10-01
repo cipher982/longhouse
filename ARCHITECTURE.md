@@ -46,6 +46,11 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
   is happening right now" and must feel terminal-fast; a durable lane answers
   "what provably happened" and must be correct, ordered, and replayable.
 
+OMP's launch-scoped coordination authority belongs to the main managed session.
+Native subagents cannot use it to send as their parent; they report blockers and
+results through OMP's native parent channel. The extension checks the calling
+agent context before making a coordination request.
+
 ## iOS session opening
 
 The iOS session route schedules opening as two client lanes over the same

@@ -9,6 +9,8 @@ type RegisteredTool = {
     toolCallId: string,
     params: Record<string, unknown>,
     signal: AbortSignal,
+    onUpdate?: unknown,
+    ctx?: unknown,
   ) => Promise<unknown>;
 };
 const channelDir = mkdtempSync(join(tmpdir(), "omp-helm-test-"));
@@ -323,10 +325,60 @@ describe("coordination tools", () => {
           "reply-call",
           { input_id: 7, text: "reply", client_request_id: "reply-1" },
           new AbortController().signal,
+          undefined,
+          { agent: { kind: "main" } },
         );
       expect(response).toMatchObject({
         content: [{ type: "text", text: JSON.stringify({ id: 41 }) }],
       });
+    } finally {
+      process.env.LONGHOUSE_OMP_HELM_URL = previousUrl;
+      await server.stop(true);
+    }
+  });
+
+  it("refuses native child coordination before any HTTP request", async () => {
+    const previousUrl = process.env.LONGHOUSE_OMP_HELM_URL;
+    let requests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        requests += 1;
+        return Response.json({ accepted: true });
+      },
+    });
+    try {
+      process.env.LONGHOUSE_OMP_HELM_URL = server.url.origin;
+      const tools = new Map<string, RegisteredTool>();
+      registerExtension({
+        on: () => undefined,
+        registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
+      });
+      // Native /tan clones have depth 0 and need not use the task artifact path.
+      const child = {
+        agent: { kind: "sub", depth: 0 },
+        sessionManager: { getSessionFile: () => join(channelDir, "clone.jsonl") },
+      };
+      const calls: Array<[string, Record<string, unknown>]> = [
+        ["peers", { repo: "/tmp/longhouse" }],
+        ["search_sessions", { query: "fixture" }],
+        ["tail", { session_id: "target" }],
+        ["send", { session_id: "target", text: "help", client_request_id: "child-send" }],
+        ["inbox", {}],
+        ["reply", { input_id: 7, text: "help", client_request_id: "child-reply" }],
+      ];
+      for (const [name, params] of calls) {
+        const response = await tools.get(name)!.execute(
+          `child-${name}`,
+          params,
+          new AbortController().signal,
+          undefined,
+          child,
+        );
+        expect(response).toMatchObject({ isError: true });
+      }
+      expect(requests).toBe(0);
     } finally {
       process.env.LONGHOUSE_OMP_HELM_URL = previousUrl;
       await server.stop(true);
@@ -446,10 +498,12 @@ describe("subagent sessions", () => {
       string,
       (event: Record<string, unknown>, ctx: unknown) => Promise<unknown>
     > = {};
+    const tools = new Map<string, RegisteredTool>();
     registerExtension({
       on: (name: string, handler: (typeof handlers)[string]) => {
         handlers[name] = handler;
       },
+      registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
     });
     const contextFor = (nativeId: string, file: string) => ({
       isIdle: () => false,
@@ -473,6 +527,17 @@ describe("subagent sessions", () => {
       // written to a ready channel.
       await handlers.session_start({ type: "session_start" }, parent);
       await waitForFrame((frame) => frame.kind === "session_start");
+
+      // Older OMP contexts lack agent.kind; their native artifact path still
+      // prevents a task child from sending as the managed parent.
+      const response = await tools.get("send")!.execute(
+        "legacy-child-send",
+        { session_id: "target", text: "help", client_request_id: "legacy-child" },
+        new AbortController().signal,
+        undefined,
+        subagent,
+      );
+      expect(response).toMatchObject({ isError: true });
 
       await handlers.session_start({ type: "session_start" }, subagent);
       await handlers.agent_start({ type: "agent_start" }, subagent);
