@@ -417,7 +417,7 @@ describe("SessionsPage", () => {
   });
 
   it("does not nag about an LLM provider: a host without one is healthy and titles fall back to the prompt", () => {
-    // window.__LLM_AVAILABLE__ is unset here, which is every fresh host.
+    // No provider is configured on this host: every fresh host.
     mockUseAgentSessions.mockReturnValue({
       data: makeSessionsResponse(),
       isLoading: false,

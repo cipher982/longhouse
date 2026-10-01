@@ -49,7 +49,7 @@ describe("getSessionCardText", () => {
     );
   });
 
-  it("shows the prompt once when the server says the headline is the prompt cut short", () => {
+  it("shows the served headline once when the server says it is the prompt cut short", () => {
     // No title model: the server's headline is the first six words plus an ellipsis.
     const prompt = "Add rate limiting to the public API and cover it with tests";
     const text = getSessionCardText(
@@ -59,7 +59,8 @@ describe("getSessionCardText", () => {
         first_user_message: prompt,
       }),
     );
-    expect(text.title).toBe(prompt);
+    // The served headline, verbatim (sanitised and cut by the server), once.
+    expect(text.title).toBe("Add rate limiting to the public\u2026");
     expect(text.titleSource).toBe("prompt");
     expect(text.subheading).toBeNull();
   });

@@ -90,13 +90,13 @@ export function getSessionCardText(
   const resolved = compactText(session.timeline_title);
   if (preferGenerated && resolved) {
     // With no title model the server's headline is the first prompt cut to a few
-    // words (`title_source: "prompt"`). Showing it above the whole prompt printed
-    // the same sentence twice on every row; show the prompt once, as the title.
-    // A generated title keeps the prompt as its subheading even when it happens
-    // to open with the same words.
+    // words (`title_source: "prompt"`), and the subheading is the whole prompt:
+    // the same sentence twice on every row. Render the served headline once,
+    // verbatim as on iOS, and drop the echo. A generated title keeps the prompt
+    // as its subheading even when it happens to open with the same words.
     if (firstUser && session.title_source === "prompt") {
       return {
-        title: truncateText(firstUser, titleMaxChars),
+        title: truncateText(resolved, titleMaxChars),
         titleSource: "prompt",
         subheading: null,
       };

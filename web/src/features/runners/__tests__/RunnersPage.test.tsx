@@ -205,6 +205,15 @@ describe("RunnersPage", () => {
     expect(screen.queryByTestId("machine-agents")).not.toBeInTheDocument();
   });
 
+  it("reports a failed machine lookup instead of claiming the host is empty", async () => {
+    machineApiMocks.listMachines.mockRejectedValue(new Error("boom"));
+
+    renderRunnersPage();
+
+    expect(await screen.findByText("Could not load connected machines")).toBeInTheDocument();
+    expect(screen.queryByText("No machines connected yet")).not.toBeInTheDocument();
+  });
+
   it("does not render inline launch actions on runner cards anymore", () => {
     mockUseRunners.mockReturnValue({
       data: [makeRunner()],

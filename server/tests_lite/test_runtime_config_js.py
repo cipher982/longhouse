@@ -76,7 +76,7 @@ def test_config_js_includes_runtime_umami_values(monkeypatch):
     assert 'window.WS_BASE_URL="wss://longhouse.ai";' in response.text
     assert 'window.__GOOGLE_CLIENT_ID__="google-client-id";' in response.text
     assert "window.__SINGLE_TENANT__=true;" in response.text
-    assert "window.__LLM_AVAILABLE__=true;" in response.text
+    assert "__LLM_AVAILABLE__" not in response.text
     assert "window.__EMBEDDINGS_AVAILABLE__=true;" in response.text
     assert 'window.__UMAMI_WEBSITE_ID__="demo-site";' in response.text
     assert 'window.__UMAMI_SCRIPT_SRC__="https://analytics.example/script.js";' in response.text

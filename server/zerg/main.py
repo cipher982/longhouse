@@ -375,7 +375,6 @@ async def serve_config_js():
 
     from zerg.models_config import is_capability_available
 
-    _llm_avail_bool = is_capability_available("text")
     _emb_avail_bool = is_capability_available("embedding")
     google_client_id = "" if _settings.control_plane_url else (_settings.google_client_id or "")
     runtime_config = {
@@ -385,7 +384,6 @@ async def serve_config_js():
         "__GOOGLE_CLIENT_ID__": google_client_id,
         # In dev mode (auth disabled), expose landing page by reporting single_tenant=false
         "__SINGLE_TENANT__": False if _settings.auth_disabled else _settings.single_tenant,
-        "__LLM_AVAILABLE__": _llm_avail_bool,
         "__EMBEDDINGS_AVAILABLE__": _emb_avail_bool,
         "__UMAMI_WEBSITE_ID__": _settings.umami_website_id or "",
         "__UMAMI_SCRIPT_SRC__": _settings.umami_script_src or "",

@@ -64,7 +64,11 @@ export default function RunnersPage() {
   const { data: runners, isLoading, error } = useRunners({ refetchInterval: 10_000 });
   // The Machine Agents connected to this Runtime Host: what "my machine" means
   // to a newcomer. A failed lookup shows no list rather than an error page.
-  const { data: machineDirectory, isLoading: machinesLoading } = useQuery({
+  const {
+    data: machineDirectory,
+    isLoading: machinesLoading,
+    isError: machinesError,
+  } = useQuery({
     queryKey: ["machine-directory"],
     queryFn: listMachines,
     refetchInterval: 10_000,
@@ -118,8 +122,15 @@ export default function RunnersPage() {
 
         {machines.length === 0 && runners && runners.length === 0 ? (
           // Held until the machine lookup settles, so a connected machine never
-          // flashes "No machines connected yet" on its way in.
-          machinesLoading ? null : <EmptyState
+          // flashes "No machines connected yet" on its way in; a failed lookup
+          // is an outage, not an empty host.
+          machinesLoading ? null : machinesError ? (
+            <EmptyState
+              variant="error"
+              title="Could not load connected machines"
+              description="Longhouse could not read this host's machine list. Reload to try again."
+            />
+          ) : <EmptyState
             title="No machines connected yet"
             description="Connect a machine and the Claude Code, Codex and Antigravity sessions it already has import here. A Runner is an optional extra for running shell commands on one from the browser."
             action={
