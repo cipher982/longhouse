@@ -12,6 +12,7 @@ extension WebTranscriptView {
         var onRetrySubmittedInput: ((String) -> Void)?
         var onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?
         var onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)?
+        var onRefresh: (() async -> Void)?
 
         func userContentController(
             _ userContentController: WKUserContentController,
@@ -72,6 +73,8 @@ extension WebTranscriptView {
         private var contentSizeObservation: NSKeyValueObservation?
         private var dragStartOffsetY: CGFloat?
         private static let historyFillSlack: CGFloat = 240
+        weak var refreshControl: UIRefreshControl?
+        private var refreshTask: Task<Void, Never>?
 
 #if DEBUG
         func setNeedsMoreHistoryHandlerForTesting(_ handler: (() -> Void)?) {
@@ -398,6 +401,18 @@ extension WebTranscriptView {
                 }
             }
         }
+        @objc func refreshControlDidChange(_ sender: UIRefreshControl) {
+            guard refreshTask == nil else { return }
+            refreshTask = Task { @MainActor [weak self, weak sender] in
+                guard let self else {
+                    sender?.endRefreshing()
+                    return
+                }
+                await self.onRefresh?()
+                sender?.endRefreshing()
+                self.refreshTask = nil
+            }
+        }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             emitNearTopIfNeeded(scrollView)
@@ -468,6 +483,16 @@ extension WebTranscriptView {
             onDiagnostics = nil
             onLifecycle = nil
             onFrameFailed = nil
+            refreshTask?.cancel()
+            refreshTask = nil
+            refreshControl?.removeTarget(
+                self,
+                action: #selector(refreshControlDidChange(_:)),
+                for: .valueChanged
+            )
+            refreshControl?.endRefreshing()
+            refreshControl = nil
+            onRefresh = nil
             onFrameRendered = nil
             pendingPayload = nil
             inFlightPayload = nil

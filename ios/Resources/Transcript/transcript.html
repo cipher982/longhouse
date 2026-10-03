@@ -12,10 +12,12 @@
 }
 
 html {
+  min-height: 100%;
   background: var(--page);
 }
 
 body {
+  min-height: 100%;
   margin: 0;
   background: var(--page);
   color: var(--text);
@@ -25,8 +27,11 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* `dvh` tracks the actual WKWebView viewport when the keyboard changes the
+   composer inset. Keep the legacy value as a fallback for older WebKit. */
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
   /* SwiftUI lays the WebView out inside the safe area, so its frame already
      stops above the floating control card. This is only the comfort gap. */
   padding: 12px 16px 18px;
@@ -281,6 +286,7 @@ h3 {
 
 .table-wrap {
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
   margin: 0.5em 0 0.75em;
   border-radius: 7px;
@@ -337,7 +343,9 @@ pre {
   border-radius: 7px;
   background: var(--code);
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   white-space: pre;
+  -webkit-overflow-scrolling: touch;
   -webkit-user-select: text;
   user-select: text;
 }
@@ -474,6 +482,8 @@ summary::-webkit-details-marker {
   background: rgba(40, 12, 10, 0.35);
   padding: 6px 8px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .failure-preview pre {
@@ -490,6 +500,8 @@ summary::-webkit-details-marker {
   border: 1px solid var(--rule);
   border-radius: 6px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 4px 0;
 }
 

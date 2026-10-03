@@ -9,44 +9,45 @@ struct ResumeCommandSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Continue this Helm in a terminal with the same session and provider thread. Longhouse starts a new Helm run.")
-                    .foregroundStyle(.secondary)
-                if unexpectedStop {
-                    Label(
-                        "This Helm stopped unexpectedly. Resume continues from the provider's last recorded event.",
-                        systemImage: "exclamationmark.triangle"
-                    )
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Ember.flame)
-                }
-                if intent.available, let command = intent.command {
-                    Text(command)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Ember.well, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(Ember.hairline, lineWidth: 0.75)
-                        }
-                    Button {
-                        UIPasteboard.general.string = command
-                        copied = true
-                    } label: {
-                        Label(copied ? "Copied" : "Copy command", systemImage: copied ? "checkmark" : "doc.on.doc")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Text("Resume is no longer available: \(resumeReasonLabel(intent.reason)).")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Continue this Helm in a terminal with the same session and provider thread. Longhouse starts a new Helm run.")
                         .foregroundStyle(.secondary)
+                    if unexpectedStop {
+                        Label(
+                            "This Helm stopped unexpectedly. Resume continues from the provider's last recorded event.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Ember.flame)
+                    }
+                    if intent.available, let command = intent.command {
+                        Text(command)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Ember.well, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(Ember.hairline, lineWidth: 0.75)
+                            }
+                        Button {
+                            UIPasteboard.general.string = command
+                            copied = true
+                        } label: {
+                            Label(copied ? "Copied" : "Copy command", systemImage: copied ? "checkmark" : "doc.on.doc")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        Text("Resume is no longer available: \(resumeReasonLabel(intent.reason)).")
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer()
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Ember.page.ignoresSafeArea())
             .navigationTitle("Resume on \(intent.machineLabel ?? intent.machineId ?? "its machine")")
             .navigationBarTitleDisplayMode(.inline)

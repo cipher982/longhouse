@@ -202,7 +202,6 @@ struct SessionView: View {
                 )
             }
         }
-        .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
         .sheet(item: $viewModel.resumeIntent) { intent in
             ResumeCommandSheet(
                 intent: intent,
@@ -480,7 +479,7 @@ struct SessionView: View {
         let state = transcriptState
         let showTranscript = state.showsTranscript
 
-        return ZStack {
+        return ZStack(alignment: .top) {
             if showTranscript {
                 WebTranscriptView(
                     serverURL: appState.serverURL,
@@ -493,6 +492,9 @@ struct SessionView: View {
                     retryRevision: viewModel.transcriptRenderRetryRevision,
                     sourceRevision: viewModel.benchmarkSourceRevision,
                     sourceOperation: viewModel.benchmarkSourceOperation,
+                    onRefresh: {
+                        await viewModel.reload(sessionId: sessionId, appState: appState)
+                    },
                     onNearTop: {
                         Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                     },

@@ -30,6 +30,9 @@ struct WebTranscriptView: UIViewRepresentable {
     /// A render left too little scroll range for the near-top callback; the
     /// owner can load older history so the transcript reaches the composer.
     let onNeedsMoreHistory: (() -> Void)?
+    /// Fires when the native transcript owner is pulled to refresh.
+    let onRefresh: (() async -> Void)?
+    /// Diagnostics from the acknowledged WebKit frame.
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     let onLifecycle: ((String) -> Void)?
     /// Tapping a worker row opens that child's transcript.
@@ -58,6 +61,7 @@ struct WebTranscriptView: UIViewRepresentable {
         onNeedsMoreHistory: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onLifecycle: ((String) -> Void)? = nil,
+        onRefresh: (() async -> Void)? = nil,
         onOpenSubagent: ((String) -> Void)? = nil,
         onEditSubmittedInput: ((String) -> Void)? = nil,
         onDiscardSubmittedInput: ((String) -> Void)? = nil,
@@ -68,6 +72,7 @@ struct WebTranscriptView: UIViewRepresentable {
         self.serverURL = serverURL
         self.items = items
         self.subagents = subagents
+        self.onRefresh = onRefresh
         self.onOpenSubagent = onOpenSubagent
         self.onEditSubmittedInput = onEditSubmittedInput
         self.onDiscardSubmittedInput = onDiscardSubmittedInput
@@ -102,6 +107,7 @@ struct WebTranscriptView: UIViewRepresentable {
         context.coordinator.onEditSubmittedInput = onEditSubmittedInput
         context.coordinator.onDiscardSubmittedInput = onDiscardSubmittedInput
         context.coordinator.onRetrySubmittedInput = onRetrySubmittedInput
+        context.coordinator.onRefresh = onRefresh
         context.coordinator.onFrameFailed = onFrameFailed
         context.coordinator.onFrameRendered = onFrameRendered
         let controller = webView.configuration.userContentController
@@ -109,7 +115,26 @@ struct WebTranscriptView: UIViewRepresentable {
         controller.add(context.coordinator, name: WebTranscriptView.bridgeName)
         webView.scrollView.delegate = context.coordinator
         webView.scrollView.keyboardDismissMode = .interactive
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.bounces = true
         webView.scrollView.alwaysBounceVertical = true
+        webView.scrollView.scrollsToTop = true
+        // SwiftUI's `.refreshable` only installs a refresh control for native
+        // SwiftUI scroll containers. This transcript's owner is WebKit's
+        // UIScrollView, so install the control on that owner explicitly.
+        webView.scrollView.refreshControl?.removeTarget(
+            nil,
+            action: nil,
+            for: .valueChanged
+        )
+        let refreshControl = UIRefreshControl()
+        refreshControl.addTarget(
+            context.coordinator,
+            action: #selector(Coordinator.refreshControlDidChange(_:)),
+            for: .valueChanged
+        )
+        webView.scrollView.refreshControl = refreshControl
+        context.coordinator.refreshControl = refreshControl
         // SwiftUI lays this view out INSIDE the safe area, so the WebView frame
         // already stops at the top of the floating control card and the DOM's
         // 18px bottom padding is only the comfort gap above it. Disable the
@@ -157,6 +182,7 @@ struct WebTranscriptView: UIViewRepresentable {
 
     func updateUIView(_ webView: TranscriptWebView, context: Context) {
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
+        context.coordinator.onRefresh = onRefresh
         context.coordinator.onEditSubmittedInput = onEditSubmittedInput
         context.coordinator.onDiscardSubmittedInput = onDiscardSubmittedInput
         context.coordinator.onRetrySubmittedInput = onRetrySubmittedInput

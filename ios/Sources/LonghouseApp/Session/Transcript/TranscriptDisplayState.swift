@@ -189,10 +189,7 @@ struct TranscriptStateOverlay: View {
         case .syncingWithRefreshError(let message):
             syncingWithRefreshError(message)
         case .contentWithRefreshError(let message):
-            VStack {
-                refreshBanner(message)
-                Spacer(minLength: 0)
-            }
+            refreshBanner(message)
         case .empty:
             Text("No messages yet")
                 .font(.callout)
