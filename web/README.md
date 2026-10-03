@@ -13,6 +13,11 @@ iOS transcript document. Folder-by-folder layout: the Code map in
 Run: `make dev` (UI against your Runtime Host) or `make dev-demo` (seeded local
 backend). Test: `make test-frontend`. See a page: `make ui-capture PAGE=timeline`.
 
+For ended managed terminal sessions, **Show resume command** appears beside the
+ended-run notice in the composer. It opens a command dialog; it does not restart
+the agent. Run the copied command in a terminal on the named machine to continue
+the same session and conversation.
+
 Hearth reel (the real timeline over scripted mock sessions, for the landing
 page and posts): preview live at `/hearth-reel.html` under `bun run dev`;
 record with `bun run record:hearth-reel` → `video/out/hearth-reel.mp4` plus a

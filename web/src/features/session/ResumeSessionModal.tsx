@@ -14,7 +14,7 @@ export function ResumeSessionModal({
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [copied, setCopied] = useState(false);
-  const machineLabel = intent.machine_label ?? intent.machine_id ?? "its machine";
+  const machineLabel = intent.machine_label ?? intent.machine_id ?? "the original machine";
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -46,7 +46,7 @@ export function ResumeSessionModal({
         <div className="modal-header">
           <div>
             <h2 id="resume-session-title">Resume on {machineLabel}</h2>
-            <p>Continue this Helm in a terminal with the same session and provider thread.</p>
+            <p>Continue the same conversation by running this command in a terminal.</p>
           </div>
           <button ref={closeRef} className="modal-close-button" onClick={onClose} aria-label="Close">
             ×
@@ -55,13 +55,13 @@ export function ResumeSessionModal({
         <div className="modal-content">
           {unexpectedStop ? (
             <p className="resume-session-modal__recovery" data-testid="resume-session-recovery-copy">
-              This Helm stopped unexpectedly. Resume continues from the provider&apos;s last recorded event.
+              This run stopped unexpectedly. Resume continues from the provider&apos;s last recorded event.
             </p>
           ) : null}
           {intent.available && intent.command ? (
             <>
               <p className="resume-session-modal__copy">
-                Run this command on {machineLabel}. Longhouse starts a new Helm run.
+                Run this command on {machineLabel}. It starts a new run of this session; opening this dialog does not start it.
               </p>
               <pre className="inspector-code-block" data-testid="resume-session-command">
                 <code>{intent.command}</code>

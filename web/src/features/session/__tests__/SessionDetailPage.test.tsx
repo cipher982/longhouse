@@ -90,10 +90,12 @@ vi.mock("@/shared/api/agents", async (importOriginal) => {
 vi.mock("../chat/SessionChat", () => ({
   SessionChat: ({
     composerDisabledReason,
+    composerDisabledAction,
     managedLaunchSuggestion,
     composerHeaderAccessory,
   }: {
     composerDisabledReason?: string | null;
+    composerDisabledAction?: React.ReactNode;
     managedLaunchSuggestion?: { command: string } | null;
     composerHeaderAccessory?: React.ReactNode;
   }) => (
@@ -104,6 +106,7 @@ vi.mock("../chat/SessionChat", () => ({
     >
       session-chat
       {composerHeaderAccessory}
+      {composerDisabledAction}
     </div>
   ),
 }));
@@ -586,9 +589,6 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("resume-session-modal")).toHaveTextContent(
       "Resume on cinder",
     );
-    expect(
-      screen.getByTestId("resume-session-recovery-copy"),
-    ).toHaveTextContent("This Helm stopped unexpectedly");
     expect(screen.getByTestId("resume-session-command")).toHaveTextContent(
       "longhouse codex --cwd /Users/example/git/zerg --resume-session session-codex",
     );

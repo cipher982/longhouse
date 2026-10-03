@@ -683,6 +683,11 @@
   color: rgba(181, 164, 142, 0.78);
 }
 
+.session-chat-composer-unavailable__action {
+  align-self: flex-start;
+  margin-top: var(--space-2);
+}
+
 /* Pending message pill — shows while managed-local POST is in flight */
 .session-chat-pending-message {
   display: flex;

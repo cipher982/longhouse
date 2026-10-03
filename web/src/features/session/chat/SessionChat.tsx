@@ -162,6 +162,7 @@ interface SessionChatProps {
   /// Heading over the disabled-composer copy. Derived from the typed blocker;
   /// falls back only when a caller has nothing better.
   composerDisabledTitle?: string | null;
+  composerDisabledAction?: ReactNode;
   managedLaunchSuggestion?: ManagedLaunchSuggestion | null;
   /**
    * When true, sending while the session is locked persists as a queued
@@ -609,6 +610,7 @@ export function SessionChat({
   chatMode,
   composerDisabledReason = null,
   composerDisabledTitle = null,
+  composerDisabledAction,
   managedLaunchSuggestion = null,
   canQueueNextInput = false,
   canSteerActiveTurn = false,
@@ -2607,6 +2609,11 @@ export function SessionChat({
               <span className="session-chat-composer-unavailable__copy">
                 {composerDisabledReason}
               </span>
+              {composerDisabledAction ? (
+                <div className="session-chat-composer-unavailable__action">
+                  {composerDisabledAction}
+                </div>
+              ) : null}
             </div>
           )
         ) : (

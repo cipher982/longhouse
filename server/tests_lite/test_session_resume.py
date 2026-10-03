@@ -15,6 +15,7 @@ def _session(*, provider: str = "codex", state: str = "available", reason: str |
         origin_label="David's Mac",
         home_label="On this Mac",
         cwd="/Users/david/project with space",
+        control=SimpleNamespace(source_runner_name="David's Mac"),
         session_state=SimpleNamespace(control=control),
     )
 
@@ -57,4 +58,35 @@ def test_resume_intent_preserves_typed_unavailable_reason() -> None:
     assert intent.available is False
     assert intent.reason == "provider_state_missing"
     assert intent.argv == []
+    assert intent.command is None
+
+
+@pytest.mark.parametrize(
+    ("runner_name", "expected_label"),
+    [(None, "cinder"), ("Cinder laptop", "Cinder laptop"), ("   ", "cinder")],
+)
+def test_resume_intent_names_the_recorded_machine_not_the_environment(runner_name, expected_label) -> None:
+    session = _session()
+    session.device_id = "cinder"
+    session.origin_label = "development"
+    session.home_label = "On this Mac"
+    session.control = SimpleNamespace(source_runner_name=runner_name)
+
+    intent = build_session_resume_intent(session)
+
+    assert intent.machine_id == "cinder"
+    assert intent.machine_label == expected_label
+
+
+def test_resume_intent_does_not_name_an_environment_when_the_machine_is_unknown() -> None:
+    session = _session()
+    session.device_id = None
+    session.control = None
+    session.origin_label = "development"
+
+    intent = build_session_resume_intent(session)
+
+    assert intent.available is False
+    assert intent.reason == "machine_unknown"
+    assert intent.machine_label is None
     assert intent.command is None

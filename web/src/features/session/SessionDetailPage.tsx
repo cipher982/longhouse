@@ -2,7 +2,7 @@
  * SessionDetailPage - Single-column session workspace.
  *
  * Layout:
- * - Header: back, title + identity subtitle, Resume, overflow menu
+ * - Header: back, title + identity subtitle, overflow menu
  * - Body: transcript fills viewport
  * - Dock: runtime strip (activity strip, elapsed, tail) + composer sticky at bottom
  * - Drawer (overlay): session context (metadata, branches, summary, attach debug)
@@ -352,11 +352,21 @@ function SessionDetailWorkspaceRoute({
     branchSourceSession.runtime_display?.pause_request?.status === "pending"
       ? branchSourceSession.runtime_display.pause_request
       : null;
+  const resumeAvailable =
+    isViewingHead &&
+    branchSourceSession.session_state.control.actions.resume.state ===
+      "available";
+  const resumeHostLabel =
+    branchSourceSession.control?.source_runner_name?.trim() ||
+    branchSourceSession.device_id?.trim() ||
+    "the original machine";
   const composerDisabledReason = activePauseRequest
     ? activePauseRequest.can_respond
       ? "Answer the provider question above before sending another prompt."
       : "Answer the provider question in the terminal before sending another prompt."
-    : interaction.composerDisabledReason;
+    : resumeAvailable
+      ? `This run has ended. To continue the same conversation, run the resume command in a terminal on ${resumeHostLabel}.`
+      : interaction.composerDisabledReason;
 
   const sessionChatTarget: SessionChatTarget = {
     id: branchSourceSession.id,
@@ -408,10 +418,6 @@ function SessionDetailWorkspaceRoute({
     toolCalls: transcriptCounts.toolCalls,
     tone: headerState.tone,
   });
-  const resumeAvailable =
-    isViewingHead &&
-    branchSourceSession.session_state.control.actions.resume.state ===
-      "available";
   // Branching is offered wherever Resume is, because the reason it is not
   // offered is worth showing too: an ended session that cannot be continued
   // should say why rather than simply have nothing there.
@@ -569,17 +575,6 @@ function SessionDetailWorkspaceRoute({
 
   const headerRight = (
     <div className="session-workspace-header__actions">
-      {resumeAvailable ? (
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => void handleResume()}
-          disabled={resumeLoading}
-          data-testid="session-resume-button"
-        >
-          {resumeLoading ? "Checking…" : `Resume on ${runtimeHostLabel}`}
-        </Button>
-      ) : null}
       {confirmingArchive ? (
         <div className="session-detail-archive-confirm">
           <span className="session-detail-archive-confirm-label">Archive?</span>
@@ -761,7 +756,23 @@ function SessionDetailWorkspaceRoute({
                     }
                     composerPlaceholder={interaction.placeholder}
                     composerDisabledReason={composerDisabledReason}
-                    composerDisabledTitle={interaction.notice?.title ?? null}
+                    composerDisabledTitle={
+                      resumeAvailable ? "Run ended" : interaction.notice?.title ?? null
+                    }
+                    composerDisabledAction={
+                      resumeAvailable ? (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          onClick={() => void handleResume()}
+                          disabled={resumeLoading}
+                          data-testid="session-resume-button"
+                        >
+                          {resumeLoading ? "Checking…" : "Show resume command"}
+                        </Button>
+                      ) : null
+                    }
                     managedLaunchSuggestion={null}
                     submitLabel={interaction.submitLabel}
                     canQueueNextInput={Boolean(

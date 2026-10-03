@@ -34,12 +34,7 @@ _RESUME_FLAG = {
 
 def build_session_resume_intent(session: SessionResponse) -> SessionResumeIntentResponse:
     session_control = getattr(session, "control", None)
-    machine_label = (
-        getattr(session_control, "source_runner_name", None)
-        or getattr(session, "origin_label", None)
-        or getattr(session, "home_label", None)
-        or session.device_id
-    )
+    machine_label = (getattr(session_control, "source_runner_name", None) or "").strip() or session.device_id
     action = session.session_state.control.actions.resume if session.session_state.control is not None else None
     if action is None or action.state != "available":
         return SessionResumeIntentResponse(
