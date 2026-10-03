@@ -770,6 +770,57 @@ def test_capability_projection_disqualifies_inline_proof_when_referenced_evidenc
     assert proof.artifact_id not in proof_payload["trusted_artifact_ids"]
 
 
+@pytest.mark.parametrize("digest", ["sha256:not-a-digest", "sha256:../../outside", "sha512:" + "a" * 64])
+def test_malformed_retained_reference_is_rejected_without_breaking_metadata_reads(monkeypatch, tmp_path: Path, digest: str) -> None:
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    assertion = routes.load_chip_edge_assertions()["codex"]["interrupt"][0]
+    proof = _record(
+        assertion_id=assertion.assertion_id,
+        assertion_variant=assertion.variant,
+        scenario_id=assertion.scenario_id,
+        scenario_revision=assertion.minimum_scenario_revision,
+        evidence_class=EvidenceClass(assertion.acceptable_evidence[0]),
+        generated_at=datetime.now(UTC).isoformat(),
+        raw_reference_digests=(digest,),
+    )
+    for reference in proof.referenced_content_digests():
+        if reference in _BLOB_CONTENT:
+            store.write_blob(_BLOB_CONTENT[reference], expected_digest=reference)
+    store.write(
+        proof,
+        publication=ProofPublication(
+            worker_id=proof.worker_id,
+            worker_census_digest=proof.worker_census_digest,
+            auth_mechanism=proof.auth_mechanism,
+            published_at=proof.generated_at,
+            bundle_digest=_blob_digest("malformed-retained-fixture"),
+        ),
+    )
+    client = _client(monkeypatch, tmp_path)
+    try:
+        capabilities = client.get("/api/agents/provider-capabilities")
+        retained = client.get("/api/agents/provider-capability-proofs")
+        routes._certification_cache = None
+        certification = client.get("/api/public/provider-certification")
+    finally:
+        api_app.dependency_overrides.clear()
+        routes._certification_cache = None
+
+    assert capabilities.status_code == retained.status_code == certification.status_code == 200
+    row = next(
+        row
+        for row in capabilities.json()["capabilities"]
+        if (row["provider"], row["assertion_id"], row["variant"]) == ("codex", proof.assertion_id, proof.assertion_variant)
+    )
+    assert row["proof_status"] == "unacceptable_evidence"
+    assert "proof_referenced_content_missing" in row["admissibility_reasons"]
+    record = next(record for record in retained.json()["records"] if record["artifact_id"] == proof.artifact_id)
+    assert record["store_integrity"] == {"admissible": False, "reason_codes": ["proof_referenced_content_missing"]}
+    codex = next(provider for provider in certification.json()["providers"] if provider["provider"] == "codex")
+    assert codex["chips"]["interrupt"]["state"] != "certified"
+
+
 def test_capability_projection_uses_older_intact_pass_when_latest_pass_evidence_is_tampered(monkeypatch, tmp_path: Path) -> None:
     moment = datetime.now(UTC)
     older_generated_at = (moment - timedelta(minutes=5)).isoformat()

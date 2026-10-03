@@ -339,6 +339,10 @@ class ProviderCapabilityProofStore:
         referenced = {digest for record in records for digest in record.referenced_content_digests()}
         available: set[str] = set()
         for digest in referenced:
+            # Noncanonical references are missing evidence, just as in a full
+            # blob audit. Never turn them into paths or abort metadata reads.
+            if not _SHA256.fullmatch(digest):
+                continue
             path = self._blob_root / self._digest_name(digest)
             if path.is_file() and self._digest_bytes(path.read_bytes()) == digest:
                 available.add(digest)

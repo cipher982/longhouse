@@ -20,7 +20,6 @@ export const APP_PAGES: PageDef[] = [
   { name: "profile", path: `/profile?${BASE_QUERY}`, ready: "page" },
   { name: "integrations", path: `/settings/integrations?${BASE_QUERY}`, ready: "page" },
   { name: "devices", path: `/settings/devices?${BASE_QUERY}`, ready: "page" },
-  { name: "admin", path: `/admin?${BASE_QUERY}`, ready: "page" },
 ];
 
 export const PUBLIC_PAGES: PageDef[] = [

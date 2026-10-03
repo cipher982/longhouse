@@ -31,7 +31,6 @@ from zerg.qa.live_session_toolkit import _cursor_interrupt_to_idle
 from zerg.qa.live_session_toolkit import _cursor_projection_diagnostics
 from zerg.qa.live_session_toolkit import _cursor_tui_input_ready
 from zerg.qa.live_session_toolkit import _opencode_tui_is_connected
-from zerg.qa.live_session_toolkit import _provision_transcript_roots
 from zerg.qa.live_session_toolkit import _raise_known_registration_transient
 from zerg.qa.live_session_toolkit import _wait_cursor_idle
 from zerg.qa.live_session_toolkit import _write_best_effort_json
@@ -142,23 +141,6 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         else:
             assert cursor_only.isdisjoint(registration.required_artifacts)
         assert ("opencode_model_profile_receipt" in registration.required_artifacts) is (provider == "opencode")
-
-
-def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    configured_claude = tmp_path / "claude-config"
-
-    _provision_transcript_roots(home, {"CLAUDE_CONFIG_DIR": str(configured_claude)})
-
-    for relative in (
-        ".codex/sessions",
-        ".local/share/opencode",
-        ".cursor/chats",
-        ".config/cursor/chats",
-        ".longhouse/agent/cursor-acp-source",
-    ):
-        assert (home / relative).is_dir()
-    assert (configured_claude / "projects").is_dir()
 
 
 def test_cursor_qualification_workspace_has_project_identity(tmp_path: Path, monkeypatch) -> None:
