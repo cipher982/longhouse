@@ -635,7 +635,8 @@ export function SessionChat({
   const composerAttachments = useComposerAttachments();
   const hasHadComposer = useRef(false);
   if (!isComposerDisabled) hasHadComposer.current = true;
-  const retainDockComposer = isDock && hasHadComposer.current;
+  const retainDockComposer =
+    isDock && hasHadComposer.current && !composerDisabledAction;
   const showComposerUnavailableState =
     isComposerDisabled && !retainDockComposer;
   const queryClient = useQueryClient();

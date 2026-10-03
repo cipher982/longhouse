@@ -353,12 +353,13 @@ function SessionDetailWorkspaceRoute({
       ? branchSourceSession.runtime_display.pause_request
       : null;
   const resumeAvailable =
+    !activePauseRequest &&
     isViewingHead &&
     branchSourceSession.session_state.control.actions.resume.state ===
       "available";
   const resumeHostLabel =
     branchSourceSession.control?.source_runner_name?.trim() ||
-    branchSourceSession.device_id?.trim() ||
+    branchSourceSession.device_id ||
     "the original machine";
   const composerDisabledReason = activePauseRequest
     ? activePauseRequest.can_respond
@@ -757,7 +758,11 @@ function SessionDetailWorkspaceRoute({
                     composerPlaceholder={interaction.placeholder}
                     composerDisabledReason={composerDisabledReason}
                     composerDisabledTitle={
-                      resumeAvailable ? "Run ended" : interaction.notice?.title ?? null
+                      activePauseRequest
+                        ? "Response required"
+                        : resumeAvailable
+                          ? "Run ended"
+                          : interaction.notice?.title ?? null
                     }
                     composerDisabledAction={
                       resumeAvailable ? (

@@ -467,6 +467,28 @@ describe("SessionChat", () => {
     expect(draft).toHaveValue("Preserve this instruction");
   });
 
+  it("shows recovery after a live composer becomes unavailable and restores its draft", async () => {
+    const user = userEvent.setup();
+    const view = renderSessionChat({ chatMode: "managed_local" });
+    await user.type(screen.getByRole("textbox"), "Keep this instruction");
+
+    view.rerenderSessionChat({
+      composerDisabledReason: "The run ended.",
+      composerDisabledAction: <button type="button">Show resume command</button>,
+    });
+
+    expect(screen.getByRole("button", { name: "Show resume command" })).toBeEnabled();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+    view.rerenderSessionChat({
+      composerDisabledReason: null,
+      composerDisabledAction: null,
+    });
+
+    expect(screen.getByRole("textbox")).toHaveValue("Keep this instruction");
+    expect(screen.queryByRole("button", { name: "Show resume command" })).not.toBeInTheDocument();
+  });
+
   it("shows a manual interrupt affordance for stalled managed sessions", async () => {
     const user = userEvent.setup();
     let interruptCalls = 0;
