@@ -1774,6 +1774,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode"
       ]
     },
@@ -2404,6 +2405,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode"
       ]
     },

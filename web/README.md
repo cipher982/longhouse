@@ -19,6 +19,9 @@ the agent. Run the copied command in a terminal on the named machine to continue
 the same session and conversation. The action also appears when a run ends while
 the page is open; an unsent draft is preserved when messaging becomes available again.
 
+OMP uses the native `longhouse omp --resume-session` entry point with the original
+session ID and working directory; it resumes the session rather than branching it.
+
 Hearth reel (the real timeline over scripted mock sessions, for the landing
 page and posts): preview live at `/hearth-reel.html` under `bun run dev`;
 record with `bun run record:hearth-reel` → `video/out/hearth-reel.mp4` plus a

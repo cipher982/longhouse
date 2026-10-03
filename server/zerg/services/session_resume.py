@@ -29,6 +29,7 @@ _RESUME_FLAG = {
     "claude": "--resume",
     "cursor": "--resume-session",
     "opencode": "--resume-session",
+    "omp": "--resume-session",
 }
 
 
