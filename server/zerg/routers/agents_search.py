@@ -1222,6 +1222,7 @@ async def _lexical_recall_matches(
     include_snippets: bool = False,
     include_titles: bool = False,
     degraded: list[MachineSearchLaneFailure] | None = None,
+    device_id: str | None = None,
 ) -> list[RecallMatch]:
     """FTS discovery, one match per session, best row wins.
 
@@ -1237,6 +1238,7 @@ async def _lexical_recall_matches(
         project=project,
         provider=provider,
         environment=environment,
+        device_id=device_id,
         days_back=since_days,
         limit=min(200, candidate_depth),
         timeout_seconds=timeout_seconds,
@@ -1746,6 +1748,7 @@ async def search_session_matches(
     limit: int,
     timeout_seconds: float,
     degraded: list[MachineSearchLaneFailure],
+    device_id: str | None = None,
 ) -> tuple[list[RecallMatch], list[Literal["lexical", "dense"]]]:
     """Rank sessions by the lanes the caller named.
 
@@ -1773,6 +1776,7 @@ async def search_session_matches(
             include_snippets=True,
             include_titles=True,
             degraded=degraded,
+            device_id=device_id,
         )
 
     async def dense() -> list[RecallMatch]:
@@ -1787,6 +1791,7 @@ async def search_session_matches(
             max_results=candidate_depth,
             timeout_seconds=timeout_seconds,
             owner_id=owner_id,
+            device_id=device_id,
         )
 
     if resolved == "lexical":

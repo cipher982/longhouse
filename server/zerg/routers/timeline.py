@@ -157,6 +157,7 @@ async def _search_storage_v2_timeline(
         days_back=params.days_back,
         include_test=params.include_test,
         include_automation=params.include_automation,
+        device_id=params.device_id,
         mode=params.mode or "lexical",
         limit=params.limit + params.offset,
         timeout_seconds=ARCHIVE_READ_TIMEOUT_SECONDS,
