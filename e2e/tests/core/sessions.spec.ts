@@ -1249,6 +1249,17 @@ test.describe("Session Detail Page", () => {
     );
     const rightX = Math.max(24, paneWidth - 24);
 
+    // The probe points must sit beside the reading column, not inside it:
+    // when the scroller was itself the narrow centered column, hovering
+    // "inside the list" could never reach a gutter and this test passed
+    // while real gutters scrolled nothing.
+    const rowsBox = await page.locator(".timeline-pane__rows").boundingBox();
+    expect(rowsBox).toBeTruthy();
+    expect((box?.x ?? 0) + leftX).toBeLessThan(rowsBox?.x ?? 0);
+    expect((box?.x ?? 0) + rightX).toBeGreaterThan(
+      (rowsBox?.x ?? 0) + (rowsBox?.width ?? 0),
+    );
+
     // Wheel from the far-left edge of the timeline pane.
     await timelineList.hover({ position: { x: leftX, y: gutterY } });
     await page.mouse.wheel(0, 600);

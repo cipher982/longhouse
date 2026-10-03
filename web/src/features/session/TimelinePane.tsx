@@ -98,8 +98,9 @@ interface TimelinePaneProps {
   headerSparkline?: ReactNode;
   /** Actions rendered at the far right of the header bar. */
   headerRight?: ReactNode;
-  /** Readout rail (Phase 4 Instruments), rendered beside the transcript on
-   *  wide viewports; CSS hides it below 1180px. */
+  /** Readout rail (Phase 4 Instruments), rendered inside the transcript
+   *  scroller (so wheel input over it scrolls the transcript) and pinned to
+   *  its bottom-right on wide viewports; CSS hides it below 1180px. */
   rail?: ReactNode;
   /** Turn outline column (item 7, web-restyle-signal): a fixed-width sidebar
    * to the left of the whole pane (header, transcript, and dock), shown only
@@ -1632,8 +1633,8 @@ export function TimelinePane({
           ))}
           </div>
         )}
+        {rail ? <div className="timeline-pane__rail-anchor">{rail}</div> : null}
         </div>
-        {rail}
       </div>
 
       {unreadCount > 0 ? (

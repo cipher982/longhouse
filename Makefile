@@ -1273,7 +1273,7 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 # Tools
 # ---------------------------------------------------------------------------
 ui-capture: ## Render a web page to PNG (PAGE=, SCENE=); fixture scenes need nothing running, Vite is started and stopped for you
-	@bunx tsx scripts/ui/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),)
+	@bunx tsx scripts/ui/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),) $(if $(WHEEL_MAP),--wheel-map,)
 
 landing-screenshots: ## Regenerate the landing showcase images (Timeline/Search/Session Detail) from the current UI with curated fixtures
 	@./scripts/ui/landing-screenshots.sh

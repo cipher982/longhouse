@@ -1112,35 +1112,20 @@
   color: rgba(233, 211, 163, 0.92);
 }
 
-/* Phase 4 (Instruments): row wrapper for the transcript list + the readout
-   rail (web/src/shared/instruments/ReadoutRail.tsx), which sits beside
-   it on wide viewports. justify-content: center keeps the two as ONE
-   992px group (760 list + 32 gap + 200 rail) centered in the pane, on the
-   same axis as the composer below (.session-control-dock--bar's own
-   centering) — neither child may flex-grow to fill the row, or the rail
-   drifts to the far edge instead of sitting right next to the transcript.
-   align-items: flex-end pins the rail's bottom edge to the bottom of the
-   scrollable list, matching its own margin-bottom, the same effect the
-   static mock gets from a shrink-wrapped row. Delete this rule (and the
-   rail width bump on .session-control-dock--bar below) if the rail itself
-   is ever deleted. */
+/* Row wrapper for the transcript scroller. The readout rail
+   (web/src/shared/instruments/ReadoutRail.tsx) is a child of the scroller
+   (see .timeline-pane__rail-anchor), not a sibling, so every pixel of the
+   body is inside one scroll container. */
 .timeline-pane__body {
   flex: 1;
   min-height: 0;
   min-width: 0;
   display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  gap: var(--space-8);
 }
 
 .timeline-pane__list {
   min-height: 0;
-  flex: 0 1 auto;
-  width: min(100%, var(--tl-tool-max));
   min-width: 0;
-  /* .timeline-pane__body's align-items: flex-end bottom-aligns the rail to
-     content height; this child opts back into full-height stretch. */
   align-self: stretch;
   overflow-y: auto;
   padding: var(--space-2) var(--space-4) var(--space-4);
@@ -1154,6 +1139,34 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* Zero-size sticky anchor at the end of the scroller content: keeps the
+   readout rail pinned to the bottom-right of the visible transcript while
+   staying a descendant of the scroller. Offset matches the list's
+   with-dock bottom padding so the rail does not jump when scrolled to the
+   end. Only exists where the rail does (>= 1180px). */
+.timeline-pane__rail-anchor {
+  display: none;
+  position: sticky;
+  bottom: var(--space-2);
+  align-self: flex-end;
+  flex: none;
+  width: 0;
+  height: 0;
+}
+
+@media (min-width: 1180px) {
+  .timeline-pane__rail-anchor {
+    display: block;
+  }
+}
+
+.timeline-pane__rail-anchor > .instrument-readout-rail {
+  position: absolute;
+  left: calc(var(--space-4) + var(--space-8));
+  bottom: 1px;
+  margin-bottom: 0;
 }
 
 .timeline-pane--with-dock .timeline-pane__list {
@@ -1422,14 +1435,22 @@
 .timeline-pane__list.timeline-events {
   gap: 2px;
   align-items: stretch;
-  /* The list is one fixed column inside .timeline-pane__body (a centered
-     flex row with the readout rail); it must not grow or self-center, or
-     the rail gets pushed to the pane's far edge. */
-  flex: 0 1 auto;
-  width: min(100%, calc(var(--tl-tool-max) + 2 * var(--space-4)));
-  max-width: calc(var(--tl-tool-max) + 2 * var(--space-4));
+  /* The scroller spans the whole body so wheel/trackpad input in the
+     gutters beside the reading column (and over the readout rail, which
+     lives inside it) scrolls the transcript. A narrow centered scroller
+     leaves those gutters with no scroll target. The column is centered by
+     padding, on the same axis as the composer (--tl-dock-max). */
+  flex: 1 1 auto;
+  width: 100%;
   margin-inline: 0;
-  padding-inline: var(--space-4);
+  --tl-side: max(
+    0px,
+    calc((100% - var(--tl-dock-max, calc(var(--tl-tool-max) + 2 * var(--space-4)))) / 2)
+  );
+  padding-inline:
+    calc(var(--tl-side) + var(--space-4))
+    calc(var(--tl-side) + var(--tl-rail-space, 0px) + var(--space-4));
+  overscroll-behavior-y: contain;
 }
 /* The trace: one brass conductor down the transcript's edge, fading at
    both ends. Tool rows branch off it (see .tl-action__head::before/after).
@@ -1488,11 +1509,14 @@
   --tl-prose-max: 760px;
   --tl-tool-max: 760px;
   --tl-message-max: var(--tl-prose-max);
-  /* Composer width when the rail is visible: transcript column + the same
-     32px gap as .timeline-pane__body (--space-8) + the rail's own 200px
-     (styles/instruments.css .instrument-readout-rail) = 992px total. Keep
-     these three numbers in sync. */
-  --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4));
+  /* Rail footprint beside the transcript column: the 32px gap + the rail's
+     own 200px (shared/instruments/instruments.css .instrument-readout-rail).
+     Zero below 1180px, where the rail is hidden. */
+  --tl-rail-space: 0px;
+  /* Width of the centered transcript + rail group, and of the composer
+     under it. The scroller (.timeline-pane__list) spans the whole body and
+     pads itself to this group, so the gutters beside it still scroll. */
+  --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4) + var(--tl-rail-space));
   /* Local instrument tokens for the trace (not in tokens.css — scoped here
      per the Phase 2 restyle so they can be deleted in one commit later). */
   --trace-gutter: var(--space-4);
@@ -1501,7 +1525,7 @@
 
 @media (min-width: 1180px) {
   .session-workspace-route--single-column {
-    --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4) + var(--space-8) + 200px);
+    --tl-rail-space: calc(var(--space-8) + 200px);
   }
 }
 
@@ -1516,13 +1540,11 @@
   .session-workspace-route--single-column {
     --tl-prose-max: 78ch;
     --tl-tool-max: 900px;
-    --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4) + var(--space-8) + 200px);
   }
 }
 @media (min-width: 1900px) {
   .session-workspace-route--single-column {
     --tl-tool-max: 1000px;
-    --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4) + var(--space-8) + 200px);
   }
 }
 

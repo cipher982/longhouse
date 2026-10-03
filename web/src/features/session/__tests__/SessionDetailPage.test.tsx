@@ -712,10 +712,13 @@ describe("SessionDetailPage", () => {
         "Using Shell",
       );
 
-      // Scoped to the transcript list — the readout rail's "Waiting on"
-      // capsule also renders the bare tool name ("Bash") now (item 5,
-      // web-restyle-signal), so an unscoped query is ambiguous.
-      const transcriptList = screen.getByTestId("session-timeline-list");
+      // Scoped to the transcript rows — the readout rail (which lives inside
+      // the transcript scroller) also renders the bare tool name ("Bash") in
+      // its "Waiting on" capsule, so a list-wide query is ambiguous.
+      const transcriptList = screen
+        .getByTestId("session-timeline-list")
+        .querySelector<HTMLElement>(".timeline-pane__rows");
+      if (!transcriptList) throw new Error("Expected transcript rows");
 
       {
         const label = within(transcriptList).getByText("Bash");

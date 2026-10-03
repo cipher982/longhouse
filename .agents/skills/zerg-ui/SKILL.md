@@ -253,6 +253,15 @@ done (it leaves a Vite that was already there alone). Output:
 `artifacts/ui-capture/<timestamp>/<page>.png`, `<page>-a11y.json|yml`,
 `console.log`, `manifest.json`, and `trace.zip` unless `NO_TRACE=1`.
 
+For "what captures the scroll wheel here?" add `WHEEL_MAP=1` (and
+`VIEWPORT=1700x900` for the three-column session layout): it sends a real wheel
+event at every 40px cell and writes `<page>-wheelmap.txt|json` — a letter per
+cell naming the scroll container that moved, `.` where nothing scrolled.
+Dead cells beside a scroller (gutters, rails) are the bug; dead cells over a
+fixed header or composer are intended. A scroller narrower than its pane (a
+centered `max-width` column with `overflow: auto`) always leaves dead gutters:
+make the scroller span the pane and center the column with padding.
+
 Fixture scenes answer every API call from Playwright routes; add new served
 fields to `scripts/ui-fixtures/*.ts` so the capture exercises them. The
 session context pane is a drawer and is closed in captures; the timeline

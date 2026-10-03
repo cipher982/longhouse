@@ -14,7 +14,11 @@
  * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
  *
  * Usage:
- *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2]
+ *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map]
+ *
+ * --wheel-map sends a real wheel event at every 40px cell and writes
+ * <page>-wheelmap.txt/.json: which scroll container moved (or "." = nothing),
+ * so gutters and rails that fail to scroll the transcript show up as dead cells.
  *
  * --probe writes <page>-probe.json with the bounding box and key computed
  * styles of each selector (first match), so a layout can be measured, not
@@ -54,6 +58,7 @@ import {
   SESSION_TONES,
   type SessionTone,
 } from "../ui-fixtures/sessionDetailStress";
+import { captureWheelMap } from "./wheel-map";
 import { buildProviderCertificationFixture } from "../ui-fixtures/providerCertification";
 import { buildFirstRunMachineFixture, FIRST_RUN_NOW } from "../ui-fixtures/firstRun";
 import { buildTimelineCardStressFixture } from "../ui-fixtures/timelineCardStress";
@@ -205,6 +210,7 @@ interface Options {
   viewportName: string;
   viewport: ViewportConfig;
   probe: string[];
+  wheelMap: boolean;
 }
 
 type A11yFormat = "json" | "yaml" | "none";
@@ -241,6 +247,7 @@ function parseArgs(): Options {
   const noTrace = args.includes("--no-trace");
   const probeArg = args.find((a) => a.startsWith("--probe="))?.slice("--probe=".length);
   const all = args.includes("--all");
+  const wheelMap = args.includes("--wheel-map");
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const parsedViewport = parseViewport(viewportArg);
@@ -256,6 +263,7 @@ function parseArgs(): Options {
     viewportName: viewportArg || "desktop",
     viewport: parsedViewport,
     probe: probeArg ? probeArg.split(",").map((s) => s.trim()).filter(Boolean) : [],
+    wheelMap,
   };
 }
 
@@ -1112,6 +1120,7 @@ async function captureBundle(
   scene: SceneName,
   frameName: string = pageName,
   probe: string[] = [],
+  wheelMap = false,
 ): Promise<CaptureResult> {
   const query = scene === "landing-search" ? `?query=${encodeURIComponent(LANDING_SEARCH_QUERY)}` : "";
   const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}${query}`;
@@ -1238,6 +1247,10 @@ async function captureBundle(
     const probePath = path.join(outputDir, `${frameName}-probe.json`);
     writeFileSync(probePath, JSON.stringify({ viewport: page.viewportSize(), elements: probed }, null, 2));
     console.log(`  Probe: ${probePath}`);
+  }
+
+  if (wheelMap) {
+    await captureWheelMap(page, outputDir, frameName);
   }
 
   // Capture accessibility snapshot
@@ -1475,6 +1488,7 @@ async function main() {
           opts.scene,
           frameName,
           opts.probe,
+          opts.wheelMap,
         );
       } catch (error) {
         const { message, detail } = formatError(error);
