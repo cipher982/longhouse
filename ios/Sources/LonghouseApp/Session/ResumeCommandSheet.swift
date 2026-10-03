@@ -11,8 +11,11 @@ struct ResumeCommandSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Continue this Helm in a terminal with the same session and provider thread. Longhouse starts a new Helm run.")
+                    Text("Continue the same Helm conversation by running this command in a terminal. This dialog only prepares the command; opening it does not start a new run.")
                         .foregroundStyle(.secondary)
+                    Text("Runs on \(intent.machineLabel ?? intent.machineId ?? "the source machine")")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Ember.text)
                     if unexpectedStop {
                         Label(
                             "This Helm stopped unexpectedly. Resume continues from the provider's last recorded event.",
@@ -49,7 +52,7 @@ struct ResumeCommandSheet: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .background(Ember.page.ignoresSafeArea())
-            .navigationTitle("Resume on \(intent.machineLabel ?? intent.machineId ?? "its machine")")
+            .navigationTitle("Resume command")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

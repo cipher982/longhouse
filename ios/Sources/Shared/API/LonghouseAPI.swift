@@ -63,8 +63,8 @@ struct LonghouseAPI: Sendable {
         try await timelineSessions(limit: 30).filter(\.needsAttention)
     }
 
-    func recentSessions(limit: Int = 30) async throws -> [SessionSummary] {
-        try await timelineSessions(limit: limit)
+    func recentSessions(limit: Int = 30, deviceId: String? = nil) async throws -> [SessionSummary] {
+        try await timelineSessions(limit: limit, deviceId: deviceId)
     }
 
     func recentActiveSessions(limit: Int = 30) async throws -> [SessionSummary] {
@@ -80,13 +80,24 @@ struct LonghouseAPI: Sendable {
         query: String,
         lane: TimelineSearchLane,
         daysBack: Int? = nil,
-        limit: Int = 30
+        limit: Int = 30,
+        deviceId: String? = nil
     ) async throws -> [SessionSummary] {
         switch lane {
         case .lexical:
-            return try await lexicalSearchSessions(query: query, daysBack: daysBack, limit: limit)
+            return try await lexicalSearchSessions(
+                query: query,
+                daysBack: daysBack,
+                limit: limit,
+                deviceId: deviceId
+            )
         case .semantic:
-            return try await semanticSearchSessions(query: query, daysBack: daysBack, limit: limit)
+            return try await semanticSearchSessions(
+                query: query,
+                daysBack: daysBack,
+                limit: limit,
+                deviceId: deviceId
+            )
         }
     }
 
@@ -95,11 +106,21 @@ struct LonghouseAPI: Sendable {
     /// Reads the same route the browser timeline reads, so the phone and the
     /// browser cannot answer one query with different lanes, and the same
     /// visibility policy applies to both.
-    func lexicalSearchSessions(query: String, daysBack: Int?, limit: Int) async throws -> [SessionSummary] {
-        let url = Self.lexicalSearchURL(baseURL: baseURL, query: query, daysBack: daysBack, limit: limit)
+    func lexicalSearchSessions(
+        query: String,
+        daysBack: Int?,
+        limit: Int,
+        deviceId: String? = nil
+    ) async throws -> [SessionSummary] {
+        let url = Self.lexicalSearchURL(
+            baseURL: baseURL,
+            query: query,
+            daysBack: daysBack,
+            limit: limit,
+            deviceId: deviceId
+        )
         var request = URLRequest(url: url)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-
         let (data, httpResponse) = try await data(for: request)
         guard httpResponse.statusCode == 200 else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
@@ -111,8 +132,19 @@ struct LonghouseAPI: Sendable {
 
     /// Dense paraphrase search. Slower, and the only lane that finds a session
     /// whose words the user did not type.
-    func semanticSearchSessions(query: String, daysBack: Int?, limit: Int) async throws -> [SessionSummary] {
-        let url = Self.semanticSearchURL(baseURL: baseURL, query: query, daysBack: daysBack, limit: limit)
+    func semanticSearchSessions(
+        query: String,
+        daysBack: Int?,
+        limit: Int,
+        deviceId: String? = nil
+    ) async throws -> [SessionSummary] {
+        let url = Self.semanticSearchURL(
+            baseURL: baseURL,
+            query: query,
+            daysBack: daysBack,
+            limit: limit,
+            deviceId: deviceId
+        )
         var request = URLRequest(url: url)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -125,7 +157,13 @@ struct LonghouseAPI: Sendable {
         return decoded.sessions.map(\.searchSessionSummary)
     }
 
-    static func lexicalSearchURL(baseURL: URL, query: String, daysBack: Int?, limit: Int) -> URL {
+    static func lexicalSearchURL(
+        baseURL: URL,
+        query: String,
+        daysBack: Int?,
+        limit: Int,
+        deviceId: String? = nil
+    ) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions"),
             resolvingAgainstBaseURL: false
@@ -139,11 +177,20 @@ struct LonghouseAPI: Sendable {
             // Keep the position the explicit-range URL has always had.
             queryItems.insert(URLQueryItem(name: "days_back", value: String(daysBack)), at: 1)
         }
+        if let deviceId, !deviceId.isEmpty {
+            queryItems.append(URLQueryItem(name: "device_id", value: deviceId))
+        }
         components.queryItems = queryItems
         return components.url!
     }
 
-    static func semanticSearchURL(baseURL: URL, query: String, daysBack: Int?, limit: Int) -> URL {
+    static func semanticSearchURL(
+        baseURL: URL,
+        query: String,
+        daysBack: Int?,
+        limit: Int,
+        deviceId: String? = nil
+    ) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/semantic"),
             resolvingAgainstBaseURL: false
@@ -157,16 +204,27 @@ struct LonghouseAPI: Sendable {
             // Keep the position the explicit-range URL has always had.
             queryItems.insert(URLQueryItem(name: "days_back", value: String(daysBack)), at: 1)
         }
+        if let deviceId, !deviceId.isEmpty {
+            queryItems.append(URLQueryItem(name: "device_id", value: deviceId))
+        }
         components.queryItems = queryItems
         return components.url!
     }
 
     func timelineSessions(limit: Int = 30) async throws -> [SessionSummary] {
+        try await timelineSessions(limit: limit, deviceId: nil)
+    }
+
+    func timelineSessions(limit: Int, deviceId: String?) async throws -> [SessionSummary] {
         var components = URLComponents(url: baseURL.appendingPathComponent("/api/timeline/sessions"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "days_back", value: "14"),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
+        if let deviceId, !deviceId.isEmpty {
+            queryItems.append(URLQueryItem(name: "device_id", value: deviceId))
+        }
+        components.queryItems = queryItems
         var request = URLRequest(url: components.url!)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
 

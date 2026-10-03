@@ -27,6 +27,7 @@ struct ChatUITestFixture: Sendable {
 actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     let sessionID: String
     private let fixtureName: String
+    static let endedCodexHelmChildID = "ui-test-codex-helm-child"
     private var nextEventID = 1
     private var events: [SessionEvent]
     private var realtimeContinuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
@@ -87,15 +88,63 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
         }
         return Self.makeDetail(
-            sessionID: sessionID,
+            sessionID: id,
             events: events,
-            title: Self.titleForFixture(fixtureName)
+            title: Self.titleForSession(fixtureName: fixtureName, sessionID: id)
         )
+    }
+
+    func sessionResumeIntent(id: String) async throws -> SessionResumeIntent {
+        guard fixtureName == "ended-codex-helm" else {
+            throw LonghouseAPIError.requestFailed
+        }
+        return SessionResumeIntent(
+            sessionId: id,
+            provider: "codex",
+            machineId: "cinder",
+            machineLabel: "cinder",
+            cwd: "/Users/example/code",
+            available: true,
+            reason: nil,
+            argv: ["longhouse", "codex", "--cwd", "/Users/example/code", "--resume-session", id],
+            command: "longhouse codex --cwd /Users/example/code --resume-session \(id)",
+            handoff: "terminal_command"
+        )
+    }
+
+    func createSessionBranch(
+        id: String,
+        message: String,
+        clientRequestId: String
+    ) async throws -> SessionBranch {
+        guard fixtureName == "ended-codex-helm", !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw LonghouseAPIError.requestFailed
+        }
+        return SessionBranch(
+            sessionId: Self.endedCodexHelmChildID,
+            threadId: "ui-test-codex-helm-child-thread",
+            turnId: "ui-test-codex-helm-child-turn",
+            runId: "ui-test-codex-helm-child-run",
+            state: "created",
+            created: true
+        )
+    }
+
+    private static func titleForSession(fixtureName: String, sessionID: String) -> String {
+        guard fixtureName == "ended-codex-helm",
+              sessionID == endedCodexHelmChildID else {
+            return titleForFixture(fixtureName)
+        }
+        return "Codex Helm branch"
     }
 
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
-        Self.makeWorkspace(sessionID: sessionID, events: events, title: Self.titleForFixture(fixtureName))
+        Self.makeWorkspace(
+            sessionID: id,
+            events: events,
+            title: Self.titleForSession(fixtureName: fixtureName, sessionID: id)
+        )
     }
 
     func sessionMobileTail(
@@ -113,12 +162,12 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             ? (events: events, pageOffset: 0)
             : Self.tailPage(events: events, limit: limit, offset: offset)
         return Self.makeMobileTail(
-            sessionID: sessionID,
+            sessionID: id,
             events: page.events,
             total: events.count,
             pageOffset: page.pageOffset,
             snapshotEventId: events.compactMap(\.legacyNumericId).max().map(String.init),
-            title: Self.titleForFixture(fixtureName)
+            title: Self.titleForSession(fixtureName: fixtureName, sessionID: id)
         )
     }
 
@@ -492,6 +541,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         switch fixtureName {
         case "marketing":
             return "Wire up OAuth refresh flow"
+        case "ended-codex-helm":
+            return "Ended Codex Helm"
         case "loading-long-title":
             return "A very long session title that must stay inside the navigation bar"
         case "helm-channel-reconcile":
@@ -536,6 +587,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     ) -> SessionDetail {
         // Marketing captures must not leak test-harness copy into the chrome.
         let isMarketing = title == titleForFixture("marketing")
+        let isEndedCodexHelm = title == titleForFixture("ended-codex-helm")
         let isHelmChannelReconcile = title == titleForFixture("helm-channel-reconcile")
         let isTimelineDelegation = title.contains("Background Tasks (timeline)")
         let isAttentionDelegation = title == titleForFixture("background-tasks-attention")
@@ -556,15 +608,15 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             gitBranch: "main",
             summary: title,
             summaryTitle: title,
-            presenceState: isHelmChannelReconcile ? "thinking" : "idle",
+            presenceState: isEndedCodexHelm ? "ended" : (isHelmChannelReconcile ? "thinking" : "idle"),
             presenceTool: nil,
             userState: "active",
-            status: isHelmChannelReconcile ? "thinking" : "idle",
+            status: isEndedCodexHelm ? "ended" : (isHelmChannelReconcile ? "thinking" : "idle"),
             lastActivityAt: events.last?.timestamp,
-            displayPhase: isHelmChannelReconcile ? "Thinking" : "Idle",
+            displayPhase: isEndedCodexHelm ? "Ended" : (isHelmChannelReconcile ? "Thinking" : "Idle"),
             activeTool: nil,
-            homeLabel: "MacBook",
-            originLabel: "UI test",
+            homeLabel: isEndedCodexHelm ? "misleading-home" : "MacBook",
+            originLabel: isEndedCodexHelm ? "misleading-origin" : "UI test",
             capabilities: SessionCapabilities(
                 canQueueNextInput: true,
                 canSteerActiveTurn: isHelmChannelReconcile,
@@ -575,24 +627,24 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "live",
                 signalTier: "none",
-                state: isHelmChannelReconcile ? "thinking" : "idle",
-                tone: isHelmChannelReconcile ? "thinking" : "idle",
-                headline: isHelmChannelReconcile ? "Thinking" : "Idle",
-                detail: idleDetail,
-                phaseLabel: isHelmChannelReconcile ? "Thinking" : "Idle",
+                state: isEndedCodexHelm ? "ended" : (isHelmChannelReconcile ? "thinking" : "idle"),
+                tone: isEndedCodexHelm ? "ended" : (isHelmChannelReconcile ? "thinking" : "idle"),
+                headline: isEndedCodexHelm ? "Ended" : (isHelmChannelReconcile ? "Thinking" : "Idle"),
+                detail: isEndedCodexHelm ? "Run ended" : idleDetail,
+                phaseLabel: isEndedCodexHelm ? "Ended" : (isHelmChannelReconcile ? "Thinking" : "Idle"),
                 compactToolLabel: nil,
-                isLive: true,
+                isLive: !isEndedCodexHelm,
                 isExecuting: isHelmChannelReconcile,
                 needsAttention: false,
-                isIdle: !isHelmChannelReconcile,
+                isIdle: !isHelmChannelReconcile && !isEndedCodexHelm,
                 isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
-                activityRecency: "live",
-                lifecycle: "open",
+                activityRecency: isEndedCodexHelm ? "historical" : "live",
+                lifecycle: isEndedCodexHelm ? "ended" : "open",
                 hostState: "online",
-                terminalReason: nil
+                terminalReason: isEndedCodexHelm ? "provider_exit" : nil
             ),
             stateFacts: DefaultUnknownSessionStateFacts(
                 wrappedValue: SessionStateFacts(
@@ -602,8 +654,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     dispositionState: "open",
                     dispositionCloseReason: nil,
                     launchState: nil,
-                    runLifecycle: "running",
-                    activityState: isHelmChannelReconcile ? "thinking" : "quiescent",
+                    runLifecycle: isEndedCodexHelm ? "ended" : "running",
+                    activityState: isEndedCodexHelm ? "ended" : (isHelmChannelReconcile ? "thinking" : "quiescent"),
                     activityRawKind: nil,
                     activityTool: nil,
                     activitySource: nil,
@@ -615,26 +667,28 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     unread: false,
                     lastResultAt: nil,
                     lastResultOutcome: nil,
-                    startTurn: unavailable,
-                    sendInput: available,
+                    sendInput: isEndedCodexHelm
+                        ? SessionStateAction(state: "unavailable", reason: "run_ended")
+                        : available,
                     interrupt: available,
                     terminate: available,
                     reattach: unavailable,
-                    resume: unavailable,
-                    branch: unavailable,
+                    resume: isEndedCodexHelm ? available : unavailable,
+                    branch: isEndedCodexHelm ? available : unavailable,
                     pendingInteractionKind: isAttentionDelegation ? "question" : nil,
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(
-                        key: isAttentionDelegation ? "needs_answer" : (isTimelineDelegation ? "delegated_work" : (isHelmChannelReconcile ? "thinking" : "idle")),
-                        label: isAttentionDelegation ? "Needs answer" : (isTimelineDelegation ? "Background · 1 agent · 1 command" : (isHelmChannelReconcile ? "Thinking" : "Idle")),
-                        tone: isAttentionDelegation ? "blocked" : (isTimelineDelegation ? "active" : (isHelmChannelReconcile ? "thinking" : "idle")),
+                        key: isEndedCodexHelm ? "ended" : (isAttentionDelegation ? "needs_answer" : (isTimelineDelegation ? "delegated_work" : (isHelmChannelReconcile ? "thinking" : "idle"))),
+                        label: isEndedCodexHelm ? "Ended" : (isAttentionDelegation ? "Needs answer" : (isTimelineDelegation ? "Background · 1 agent · 1 command" : (isHelmChannelReconcile ? "Thinking" : "Idle"))),
+                        tone: isEndedCodexHelm ? "quiet" : (isAttentionDelegation ? "blocked" : (isTimelineDelegation ? "active" : (isHelmChannelReconcile ? "thinking" : "idle"))),
                         observedAt: nil
                     ),
                     access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),
                     transcript: nil,
                     commitSeq: nil
                 )
-            )
+            ),
+            deviceId: isEndedCodexHelm ? "cinder" : nil
         )
         if title.hasPrefix("Background Tasks") {
             let positiveExpired = title.contains("(stale)") || title.contains("(expired positive)")

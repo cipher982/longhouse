@@ -49,7 +49,7 @@ struct MachinesTests {
               "upload_p95_ms": 42,
               "waiting_uploads": 0,
               "failed_uploads": 0,
-              "history": {"state": "imported", "source_count": 3, "remaining_bytes": 0, "remaining_records": 0, "acknowledged_records": 20}
+              "history": {"state": "current", "source_count": 3, "remaining_bytes": 0, "remaining_records": 0, "acknowledged_records": 20}
             }
           }]
         }
@@ -60,7 +60,7 @@ struct MachinesTests {
         #expect(response.machines[0].machine.machineName == "cinder")
         #expect(response.machines[0].activity.liveCount == 9)
         #expect(response.machines[0].activity.daily[0].byProvider["omp"] == 43)
-        #expect(response.machines[0].sync?.history.state == "imported")
+        #expect(response.machines[0].sync?.history.state == "current")
 
         let sparse = try #require("{\"machines\":[{\"machine\":{\"device_id\":\"old\",\"machine_name\":\"old\",\"online\":false,\"launch\":{\"providers\":[]}}}]}".data(using: .utf8))
         let sparseResponse = try JSONDecoder.snakeCase.decode(MachinesSummaryResponse.self, from: sparse)
@@ -94,7 +94,7 @@ struct MachinesTests {
             (machine(online: true, blockedBy: "auth_failed"), nil, nil, "Needs repair", .fault),
             (machine(online: true, blockedBy: "engine_too_old"), nil, nil, "Update required", .attention),
             (machine(online: true, blockedBy: "no_launch_support"), nil, nil, "Can't start sessions", .attention),
-            (machine(online: true), nil, nil, "Online, idle", .live),
+            (machine(online: true), nil, nil, "Online", .live),
             (machine(online: false, blockedBy: "control_down"), nil, MachineSync(stale: false), "Sync only", .quiet),
             (machine(online: true), nil, MachineSync(status: "broken"), "Needs repair", .fault),
             (machine(online: false, lastSeenAt: "2026-09-25T16:40:00Z"), nil, nil, "Offline", .off),
@@ -105,6 +105,29 @@ struct MachinesTests {
             #expect(status.text == text)
             #expect(status.role == role)
         }
+    }
+
+    @Test
+    func statusKeepsLastSeenSeparateFromRepairAction() {
+        let now = Date(timeIntervalSince1970: 1_791_043_200)
+        let offline = deriveMachineStatus(
+            machine: machine(online: false, lastSeenAt: "2026-09-25T16:40:00Z"),
+            now: now
+        )
+        #expect(offline.detail?.hasPrefix("last seen ") == true)
+
+        let repair = deriveMachineStatus(
+            machine: machine(online: false, blockedBy: "runtime_unreachable"),
+            now: now
+        )
+        #expect(repair.detail == "Run longhouse local-health on this machine to inspect the fault")
+    }
+
+    @Test
+    func directoryOnlyOnlineWithoutLaunchMetadataDoesNotReadAsIdle() {
+        let status = deriveMachineStatus(machine: machine(online: true))
+        #expect(status.text == "Online")
+        #expect(status.detail == nil)
     }
 
     private func machine(

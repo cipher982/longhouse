@@ -65,7 +65,7 @@ export function machineStatus({ machine, activity, sync }: StatusInput): Machine
   const quietBase = { hint: null, quiet: false };
 
   if ((blocked && REPAIR_REASONS[blocked]) || (syncFresh && sync?.status === "broken")) {
-    return { tone: "fault", label: "Needs repair", hint: "Run longhouse machine repair on this machine", quiet: false };
+    return { tone: "fault", label: "Needs repair", hint: "Run longhouse local-health on this machine to inspect the fault", quiet: false };
   }
   if (machine.online) {
     const needs = signInNeeds(machine);
@@ -118,7 +118,7 @@ export function connectionLine(machine: MachineDirectoryEntry, now = Date.now())
     return held && held !== "just now" ? `online for ${held}` : "just connected";
   }
   const seen = relativeTime(machine.last_seen_at, now);
-  return seen ? `last connected ${seen}` : "never connected";
+  return seen ? `last seen ${seen}` : "No connection evidence";
 }
 
 // Chart colours per provider, tuned for the dark ground: several brand
@@ -179,8 +179,6 @@ export function machineAgents(
 }
 
 const IMPORTING_STATES: Record<string, true> = { discovering: true, inventory_ready: true, importing: true, backpressured: true };
-// Below this the import is a rounding error a person should not be told about.
-const IMPORT_NOTICE_BYTES = 64 * 1024;
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -200,9 +198,10 @@ export function historyLine(sync: MachineSync | null | undefined): { text: strin
   const history = sync.history;
   const remaining = history.remaining_bytes ?? 0;
   const files = history.source_count != null ? `${history.source_count.toLocaleString()} files` : null;
-  if (history.state === "current" || (IMPORTING_STATES[history.state] && remaining <= IMPORT_NOTICE_BYTES && (history.remaining_records ?? 0) === 0)) {
+  if (history.state === "current") {
     return { text: files ? `All imported · ${files}` : "All imported", tone: "live" };
   }
+  if (history.state === "discovering") return { text: "Discovering history", tone: "plain" };
   if (IMPORTING_STATES[history.state]) {
     return { text: remaining > 0 ? `Importing · ${formatBytes(remaining)} left` : "Importing", tone: "plain" };
   }
@@ -215,7 +214,7 @@ export function historyLine(sync: MachineSync | null | undefined): { text: strin
 export function isImporting(sync: MachineSync | null | undefined): boolean {
   if (!sync || sync.stale) return false;
   const history = sync.history;
-  return Boolean(IMPORTING_STATES[history.state]) && ((history.remaining_bytes ?? 0) > IMPORT_NOTICE_BYTES || (history.remaining_records ?? 0) > 0);
+  return Boolean(IMPORTING_STATES[history.state]);
 }
 
 type RunnerLike = { id: number; name: string; status: string; availability_policy?: string | null };

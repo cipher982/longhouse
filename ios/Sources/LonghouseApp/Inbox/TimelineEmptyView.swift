@@ -1,17 +1,23 @@
 import SwiftUI
 
-/// The timeline of a Runtime Host that has no sessions yet. A brand-new host
-/// has no machine either, and the phone cannot connect one, so the screen says
-/// where to do it instead of promising a sync that has nothing to sync from.
+/// The timeline empty state is about the selected window, not lifetime
+/// history. A machine-scoped timeline uses the same honest wording while
+/// retaining its directory identity and launch actions.
 struct TimelineEmptyView: View {
+    let scopedToMachine: Bool
+
+    init(scopedToMachine: Bool = false) {
+        self.scopedToMachine = scopedToMachine
+    }
+
     var body: some View {
         ContentUnavailableView(
-            "No sessions yet",
+            "No sessions in this window",
             systemImage: "rectangle.stack",
             description: Text(
-                "New sessions you start from now on appear here as Longhouse syncs them from your machines. "
-                    + "Existing history stays on the computer unless you choose a project, date, or all history there during setup or later. "
-                    + "No machine yet? On your computer, open your Longhouse in a browser and run the command under \u{201C}Connect your first machine\u{201D}."
+                scopedToMachine
+                    ? "No sessions appeared for this machine in the selected window."
+                    : "No sessions appeared in the selected window. New sessions you start from now on appear here as Longhouse syncs them from your machines."
             )
         )
         .accessibilityIdentifier("timeline-empty")

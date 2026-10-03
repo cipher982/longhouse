@@ -82,6 +82,43 @@ struct TimelineViewModelConnectivityTests {
     }
 
     @Test
+    func machineScopedTimelineKeepsColdRealtimeAndSearchRowsOnSelectedMachine() async {
+        let cinder = makeSession(id: "cinder-session", deviceId: "cinder")
+        let other = makeSession(id: "other-session", deviceId: "other")
+        let api = FakeTimelineSessionsClient(
+            [.success([other, cinder]), .success([other, cinder])],
+            searchResponse: .success([other, cinder])
+        )
+        let stream = TimelineStreamRecorder()
+        let model = TimelineViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, _ in stream.make() },
+            enableRealtime: true,
+            enableConnectivityClock: false,
+            deviceId: "cinder"
+        )
+        let appState = makeAppState()
+
+        await model.refresh(using: appState, force: true)
+        #expect(model.state == .loaded([cinder]))
+
+        model.startStream(using: appState)
+        await waitUntil { stream.startCount() >= 1 }
+        stream.emit(.connected)
+        await drain()
+        stream.emit(.connected)
+        await waitUntil { await api.requestCount() == 2 }
+        #expect(model.state == .loaded([cinder]))
+
+        model.searchRemote(query: "migration", lane: .lexical, using: appState)
+        await model.awaitRemoteSearch()
+        #expect(model.searchState == .loaded([cinder]))
+        #expect(await api.observedRecentDeviceIDs() == ["cinder", "cinder"])
+        #expect(await api.observedSearchDeviceIDs() == ["cinder"])
+        model.stopStream()
+    }
+
+    @Test
     func streamAuthFailureRefreshesSessionAndRestartsStream() async {
         let session = makeSession()
         let api = FakeTimelineSessionsClient([
@@ -232,7 +269,7 @@ struct TimelineViewModelConnectivityTests {
     ) -> TimelineViewModel {
         TimelineViewModel(
             apiFactory: { _ in api },
-            streamFactory: { _, _ in stream.make() },
+            streamFactory: { _, _, _ in stream.make() },
             enableRealtime: true,
             enableConnectivityClock: false
         )
@@ -275,7 +312,7 @@ struct TimelineViewModelConnectivityTests {
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
 
-    private func makeSession(id: String = "session-1") -> SessionSummary {
+    private func makeSession(id: String = "session-1", deviceId: String? = nil) -> SessionSummary {
         let display = SessionRuntimeDisplay(
             truthTier: "live",
             signalTier: "live",
@@ -312,6 +349,7 @@ struct TimelineViewModelConnectivityTests {
             timelineAnchorAt: "2026-06-02T14:00:00Z",
             userMessages: 1,
             toolCalls: 1,
+            deviceId: deviceId,
             runtimeDisplay: display
         )
     }
@@ -329,6 +367,8 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     private var requests = 0
     private var searchRequests = 0
     private var observedLanes: [TimelineSearchLane] = []
+    private var observedRecentDeviceIds: [String?] = []
+    private var observedSearchDeviceIds: [String?] = []
 
     init(
         _ responses: [FakeTimelineResponse],
@@ -345,9 +385,17 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     func searchRequestCount() -> Int {
         searchRequests
     }
+    func observedRecentDeviceIDs() -> [String?] {
+        observedRecentDeviceIds
+    }
 
-    func recentSessions(limit: Int) async throws -> [SessionSummary] {
+    func observedSearchDeviceIDs() -> [String?] {
+        observedSearchDeviceIds
+    }
+
+    func recentSessions(limit: Int, deviceId: String?) async throws -> [SessionSummary] {
         requests += 1
+        observedRecentDeviceIds.append(deviceId)
         guard !responses.isEmpty else { return [] }
         switch responses.removeFirst() {
         case .success(let sessions):
@@ -363,10 +411,12 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
         query: String,
         lane: TimelineSearchLane,
         daysBack: Int?,
-        limit: Int
+        limit: Int,
+        deviceId: String?
     ) async throws -> [SessionSummary] {
         searchRequests += 1
         observedLanes.append(lane)
+        observedSearchDeviceIds.append(deviceId)
         switch searchResponse {
         case .success(let sessions):
             return sessions

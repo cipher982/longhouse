@@ -100,6 +100,12 @@ function makeMessageItem(content: string): TimelineItem {
     },
   };
 }
+function makeTimelineMessage(id: number, content: string): TimelineItem {
+  const item = makeMessageItem(content);
+  if (item.kind !== "message") throw new Error("fixture must be a message");
+  return { ...item, event: { ...item.event, id } };
+}
+
 
 function makePendingToolItem(state: "running" | "dropped"): TimelineItem {
   return {
@@ -331,6 +337,31 @@ function renderPane(items: TimelineItem[]) {
       onSelectKey={vi.fn()}
     />,
   );
+}
+
+function timelinePaneForMutation(items: TimelineItem[], loadedEntries = items.length) {
+  return (
+    <TimelinePane
+      items={items}
+      totalEntries={loadedEntries}
+      loadedEntries={loadedEntries}
+      abandonedEvents={0}
+      showAbandonedBranches={false}
+      onShowAbandonedBranchesChange={vi.fn()}
+      hasPreviousPage={false}
+      isFetchingPreviousPage={false}
+      onFetchPreviousPage={vi.fn()}
+      loading={false}
+      error={null}
+      selectedKey={null}
+      onSelectKey={vi.fn()}
+    />
+  );
+}
+
+function setTimelineScrollMetrics(list: HTMLElement, scrollHeight: number, clientHeight: number) {
+  Object.defineProperty(list, "scrollHeight", { configurable: true, value: scrollHeight });
+  Object.defineProperty(list, "clientHeight", { configurable: true, value: clientHeight });
 }
 
 /** Edit interaction with a real `old_string`/`new_string` shape. */
@@ -1121,6 +1152,53 @@ describe("TimelinePane", () => {
     // Previously an accordion: opening the second closed the first.
     expect(container.querySelectorAll(".tl-noise__item.is-expanded").length).toBe(2);
     expect(container.querySelectorAll(".tl-diff").length).toBe(2);
+  });
+});
+
+describe("TimelinePane scroll mutation ownership", () => {
+  it("anchors history prepends and counts only later tail appends as unread", () => {
+    const first = makeTimelineMessage(101, "first");
+    const second = makeTimelineMessage(102, "second");
+    const older = makeTimelineMessage(100, "older");
+    const tailOne = makeTimelineMessage(103, "tail one");
+    const tailTwo = makeTimelineMessage(104, "tail two");
+    const view = render(timelinePaneForMutation([]));
+    const list = screen.getByTestId("session-timeline-list");
+
+    // Seed the layout baseline through the initial empty render, then load
+    // the current tail before deliberately scrolling up.
+    setTimelineScrollMetrics(list, 1000, 400);
+    view.rerender(timelinePaneForMutation([first, second], 2));
+    list.scrollTop = 200;
+    fireEvent.scroll(list);
+
+    setTimelineScrollMetrics(list, 1100, 400);
+    view.rerender(timelinePaneForMutation([older, first, second], 3));
+    expect(list.scrollTop).toBe(300);
+    expect(screen.queryByTestId("timeline-unread-pill")).not.toBeInTheDocument();
+
+    setTimelineScrollMetrics(list, 1220, 400);
+    view.rerender(timelinePaneForMutation([older, first, second, tailOne, tailTwo], 5));
+    expect(list.scrollTop).toBe(300);
+    expect(screen.getByTestId("timeline-unread-pill")).toHaveTextContent("↓ 2 new");
+  });
+
+  it("follows a tail append when the reader was already at the bottom", () => {
+    const first = makeTimelineMessage(201, "first");
+    const second = makeTimelineMessage(202, "second");
+    const tail = makeTimelineMessage(203, "tail");
+    const view = render(timelinePaneForMutation([]));
+    const list = screen.getByTestId("session-timeline-list");
+
+    setTimelineScrollMetrics(list, 1000, 400);
+    view.rerender(timelinePaneForMutation([first, second], 2));
+    list.scrollTop = 600;
+    fireEvent.scroll(list);
+
+    setTimelineScrollMetrics(list, 1060, 400);
+    view.rerender(timelinePaneForMutation([first, second, tail], 3));
+    expect(list.scrollTop).toBe(1060);
+    expect(screen.queryByTestId("timeline-unread-pill")).not.toBeInTheDocument();
   });
 });
 

@@ -35,7 +35,7 @@ struct SessionView: View {
     @State private var isShowingBugReportSavedAlert = false
     @State private var bugReportSavedPending = false
     @State private var bugReportSessionToOpen: String?
-    @State private var bugReportScreenshot: Data?
+    @State private var branchedSessionRoute: SessionRoute?
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var editingClientRequestId: String?
     @State private var isLoadingPickerItems: Bool = false
@@ -201,6 +201,31 @@ struct SessionView: View {
                     appState: appState
                 )
             }
+        }
+        .onChange(of: viewModel.branchedSessionId) { _, childSessionID in
+            guard let childSessionID, !childSessionID.isEmpty else { return }
+            if let onOpenSession {
+                onOpenSession(childSessionID)
+            } else {
+                branchedSessionRoute = SessionRoute(
+                    sessionId: childSessionID,
+                    fallbackTitle: "New branch",
+                    fallbackSubtitle: viewModel.detail?.displayTitle ?? fallbackTitle
+                )
+            }
+            // The route owner consumes the child identity after it has been
+            // handed off, preventing a SwiftUI redraw from pushing it twice.
+            viewModel.branchedSessionId = nil
+        }
+        .navigationDestination(item: $branchedSessionRoute) { route in
+            SessionView(
+                sessionId: route.sessionId,
+                fallbackTitle: route.fallbackTitle,
+                fallbackSubtitle: route.fallbackSubtitle,
+                onTranscriptDiagnostics: onTranscriptDiagnostics,
+                onOpenSubagent: onOpenSubagent,
+                onOpenSession: onOpenSession
+            )
         }
         .sheet(item: $viewModel.resumeIntent) { intent in
             ResumeCommandSheet(
@@ -770,7 +795,7 @@ struct SessionView: View {
                     }
                 } label: {
                     Label(
-                        "Resume on \(detail.homeLabel ?? detail.originLabel ?? "its machine")",
+                        "Show resume command",
                         systemImage: "terminal"
                     )
                     .frame(maxWidth: .infinity)

@@ -1,17 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Route, Routes } from "react-router";
 import type { MachineSummary, MachinesSummaryResponse } from "@/shared/api/index";
 import type * as ApiIndex from "@/shared/api/index";
 import { TestRouter } from "@/shared/test/test-utils";
 import MachinesPage from "../MachinesPage";
+import MachineDetailPage from "../MachineDetailPage";
 
-const api = vi.hoisted(() => ({ listMachineSummaries: vi.fn(), fetchRunners: vi.fn() }));
+const api = vi.hoisted(() => ({ listMachineSummaries: vi.fn(), listMachines: vi.fn(), fetchRunners: vi.fn() }));
 
 vi.mock("@/shared/api/index", async (importOriginal) => ({
   ...(await importOriginal<typeof ApiIndex>()),
   listMachineSummaries: api.listMachineSummaries,
+  listMachines: api.listMachines,
   fetchRunners: api.fetchRunners,
 }));
 
@@ -44,15 +47,19 @@ function response(machines: MachineSummary[]): MachinesSummaryResponse {
   return { generated_at: "2026-10-03T16:00:00Z", days: 14, utc_offset_minutes: 0, first_day: "2026-09-20", last_day: "2026-10-03", machines };
 }
 
-function renderPage() {
+function renderPage(detail = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
-      <TestRouter>
-        <MachinesPage />
+      <TestRouter initialEntries={[detail ? "/machines/cinder" : "/machines"]}>
+        <Routes>
+          <Route path="/machines" element={<MachinesPage />} />
+          <Route path="/machines/:deviceId" element={<MachineDetailPage />} />
+        </Routes>
       </TestRouter>
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 const offline = { online: false, control_channel_status: "disconnected", launch: { providers: [], blocked_by: "control_down" } };
@@ -60,6 +67,7 @@ const offline = { online: false, control_channel_status: "disconnected", launch:
 describe("MachinesPage", () => {
   beforeEach(() => {
     api.listMachineSummaries.mockReset();
+    api.listMachines.mockReset().mockResolvedValue({ machines: [] });
     api.fetchRunners.mockReset().mockResolvedValue([]);
   });
 
@@ -136,13 +144,60 @@ describe("MachinesPage", () => {
     expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
   });
 
-  it("says the read failed instead of showing an empty host", async () => {
+  it("retains independently available machines and matches their runners during a summary outage", async () => {
     api.listMachineSummaries.mockRejectedValue(new Error("The session catalog is restarting."));
+    api.listMachines.mockResolvedValue({ machines: [summary("cinder").machine] });
+    api.fetchRunners.mockResolvedValue([
+      { id: 1, name: "cinder", status: "online", availability_policy: "on_demand" },
+      { id: 2, name: "clifford", status: "online", availability_policy: "always_on" },
+    ]);
     renderPage();
 
-    // The page retries once before it gives up.
-    expect(await screen.findByText("Machines are unavailable right now", {}, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.getByText("The session catalog is restarting.")).toBeInTheDocument();
-    expect(screen.queryByText("Connect your first machine")).toBeNull();
+    const row = await screen.findByTestId("machine-row-cinder", {}, { timeout: 5000 });
+    expect(within(row).getByRole("link")).toHaveAttribute("href", "/machines/cinder");
+    expect(screen.getByTestId("machines-unmatched-runners")).not.toHaveTextContent("cinder");
+    expect(screen.getByTestId("machines-unmatched-runners")).toHaveTextContent("clifford");
+    expect(screen.queryByTestId("machines-summary")).toBeNull();
+    expect(screen.queryByTestId("machines-connect-first-button")).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("keeps known machine actions and readiness without inventing an activity summary", async () => {
+    api.listMachineSummaries.mockRejectedValue(new Error("The session catalog is restarting."));
+    api.listMachines.mockResolvedValue({ machines: [summary("cinder").machine] });
+    renderPage(true);
+
+    expect(await screen.findByTestId("machine-name", {}, { timeout: 5000 })).toHaveTextContent("cinder");
+    expect(screen.getByRole("link", { name: "Open sessions" })).toHaveAttribute("href", "/timeline?device_id=cinder");
+    expect(screen.getByTestId("machine-new-session")).toBeInTheDocument();
+    expect(screen.getByText("Claude")).toBeInTheDocument();
+    expect(screen.queryByText("No upload reports from this machine in the last 30 days.")).toBeNull();
+    expect(screen.queryByText("Last 14 days")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("unavailable");
+  });
+
+  it("marks a retained empty directory as last known after refresh fails", async () => {
+    api.listMachineSummaries.mockResolvedValue(response([]));
+    const { client } = renderPage();
+    await screen.findByTestId("machines-connect-first-button");
+    api.listMachineSummaries.mockRejectedValue(new Error("Refresh unavailable"));
+    await act(async () => { await client.invalidateQueries({ queryKey: ["machine-summaries"] }); });
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Showing what Longhouse knew");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("marks retained detail facts as last known and keeps the scoped repair instruction", async () => {
+    api.listMachineSummaries.mockResolvedValue(response([summary("cinder", {
+      sync: { status: "broken", stale: false, history: { state: "unavailable" } } as MachineSummary["sync"],
+    })]));
+    const { client } = renderPage(true);
+    await screen.findByTestId("machine-name");
+    expect(screen.getByText(/longhouse local-health/)).toBeInTheDocument();
+    api.listMachineSummaries.mockRejectedValue(new Error("Refresh unavailable"));
+    await act(async () => { await client.invalidateQueries({ queryKey: ["machine-summaries"] }); });
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Showing what Longhouse knew");
+    expect(screen.getByRole("link", { name: "Open sessions" })).toBeInTheDocument();
   });
 });

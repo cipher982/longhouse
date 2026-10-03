@@ -63,9 +63,7 @@ func deriveMachineStatus(
         || (syncFresh && sync?.status.lowercased() == "broken") {
         return MachineStatus(
             text: "Needs repair",
-            detail: syncFresh && sync?.status.lowercased() == "broken"
-                ? "Run longhouse machine repair on this machine"
-                : nil,
+            detail: "Run longhouse local-health on this machine to inspect the fault",
             role: .fault
         )
     }
@@ -80,17 +78,24 @@ func deriveMachineStatus(
         }
         switch blockedBy {
         case "engine_too_old":
-            return MachineStatus(text: "Update required", role: .attention)
+            return MachineStatus(
+                text: "Update required",
+                detail: "Update Longhouse on this machine",
+                role: .attention
+            )
         case "no_launch_support":
             // Amber, as on the web: connected but unable to start a session.
             return MachineStatus(text: "Can't start sessions", role: .attention)
         default:
             break
         }
-        // The directory-only launch chooser has no activity snapshot. A
-        // launchable online machine is ready, not "idle".
-        if activity == nil, !machine.launch.providers.isEmpty {
-            return MachineStatus(text: "Ready", role: .live)
+        // A directory-only machine may not have launch metadata yet. It is
+        // connected, but an absent summary must never be rendered as idle.
+        if activity == nil {
+            if !machine.launch.providers.isEmpty {
+                return MachineStatus(text: "Ready", role: .live)
+            }
+            return MachineStatus(text: "Online", role: .live)
         }
         return MachineStatus(text: "Online, idle", role: .live)
     }
@@ -103,7 +108,7 @@ func deriveMachineStatus(
     }
     return MachineStatus(
         text: "Offline",
-        detail: lastConnectedText(machine.lastSeenAt, now: now),
+        detail: lastSeenText(machine.lastSeenAt, now: now),
         role: .off
     )
 }
@@ -154,9 +159,9 @@ func machineRelativeTime(_ raw: String?, now: Date = Date()) -> String? {
     return formatter.localizedString(for: date, relativeTo: now)
 }
 
-private func lastConnectedText(_ raw: String?, now: Date) -> String? {
+private func lastSeenText(_ raw: String?, now: Date) -> String? {
     guard let relative = machineRelativeTime(raw, now: now) else { return nil }
-    return "last connected \(relative)"
+    return "last seen \(relative)"
 }
 
 private func parseMachineDate(_ raw: String) -> Date? {

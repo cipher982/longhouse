@@ -40,6 +40,7 @@ actor TimelineSessionsStream {
     private let baseURL: URL
     private let daysBack: Int
     private let limit: Int
+    private let deviceId: String?
     private let skipInitialReplay: Bool
     private let staleTimeoutSeconds: TimeInterval
     private var task: Task<Void, Never>?
@@ -52,25 +53,37 @@ actor TimelineSessionsStream {
         daysBack: Int = 14,
         limit: Int = 40,
         skipInitialReplay: Bool = true,
-        staleTimeoutSeconds: TimeInterval = 45
+        staleTimeoutSeconds: TimeInterval = 45,
+        deviceId: String? = nil
     ) {
         self.baseURL = baseURL
         self.daysBack = daysBack
         self.limit = limit
         self.skipInitialReplay = skipInitialReplay
         self.staleTimeoutSeconds = staleTimeoutSeconds
+        self.deviceId = deviceId
     }
 
-    static func streamURL(baseURL: URL, daysBack: Int, limit: Int, skipInitialReplay: Bool) -> URL {
+    static func streamURL(
+        baseURL: URL,
+        daysBack: Int,
+        limit: Int,
+        skipInitialReplay: Bool,
+        deviceId: String? = nil
+    ) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/stream"),
             resolvingAgainstBaseURL: false
         )!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "days_back", value: String(daysBack)),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "skip_initial_replay", value: skipInitialReplay ? "true" : "false"),
         ]
+        if let deviceId, !deviceId.isEmpty {
+            queryItems.append(URLQueryItem(name: "device_id", value: deviceId))
+        }
+        components.queryItems = queryItems
         return components.url!
     }
 
@@ -125,7 +138,8 @@ actor TimelineSessionsStream {
             baseURL: baseURL,
             daysBack: daysBack,
             limit: limit,
-            skipInitialReplay: skipInitialReplay
+            skipInitialReplay: skipInitialReplay,
+            deviceId: deviceId
         )
         var req = URLRequest(url: url)
         req.addValue("text/event-stream", forHTTPHeaderField: "Accept")

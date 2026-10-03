@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { MachineDirectoryEntry } from "@/shared/api/index";
-import { machineAgents, machineStatus, runnerForMachine, unmatchedRunners } from "../machinePresentation";
+import type { MachineDirectoryEntry, MachineSync } from "@/shared/api/index";
+import { historyLine, isImporting, machineAgents, machineStatus, runnerForMachine, unmatchedRunners } from "../machinePresentation";
 
 function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirectoryEntry {
   return {
@@ -146,5 +146,30 @@ describe("runners", () => {
 
   it("lists only live or long-lived runners that match no machine", () => {
     expect(unmatchedRunners(runners, [machine()]).map((runner) => runner.name)).toEqual(["clifford"]);
+  });
+});
+
+describe("eligible-history completion", () => {
+  function sync(state: string, remaining: number | null = null): MachineSync {
+    return {
+      stale: false,
+      history: { state, source_count: null, remaining_bytes: remaining, remaining_records: remaining },
+    } as MachineSync;
+  }
+
+  it.each(["discovering", "inventory_ready", "importing", "backpressured"])(
+    "does not infer completion from missing or zero progress in %s",
+    (state) => {
+      for (const remaining of [null, 0]) {
+        expect(historyLine(sync(state, remaining)).tone).not.toBe("live");
+        expect(isImporting(sync(state, remaining))).toBe(true);
+      }
+    },
+  );
+
+  it("uses current as completion authority and does not treat stale progress as active import", () => {
+    expect(historyLine(sync("current")).tone).toBe("live");
+    expect(isImporting(sync("current"))).toBe(false);
+    expect(isImporting({ ...sync("importing", 1000), stale: true })).toBe(false);
   });
 });

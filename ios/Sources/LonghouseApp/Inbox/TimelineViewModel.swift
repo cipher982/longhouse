@@ -3,12 +3,13 @@ import SwiftUI
 import WidgetKit
 
 protocol TimelineSessionsClient: Sendable {
-    func recentSessions(limit: Int) async throws -> [SessionSummary]
+    func recentSessions(limit: Int, deviceId: String?) async throws -> [SessionSummary]
     func searchSessions(
         query: String,
         lane: TimelineSearchLane,
         daysBack: Int?,
-        limit: Int
+        limit: Int,
+        deviceId: String?
     ) async throws -> [SessionSummary]
 }
 
@@ -18,8 +19,8 @@ struct TimelineSessionsStreamSource: Sendable {
     let start: @Sendable () async -> AsyncStream<TimelineSessionsStream.Event>
     let stop: @Sendable () async -> Void
 
-    static func live(baseURL: URL, limit: Int) -> TimelineSessionsStreamSource {
-        let stream = TimelineSessionsStream(baseURL: baseURL, limit: limit)
+    static func live(baseURL: URL, limit: Int, deviceId: String? = nil) -> TimelineSessionsStreamSource {
+        let stream = TimelineSessionsStream(baseURL: baseURL, limit: limit, deviceId: deviceId)
         return TimelineSessionsStreamSource(
             start: { await stream.start() },
             stop: { await stream.stop() }
@@ -72,7 +73,8 @@ final class TimelineViewModel: ObservableObject {
     private var lastSearchQuery: String?
     private var lastSearchLane: TimelineSearchLane?
     private let apiFactory: (String) -> TimelineSessionsClient?
-    private let streamFactory: (URL, Int) -> TimelineSessionsStreamSource
+    private let streamFactory: (URL, Int, String?) -> TimelineSessionsStreamSource
+    private let deviceId: String?
     private let enableRealtime: Bool
     private let enableConnectivityClock: Bool
     private let limit = 40
@@ -92,16 +94,18 @@ final class TimelineViewModel: ObservableObject {
 
     init(
         apiFactory: @escaping (String) -> TimelineSessionsClient? = { LonghouseAPI(host: $0) },
-        streamFactory: @escaping (URL, Int) -> TimelineSessionsStreamSource = { baseURL, limit in
-            TimelineSessionsStreamSource.live(baseURL: baseURL, limit: limit)
+        streamFactory: @escaping (URL, Int, String?) -> TimelineSessionsStreamSource = { baseURL, limit, deviceId in
+            TimelineSessionsStreamSource.live(baseURL: baseURL, limit: limit, deviceId: deviceId)
         },
         enableRealtime: Bool = true,
-        enableConnectivityClock: Bool = true
+        enableConnectivityClock: Bool = true,
+        deviceId: String? = nil
     ) {
         self.apiFactory = apiFactory
         self.streamFactory = streamFactory
         self.enableRealtime = enableRealtime
         self.enableConnectivityClock = enableConnectivityClock
+        self.deviceId = deviceId
     }
 
     func connectionBanner(at now: Date) -> TimelineConnectivityBanner {
@@ -117,6 +121,10 @@ final class TimelineViewModel: ObservableObject {
         if case .loaded = state { return true }
         return false
     }
+    private func scopedSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
+        guard let deviceId, !deviceId.isEmpty else { return sessions }
+        return sessions.filter { $0.deviceId == deviceId }
+    }
 
     func load(using appState: AppState) async {
         startConnectivityClock()
@@ -128,9 +136,10 @@ final class TimelineViewModel: ObservableObject {
             return
         }
         if let cached = TimelineCacheStore.load(serverURL: appState.serverURL) {
-            applySessions(cached.sessions, source: "cache")
-            applyConnectivity(.cacheLoaded(hasLoadedData: !cached.sessions.isEmpty, savedAt: cached.savedAt))
-            logger.info("timeline cache hit sessions=\(cached.sessions.count, privacy: .public)")
+            let cachedSessions = scopedSessions(cached.sessions)
+            applySessions(cachedSessions, source: "cache")
+            applyConnectivity(.cacheLoaded(hasLoadedData: !cachedSessions.isEmpty, savedAt: cached.savedAt))
+            logger.info("timeline cache hit sessions=\(cachedSessions.count, privacy: .public)")
             Task { [weak self] in
                 await self?.refresh(using: appState, reloadWidget: true)
             }
@@ -181,12 +190,13 @@ final class TimelineViewModel: ObservableObject {
                 return
             }
             do {
-                let sessions = try await api.searchSessions(
+                let sessions = self.scopedSessions(try await api.searchSessions(
                     query: normalized,
                     lane: lane,
                     daysBack: self.searchDaysBack,
-                    limit: self.searchLimit
-                )
+                    limit: self.searchLimit,
+                    deviceId: self.deviceId
+                ))
                 guard !Task.isCancelled, generation == self.searchGeneration else { return }
                 self.searchState = sessions.isEmpty ? .empty : .loaded(sessions)
             } catch LonghouseAPIError.notAuthenticated {
@@ -231,7 +241,7 @@ final class TimelineViewModel: ObservableObject {
         defer { isRefreshInFlight = false }
 
         do {
-            let sessions = try await api.recentSessions(limit: limit)
+            let sessions = scopedSessions(try await api.recentSessions(limit: limit, deviceId: deviceId))
             // Drop stale snapshots from a previous stream lifetime — a slow
             // reconnect bootstrap mustn't overwrite newer stream-applied state.
             guard generation == streamGeneration || generation == 0 else {
@@ -241,10 +251,14 @@ final class TimelineViewModel: ObservableObject {
             let attentionIds = Set(sessions.filter(\.needsAttention).map(\.id))
             applySessions(sessions, source: "network")
             applyConnectivity(.snapshotSucceeded(hasLoadedData: !sessions.isEmpty))
-            schedulePersist(sessions: sessions, appState: appState)
-            PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
-            if reloadWidget {
-                reloadWidgetTimelineIfNeeded()
+            // Machine-scoped timelines must not overwrite the all-machine
+            // cache or widget snapshot with a narrowed projection.
+            if deviceId == nil {
+                schedulePersist(sessions: sessions, appState: appState)
+                PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
+                if reloadWidget {
+                    reloadWidgetTimelineIfNeeded()
+                }
             }
             logger.info("timeline refresh finished sessions=\(sessions.count, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch LonghouseAPIError.notAuthenticated {
@@ -288,7 +302,7 @@ final class TimelineViewModel: ObservableObject {
         streamGeneration &+= 1
         let generation = streamGeneration
         hasReceivedFirstConnect = false
-        let stream = streamFactory(baseURL, limit)
+        let stream = streamFactory(baseURL, limit, deviceId)
         self.stream = stream
         streamTask = Task { [weak self] in
             let events = await stream.start()
@@ -376,6 +390,7 @@ final class TimelineViewModel: ObservableObject {
                 applyConnectivity(.streamSignal(.firstConnected), generation: generation)
             }
         case .upsert(let card, _, _):
+            guard deviceId == nil || card.sessionSummary.deviceId == deviceId else { continue }
             applyUpsert(card.sessionSummary, appState: appState)
             applyConnectivity(.streamSignal(.upsert), generation: generation)
         case .remove(let threadId, _, _):
@@ -491,8 +506,10 @@ final class TimelineViewModel: ObservableObject {
         current = timelineDisplayOrder(current)
         current = SessionSummary.residentCap(current, limit: limit)
         applySessions(current, source: "stream")
-        schedulePersist(sessions: current, appState: appState)
-        reloadWidgetTimelineIfNeeded()
+        if deviceId == nil {
+            schedulePersist(sessions: current, appState: appState)
+            reloadWidgetTimelineIfNeeded()
+        }
     }
 
     private func applyRemove(threadId: String, appState: AppState) {
@@ -508,8 +525,10 @@ final class TimelineViewModel: ObservableObject {
         }
         guard current.count != before else { return }
         applySessions(current, source: "stream")
-        schedulePersist(sessions: current, appState: appState)
-        reloadWidgetTimelineIfNeeded()
+        if deviceId == nil {
+            schedulePersist(sessions: current, appState: appState)
+            reloadWidgetTimelineIfNeeded()
+        }
     }
 
     private func currentSessions() -> [SessionSummary] {

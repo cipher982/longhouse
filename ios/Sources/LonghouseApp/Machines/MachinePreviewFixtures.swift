@@ -49,7 +49,7 @@ enum MachinePreviewFixtures {
             statusSummary: "All imported",
             lastUploadAt: "2026-10-03T16:39:52Z",
             waitingUploads: 0,
-            history: MachineSyncHistory(state: "imported", sourceCount: 3)
+            history: MachineSyncHistory(state: "current", sourceCount: 3)
         )
     )
 
@@ -64,19 +64,19 @@ enum MachinePreviewFixtures {
             blockedBy: "providers_not_ready"
         ),
         activity: MachineActivity(sessionsStarted: 12, daily: dailyCounts.map { MachineDailyActivity(date: $0.date, total: $0.total / 4, byProvider: $0.byProvider) }),
-        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "imported"))
+        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "current"))
     )
 
     static let cube = MachineSummary(
         machine: directory(id: "cube", name: "cube", online: true, providers: ["omp"]),
         activity: MachineActivity(sessionsStarted: 18, daily: dailyCounts.map { MachineDailyActivity(date: $0.date, total: $0.total / 6, byProvider: $0.byProvider) }),
-        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "imported"))
+        sync: MachineSync(status: "healthy", history: MachineSyncHistory(state: "current"))
     )
 
     static let clifford = MachineSummary(
         machine: directory(id: "clifford-sauron", name: "clifford-sauron", online: false, lastSeenAt: "2026-10-01T16:40:00Z", blockedBy: "control_down"),
         activity: MachineActivity(sessionsStarted: 3, daily: dailyCounts.map { MachineDailyActivity(date: $0.date, total: $0.total / 10, byProvider: $0.byProvider) }),
-        sync: MachineSync(stale: false, status: "offline", history: MachineSyncHistory(state: "imported"))
+        sync: MachineSync(stale: false, status: "offline", history: MachineSyncHistory(state: "current"))
     )
 
     static let quietOne = MachineSummary(

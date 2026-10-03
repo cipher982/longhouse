@@ -78,21 +78,39 @@ struct ChatUITestFixtureView: View {
                 },
                 onOpenSubagent: fixtureName.hasPrefix("background-tasks")
                     ? { childSessionId in navigationPath.append(childSessionId) }
+                    : nil,
+                onOpenSession: fixtureName == "ended-codex-helm"
+                    ? { childSessionId in navigationPath.append(childSessionId) }
                     : nil
             )
             .navigationDestination(for: String.self) { childSessionId in
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Child transcript")
-                        .font(.headline)
-                    Text(childSessionId)
-                        .font(.body.monospaced())
-                        .accessibilityIdentifier("child-session-id")
+                if fixtureName == "ended-codex-helm" {
+                    SessionView(
+                        sessionId: childSessionId,
+                        fallbackTitle: "Codex Helm branch",
+                        fallbackSubtitle: "cinder",
+                        viewModel: SessionViewModel(
+                            apiFactory: { _ in client },
+                            streamFactory: { _, _, _, _ in client.streamSource() },
+                            enableRealtime: false,
+                            pendingInputStore: Self.isolatedPendingInputStore()
+                        )
+                    )
+                    .accessibilityIdentifier("child-session-\(childSessionId)")
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Child transcript")
+                            .font(.headline)
+                        Text(childSessionId)
+                            .font(.body.monospaced())
+                            .accessibilityIdentifier("child-session-id")
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Ember.page)
+                    .navigationTitle("Subagent")
+                    .navigationBarTitleDisplayMode(.inline)
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(Ember.page)
-                .navigationTitle("Subagent")
-                .navigationBarTitleDisplayMode(.inline)
             }
         }
         .sheet(isPresented: $showBackgroundSheet) {

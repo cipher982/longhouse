@@ -130,7 +130,8 @@ private func resultDate(for session: SessionSummary) -> Date {
 struct TimelineView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var viewModel = TimelineViewModel()
+    private let initialDeviceId: String?
+    @StateObject private var viewModel: TimelineViewModel
     @State private var launchSheetPresented = false
     @State private var settingsPresented = false
     @State private var path: [SessionRoute] = []
@@ -141,6 +142,10 @@ struct TimelineView: View {
     @State private var bugReportSessionToOpen: String?
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
+    init(initialDeviceId: String? = nil) {
+        self.initialDeviceId = initialDeviceId
+        _viewModel = StateObject(wrappedValue: TimelineViewModel(deviceId: initialDeviceId))
+    }
     @State private var searchText = ""
 
     private var effectiveConnectionBanner: TimelineConnectivityBanner {
@@ -450,7 +455,7 @@ struct TimelineView: View {
     }
 
     private var emptyView: some View {
-        TimelineEmptyView()
+        TimelineEmptyView(scopedToMachine: initialDeviceId != nil)
     }
 
     private func errorView(_ message: String) -> some View {

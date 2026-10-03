@@ -408,28 +408,32 @@ function NavStatus() {
     };
   }, [documentVisible]);
 
-  const { data: directory } = useMachineDirectory({
+  const { data: directory, isError: directoryUnavailable, error: directoryError } = useMachineDirectory({
     enabled: queryEnabled,
     refetchInterval: documentVisible ? 30_000 : false,
   });
 
   const machines = directory?.machines ?? [];
   const online = machines.filter((machine) => machine.online).length;
-  if (!apiError && machines.length === 0) return null;
+  if (!apiError && !directoryUnavailable && machines.length === 0) return null;
 
   const label = apiError
     ? "Can't reach Longhouse"
-    : `${online} of ${machines.length} ${machines.length === 1 ? "machine" : "machines"} online`;
+    : directoryUnavailable
+      ? "Machine status unavailable"
+      : `${online} of ${machines.length} ${machines.length === 1 ? "machine" : "machines"} online`;
   const title = apiError
     ? apiError.message
-    : machines.map((machine) => `${machine.machine_name}: ${machine.online ? "online" : "offline"}`).join("\n");
+    : directoryUnavailable
+      ? directoryError instanceof Error ? directoryError.message : "The machine directory could not be refreshed."
+      : machines.map((machine) => `${machine.machine_name}: ${machine.online ? "online" : "offline"}`).join("\n");
 
   return (
     <Link to="/machines" className="nav-status" data-testid="nav-status" title={title} aria-live="polite">
       <span
         className={clsx("nav-status-dot", {
           "nav-status-dot--error": Boolean(apiError),
-          "nav-status-dot--off": !apiError && online === 0,
+          "nav-status-dot--off": !apiError && (directoryUnavailable || online === 0),
         })}
         aria-hidden="true"
       />

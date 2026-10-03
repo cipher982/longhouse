@@ -79,9 +79,10 @@ def test_resume_intent_names_the_recorded_machine_not_the_environment(runner_nam
     assert intent.machine_label == expected_label
 
 
-def test_resume_intent_does_not_name_an_environment_when_the_machine_is_unknown() -> None:
+@pytest.mark.parametrize("device_id", [None, ""])
+def test_resume_intent_does_not_name_an_environment_when_the_machine_is_unknown(device_id) -> None:
     session = _session()
-    session.device_id = None
+    session.device_id = device_id
     session.control = None
     session.origin_label = "development"
 

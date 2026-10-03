@@ -171,7 +171,7 @@ function normalizeTranscriptQuestions(input: Record<string, unknown> | null | un
 
 function SeamRow({ seam }: { seam: TimelineSeam }) {
   return (
-    <div className="tl-seam" data-testid="session-timeline-seam">
+    <div id={`seam-${seam.key}`} className="tl-seam" data-testid="session-timeline-seam">
       <div className="tl-seam__rule" />
       <div className="tl-seam__body">
         <span className="tl-seam__label">{seam.label}</span>
@@ -180,6 +180,48 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
       <div className="tl-seam__stamp">{formatContinuationStamp(seam.timestamp)}</div>
     </div>
   );
+}
+
+function timelineItemIdentity(item: TimelineItem): string {
+  switch (item.kind) {
+    case "seam":
+      return `seam:${item.seam.key}`;
+    case "action":
+      return `action:${item.action.key}`;
+    case "reasoning":
+      return `reasoning:${item.event.id}`;
+    case "provider_notification":
+      return `provider_notification:${item.event.id}`;
+    case "message":
+      return `message:${item.event.id}`;
+    case "tool":
+      return `tool:${item.interaction.key}`;
+    case "activity_group":
+      return `activity_group:${item.group.key}`;
+  }
+}
+
+function timelineItemRowId(item: TimelineItem): string | null {
+  switch (item.kind) {
+    case "seam":
+      return `seam-${item.seam.key}`;
+    case "action":
+      return `action-${item.action.action.event_id ?? item.action.key}`;
+    case "reasoning":
+    case "provider_notification":
+    case "message":
+      return `event-${item.event.id}`;
+    case "tool":
+      return `event-${item.interaction.anchorId}`;
+    case "activity_group":
+      return `event-${item.group.anchorId}`;
+  }
+}
+
+function timelineRowTop(rowId: string | null): number | null {
+  if (!rowId) return null;
+  const row = document.getElementById(rowId);
+  return row ? row.getBoundingClientRect().top : null;
 }
 
 function ActionRow({ action }: { action: TimelineAction }) {
@@ -1177,8 +1219,11 @@ export function TimelinePane({
   });
 
   const prevScrollHeightRef = useRef(0);
-  const prevLoadedEntriesRef = useRef(0);
   const prevItemCountRef = useRef(0);
+  const prevFirstItemKeyRef = useRef<string | null>(null);
+  const prevLastItemKeyRef = useRef<string | null>(null);
+  const prevFirstRowIdRef = useRef<string | null>(null);
+  const prevFirstRowTopRef = useRef<number | null>(null);
   // Remember whether the user was "at the bottom" *before* items mutated.
   // If they were, new entries should scroll into view; if not, viewport
   // stays put so the user doesn't get yanked mid-read.
@@ -1190,50 +1235,83 @@ export function TimelinePane({
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-    const newScrollHeight = container.scrollHeight;
-    const prevLoaded = prevLoadedEntriesRef.current;
-    prevLoadedEntriesRef.current = loadedEntries;
 
-    // Case 1: older entries prepended (pagination scroll preservation).
-    if (prevLoaded > 0 && loadedEntries > prevLoaded) {
-      const diff = newScrollHeight - prevScrollHeightRef.current;
-      if (diff > 0) container.scrollTop += diff;
+    const newScrollHeight = container.scrollHeight;
+    const previousCount = prevItemCountRef.current;
+    const previousFirstKey = prevFirstItemKeyRef.current;
+    const previousLastKey = prevLastItemKeyRef.current;
+    const previousFirstTop = prevFirstRowTopRef.current;
+    const currentFirstKey = items.length > 0 ? timelineItemIdentity(items[0]) : null;
+    const currentLastKey = items.length > 0 ? timelineItemIdentity(items[items.length - 1]) : null;
+    const currentAnchorTop = timelineRowTop(prevFirstRowIdRef.current);
+    let prependedCount = 0;
+    let appendedCount = 0;
+
+    // Identify which end changed from stable item identity and order. The
+    // loaded entry count also rises for live appends, so it cannot identify a
+    // pagination prepend by itself. One scan handles a mixed prepend+append
+    // update without copying the item list.
+    if (
+      previousCount > 0 &&
+      items.length > previousCount &&
+      previousFirstKey !== null &&
+      previousLastKey !== null
+    ) {
+      let previousFirstIndex = -1;
+      let previousLastIndex = -1;
+      for (let index = 0; index < items.length; index += 1) {
+        const key = timelineItemIdentity(items[index]);
+        if (key === previousFirstKey && previousFirstIndex < 0) previousFirstIndex = index;
+        if (key === previousLastKey && previousLastIndex < 0) previousLastIndex = index;
+      }
+      if (previousFirstIndex >= 0 && previousLastIndex >= previousFirstIndex) {
+        prependedCount = previousFirstIndex;
+        appendedCount = items.length - previousLastIndex - 1;
+      }
     }
+
+    if (previousCount === 0 && items.length > 0) {
+      // Initial load — scroll to bottom so the most recent activity is
+      // visible out of the box.
+      container.scrollTop = container.scrollHeight;
+      wasAtBottomRef.current = true;
+    } else {
+      if (prependedCount > 0) {
+        const heightDelta = newScrollHeight - prevScrollHeightRef.current;
+        // A mixed update also adds tail height. Anchor the first previously
+        // visible row when its geometry is available so only the prepended
+        // displacement is applied; pagination-only updates retain the
+        // existing scrollHeight delta behavior.
+        const diff =
+          appendedCount > 0 && previousFirstTop !== null && currentAnchorTop !== null
+            ? currentAnchorTop - previousFirstTop
+            : heightDelta;
+        if (diff > 0) container.scrollTop += diff;
+      }
+      if (appendedCount > 0) {
+        if (wasAtBottomRef.current) {
+          container.scrollTop = container.scrollHeight;
+        } else {
+          setUnreadCount((prev) => prev + appendedCount);
+        }
+      }
+    }
+
     prevScrollHeightRef.current = newScrollHeight;
-  }, [loadedEntries]);
+    prevItemCountRef.current = items.length;
+    prevFirstItemKeyRef.current = currentFirstKey;
+    prevLastItemKeyRef.current = currentLastKey;
+    prevFirstRowIdRef.current = items.length > 0 ? timelineItemRowId(items[0]) : null;
+    prevFirstRowTopRef.current = timelineRowTop(prevFirstRowIdRef.current);
+  }, [items, loadedEntries]);
 
   // Unread counter — increments while user is scrolled up and new items append.
   // Resets to 0 when the user is back at the bottom.
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Case 2: items appended at the bottom (live events in an open session).
-  // Stick to bottom only if the user was already at the bottom before the
-  // append. Otherwise the viewport stays anchored to whatever they were
-  // reading.
-  useLayoutEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const prevCount = prevItemCountRef.current;
-    prevItemCountRef.current = items.length;
-    if (prevCount === 0) {
-      // Initial load — scroll to bottom so the most recent activity is
-      // visible out of the box.
-      container.scrollTop = container.scrollHeight;
-      wasAtBottomRef.current = true;
-      return;
-    }
-    if (items.length > prevCount) {
-      if (wasAtBottomRef.current) {
-        container.scrollTop = container.scrollHeight;
-      } else {
-        setUnreadCount((prev) => prev + (items.length - prevCount));
-      }
-    }
-  }, [items]);
-
   // Track "at bottom" continuously so the next append knows whether to
-  // stick. We read scrollTop on every scroll, not only on mutation, so
-  // the user's intent (scrolled up = don't follow) is always current.
+  // stick. We read scrollTop on every scroll, not only on mutation, so the
+  // user's intent (scrolled up = don't follow) is always current.
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -1241,6 +1319,8 @@ export function TimelinePane({
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
       const atBottom = distance < STICK_THRESHOLD;
       wasAtBottomRef.current = atBottom;
+      const anchorTop = timelineRowTop(prevFirstRowIdRef.current);
+      if (anchorTop !== null) prevFirstRowTopRef.current = anchorTop;
       if (atBottom) {
         setUnreadCount((prev) => (prev === 0 ? prev : 0));
       }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import type { MachineSummary, Runner } from "@/shared/api/index";
+import type { MachineActivity, MachineDirectoryEntry, MachineSummary, Runner } from "@/shared/api/index";
 import { Button, EmptyState, PageShell, Spinner } from "@/shared/ui";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
@@ -19,7 +19,7 @@ import {
   relativeTime,
   runnerForMachine,
 } from "./machinePresentation";
-import { useMachineSummaries } from "./useMachines";
+import { useMachineDirectory, useMachineSummaries } from "./useMachines";
 import "./MachinesPage.css";
 
 function shortDate(isoDate: string): string {
@@ -28,11 +28,10 @@ function shortDate(isoDate: string): string {
   return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function Agents({ summary }: { summary: MachineSummary }) {
-  const { machine } = summary;
+function Agents({ machine, activity }: { machine: MachineDirectoryEntry; activity?: MachineActivity }) {
   // Only what the machine can start now reads Ready, most used first. History
   // never stands in for readiness.
-  const usage = Object.fromEntries(providerTotals(summary.activity));
+  const usage = Object.fromEntries(providerTotals(activity));
   const ready = machine.launch.providers
     .map((option) => option.provider)
     .sort((a, b) => (usage[b] ?? 0) - (usage[a] ?? 0) || a.localeCompare(b));
@@ -43,7 +42,7 @@ function Agents({ summary }: { summary: MachineSummary }) {
     (provider) => !ready.includes(provider) && readiness[provider]?.state !== "cli_missing" && readiness[provider]?.state !== "not_authenticated",
   );
   if (!machine.online) {
-    const used = providerTotals(summary.activity).map(([provider]) => provider);
+    const used = providerTotals(activity).map(([provider]) => provider);
     return (
       <>
         <p className="machine-empty-line">
@@ -164,12 +163,13 @@ export default function MachineDetailPage() {
   const { deviceId = "" } = useParams();
   const navigate = useNavigate();
   const { data, isLoading, isError, error, refetch } = useMachineSummaries();
+  const directory = useMachineDirectory({ enabled: isError && !data });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const [launchOpen, setLaunchOpen] = useState(false);
 
   useReadinessFlag({ ready: !isLoading });
 
-  if (isLoading) {
+  if (isLoading || (isError && !data && directory.isLoading)) {
     return (
       <PageShell size="wide" className="machine-page">
         <div className="machines-loading">
@@ -178,15 +178,15 @@ export default function MachineDetailPage() {
       </PageShell>
     );
   }
-  if (isError && !data) {
+  if (isError && !data && !directory.data?.machines?.some((machine) => machine.device_id === deviceId)) {
     return (
       <PageShell size="wide" className="machine-page">
         <EmptyState
           variant="error"
-          title="This machine is unavailable right now"
+          title="Machine information is unavailable right now"
           description={error instanceof Error ? error.message : "Longhouse could not read this host's machines."}
           action={
-            <Button variant="secondary" onClick={() => void refetch()}>
+            <Button variant="secondary" onClick={() => { void refetch(); void directory.refetch(); }}>
               Try again
             </Button>
           }
@@ -195,7 +195,8 @@ export default function MachineDetailPage() {
     );
   }
   const summary = data?.machines.find((item) => item.machine.device_id === deviceId);
-  if (!summary) {
+  const machine = summary?.machine ?? (!data ? directory.data?.machines?.find((entry) => entry.device_id === deviceId) : undefined);
+  if (!machine) {
     return (
       <PageShell size="wide" className="machine-page">
         <EmptyState
@@ -211,8 +212,11 @@ export default function MachineDetailPage() {
     );
   }
 
-  const { machine, activity, sync } = summary;
-  const status = machineStatus(summary);
+  const activity = summary?.activity;
+  const sync = summary?.sync;
+  const status = summary
+    ? machineStatus(summary)
+    : { tone: machine.online ? "idle" : "off", label: machine.online ? "Online" : "Offline", hint: null };
   const runner = runnerForMachine(runners ?? [], machine);
   const timelineHref = `/timeline?device_id=${encodeURIComponent(machine.device_id)}`;
   const totals = providerTotals(activity);
@@ -245,6 +249,20 @@ export default function MachineDetailPage() {
         </div>
       </header>
 
+      {isError && (
+        <p className="machines-stale" role="status">
+          {data
+            ? `Could not refresh. Showing what Longhouse knew ${relativeTime(data.generated_at) ?? "earlier"}.`
+            : "Activity and sync are unavailable. Connection and launch information comes from the machine directory."}{" "}
+          {directory.isError && !data && "Directory information could not be refreshed and is also last known. "}
+          <button type="button" className="machines-link-button" onClick={() => { void refetch(); void directory.refetch(); }}>
+            Retry
+          </button>
+        </p>
+      )}
+      {status.hint && <p className={`machine-note machine-note--${status.tone}`}>{status.hint}</p>}
+
+      {activity && (
       <section className="machine-section">
         <h2 className="machine-section-title">Last 14 days</h2>
         <p className="machine-activity-line">
@@ -266,8 +284,9 @@ export default function MachineDetailPage() {
           </div>
         )}
       </section>
+      )}
 
-      {activity.live_sessions.length > 0 && (
+      {activity && activity.live_sessions.length > 0 && (
         <section className="machine-section">
           <h2 className="machine-section-title">
             <span>Live now</span>
@@ -293,7 +312,7 @@ export default function MachineDetailPage() {
         </section>
       )}
 
-      {activity.live_sessions.length === 0 && activity.latest_session && (
+      {activity && activity.live_sessions.length === 0 && activity.latest_session && (
         <section className="machine-section">
           <h2 className="machine-section-title">Latest session</h2>
           <ul className="machine-rows">
@@ -317,11 +336,11 @@ export default function MachineDetailPage() {
       <div className="machine-section machine-columns">
         <section>
           <h2 className="machine-section-title">Agents</h2>
-          <Agents summary={summary} />
+          <Agents machine={machine} activity={activity} />
         </section>
         <section>
           <h2 className="machine-section-title">Sync</h2>
-          <Sync summary={summary} />
+          {summary ? <Sync summary={summary} /> : <p className="machine-empty-line">Sync information is unavailable.</p>}
         </section>
       </div>
 

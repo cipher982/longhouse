@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import type { MachineSummary } from "@/shared/api/index";
+import type { MachineDirectoryEntry, MachineSummary } from "@/shared/api/index";
 import { Button, EmptyState, PageShell, Spinner } from "@/shared/ui";
 import { PlusIcon } from "@/shared/ui/icons";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
@@ -17,7 +17,7 @@ import {
   relativeTime,
   unmatchedRunners,
 } from "./machinePresentation";
-import { useMachineSummaries } from "./useMachines";
+import { useMachineDirectory, useMachineSummaries } from "./useMachines";
 import "./MachinesPage.css";
 
 const AGENTS_SHOWN = 5;
@@ -59,11 +59,11 @@ function Latest({ summary }: { summary: MachineSummary }) {
   if (!latest) {
     return (
       <div className="machine-latest machine-latest--empty">
-        <span className="machine-latest-title">No sessions yet</span>
+        <span className="machine-latest-title">No recent sessions</span>
         <span className="machine-meta">
           {machine.online && machine.launch.providers.length > 0
             ? `ready to run ${getProviderLabel(machine.launch.default_provider ?? machine.launch.providers[0].provider)}`
-            : "sessions it runs will appear here"}
+            : "open this machine's sessions to see older history"}
         </span>
       </div>
     );
@@ -138,8 +138,23 @@ function MachineRow({ summary }: { summary: MachineSummary }) {
   );
 }
 
+function DirectoryRow({ machine }: { machine: MachineDirectoryEntry }) {
+  return (
+    <li className="machine-row" data-testid={`machine-row-${machine.device_id}`}>
+      <Link to={`/machines/${encodeURIComponent(machine.device_id)}`} className="machine-directory-row">
+        <span className="machine-name">
+          <span className={`machine-dot machine-dot--${machine.online ? "idle" : "off"}`} aria-hidden="true" />
+          {machine.machine_name}
+        </span>
+        <span className="machine-meta">{connectionLine(machine)}</span>
+      </Link>
+    </li>
+  );
+}
+
 export default function MachinesPage() {
   const { data, isLoading, error, isError, refetch, isRefetchError } = useMachineSummaries();
+  const directory = useMachineDirectory({ enabled: isError && !data });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const [showConnect, setShowConnect] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
@@ -153,7 +168,8 @@ export default function MachinesPage() {
   const liveMachines = summaries.filter((summary) => summary.activity.live_count > 0).length;
   const started = summaries.reduce((sum, summary) => sum + summary.activity.sessions_started, 0);
   const online = summaries.filter((summary) => summary.machine.online).length;
-  const strays = unmatchedRunners(runners ?? [], summaries.map((summary) => summary.machine));
+  const machines = data ? summaries.map((summary) => summary.machine) : directory.data?.machines;
+  const strays = machines ? unmatchedRunners(runners ?? [], machines) : [];
 
   const connectButton = (
     <Button variant="primary" data-testid="machines-connect-button" onClick={() => setShowConnect(true)}>
@@ -171,16 +187,35 @@ export default function MachinesPage() {
     );
   } else if (isError && !data) {
     body = (
-      <EmptyState
-        variant="error"
-        title="Machines are unavailable right now"
-        description={error instanceof Error ? error.message : "Longhouse could not read this host's machines."}
-        action={
-          <Button variant="secondary" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        }
-      />
+      <>
+        {machines && machines.length > 0 ? (
+          <p className="machines-stale" role="status">
+            Activity and sync are unavailable. {error instanceof Error ? error.message : ""}{" "}
+            <button type="button" className="machines-link-button" onClick={() => { void refetch(); void directory.refetch(); }}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <EmptyState
+            variant="error"
+            title="Machine activity and sync are unavailable right now"
+            description={error instanceof Error ? error.message : "Longhouse could not read this host's machine summaries."}
+            action={
+              <Button variant="secondary" onClick={() => { void refetch(); void directory.refetch(); }}>
+                Try again
+              </Button>
+            }
+          />
+        )}
+        {directory.isError && directory.data && (
+          <p className="machines-stale" role="status">Connection information is also last known; it could not be refreshed.</p>
+        )}
+        {machines && machines.length > 0 && (
+          <ul className="machine-list" data-testid="machine-list">
+            {machines.map((machine) => <DirectoryRow key={machine.device_id} machine={machine} />)}
+          </ul>
+        )}
+      </>
     );
   } else if (summaries.length === 0) {
     body = (
@@ -197,14 +232,6 @@ export default function MachinesPage() {
   } else {
     body = (
       <>
-        {isRefetchError && (
-          <p className="machines-stale" role="status">
-            Could not refresh. Showing what Longhouse knew {relativeTime(data?.generated_at) ?? "earlier"}.{" "}
-            <button type="button" className="machines-link-button" onClick={() => void refetch()}>
-              Retry
-            </button>
-          </p>
-        )}
         <ul className="machine-list" data-testid="machine-list">
           {active.map((summary) => (
             <MachineRow key={summary.machine.device_id} summary={summary} />
@@ -260,8 +287,16 @@ export default function MachinesPage() {
             </p>
           )}
         </div>
-        {summaries.length > 0 && connectButton}
+        {Boolean(machines?.length) && connectButton}
       </header>
+      {isRefetchError && data && (
+        <p className="machines-stale" role="status">
+          Could not refresh. Showing what Longhouse knew {relativeTime(data.generated_at) ?? "earlier"}.{" "}
+          <button type="button" className="machines-link-button" onClick={() => void refetch()}>
+            Retry
+          </button>
+        </p>
+      )}
       {body}
       {!isLoading && strays.length > 0 && (
         <p className="machines-runners machine-meta" data-testid="machines-unmatched-runners">

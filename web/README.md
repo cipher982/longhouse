@@ -13,9 +13,11 @@ iOS transcript document. Folder-by-folder layout: the Code map in
 Run: `make dev` (UI against your Runtime Host) or `make dev-demo` (seeded local
 backend). Test: `make test-frontend`. See a page: `make ui-capture PAGE=timeline`.
 
-The app navigation is Timeline, Machines, and (for single-tenant instances)
-Health. Provider readiness and sign-in live with Machines and launch; factory
-proof assertions are machine API diagnostics, not a customer Admin page.
+The app navigation is Timeline and Machines. Machines owns provider readiness,
+sign-in and sync diagnostics; factory proof assertions remain machine API
+diagnostics, not a customer Admin page. A failed activity/sync read keeps the
+independently available directory and machine actions visible. Cached facts are
+marked last known when refresh fails; missing import progress is not completion.
 
 For ended managed terminal sessions, **Show resume command** appears beside the
 ended-run notice in the composer. It opens a command dialog; it does not restart
@@ -25,6 +27,11 @@ the page is open; an unsent draft is preserved when messaging becomes available 
 
 OMP uses the native `longhouse omp --resume-session` entry point with the original
 session ID and working directory; it resumes the session rather than branching it.
+
+On wide screens the turn outline follows the visible transcript and pins a clicked
+turn through its smooth scroll. New live output does not move a reader away from
+older content; loading older history preserves the viewport without counting it
+as new output. The transcript gutters and readout rail belong to its scroll pane.
 
 Hearth reel (the real timeline over scripted mock sessions, for the landing
 page and posts): preview live at `/hearth-reel.html` under `bun run dev`;

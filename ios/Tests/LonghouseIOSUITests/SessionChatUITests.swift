@@ -310,6 +310,42 @@ final class SessionChatUITests: XCTestCase {
         shot.lifetime = .keepAlways
         add(shot)
     }
+
+    func testEndedCodexHelmResumeHandoffAndContinueToChildSession() {
+        let app = launchChatFixture(name: "ended-codex-helm", eventCount: 4)
+
+        let resume = app.buttons["session-resume-button"]
+        XCTAssertTrue(resume.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
+        let footerShot = XCTAttachment(screenshot: app.screenshot())
+        footerShot.name = "ended-codex-helm-footer"
+        footerShot.lifetime = .keepAlways
+        add(footerShot)
+
+        resume.tap()
+        let handoff = app.navigationBars["Resume command"]
+        XCTAssertTrue(handoff.waitForExistence(timeout: Self.patient(5)))
+        let handoffShot = XCTAttachment(screenshot: app.screenshot())
+        handoffShot.name = "ended-codex-helm-resume-handoff"
+        handoffShot.lifetime = .keepAlways
+        add(handoffShot)
+
+        app.buttons["Done"].tap()
+        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
+        let branchInput = app.textFields["session-branch-input"]
+        XCTAssertTrue(branchInput.waitForExistence(timeout: Self.webTranscriptTimeout))
+        branchInput.tap()
+        branchInput.typeText("continue with the migration")
+        app.buttons["session-branch-button"].tap()
+
+        XCTAssertTrue(app.navigationBars["Codex Helm branch"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.textFields["session-chat-composer"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        let childShot = XCTAttachment(screenshot: app.screenshot())
+        childShot.name = "ended-codex-helm-child"
+        childShot.lifetime = .keepAlways
+        add(childShot)
+    }
     func testBackgroundTaskSummaryLeavesParentHeadlinePrimary() {
         let app = launchChatFixture(name: "background-tasks", eventCount: 0)
         XCTAssertTrue(app.staticTexts["Idle"].waitForExistence(timeout: Self.webTranscriptTimeout))
