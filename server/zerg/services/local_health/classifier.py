@@ -138,6 +138,9 @@ def _apply_provider_live_route_e2e_status(
             headline = "Hosted provider-live route proof failed"
         return health_state, severity, headline
 
+    if route_is_fresh and route_status == "ok" and proof.get("coverage_status") == "none_expected":
+        return health_state, severity, headline
+
     if not route_is_fresh or route_status != "ok" or not route_applies:
         if "provider_live_route_e2e_warning" not in reasons:
             reasons.append("provider_live_route_e2e_warning")
@@ -145,7 +148,11 @@ def _apply_provider_live_route_e2e_status(
         if health_state == "healthy":
             health_state = "degraded"
             severity = "yellow"
-            headline = "Hosted provider-live route proof is stale or unavailable"
+            headline = (
+                "Hosted provider-live route proof coverage is incomplete"
+                if route_is_fresh and route_status == "ok"
+                else "Hosted provider-live route proof is stale or unavailable"
+            )
     return health_state, severity, headline
 
 

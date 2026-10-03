@@ -109,7 +109,7 @@ def _collect_installed_native_identity(*, engine_payload: Mapping[str, Any]) -> 
         return {"error": "corrupt", "detail": "native identity is missing engine path"}
     if not _is_complete_build_identity(raw_facade) or not _is_complete_build_identity(raw_engine):
         return {"error": "corrupt", "detail": "native identity facade or engine is incomplete"}
-    if raw_facade["commit"] != raw_engine["commit"]:
+    if raw_facade["commit"].strip().lower() != raw_engine["commit"].strip().lower():
         return {"error": "corrupt", "detail": "native facade and engine commits differ"}
 
     engine_path = raw["engine_path"]

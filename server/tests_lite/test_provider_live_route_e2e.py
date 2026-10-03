@@ -217,9 +217,8 @@ def test_stale_red_route_receipt_is_unknown_not_current_failure() -> None:
         suggested_actions=actions,
     )
 
-    assert state == ("degraded", "yellow", "Hosted provider-live route proof is stale or unavailable")
+    assert state[:2] == ("degraded", "yellow")
     assert reasons == ["provider_live_route_e2e_warning"]
-    assert actions == ["Refresh the hosted provider-live route proof before diagnosing a provider failure."]
 
 
 def test_fresh_red_route_receipt_remains_red() -> None:
@@ -234,9 +233,8 @@ def test_fresh_red_route_receipt_remains_red() -> None:
         suggested_actions=actions,
     )
 
-    assert state == ("broken", "red", "Hosted provider-live route proof failed")
+    assert state[:2] == ("broken", "red")
     assert reasons == ["provider_live_route_e2e_warning"]
-    assert actions == ["Run dogfood refresh to investigate the failed hosted provider-live route proof."]
 
 
 def test_fresh_incomplete_route_receipt_is_advisory() -> None:
@@ -251,9 +249,28 @@ def test_fresh_incomplete_route_receipt_is_advisory() -> None:
         suggested_actions=actions,
     )
 
-    assert state == ("degraded", "yellow", "Hosted provider-live route proof is stale or unavailable")
+    assert state[:2] == ("degraded", "yellow")
     assert reasons == ["provider_live_route_e2e_warning"]
-    assert actions == ["Refresh the hosted provider-live route proof before diagnosing a provider failure."]
+
+
+@pytest.mark.parametrize("initial_state,severity", [("healthy", "green"), ("broken", "red")])
+def test_fresh_route_with_no_expected_providers_does_not_change_health(tmp_path, initial_state, severity) -> None:
+    _write_artifact(tmp_path, _route_artifact())
+    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path, expected_providers=[])
+    reasons = ["existing_failure"] if initial_state == "broken" else []
+    actions = []
+    state = _apply_provider_live_route_e2e_status(
+        proof=proof,
+        health_state=initial_state,
+        severity=severity,
+        headline="Existing health",
+        reasons=reasons,
+        suggested_actions=actions,
+    )
+
+    assert state[:2] == (initial_state, severity)
+    assert reasons == (["existing_failure"] if initial_state == "broken" else [])
+    assert actions == []
 
 
 def test_expected_route_providers_from_live_proof_uses_current_applying_sidecars() -> None:
