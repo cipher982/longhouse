@@ -29,6 +29,7 @@ These reads validate current qualifying proof candidates, or the latest attempt
 when none qualifies, reusing publication facts within the request. They do not
 hash unrelated blobs or run orphan-history audits. Full store integrity audits remain available;
 missing or tampered supporting evidence still rejects a proof.
+The bounded proof listing validates only the records it returns.
 
 Live background qualification uses `claude_background_v1` and
 `omp_background_v1` through the existing provider qualification dispatcher.

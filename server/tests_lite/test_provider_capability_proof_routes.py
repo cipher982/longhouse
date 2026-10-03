@@ -751,6 +751,7 @@ def test_capability_projection_disqualifies_inline_proof_when_referenced_evidenc
     client = _client(monkeypatch, tmp_path)
     try:
         response = client.get("/api/agents/provider-capabilities")
+        proofs_response = client.get("/api/agents/provider-capability-proofs")
     finally:
         api_app.dependency_overrides.clear()
 
@@ -762,6 +763,11 @@ def test_capability_projection_disqualifies_inline_proof_when_referenced_evidenc
     )
     assert row["proof_status"] == "unacceptable_evidence"
     assert "proof_referenced_content_missing" in row["admissibility_reasons"]
+    assert proofs_response.status_code == 200
+    proof_payload = proofs_response.json()
+    retained = next(item for item in proof_payload["records"] if item["artifact_id"] == proof.artifact_id)
+    assert retained["store_integrity"] == {"admissible": False, "reason_codes": ["proof_referenced_content_missing"]}
+    assert proof.artifact_id not in proof_payload["trusted_artifact_ids"]
 
 
 def test_capability_projection_uses_older_intact_pass_when_latest_pass_evidence_is_tampered(monkeypatch, tmp_path: Path) -> None:

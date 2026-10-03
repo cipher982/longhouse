@@ -554,9 +554,18 @@ def list_provider_capability_proofs(
             :_MAX_RECORDS
         ]
     total += legacy_total
-    reports = {provider: store.integrity_report(provider) for provider in managed_provider_names()}
-    integrity = {item.artifact_id: item for report in reports.values() for item in report.artifacts}
     legacy_ids = {record.artifact_id for record in legacy_records}
+    records_by_provider = {
+        provider: tuple(record for record in records if record.provider == provider and record.artifact_id not in legacy_ids)
+        for provider in managed_provider_names()
+    }
+    available = store.available_blob_digests(records=tuple(record for record in records if record.artifact_id not in legacy_ids))
+    reports = {
+        provider: store.integrity_report(provider, records=provider_records, available=available)
+        for provider, provider_records in records_by_provider.items()
+        if provider_records
+    }
+    integrity = {item.artifact_id: item for report in reports.values() for item in report.artifacts}
     trusted_ids = [
         record.artifact_id
         for record in records
