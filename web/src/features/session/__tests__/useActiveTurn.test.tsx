@@ -139,7 +139,7 @@ describe("useActiveTurn", () => {
   it("holds a settled pin while the list stays put, and ends it when anything moves the list (send, new-message pill)", async () => {
     render(<Probe />);
     act(() => current.pin(3));
-    await scrollTo(2500); // the click's scroll arrives: row 3 at y=500
+    await scrollTo(3000); // the click's scroll arrives: row 3 at the top
     await settled();
     expect(current.activeKey).toBe("turn-3");
 
@@ -149,7 +149,7 @@ describe("useActiveTurn", () => {
 
   it("ends the pin of a click that scrolled nothing when the list later jumps", async () => {
     render(<Probe />);
-    await scrollTo(2500); // row 3 already on screen
+    await scrollTo(3000); // row 3 already at the top
     act(() => current.pin(3)); // no scroll follows the click
     await settled();
 
@@ -168,7 +168,7 @@ describe("useActiveTurn", () => {
   it("ends a settled pin when a layout shift carries its row off screen without any scroll", async () => {
     render(<Probe />);
     act(() => current.pin(3));
-    await scrollTo(2500);
+    await scrollTo(3000);
     await settled();
     expect(current.activeKey).toBe("turn-3");
 
@@ -177,5 +177,18 @@ describe("useActiveTurn", () => {
     list.appendChild(document.createElement("div")); // any DOM change re-measures
     await frame();
     expect(current.activeKey).toBe("turn-2");
+  });
+
+  it("ignores Space that activates a transcript button instead of scrolling", async () => {
+    const button = document.createElement("button");
+    list.appendChild(button);
+    render(<Probe />);
+    act(() => current.pin(3));
+    await scrollTo(3000);
+    await settled();
+
+    fireEvent.keyDown(button, { key: " " });
+    await frame();
+    expect(current.activeKey).toBe("turn-3");
   });
 });

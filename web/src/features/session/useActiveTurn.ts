@@ -32,6 +32,8 @@ const BOTTOM_SLOP_PX = 2;
 const SETTLE_MS = 150;
 /** Scroll offset wobble tolerated after settling (sub-pixel layout). */
 const SETTLE_SLOP_PX = 1;
+/** How far from the click's target the scroll may rest and still count as its own. */
+const TARGET_SLOP_PX = 48;
 const SCROLL_KEYS: Record<string, true> = {
   PageUp: true,
   PageDown: true,
@@ -93,6 +95,8 @@ interface Pin {
   eventId: AgentEventId;
   /** Where the list came to rest after the click's scroll; null while it travels. */
   settledTop: number | null;
+  /** Where the click's smooth scroll is headed (row to the top, clamped to the end). */
+  targetTop: number | null;
 }
 
 /** Whether turn `eventId`'s row overlaps the list viewport; null when it is not rendered. */
@@ -108,10 +112,12 @@ export function useActiveTurn(list: HTMLElement | null): ActiveTurn {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const pinnedRef = useRef<Pin | null>(null);
   const armSettleRef = useRef<() => void>(() => {});
+  const listRef = useRef<HTMLElement | null>(null);
 
   // Layout effect: the first measure lands before paint, so the outline never
   // flashes the wrong turn when the transcript opens.
   useLayoutEffect(() => {
+    listRef.current = list;
     if (!list) return;
     let frame = 0;
     let settleTimer: number | undefined;
@@ -137,11 +143,11 @@ export function useActiveTurn(list: HTMLElement | null): ActiveTurn {
       settleTimer = window.setTimeout(() => {
         const pinned = pinnedRef.current;
         if (!pinned) return;
-        if (isRowInView(list, pinned.eventId) === true) {
+        // Judge whether the scroll came to rest where the click sent it; if a
+        // send or the "new" pill overtook it, the pinned turn is not where we are.
+        if (pinned.targetTop !== null && Math.abs(list.scrollTop - pinned.targetTop) <= TARGET_SLOP_PX) {
           pinned.settledTop = list.scrollTop;
         } else {
-          // The scroll came to rest somewhere else (a send or the "new" pill
-          // overtook the click's scroll): the pinned turn is not where we are.
           pinnedRef.current = null;
           schedule();
         }
@@ -163,9 +169,11 @@ export function useActiveTurn(list: HTMLElement | null): ActiveTurn {
     // in the composer or on a button they do something else.
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
-      if (SCROLL_KEYS[event.key] === true && (target === document.body || (target instanceof Node && list.contains(target)))) {
-        release();
-      }
+      if (SCROLL_KEYS[event.key] !== true) return;
+      if (target !== document.body && !(target instanceof Node && list.contains(target))) return;
+      // Space on a focused button or link activates it rather than scrolling.
+      if (event.key === " " && target instanceof Element && target.closest("button, a, summary, input, textarea, select, [contenteditable]")) return;
+      release();
     };
     // Only the scrollbar is a pointerdown target on the list itself; a click
     // on transcript content must not cut a smooth scroll's pin short.
@@ -220,7 +228,14 @@ export function useActiveTurn(list: HTMLElement | null): ActiveTurn {
   }, [list]);
 
   const pin = useCallback((eventId: AgentEventId) => {
-    pinnedRef.current = { eventId, settledTop: null };
+    const list = listRef.current;
+    const row = list?.querySelector(`[id="${turnRowId(eventId)}"]`);
+    let targetTop: number | null = null;
+    if (list && row) {
+      const wanted = list.scrollTop + row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      targetTop = Math.min(Math.max(wanted, 0), Math.max(list.scrollHeight - list.clientHeight, 0));
+    }
+    pinnedRef.current = { eventId, settledTop: null, targetTop };
     armSettleRef.current(); // covers a click that scrolls nothing
     setActiveKey(turnKeyForEventId(eventId));
   }, []);
