@@ -343,12 +343,12 @@ struct TimelineViewModelConnectivityTests {
             project: "zerg",
             lastActivityAt: "2026-06-02T14:00:00Z",
             summary: "Timeline connectivity test session.",
+            deviceId: deviceId,
             userState: "active",
             status: nil,
             timelineAnchorAt: "2026-06-02T14:00:00Z",
             userMessages: 1,
             toolCalls: 1,
-            deviceId: deviceId,
             runtimeDisplay: display
         )
     }
