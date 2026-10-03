@@ -15,6 +15,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
+from uuid import UUID
 
 from zerg.schemas.machines import MachineActivity
 from zerg.schemas.machines import MachineActivityDay
@@ -30,20 +31,15 @@ from zerg.services.agent_heartbeat_health import machine_transport_health_from_c
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_activity
 from zerg.services.catalog_read_gateway import machine_heartbeats
-from zerg.services.live_catalog_timeline import list_live_catalog_timeline
+from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.machines_directory import build_machines_directory
-from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 LIVE_SESSIONS_SHOWN = 5
 # Sync evidence older than this is not shown at all: a machine that has not
 # reported in a month has no sync state worth describing.
 SYNC_EVIDENCE_WINDOW = timedelta(days=30)
-# The catalog's timeline RPC pages at most this many rows.
-_TIMELINE_PAGE_LIMIT = 200
-# Unread-plus-open rows read per machine to find its live sessions: five pages.
-# A real machine has a handful of open sessions; this bounds a pathological
-# unread backlog without silently cutting at the first page.
-_MAX_LIVE_ROWS = 5 * _TIMELINE_PAGE_LIMIT
+# The catalog's batch session read takes at most this many ids per call.
+_SESSION_BATCH_LIMIT = 20
 
 
 def build_machines_summary(*, owner_id: int, days: int, utc_offset_minutes: int) -> MachinesSummaryResponse:
@@ -72,7 +68,7 @@ def build_machines_summary(*, owner_id: int, days: int, utc_offset_minutes: int)
         machines.append(
             MachineSummary(
                 machine=machine,
-                activity=_activity(raw_activity, calendar=calendar, owner_id=owner_id, device_id=machine.device_id, days=days),
+                activity=_activity(raw_activity, calendar=calendar, owner_id=owner_id),
                 sync=_sync(sync_by_device.get(machine.device_id)),
             )
         )
@@ -91,8 +87,6 @@ def _activity(
     *,
     calendar: list[date],
     owner_id: int,
-    device_id: str,
-    days: int,
 ) -> MachineActivity:
     raw = raw or {}
     by_day = {str(item["date"]): dict(item.get("by_provider") or {}) for item in raw.get("daily", [])}
@@ -103,15 +97,7 @@ def _activity(
         for day in calendar
     ]
     latest = raw.get("latest")
-    live_count, live_sessions = _live_sessions(
-        owner_id=owner_id,
-        device_id=device_id,
-        days=days,
-        # Unread rows sort ahead of open ones, so the first unread + open
-        # rows of the machine's timeline hold every open candidate.
-        candidates=int(raw.get("open_candidates") or 0) + int(raw.get("unread") or 0),
-        has_open_candidates=int(raw.get("open_candidates") or 0) > 0,
-    )
+    live_count, live_sessions = _live_sessions(owner_id=owner_id, session_ids=list(raw.get("open_session_ids") or []))
     return MachineActivity(
         sessions_started=int(raw.get("sessions_started") or 0),
         daily=daily,
@@ -132,51 +118,22 @@ def _activity(
     )
 
 
-def _live_sessions(
-    *,
-    owner_id: int,
-    device_id: str,
-    days: int,
-    candidates: int,
-    has_open_candidates: bool,
-) -> tuple[int, list[MachineSessionBrief]]:
-    """Project the served working set; the SQL open flag is only a superset.
+def _live_sessions(*, owner_id: int, session_ids: list[str]) -> tuple[int, list[MachineSessionBrief]]:
+    """Project the served working set of the machine's open candidates.
 
-    The timeline orders unread, then open, then recency, so every open
-    candidate sits inside its first ``candidates`` rows. Those rows are paged
-    rather than cut at one RPC page; a machine with more unread-plus-open
-    sessions than ``_MAX_LIVE_ROWS`` reports the open ones it found there.
+    The catalog's open flag is a superset of what the Timeline calls open, so
+    each candidate id from the activity snapshot is projected and only a
+    served ``working_set == "open"`` counts. Reading ids, not timeline pages,
+    keeps unread history from crowding them out and cannot skip or repeat a
+    session between pages.
     """
 
-    if not has_open_candidates:
-        return 0, []
     live = []
-    wanted = min(candidates, _MAX_LIVE_ROWS)
-    for offset in range(0, wanted, _TIMELINE_PAGE_LIMIT):
-        limit = min(_TIMELINE_PAGE_LIMIT, wanted - offset)
-        listed = list_live_catalog_timeline(
-            params=TimelineSessionListParams(
-                project=None,
-                provider=None,
-                environment=None,
-                include_test=False,
-                hide_autonomous=True,
-                include_automation=False,
-                include_hidden=False,
-                device_id=device_id,
-                days_back=days,
-                query=None,
-                limit=limit,
-                offset=offset,
-                sort=None,
-                mode="lexical",
-                context_mode="forensic",
-            ),
-            owner_id=owner_id,
-        )
-        live.extend(card.head for card in listed.sessions if card.head.session_state.working_set == "open")
-        if len(listed.sessions) < limit:
-            break
+    for start in range(0, len(session_ids), _SESSION_BATCH_LIMIT):
+        chunk = [UUID(session_id) for session_id in session_ids[start : start + _SESSION_BATCH_LIMIT]]
+        for projected, _alias, _commit_seq in read_live_catalog_sessions(chunk, owner_id=owner_id, include_hidden=True):
+            if projected is not None and projected.session_state.working_set == "open":
+                live.append(projected)
     live.sort(key=lambda head: head.last_activity_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return len(live), [
         MachineSessionBrief(

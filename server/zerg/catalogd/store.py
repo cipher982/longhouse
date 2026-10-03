@@ -489,6 +489,10 @@ def _timeline_possibly_open_session_ids(*, observed_at: datetime) -> Any:
 
 
 _MACHINE_ACTIVITY_TOP_PROJECTS = 3
+# Open candidates returned per machine, newest first. The flag is a superset of
+# the served working set; callers project these ids before counting a session
+# live. Real machines hold a handful; this bounds a pathological one.
+_MACHINE_ACTIVITY_OPEN_IDS = 100
 
 
 def _activity_utc(value: Any) -> datetime | None:
@@ -516,6 +520,8 @@ def _summarize_machine_activity_rows(
     UTC); only sessions started inside the window count toward ``daily`` and
     ``top_projects``. ``latest`` is the most recent activity among every
     candidate, which includes open and unread work older than the window.
+    ``open_session_ids`` are the candidates whose open flag is set, newest
+    activity first, read from this one snapshot.
     """
 
     offset = timedelta(minutes=utc_offset_minutes)
@@ -532,13 +538,14 @@ def _summarize_machine_activity_rows(
                 "latest": None,
                 "latest_at": None,
                 "open_candidates": 0,
-                "unread": 0,
+                "open": [],
             },
         )
-        entry["open_candidates"] += int(row["open_now"] or 0)
-        entry["unread"] += int(row["unread"] or 0)
         order_at = _activity_utc(row["order_at"])
         session_id = str(row["session_id"])
+        if int(row["open_now"] or 0):
+            entry["open_candidates"] += 1
+            entry["open"].append((order_at or window_start, session_id))
         if order_at is not None and (
             entry["latest_at"] is None
             or order_at > entry["latest_at"]
@@ -568,6 +575,8 @@ def _summarize_machine_activity_rows(
         entry = machines[device_id]
         projects = sorted(entry.pop("projects").items(), key=lambda item: (-item[1], item[0]))
         entry.pop("latest_at")
+        opened = sorted(entry.pop("open"), key=lambda item: (item[0], item[1]), reverse=True)
+        entry["open_session_ids"] = [session_id for _, session_id in opened[:_MACHINE_ACTIVITY_OPEN_IDS]]
         entry["top_projects"] = [{"project": name, "sessions": count} for name, count in projects[:_MACHINE_ACTIVITY_TOP_PROJECTS]]
         entry["daily"] = [{"date": day, "by_provider": counts} for day, counts in sorted(entry["daily"].items())]
         result.append(entry)

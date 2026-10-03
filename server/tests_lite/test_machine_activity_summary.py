@@ -6,6 +6,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -130,6 +131,8 @@ def test_machine_activity_counts_only_the_owners_visible_sessions_in_the_window(
     assert cinder["top_projects"] == [{"project": "zerg", "sessions": 2}, {"project": "zeta", "sessions": 1}]
     assert machines["cube"]["latest"]["session_id"] == latest
     assert machines["cube"]["latest"]["title"] == "Newest"
+    # Nothing here is current work, so no candidate needs projecting.
+    assert machines["cinder"]["open_session_ids"] == []
 
 
 def test_machine_activity_buckets_days_in_the_callers_timezone(engine):
@@ -218,20 +221,22 @@ def test_summary_zero_fills_days_and_counts_only_served_open_sessions(monkeypatc
                     "top_projects": [{"project": "zerg", "sessions": 2}],
                     "latest": None,
                     "open_candidates": 2,
-                    "unread": 0,
+                    "open_session_ids": [str(UUID(int=1)), str(UUID(int=2))],
                 }
             ],
         },
     )
     monkeypatch.setattr(machines_summary, "machine_heartbeats", lambda **_: {"heartbeats": []})
     # The SQL open flag is a superset; one candidate is history once projected.
-    page = SimpleNamespace(
-        sessions=[
-            SimpleNamespace(head=_head("a", working_set="open", minutes_ago=1)),
-            SimpleNamespace(head=_head("b", working_set="history", minutes_ago=2)),
-        ]
+    heads = {
+        UUID(int=1): _head(str(UUID(int=1)), working_set="open", minutes_ago=1),
+        UUID(int=2): _head(str(UUID(int=2)), working_set="history", minutes_ago=2),
+    }
+    monkeypatch.setattr(
+        machines_summary,
+        "read_live_catalog_sessions",
+        lambda ids, *, owner_id, include_hidden: [(heads[session_id], None, "1") for session_id in ids],
     )
-    monkeypatch.setattr(machines_summary, "list_live_catalog_timeline", lambda **_: page)
 
     summary = machines_summary.build_machines_summary(owner_id=1, days=7, utc_offset_minutes=0)
 
@@ -243,7 +248,7 @@ def test_summary_zero_fills_days_and_counts_only_served_open_sessions(monkeypatc
     ]
     assert [day.total for day in cinder.activity.daily] == [0, 0, 0, 0, 0, 0, 2]
     assert cinder.activity.live_count == 1
-    assert [item.session_id for item in cinder.activity.live_sessions] == ["a"]
+    assert [item.session_id for item in cinder.activity.live_sessions] == [str(UUID(int=1))]
     assert cube.activity.sessions_started == 0
     assert cube.activity.live_count == 0
     assert len(cube.activity.daily) == 7
@@ -251,22 +256,21 @@ def test_summary_zero_fills_days_and_counts_only_served_open_sessions(monkeypatc
     assert (summary.first_day, summary.last_day) == ("2026-09-27", "2026-10-03")
 
 
-def test_live_sessions_behind_an_unread_backlog_are_still_counted(monkeypatch):
-    # 450 unread rows sort ahead of the machine's one open session.
+def test_every_open_candidate_is_projected_in_bounded_batches(monkeypatch):
+    # 45 candidates: three batch reads of at most 20; two are open once projected.
+    ids = [str(UUID(int=index + 1)) for index in range(45)]
     calls = []
 
-    def timeline(*, params, owner_id):
-        calls.append((params.offset, params.limit))
-        rows = [
-            _head(f"unread-{index}", working_set="history", minutes_ago=5) for index in range(params.offset, params.offset + params.limit)
+    def read(chunk, *, owner_id, include_hidden):
+        calls.append(len(chunk))
+        return [
+            (_head(str(session_id), working_set="open" if session_id.int in (7, 44) else "history", minutes_ago=session_id.int), None, "1")
+            for session_id in chunk
         ]
-        if params.offset <= 450 < params.offset + params.limit:
-            rows[450 - params.offset] = _head("open", working_set="open", minutes_ago=1)
-        return SimpleNamespace(sessions=[SimpleNamespace(head=row) for row in rows[: max(0, 451 - params.offset)]])
 
-    monkeypatch.setattr(machines_summary, "list_live_catalog_timeline", timeline)
-    count, sessions = machines_summary._live_sessions(owner_id=1, device_id="cinder", days=14, candidates=451, has_open_candidates=True)
+    monkeypatch.setattr(machines_summary, "read_live_catalog_sessions", read)
+    count, sessions = machines_summary._live_sessions(owner_id=1, session_ids=ids)
 
-    assert count == 1
-    assert [item.session_id for item in sessions] == ["open"]
-    assert calls == [(0, 200), (200, 200), (400, 51)]
+    assert count == 2
+    assert [item.session_id for item in sessions] == [str(UUID(int=7)), str(UUID(int=44))]
+    assert calls == [20, 20, 5]

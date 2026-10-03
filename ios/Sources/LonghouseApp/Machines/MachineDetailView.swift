@@ -5,10 +5,15 @@ struct MachineDetailView: View {
     @EnvironmentObject private var appState: AppState
     @State private var showingLaunchSheet = false
     @State private var openedSession: SessionRoute?
-    @State private var summary: MachineSummary
+    /// The list's latest copy; it keeps polling, so this stays current.
+    private let incoming: MachineSummary
+    /// A fresher copy fetched here (after a provider sign-in), until the list's next update.
+    @State private var refreshed: MachineSummary?
+
+    private var summary: MachineSummary { refreshed ?? incoming }
 
     init(summary: MachineSummary) {
-        _summary = State(initialValue: summary)
+        incoming = summary
     }
 
     private var status: MachineStatus {
@@ -40,6 +45,7 @@ struct MachineDetailView: View {
             .padding(.bottom, 28)
         }
         .background { EmberHearthBackground() }
+        .onChange(of: incoming) { _, _ in refreshed = nil }
         .navigationTitle(summary.machine.machineName)
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $openedSession) { route in
@@ -189,7 +195,7 @@ struct MachineDetailView: View {
         do {
             let response = try await api.listMachineSummaries()
             if let updated = response.machines.first(where: { $0.machine.deviceId == summary.machine.deviceId }) {
-                summary = updated
+                refreshed = updated
             }
         } catch {
             // The existing detail remains honest if a refresh is unavailable.
