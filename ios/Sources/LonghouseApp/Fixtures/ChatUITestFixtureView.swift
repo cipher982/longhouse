@@ -96,7 +96,6 @@ struct ChatUITestFixtureView: View {
                             pendingInputStore: Self.isolatedPendingInputStore()
                         )
                     )
-                    .accessibilityIdentifier("child-session-\(childSessionId)")
                 } else {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Child transcript")
