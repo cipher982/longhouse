@@ -598,6 +598,82 @@ describe("SessionDetailPage", () => {
     );
   });
 
+  describe("branching an ended Helm session", () => {
+    function endedHelmSession(branch: { state: "available" | "unavailable"; reason?: string }) {
+      const base = makeSession({
+        runtime_display: makeRuntimeDisplay({
+          lifecycle: "closed",
+          state: "completed",
+          is_live: false,
+          is_executing: false,
+          activity_recency: "stale",
+          terminal_reason: "provider_exit",
+        }),
+      });
+      return {
+        ...base,
+        session_state: {
+          ...base.session_state,
+          mode: "helm" as const,
+          run: {
+            ...base.session_state.run,
+            lifecycle: "ended" as const,
+            ended_at: "2026-04-15T16:12:00Z",
+          },
+          control: {
+            ...base.session_state.control,
+            ownership: "owned" as const,
+            connection: "disconnected" as const,
+            actions: {
+              ...base.session_state.control.actions,
+              resume: { state: "available" as const },
+              branch,
+            },
+          },
+        },
+      };
+    }
+
+    it("offers the prompt form inside the Run ended notice, beside Resume", () => {
+      mockWorkspaceState({
+        session: endedHelmSession({ state: "available" }),
+        model: buildTimelineModel([]),
+      });
+
+      renderSessionDetailPage();
+
+      const notice = screen.getByTestId("session-chat");
+      expect(within(notice).getByTestId("session-resume-button")).toBeInTheDocument();
+      expect(within(notice).getByTestId("branch-session-card")).toBeInTheDocument();
+    });
+
+    it("stays out of the way when the provider cannot fork", () => {
+      mockWorkspaceState({
+        session: endedHelmSession({ state: "unavailable", reason: "fork_unsupported" }),
+        model: buildTimelineModel([]),
+      });
+
+      renderSessionDetailPage();
+
+      const notice = screen.getByTestId("session-chat");
+      expect(within(notice).getByTestId("session-resume-button")).toBeInTheDocument();
+      expect(screen.queryByTestId("branch-session-unavailable")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("branch-session-card")).not.toBeInTheDocument();
+    });
+
+    it("says why a session that ran with approvals cannot be branched", () => {
+      mockWorkspaceState({
+        session: endedHelmSession({ state: "unavailable", reason: "permission_mode_unsupported" }),
+        model: buildTimelineModel([]),
+      });
+
+      renderSessionDetailPage();
+
+      const notice = screen.getByTestId("session-chat");
+      expect(within(notice).getByTestId("branch-session-unavailable")).toBeInTheDocument();
+    });
+  });
+
   it("keeps terminal attach in the terminal section when control is offline", async () => {
     const user = userEvent.setup();
     const session = makeSession({

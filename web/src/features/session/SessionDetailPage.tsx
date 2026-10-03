@@ -32,7 +32,7 @@ import {
   isUnexpectedResumeStop,
   ResumeSessionModal,
 } from "./ResumeSessionModal";
-import { BranchSessionCard } from "./BranchSessionCard";
+import { BranchSessionCard, branchUnavailableNote } from "./BranchSessionCard";
 import { deriveTurnOutline, TurnOutline, turnRowId, type TurnOutlineTurn } from "./TurnOutline";
 import { useActiveTurn } from "./useActiveTurn";
 import { SessionStateBadge } from "./SessionStateBadge";
@@ -441,10 +441,12 @@ function SessionDetailWorkspaceRoute({
     displaySession.continuation_kind === "fork"
       ? displaySession.continued_from_session_id
       : null;
+  const branchAvailable = branchAction?.state === "available";
   const showBranchCard =
     isViewingHead &&
     branchSourceSession.session_state.run?.lifecycle === "ended" &&
-    branchSourceSession.session_state.mode === "helm";
+    branchSourceSession.session_state.mode === "helm" &&
+    (branchAvailable || branchUnavailableNote(branchAction?.reason) !== null);
   // Phase 4 (Instruments): "Turn" readout data — the sparkline/tool-call/
   // waiting-on useMemos live above, before the early returns; this part is
   // plain per-render arithmetic on `displaySession`, not a hook, so it's
@@ -681,16 +683,6 @@ function SessionDetailWorkspaceRoute({
       data-runtime-tone={runtime.tone}
     >
       {launchPendingBanner}
-      {showBranchCard ? (
-        <BranchSessionCard
-          sessionId={branchSourceSession.id}
-          providerLabel={interaction.providerLabel}
-          machineLabel={runtimeHostLabel}
-          available={branchAction?.state === "available"}
-          unavailableReason={branchAction?.reason}
-          onBranched={navigateToSession}
-        />
-      ) : null}
       <div className="session-workspace-shell">
         <TimelinePane
           items={items}
@@ -776,17 +768,31 @@ function SessionDetailWorkspaceRoute({
                           : interaction.notice?.title ?? null
                     }
                     composerDisabledAction={
-                      resumeAvailable ? (
-                        <Button
-                          type="button"
-                          variant="primary"
-                          size="sm"
-                          onClick={() => void handleResume()}
-                          disabled={resumeLoading}
-                          data-testid="session-resume-button"
-                        >
-                          {resumeLoading ? "Checking…" : "Show resume command"}
-                        </Button>
+                      resumeAvailable || showBranchCard ? (
+                        <>
+                          {resumeAvailable ? (
+                            <Button
+                              type="button"
+                              variant="primary"
+                              size="sm"
+                              onClick={() => void handleResume()}
+                              disabled={resumeLoading}
+                              data-testid="session-resume-button"
+                            >
+                              {resumeLoading ? "Checking…" : "Show resume command"}
+                            </Button>
+                          ) : null}
+                          {showBranchCard ? (
+                            <BranchSessionCard
+                              sessionId={branchSourceSession.id}
+                              providerLabel={interaction.providerLabel}
+                              machineLabel={runtimeHostLabel}
+                              available={branchAvailable}
+                              unavailableReason={branchAction?.reason}
+                              onBranched={navigateToSession}
+                            />
+                          ) : null}
+                        </>
                       ) : null
                     }
                     managedLaunchSuggestion={null}

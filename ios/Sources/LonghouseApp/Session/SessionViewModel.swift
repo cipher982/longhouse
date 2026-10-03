@@ -850,6 +850,12 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
+    /// The server deduplicates a branch on its request id, so the id has to
+    /// survive a retry of the same text: after a dropped response the first
+    /// attempt may have succeeded, and a fresh id would start a second branch.
+    /// Different text is a different request.
+    private var branchAttempt: (text: String, id: String)?
+
     func startBranch(sessionId: String, appState: AppState) async {
         let text = branchMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isBranching else { return }
@@ -857,6 +863,10 @@ final class SessionViewModel: ObservableObject {
             branchErrorMessage = "The Longhouse server URL is invalid."
             return
         }
+        if branchAttempt?.text != text {
+            branchAttempt = (text: text, id: UUID().uuidString)
+        }
+        guard let attempt = branchAttempt else { return }
         isBranching = true
         branchErrorMessage = nil
         defer { isBranching = false }
@@ -864,10 +874,11 @@ final class SessionViewModel: ObservableObject {
             let branch = try await api.createSessionBranch(
                 id: sessionId,
                 message: text,
-                clientRequestId: UUID().uuidString
+                clientRequestId: attempt.id
             )
             // Only clear the draft once the branch exists. Losing what someone
             // typed is the worst possible answer to a failure they can retry.
+            branchAttempt = nil
             branchMessage = ""
             branchedSessionId = branch.sessionId
         } catch {

@@ -32,6 +32,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-ended   # the ended-run notice, resume and branch, no modal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-background-notices   # collapsed and expanded PNGs
  *   bunx tsx scripts/ui/ui-capture.ts devices --scene=devices-revoke
@@ -111,6 +112,7 @@ const SCENES = [
   "session-question",
   "session-attention",
   "session-resume",
+  "session-ended",
   "session-stale-observation",
   "session-tones",
   "session-background-notices",
@@ -152,6 +154,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-question",
   "session-attention",
   "session-resume",
+  "session-ended",
   "session-stale-observation",
   "session-tones",
   "session-background-notices",
@@ -314,6 +317,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-question" ||
     scene === "session-attention" ||
     scene === "session-resume" ||
+    scene === "session-ended" ||
     scene === "session-stale-observation" ||
     scene === "session-tones" ||
     scene === "session-background-notices" ||
@@ -452,7 +456,7 @@ async function installSceneMocks(
     const fixture =
       scene === "landing-session"
         ? buildLandingSessionFixture()
-        : scene === "session-resume"
+        : scene === "session-resume" || scene === "session-ended"
         ? buildSessionResumeFixture()
         : scene === "session-question"
           ? buildSessionQuestionFixture()
@@ -1231,7 +1235,7 @@ async function captureBundle(
   }
 
   if (scene === "session-resume" && pageName === "session-detail") {
-    await page.getByRole("button", { name: /Resume on/ }).click();
+    await page.getByRole("button", { name: /Show resume command/ }).click();
     await page.getByRole("dialog").waitFor();
   }
 

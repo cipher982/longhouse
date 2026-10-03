@@ -1,32 +1,29 @@
-import { useCallback, useState, type KeyboardEvent } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import { createSessionBranch } from "@/shared/api/agents";
 import { ApiError } from "@/shared/api/base";
 import { Button } from "@/shared/ui";
 
 /**
- * The reason a branch cannot be offered, in the user's terms.
+ * What to say about a branch that cannot be offered, or null to say nothing.
  *
- * The server sends one served reason and this renders it. Inventing copy per
- * call site is how a refusal ends up explained two different ways on two
- * screens.
+ * A reason gets words only when it tells the reader something no other part of
+ * the screen already does. Resume's own blockers (offline machine, moved
+ * folder, missing contract) are explained once, in the ended-run notice, so
+ * repeating them here would be a second, competing explanation. A provider
+ * that cannot fork yet is a roadmap fact, not something anyone can act on, and
+ * showed on most ended sessions. The approval reasons remain: they are about
+ * this particular session, and the answer is to resume it at the machine.
+ *
+ * iOS keeps the same rule in `branchReasonLabel`.
  */
-function describeUnavailable(reason: string | null | undefined, providerLabel: string): string {
+export function branchUnavailableNote(reason: string | null | undefined): string | null {
   switch (reason) {
-    case "fork_unsupported":
-      return `Longhouse can't branch ${providerLabel} sessions yet.`;
     case "permission_mode_unknown":
+      return "Longhouse couldn't verify this session's approval settings, so it can't be branched. Resume it in the terminal instead.";
     case "permission_mode_unsupported":
-      return "This session ran with approvals a branch can't carry.";
-    case "machine_offline":
-    case "machine_unknown":
-      return "The machine this ran on is offline.";
-    case "contract_missing":
-    case "contract_invalid":
-      return "The provider state this needs is no longer on the machine.";
-    case "workspace_mismatch":
-      return "The folder this ran in has moved.";
+      return "A branch runs without approval prompts and this session ran with them. Resume it in the terminal instead.";
     default:
-      return "This session can't be branched right now.";
+      return null;
   }
 }
 
@@ -56,19 +53,27 @@ export function BranchSessionCard({
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The server deduplicates on this id, so it has to survive a retry of the
+  // same text: after a dropped response the first attempt may have succeeded,
+  // and a fresh id would start a second branch. Different text is a different
+  // request, and reusing the id for it would be refused.
+  const attemptRef = useRef<{ text: string; id: string } | null>(null);
 
   const submit = useCallback(async () => {
     const text = message.trim();
     if (!text || submitting) return;
+    if (attemptRef.current?.text !== text) {
+      attemptRef.current = { text, id: crypto.randomUUID() };
+    }
+    const attempt = attemptRef.current;
     setSubmitting(true);
     setError(null);
     try {
-      // A stable id per attempt: a retry after a dropped response must not
-      // start a second branch, and the server deduplicates on this.
       const branch = await createSessionBranch(sessionId, {
         message: text,
-        client_request_id: crypto.randomUUID(),
+        client_request_id: attempt.id,
       });
+      attemptRef.current = null;
       setMessage("");
       onBranched(branch.session_id);
     } catch (caught: unknown) {
@@ -86,11 +91,12 @@ export function BranchSessionCard({
   };
 
   if (!available) {
-    return (
-      <div className="branch-session-card branch-session-card--unavailable" data-testid="branch-session-unavailable">
-        <p>{describeUnavailable(unavailableReason, providerLabel)}</p>
-      </div>
-    );
+    const note = branchUnavailableNote(unavailableReason);
+    return note ? (
+      <p className="branch-session-card__note" data-testid="branch-session-unavailable">
+        {note}
+      </p>
+    ) : null;
   }
 
   return (

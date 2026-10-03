@@ -1279,6 +1279,7 @@ export function buildSessionResumeFixture(): SessionDetailFixture {
         terminate: { state: "unavailable", reason: "run_ended" },
         reattach: { state: "unavailable", reason: "run_ended" },
         resume: { state: "available" },
+        branch: { state: "available" },
       },
     },
     host: { state: "online", observed_at: endedAt },

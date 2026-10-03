@@ -42,10 +42,8 @@ struct BranchComposerCard: View {
                 .disabled(!canSubmit)
                 .accessibilityIdentifier("session-branch-button")
             }
-        } else if let unavailableReason {
-            // Silence would make a session Longhouse cannot continue look
-            // identical to one it simply has not been asked to.
-            Text(branchReasonLabel(unavailableReason))
+        } else if let note = branchReasonLabel(unavailableReason) {
+            Text(note)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("session-branch-unavailable")
@@ -53,16 +51,21 @@ struct BranchComposerCard: View {
     }
 }
 
-/// Why a branch is not on offer, in the user's terms rather than the
-/// projector's. The two reasons branching adds over Resume are the ones it can
-/// refuse for on its own: the provider cannot fork, or the parent's approvals
-/// are not ones a headless turn can carry.
-func branchReasonLabel(_ reason: String?) -> String {
+/// What to say about a branch that is not on offer, or nil to say nothing.
+///
+/// A reason gets words only when it tells the reader something the rest of the
+/// screen does not. Resume's own blockers are explained once, in the Resume
+/// footer; a provider that cannot fork yet is a roadmap fact nobody can act on
+/// and showed on most ended sessions. The approval reasons are about this
+/// session, and the answer is to resume it at the machine. Same rule and same
+/// words as the web's `branchUnavailableNote`.
+func branchReasonLabel(_ reason: String?) -> String? {
     switch reason {
-    case "fork_unsupported": return "Longhouse can't branch this provider yet."
-    case "permission_mode_unknown", "permission_mode_unsupported":
-        return "This session ran with approvals a branch can't carry."
-    default: return "Can't continue this session here: \(resumeReasonLabel(reason))."
+    case "permission_mode_unknown":
+        return "Longhouse couldn't verify this session's approval settings, so it can't be branched. Resume it in the terminal instead."
+    case "permission_mode_unsupported":
+        return "A branch runs without approval prompts and this session ran with them. Resume it in the terminal instead."
+    default: return nil
     }
 }
 
@@ -102,10 +105,10 @@ func branchReasonLabel(_ reason: String?) -> String {
     .padding()
 }
 
-#Preview("Branch · Provider cannot fork") {
+#Preview("Branch · Session ran with approvals") {
     BranchComposerCard(
         available: false,
-        unavailableReason: "fork_unsupported",
+        unavailableReason: "permission_mode_unsupported",
         message: .constant(""),
         isSubmitting: false,
         errorMessage: nil,

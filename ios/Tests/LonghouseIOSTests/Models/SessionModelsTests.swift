@@ -2246,22 +2246,17 @@ struct SessionModelsTests {
 }
 
 struct BranchAvailabilityTests {
-    /// The two refusals branching adds over Resume get their own words. Falling
-    /// through to the Resume vocabulary would tell someone their contract was
-    /// missing when the real answer is that this provider cannot fork at all.
+    /// Only the approval refusals get words. The provider not forking yet is
+    /// not actionable, and everything inherited from Resume is already
+    /// explained by the Resume footer, so saying it again would describe one
+    /// refusal two ways.
     @Test
-    func branchReasonsThatResumeDoesNotHave() {
-        #expect(branchReasonLabel("fork_unsupported") == "Longhouse can't branch this provider yet.")
-        #expect(branchReasonLabel("permission_mode_unknown") == "This session ran with approvals a branch can't carry.")
-        #expect(branchReasonLabel("permission_mode_unsupported") == "This session ran with approvals a branch can't carry.")
-    }
-
-    /// Anything a branch inherits from Resume is explained the way Resume
-    /// explains it, so one refusal is never described two ways.
-    @Test
-    func sharedReasonsReuseTheResumeWording() {
-        #expect(branchReasonLabel("machine_offline").contains(resumeReasonLabel("machine_offline")))
-        #expect(branchReasonLabel(nil).contains(resumeReasonLabel(nil)))
+    func onlyApprovalReasonsAreWorthSaying() {
+        #expect(branchReasonLabel("permission_mode_unknown")?.contains("couldn't verify") == true)
+        #expect(branchReasonLabel("permission_mode_unsupported")?.contains("ran with them") == true)
+        #expect(branchReasonLabel("fork_unsupported") == nil)
+        #expect(branchReasonLabel("machine_offline") == nil)
+        #expect(branchReasonLabel(nil) == nil)
     }
 
     /// Branch is strictly narrower than Resume: a session may be resumable and

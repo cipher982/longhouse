@@ -3690,3 +3690,60 @@
   color: var(--color-text-tertiary, var(--color-text-secondary));
   font-variant-numeric: tabular-nums;
 }
+
+/* Picking an ended session back up. Lives in the composer's "Run ended"
+   notice, beside Resume: the next thing you can do is where the last thing
+   ended. Kept with the session feature, not the timeline list's stylesheet,
+   which a direct load of a session URL never fetches. The notice's action slot
+   shrinks to its content, so a slot holding the prompt form stretches to the
+   notice instead. */
+.session-chat-composer-unavailable__action:has(.branch-session-card) {
+  align-self: stretch;
+}
+
+.branch-session-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.branch-session-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.branch-session-card__header span {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+.branch-session-card__input {
+  width: 100%;
+  resize: vertical;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.branch-session-card__error {
+  color: var(--color-danger, #b4463c);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.branch-session-card__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Only the reasons worth saying (approvals) render; the rest stay silent. */
+.branch-session-card__note {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
