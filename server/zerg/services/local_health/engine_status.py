@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
@@ -22,85 +24,215 @@ from .phase import _phase_display_label
 from .process import _process_row_by_pid
 from .process import _process_row_is_zombie
 
+NATIVE_IDENTITY_TIMEOUT_SECONDS = 2.0
 ENGINE_PROJECTION_STALE_SECONDS = 60
 
 
+def _resolve_native_cli(*, binary_path: Any) -> Path | None:
+    """Find the installed native facade paired with the running engine.
+
+    The engine status file records the executable that the daemon started from.
+    Looking beside that path first avoids accidentally inspecting a different
+    ``longhouse`` found earlier on ``PATH``.  The remaining candidates mirror
+    the native desktop resolver and are only used when the engine did not
+    publish its path.
+    """
+    candidates: list[Path] = []
+    if isinstance(binary_path, str) and binary_path.strip():
+        candidates.append(Path(binary_path).expanduser().with_name("longhouse"))
+
+    home = Path.home()
+    candidates.extend(
+        (
+            home / ".local" / "bin" / "longhouse",
+            home / "bin" / "longhouse",
+            Path("/opt/homebrew/bin/longhouse"),
+            Path("/usr/local/bin/longhouse"),
+            Path("/usr/bin/longhouse"),
+        )
+    )
+    candidates.extend(Path(entry) / "longhouse" for entry in os.environ.get("PATH", "").split(os.pathsep) if entry)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.expanduser()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _collect_installed_native_identity(*, engine_payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the installed native facade/engine pair's self-reported identity.
+
+    ``longhouse build-identity --json`` verifies and reports both binaries.
+    Python's package identity is deliberately not used here: the package and
+    native pair are independently upgradeable artifacts.
+    """
+    binary_path = engine_payload.get("binary_path")
+    native_cli = _resolve_native_cli(binary_path=binary_path)
+    if native_cli is None:
+        return {
+            "error": "unavailable",
+            "detail": "installed native longhouse facade is unavailable",
+        }
+
+    try:
+        completed = subprocess.run(
+            [str(native_cli), "build-identity", "--json"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=NATIVE_IDENTITY_TIMEOUT_SECONDS,
+        )
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
+        return {"error": "unavailable", "detail": f"reading native build identity: {exc}"}
+
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or f"native identity exited with status {completed.returncode}"
+        return {"error": "unavailable", "detail": detail}
+
+    try:
+        raw = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        return {"error": "corrupt", "detail": f"native identity is not JSON: {exc}"}
+    if not isinstance(raw, Mapping):
+        return {"error": "corrupt", "detail": "native identity root is not an object"}
+
+    raw_facade = raw.get("facade")
+    raw_engine = raw.get("engine")
+    if not isinstance(raw_facade, Mapping) or not isinstance(raw_engine, Mapping):
+        return {"error": "corrupt", "detail": "native identity is missing facade or engine"}
+    if not isinstance(raw.get("engine_path"), str) or not raw["engine_path"].strip():
+        return {"error": "corrupt", "detail": "native identity is missing engine path"}
+    if not _is_complete_build_identity(raw_facade) or not _is_complete_build_identity(raw_engine):
+        return {"error": "corrupt", "detail": "native identity facade or engine is incomplete"}
+    if raw_facade["commit"] != raw_engine["commit"]:
+        return {"error": "corrupt", "detail": "native facade and engine commits differ"}
+
+    engine_path = raw["engine_path"]
+    return {
+        "path": str(native_cli),
+        "engine_path": engine_path,
+        "facade": dict(raw_facade),
+        "engine": dict(raw_engine),
+    }
+
+
+def _is_complete_build_identity(identity: Mapping[str, Any] | None) -> bool:
+    if not isinstance(identity, Mapping):
+        return False
+    if identity.get("error") is not None:
+        return False
+    required_fields = ("version", "commit", "commit_short", "dirty", "built_at", "channel")
+    if any(field not in identity for field in required_fields):
+        return False
+    string_fields_valid = all(isinstance(identity[field], str) and identity[field].strip() for field in required_fields if field != "dirty")
+    if not string_fields_valid or not isinstance(identity["dirty"], bool):
+        return False
+    if identity["channel"] not in {"dev", "release"}:
+        return False
+    commit = identity["commit"].strip().lower()
+    commit_short = identity["commit_short"].strip().lower()
+    return commit.startswith(commit_short)
+
+
+def _identity_commit_short(identity: Mapping[str, Any] | None) -> str | None:
+    if not _is_complete_build_identity(identity):
+        return None
+    assert identity is not None
+    value = identity.get("commit_short")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
-    """Compare CLI build identity against engine build identity.
+    """Report Python, installed-native, and running-engine identities separately.
 
-    Returns the CLI identity, engine identity (short SHA only, since that's
-    all we need for drift detection), and whether the running engine daemon
-    is behind the installed/on-disk binary.
-
-    We report "engine restart pending" instead of a scary drift pill when:
-    - the engine daemon's build commit_short differs from the installed CLI's, OR
-    - the engine daemon's current_exe mtime is newer than its daemon_started_at
-      (binary replaced on disk since the daemon started — e.g. after `make
-      install-engine`).
-
-    This is a benign state, not an error. Daemons don't hot-reload; the user
-    just needs to restart the shipper when convenient.
+    The Python package and native pair are independently upgradeable.  Restart
+    attribution therefore compares the installed native engine identity with
+    the engine daemon's compiled identity, never the Python package commit.
+    A native identity or timestamp that cannot be read remains explicit
+    unknown evidence; a binary replacement still wins when its mtime proves it.
     """
     from zerg.build_info import BuildIdentityMissing
     from zerg.build_info import load as load_build_identity
 
-    installed_block: dict[str, Any]
+    python_package: dict[str, Any]
     try:
-        cli = load_build_identity()
-        installed_block = cli.as_dict()
-        installed_short: str | None = cli.commit_short
+        python_package_identity = load_build_identity()
+        python_package = python_package_identity.as_dict()
     except BuildIdentityMissing as exc:
-        installed_block = {"error": "missing", "detail": str(exc)}
-        installed_short = None
+        python_package = {"error": "missing", "detail": str(exc)}
 
-    # engine-status.json is engine-controlled but user-writable; guard
-    # against corrupt payloads so local-health degrades cleanly instead of
-    # raising and taking the whole menu bar snapshot down.
+    # engine-status.json is engine-controlled but user-writable; guard against
+    # corrupt payloads so local-health degrades cleanly instead of raising and
+    # taking the whole menu bar snapshot down.
     raw_payload = engine_status.get("payload") if engine_status else None
     engine_payload: Mapping[str, Any] = raw_payload if isinstance(raw_payload, Mapping) else {}
     raw_engine_build = engine_payload.get("build")
-    engine_build: Mapping[str, Any] = raw_engine_build if isinstance(raw_engine_build, Mapping) else {}
-    engine_short = engine_build.get("commit_short") if engine_build else None
+    running_engine: Mapping[str, Any] = raw_engine_build if isinstance(raw_engine_build, Mapping) else {}
+    running_engine_short = _identity_commit_short(running_engine)
+    installed_native = _collect_installed_native_identity(engine_payload=engine_payload)
+    native_engine = installed_native.get("engine") if isinstance(installed_native.get("engine"), Mapping) else None
+    native_facade = installed_native.get("facade") if isinstance(installed_native.get("facade"), Mapping) else None
+    native_engine_short = _identity_commit_short(native_engine)
+    native_engine_commit_mismatch: bool | None = (
+        None
+        if native_engine_short is None or running_engine_short is None
+        else native_engine["commit"].strip().lower() != running_engine["commit"].strip().lower()
+    )
 
-    binary_mtime_raw = engine_payload.get("binary_mtime") if engine_payload else None
-    daemon_started_at_raw = engine_payload.get("daemon_started_at") if engine_payload else None
-    binary_mtime = _parse_iso8601(binary_mtime_raw)
-    daemon_started_at = _parse_iso8601(daemon_started_at_raw)
-
-    commit_mismatch = bool(installed_short and engine_short and installed_short != engine_short)
+    binary_mtime = _parse_iso8601(engine_payload.get("binary_mtime"))
+    daemon_started_at = _parse_iso8601(engine_payload.get("daemon_started_at"))
     binary_times_present = binary_mtime is not None and daemon_started_at is not None
-    binary_newer_than_daemon = bool(binary_times_present and binary_mtime > daemon_started_at)
-    engine_restart_pending = commit_mismatch or binary_newer_than_daemon
+    binary_newer_than_daemon: bool | None = binary_mtime > daemon_started_at if binary_times_present else None
+    if native_engine_commit_mismatch is True or binary_newer_than_daemon is True:
+        engine_restart_pending: bool | None = True
+    elif native_engine_commit_mismatch is False:
+        engine_restart_pending = False
+    else:
+        engine_restart_pending = None
+
+    components = []
+    for name, identity in (
+        ("python_package", python_package),
+        ("native_facade", native_facade),
+        ("installed_native_engine", native_engine),
+        ("running_engine", running_engine),
+    ):
+        commit_short = _identity_commit_short(identity)
+        if commit_short:
+            components.append({"name": name, "commit_short": commit_short})
 
     return {
-        "installed": installed_block,
-        "engine": engine_build if engine_build else None,
+        "python_package": python_package,
+        "installed_native": installed_native,
+        "running_engine": dict(running_engine) if running_engine else None,
         "engine_restart_pending": engine_restart_pending,
         "restart_pending_reasons": {
-            "commit_mismatch": commit_mismatch,
+            "native_engine_commit_mismatch": native_engine_commit_mismatch,
             "binary_newer_than_daemon": binary_newer_than_daemon,
         },
-        "components": [
-            component
-            for component in (
-                {"name": "installed", "commit_short": installed_short} if installed_short else None,
-                {"name": "engine", "commit_short": engine_short} if engine_short else None,
-            )
-            if component is not None
-        ],
+        "components": components,
     }
 
 
 def _parse_iso8601(value: Any) -> datetime | None:
     """Parse an ISO-8601 string emitted by the engine. Returns None on any
-    failure — the caller treats a missing/unparseable value as "can't tell"
-    and falls back to commit_short comparison alone."""
+    failure — callers preserve unknown timestamp evidence instead of inferring
+    that the installed and running binaries match.
+    """
     if not isinstance(value, str) or not value.strip():
         return None
     try:
         # datetime.fromisoformat in Py 3.11+ handles most RFC 3339 shapes,
         # including the fractional seconds + offset the engine emits.
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
     except ValueError:
         return None
 
@@ -501,6 +633,8 @@ def _validate_resolved_engine_managed_sessions(
 __all__ = [
     "_collect_build_identity",
     "_parse_iso8601",
+    "_resolve_native_cli",
+    "_collect_installed_native_identity",
     "_collect_engine_status",
     "_collect_outbox",
     "_engine_status_payload",

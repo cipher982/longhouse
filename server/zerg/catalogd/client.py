@@ -82,6 +82,7 @@ _SAFE_RETRY_METHODS = {
     "session.preferences.update.v2",
     "session.active.list.v2",
     "session.timeline.list.v2",
+    "session.titles.search.v2",
     "directed_input.create.v2",
     "directed_input.link_receipt.v2",
     "directed_input.list.v2",

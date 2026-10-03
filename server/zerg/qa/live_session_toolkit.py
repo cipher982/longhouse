@@ -881,8 +881,18 @@ def _provision_transcript_roots(home: Path, environment: dict[str, str]) -> None
     xdg_config_home = Path(str(environment.get("XDG_CONFIG_HOME") or home / ".config"))
     roots = [
         home / ".codex" / "sessions",
+        # Pi's default session root is derived from HOME when the Console
+        # payload does not supply PI_CODING_AGENT_SESSION_DIR. Discovery
+        # canonicalizes only roots that exist before engine startup, so this
+        # must be provisioned alongside the other native stores.
+        home / ".pi" / "agent" / "sessions",
+        # The legacy Longhouse Pi source remains a discovery candidate for
+        # imported sessions, so keep it present in the same startup snapshot.
+        home / ".longhouse" / "agent" / "pi-console",
+        home / ".gemini" / "antigravity-cli" / "brain",
+        home / ".gemini" / "antigravity" / "brain",
+        home / ".gemini" / "tmp",
         home / ".local" / "share" / "opencode",
-        home / ".cursor" / "chats",
         xdg_config_home / "cursor" / "chats",
         # Cursor's durable project store is the authoritative source for
         # resumed conversations.  Create the discovery root before the

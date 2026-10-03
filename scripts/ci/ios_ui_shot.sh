@@ -2,13 +2,17 @@
 # Run one iOS UI test under the smoke scheme (the only scheme that carries the
 # UI test target) and export every screenshot it attached, so an agent can
 # look at the rendered frame instead of trusting an assertion.
+# OMP Console control/photo proof uses the same XCTest class but must run from
+# scripts/ci/ios_live_control_proof.sh under scripts/ops/bench.sh on wisp.
+# The credential-free native dispatcher intentionally does not forward live
+# Runtime Host credentials or operator photos.
 #
-# Usage: scripts/ci/ios_ui_shot.sh SessionChatUITests/testTurnFooterRendersUnderTheProviderReply
-# HTTP outbox proof: make ios-ui-shot TEST=HTTPOutboxUITests/testRealHTTPOutboxRetriesSamePhotoOperationAndSurvivesRelaunch
-# Its simulator defaults to the latest runtime; set IOS_SIMULATOR_RUNTIME_VERSION to override it.
-# Live-session proof: export LONGHOUSE_FIDELITY_{SERVER_URL,AUTH_TOKEN,SESSION_ID,MARKERS_JSON}
-# first, then select LiveSessionFidelityUITests/testRealSessionColdOpenAndReopen.
-# Credentials travel only through process environment, never xctestrun/plist files.
+#   LONGHOUSE_LIVE_CONTROL_{SERVER_URL,AUTH_TOKEN,SESSION_ID}=... \
+#   IOS_LIVE_CONTROL_PHOTO=/tmp/agents/ios-control/<run>/real-photo.jpg \
+#   scripts/ci/ios_live_control_proof.sh \
+#     LiveConsoleControlUITests/testLiveConsoleControlAndPhoto
+# Fixture UI shots continue through:
+#   make ios-ui-shot TEST=SessionChatUITests/testName
 # Output: artifacts/ios-ui-shot/<timestamp>/<attachment name>.png plus the
 #         .xcresult bundle. Failure screenshots XCTest takes on its own are
 #         exported too, so a failing run still leaves a frame to look at.

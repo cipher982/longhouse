@@ -1067,21 +1067,30 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "UPDATE AVAILABLE"
     }
 
-    public var installedVersionLabel: String {
-        // Qualified build identity ("0.2.0-dev+b672fcca[.dirty]" or
-        // "0.2.0 (b672fcca)"). If missing, surface loudly rather than
-        // fall back to raw PyPI release version.
-        build?.installed?.qualified ?? "BUILD IDENTITY MISSING"
+    public var pythonPackageVersionLabel: String {
+        // The server-side health collector calls this out as the Python
+        // package. It is independent from the native pair and running engine.
+        build?.pythonPackage?.qualified ?? "BUILD IDENTITY MISSING"
     }
 
-    public var hasResolvedInstalledVersion: Bool {
-        build?.installed?.qualified != nil
+    public var hasResolvedPythonPackageVersion: Bool {
+        build?.pythonPackage?.qualified != nil
     }
 
-    /// True when the shipper daemon is running a stale engine binary:
-    /// installed vs engine commit_short disagree, or the on-disk engine
-    /// binary is newer than the daemon's start time. Benign; needs a
-    /// daemon restart.
+    public var nativePairVersionLabel: String {
+        guard let facade = build?.installedNative?.facade?.qualified,
+              let engine = build?.installedNative?.engine?.qualified else {
+            return "NATIVE PAIR IDENTITY UNKNOWN"
+        }
+        return "\(facade) / \(engine)"
+    }
+
+    public var runningEngineVersionLabel: String {
+        build?.runningEngine?.qualified ?? "RUNNING ENGINE IDENTITY UNKNOWN"
+    }
+
+    /// True when the installed native engine or an on-disk replacement proves
+    /// that the shipper daemon is running an older engine binary.
     public var engineRestartPending: Bool {
         build?.engineRestartPending == true
     }
@@ -1661,21 +1670,37 @@ public struct EngineStatusSnapshot: Codable, Equatable, Sendable {
     public let error: String?
 }
 
-/// Build identity block emitted by `longhouse local-health --json`.
+/// Build identity block emitted by a local-health JSON snapshot.
+///
+/// The Python package, installed native pair, and running engine are separate
+/// artifacts. Keeping them separate prevents a Python-only upgrade from being
+/// mistaken for a daemon restart requirement.
 public struct BuildIdentitySnapshot: Codable, Equatable, Sendable {
-    public let installed: BuildIdentityRecord?
-    public let engine: BuildIdentityRecord?
+    public let pythonPackage: BuildIdentityRecord?
+    public let installedNative: InstalledNativeIdentity?
+    public let runningEngine: BuildIdentityRecord?
     public let engineRestartPending: Bool?
 
     public init(
-        installed: BuildIdentityRecord?,
-        engine: BuildIdentityRecord?,
+        pythonPackage: BuildIdentityRecord?,
+        installedNative: InstalledNativeIdentity?,
+        runningEngine: BuildIdentityRecord?,
         engineRestartPending: Bool?
     ) {
-        self.installed = installed
-        self.engine = engine
+        self.pythonPackage = pythonPackage
+        self.installedNative = installedNative
+        self.runningEngine = runningEngine
         self.engineRestartPending = engineRestartPending
     }
+}
+
+public struct InstalledNativeIdentity: Codable, Equatable, Sendable {
+    public let path: String?
+    public let enginePath: String?
+    public let facade: BuildIdentityRecord?
+    public let engine: BuildIdentityRecord?
+    public let error: String?
+    public let detail: String?
 }
 
 public struct BuildIdentityRecord: Codable, Equatable, Sendable {
@@ -1690,11 +1715,21 @@ public struct BuildIdentityRecord: Codable, Equatable, Sendable {
     public let detail: String?
 
     public var qualified: String? {
-        guard let version, let commitShort else { return nil }
+        guard error == nil,
+              let version, !version.isEmpty,
+              let commit, !commit.isEmpty,
+              let commitShort, !commitShort.isEmpty,
+              let dirty,
+              let builtAt, !builtAt.isEmpty,
+              let channel, !channel.isEmpty,
+              channel == "dev" || channel == "release",
+              commit.lowercased().hasPrefix(commitShort.lowercased()) else {
+            return nil
+        }
         if channel == "release" {
             return "\(version) (\(commitShort))"
         }
-        let suffix = (dirty == true) ? "\(commitShort).dirty" : commitShort
+        let suffix = dirty ? "\(commitShort).dirty" : commitShort
         return "\(version)-dev+\(suffix)"
     }
 }

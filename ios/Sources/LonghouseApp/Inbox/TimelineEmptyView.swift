@@ -9,7 +9,8 @@ struct TimelineEmptyView: View {
             "No sessions yet",
             systemImage: "rectangle.stack",
             description: Text(
-                "Sessions appear here as Longhouse syncs them from your machines. "
+                "New sessions you start from now on appear here as Longhouse syncs them from your machines. "
+                    + "Existing history stays on the computer unless you choose a project, date, or all history there during setup or later. "
                     + "No machine yet? On your computer, open your Longhouse in a browser and run the command under \u{201C}Connect your first machine\u{201D}."
             )
         )

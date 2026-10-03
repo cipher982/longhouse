@@ -120,7 +120,18 @@ jobs:
           chmod 700 "$fixture_root"
           provider_root="$fixture_root/providers"
           home="$fixture_root/home"
-          mkdir -p "$provider_root" "$home" "$fixture_root/bin" "$fixture_root/workspace" "$home/.gemini/antigravity-cli"
+          # Discovery admits only canonical roots that already exist at Agent
+          # startup. Create every root used by the seven Console adapters so a
+          # stock provider's first turn cannot race root creation and disappear
+          # from the served transcript.
+          mkdir -p \
+            "$provider_root" "$home" "$fixture_root/bin" "$fixture_root/workspace" \
+            "$home/.claude/projects" "$home/.codex/sessions" \
+            "$home/.pi/agent/sessions" \
+            "$home/.gemini/antigravity-cli/brain" "$home/.gemini/antigravity/brain" "$home/.gemini/tmp" \
+            "$home/.local/share/opencode" "$home/.local/share/omp/sessions" \
+            "$home/.longhouse/agent/pi-console" "$home/.longhouse/agent/cursor-acp-source" \
+            "$home/.config/cursor/chats" "$home/.cursor/chats" "$home/.cursor/projects"
           git init --quiet "$fixture_root/workspace"
           echo "CONSOLE_QA_CWD=$fixture_root/workspace" >> "$GITHUB_ENV"
           echo "CONSOLE_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
@@ -134,15 +145,26 @@ jobs:
             --output "$GITHUB_WORKSPACE/.build/build-identity.json"
           test -s "$GITHUB_WORKSPACE/.build/build-identity.json"
           python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" exec -- \
-            build --manifest-path "$GITHUB_WORKSPACE/engine/Cargo.toml" --profile ci --bin longhouse-engine
+            build --manifest-path "$GITHUB_WORKSPACE/engine/Cargo.toml" --profile ci --bin longhouse-engine --bin longhouse
           engine="$(python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)"
+          cli="$(python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" artifact --profile ci --bin longhouse)"
           test -x "$engine"
+          test -x "$cli"
           export HOME="$home"
+          export PATH="$fixture_root/bin:$home/.local/bin:$PATH"
+          export LONGHOUSE_ENGINE_BIN="$engine"
+          install -m 755 "$cli" "$fixture_root/bin/longhouse"
+          # Claude Console admission is deliberately gated on its lifecycle
+          # hook. Configure the disposable profile with the paired engine
+          # before the Machine Agent computes its capabilities.
+          "$fixture_root/bin/longhouse" claude configure --claude-dir "$home/.claude"
           export PATH="$fixture_root/bin:$home/.local/bin:$PATH"
           # Installation scripts are untrusted network inputs; never expose
           # provider credentials while they run. The next step receives the
           # job-scoped secrets again from the workflow environment.
-          unset CODEX_API_KEY ANTHROPIC_API_KEY CURSOR_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY LONGHOUSE_MACHINE_TOKEN
+          unset CODEX_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
+            CURSOR_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY PI_OPENROUTER_API_KEY \
+            OMP_OPENROUTER_API_KEY LONGHOUSE_MACHINE_TOKEN
           # These are upstream package/install surfaces, staged below the
           # disposable fixture root. Nothing is written to the runner's user
           # profile or PATH.
@@ -156,7 +178,15 @@ jobs:
           bash "$fixture_root/cursor-install.sh"
           curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
           bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
+          # Keep the disposable home explicit across steps. Codex's supported
+          # non-interactive auth is a provider-native login, not an ambient
+          # CODEX_API_KEY fallback; the proof step performs that login after
+          # the job-scoped secret is restored.
           echo "HOME=$home" >> "$GITHUB_ENV"
+          echo "PATH=$fixture_root/bin:$home/.local/bin:$PATH" >> "$GITHUB_ENV"
+          echo "CODEX_HOME=$home/.codex" >> "$GITHUB_ENV"
+          echo "LONGHOUSE_CLI_BIN=$fixture_root/bin/longhouse" >> "$GITHUB_ENV"
+          echo "LONGHOUSE_ENGINE_BIN=$engine" >> "$GITHUB_ENV"
           echo "CONSOLE_FIXTURE_ENGINE=$engine" >> "$GITHUB_ENV"
           for pair in \
             "LONGHOUSE_CODEX_BIN=$provider_root/node_modules/.bin/codex" \
@@ -180,6 +210,15 @@ jobs:
         id: served_state
         run: |
           set -euo pipefail
+          # Authenticate stock Codex in the disposable profile through its
+          # supported stdin login path. The helper removes both internal and
+          # ambient OpenAI credential variables from the child process.
+          PYTHONPATH="$GITHUB_WORKSPACE/server" python3 -c \
+            'import os,sys; from pathlib import Path; from zerg.qa.codex_auth import login_with_api_key; print(login_with_api_key(Path(sys.argv[1]), api_key=os.environ["CODEX_API_KEY"], environment=os.environ, cwd=Path(sys.argv[2])))' \
+            "$LONGHOUSE_CODEX_BIN" "$CONSOLE_QA_CWD" > "$CONSOLE_FIXTURE_ROOT/codex-auth-receipt.txt"
+          # After login, do not let the Longhouse-only binding become an
+          # accidental provider credential for the Console child process.
+          unset CODEX_API_KEY OPENAI_API_KEY
           mkdir -p artifacts
           result="artifacts/console-served-state.json"
           uv run --project server python scripts/qa/console-served-state-e2e.py \
@@ -207,12 +246,32 @@ jobs:
             echo "No artifact produced." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Retain fixture diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          diagnostics="artifacts/console-fixture"
+          mkdir -p "$diagnostics"
+          fixture_root="${CONSOLE_FIXTURE_ROOT:-}"
+          if [[ -n "$fixture_root" && "$fixture_root" == "$RUNNER_TEMP"/* ]]; then
+            if [[ -f "$fixture_root/codex-auth-receipt.txt" ]]; then
+              cp -- "$fixture_root/codex-auth-receipt.txt" "$diagnostics/codex-auth-receipt.txt"
+            fi
+            antigravity_logs="$fixture_root/home/.longhouse/agent/antigravity-console"
+            if [[ -d "$antigravity_logs" ]]; then
+              mkdir -p "$diagnostics/antigravity-console"
+              cp -R -- "$antigravity_logs/." "$diagnostics/antigravity-console/"
+            fi
+          fi
+
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: console-served-state-${{ github.run_id }}
-          path: artifacts/console-served-state.json
+          path: |
+            artifacts/console-served-state.json
+            artifacts/console-fixture
           if-no-files-found: ignore
 
       - name: Remove owned fixture state

@@ -34,6 +34,7 @@ from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.searchd_supervisor import get_searchd_client
@@ -369,6 +370,8 @@ async def search_storage_v2_rows(
     include_snippets: bool = True,
     include_origin_hidden: bool = False,
     include_test: bool = False,
+    include_titles: bool = False,
+    degraded: list[MachineSearchLaneFailure] | None = None,
 ) -> list[dict[str, object]]:
     """Search the disposable v2 index without opening the retired archive DB.
 
@@ -400,10 +403,27 @@ async def search_storage_v2_rows(
             "include_origin_hidden": include_origin_hidden,
             "include_test": include_test,
         }
-        if timeout_seconds is None:
-            result = await search.call("search.query.v2", params)
-        else:
-            result = await search.call("search.query.v2", params, timeout_seconds=timeout_seconds)
+        title_query = (
+            _session_title_search(
+                owner_id=owner_id,
+                query=query,
+                project=project,
+                provider=provider,
+                environment=environment,
+                days_back=days_back,
+                include_test=include_test,
+                include_automation=include_origin_hidden,
+                limit=min(200, max(1, limit)),
+                timeout_seconds=timeout_seconds,
+                degraded=degraded,
+            )
+            if include_titles
+            else asyncio.sleep(0, result=[])
+        )
+        result, title_rows = await asyncio.gather(
+            search.call("search.query.v2", params, timeout_seconds=timeout_seconds),
+            title_query,
+        )
     except (CatalogRemoteError, CatalogUnavailable) as exc:
         reason = exc.code if isinstance(exc, CatalogRemoteError) else str(exc)
         logger.warning(
@@ -420,7 +440,64 @@ async def search_storage_v2_rows(
                 "reason": reason,
             },
         ) from exc
-    return [row for row in (result.get("results") or []) if isinstance(row, dict)]
+    return title_rows + [row for row in (result.get("results") or []) if isinstance(row, dict)]
+
+
+async def _session_title_search(
+    *,
+    owner_id: int,
+    query: str,
+    project: str | None,
+    provider: str | None,
+    environment: str | None,
+    days_back: int | None,
+    include_test: bool,
+    include_automation: bool,
+    limit: int,
+    timeout_seconds: float | None,
+    degraded: list[MachineSearchLaneFailure] | None,
+) -> list[dict[str, object]]:
+    """Current title facts join session discovery, never conversation recall.
+
+    A title is metadata, not a transcript event: it has no invented source
+    locator. The catalog applies the same ownership and visibility predicates
+    as the timeline before the bounded title page leaves its read snapshot.
+    """
+
+    catalog = get_catalogd_client()
+    try:
+        if catalog is None:
+            raise CatalogUnavailable("The live catalog is unavailable.")
+        params = {
+            "owner_id": owner_id,
+            "query": query,
+            "project": project,
+            "provider": provider,
+            "environment": environment,
+            "include_test": include_test,
+            "include_automation": include_automation,
+            "days_back": days_back,
+            "limit": limit,
+        }
+        result = await catalog.call("session.titles.search.v2", params, timeout_seconds=timeout_seconds)
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        failure = MachineSearchLaneFailure(
+            lane="catalog",
+            status_code=503,
+            code=getattr(exc, "code", None) or "catalog_unavailable",
+            message="Session title search is temporarily unavailable.",
+            reason=str(exc),
+        )
+        if degraded is None:
+            raise HTTPException(status_code=503, detail=failure.model_dump()) from exc
+        if not any(item.lane == "catalog" for item in degraded):
+            degraded.append(failure)
+        return []
+    return [
+        {**row, "content_snippet": row["title"], "rank": 0.0}
+        for row in result.get("matches", [])
+        if isinstance(row, dict) and row.get("session_id") and row.get("title")
+    ]
 
 
 async def search_storage_v2_context(
@@ -611,6 +688,8 @@ async def search_storage_v2_sessions(
         limit=200,
         include_origin_hidden=include_automation,
         include_test=include_test,
+        include_titles=True,
+        degraded=degraded,
     )
     best_rows: dict[str, dict[str, object]] = {}
     for row in rows:
@@ -1115,6 +1194,8 @@ async def _lexical_recall_matches(
     timeout_seconds: float,
     environment: Optional[str] = None,
     include_snippets: bool = False,
+    include_titles: bool = False,
+    degraded: list[MachineSearchLaneFailure] | None = None,
 ) -> list[RecallMatch]:
     """FTS discovery, one match per session, best row wins.
 
@@ -1136,6 +1217,8 @@ async def _lexical_recall_matches(
         include_snippets=include_snippets,
         include_origin_hidden=include_automation,
         include_test=include_test,
+        include_titles=include_titles,
+        degraded=degraded,
     )
     matches: list[RecallMatch] = []
     seen: set[str] = set()
@@ -1662,6 +1745,8 @@ async def search_session_matches(
             timeout_seconds=timeout_seconds,
             environment=environment,
             include_snippets=True,
+            include_titles=True,
+            degraded=degraded,
         )
 
     async def dense() -> list[RecallMatch]:

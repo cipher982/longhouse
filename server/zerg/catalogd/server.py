@@ -656,6 +656,8 @@ class CatalogDaemon:
             return await self._cancel_input_receipt(request)
         if request.method == "session.timeline.list.v2":
             return await self._list_session_timeline(request)
+        if request.method == "session.titles.search.v2":
+            return await self._search_session_titles(request)
         if request.method == "session.read.v2":
             return await self._read_session(request)
         if request.method == "session.shadow_state.read.v2":
@@ -2483,6 +2485,44 @@ class CatalogDaemon:
             self._store.cancel_input_receipt,
             session_id=request.params["session_id"],
             receipt_id=request.params["receipt_id"],
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _search_session_titles(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        params = request.params
+        expected = {"owner_id", "query", "project", "provider", "environment", "include_test", "include_automation", "days_back", "limit"}
+        if set(params) != expected:
+            return self._error(request, "invalid_request", "session.titles.search.v2 has invalid parameters")
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(params["query"], str):
+            return self._error(request, "invalid_request", "query must be a string")
+        for field, maximum in (("project", 255), ("provider", 64), ("environment", 32)):
+            value = params[field]
+            if value is not None and (not isinstance(value, str) or not value or len(value) > maximum):
+                return self._error(request, "invalid_request", f"{field} must be null or contain 1 to {maximum} characters")
+        for field in ("include_test", "include_automation"):
+            if type(params[field]) is not bool:
+                return self._error(request, "invalid_request", f"{field} must be a boolean")
+        if params["days_back"] is not None and (type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 3_650):
+            return self._error(request, "invalid_request", "days_back must be null or an integer from 1 through 3650")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 200:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 200")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.list_session_timeline,
+            project=params["project"],
+            provider=params["provider"],
+            environment=params["environment"],
+            include_test=params["include_test"],
+            hide_autonomous=True,
+            include_automation=params["include_automation"],
+            device_id=None,
+            days_back=params["days_back"],
+            limit=params["limit"],
+            offset=0,
+            owner_id=params["owner_id"],
+            title_query=params["query"],
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

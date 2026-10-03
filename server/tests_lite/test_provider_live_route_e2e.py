@@ -10,6 +10,8 @@ import pytest
 from zerg import provider_live_route_e2e as route_e2e
 from zerg import provider_release_status as prs
 
+from zerg.services.local_health.classifier import _apply_provider_live_route_e2e_status
+
 
 @pytest.fixture(autouse=True)
 def isolate_longhouse_home(monkeypatch, tmp_path: Path) -> None:
@@ -98,6 +100,16 @@ def test_route_e2e_green_artifact_applies(tmp_path: Path) -> None:
     assert proof["source"]["path"] == str(path)
 
 
+def test_route_e2e_without_expected_providers_does_not_apply(tmp_path: Path) -> None:
+    _write_artifact(tmp_path, _route_artifact())
+
+    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path, expected_providers=[])
+
+    assert proof["status"] == "ok"
+    assert proof["coverage_status"] == "none_expected"
+    assert proof["applies"] is False
+
+
 def test_route_e2e_reports_missing_expected_provider_coverage(tmp_path: Path) -> None:
     _write_artifact(tmp_path, _route_artifact())
 
@@ -159,8 +171,29 @@ def test_route_e2e_malformed_failure_count_does_not_crash(tmp_path: Path) -> Non
     assert proof["applies"] is False
 
 
-def test_route_e2e_stale_artifact_does_not_apply(monkeypatch, tmp_path: Path) -> None:
+def test_route_e2e_boolean_failure_count_is_malformed(tmp_path: Path) -> None:
     payload = _route_artifact()
+    payload["failure_count"] = True
+    _write_artifact(tmp_path, payload)
+
+    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path)
+
+    assert proof["status"] == "malformed_results"
+    assert proof["applies"] is False
+
+
+def test_fresh_route_without_expected_coverage_is_advisory(tmp_path: Path) -> None:
+    _write_artifact(tmp_path, _route_artifact())
+    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path, expected_providers=["claude"])
+
+    assert proof["status"] == "ok"
+    assert proof["freshness_status"] == "fresh"
+    assert proof["applies"] is False
+    assert proof["coverage_status"] == "missing"
+
+
+def test_route_e2e_stale_artifact_does_not_apply(monkeypatch, tmp_path: Path) -> None:
+    payload = _route_artifact(verdict="red", status="fail")
     payload["generated_at"] = "2000-01-01T00:00:00Z"
     _write_artifact(tmp_path, payload)
     monkeypatch.setattr(route_e2e, "_max_artifact_age_seconds", lambda: 1)
@@ -170,6 +203,57 @@ def test_route_e2e_stale_artifact_does_not_apply(monkeypatch, tmp_path: Path) ->
     assert proof["status"] == "stale"
     assert proof["applies"] is False
     assert proof["freshness_status"] == "stale"
+
+
+def test_stale_red_route_receipt_is_unknown_not_current_failure() -> None:
+    reasons: list[str] = []
+    actions: list[str] = []
+    state = _apply_provider_live_route_e2e_status(
+        proof={"configured": True, "status": "stale", "freshness_status": "stale"},
+        health_state="healthy",
+        severity="green",
+        headline="Longhouse shipping healthy",
+        reasons=reasons,
+        suggested_actions=actions,
+    )
+
+    assert state == ("degraded", "yellow", "Hosted provider-live route proof is stale or unavailable")
+    assert reasons == ["provider_live_route_e2e_warning"]
+    assert actions == ["Refresh the hosted provider-live route proof before diagnosing a provider failure."]
+
+
+def test_fresh_red_route_receipt_remains_red() -> None:
+    reasons: list[str] = []
+    actions: list[str] = []
+    state = _apply_provider_live_route_e2e_status(
+        proof={"configured": True, "status": "failed", "freshness_status": "fresh"},
+        health_state="healthy",
+        severity="green",
+        headline="Longhouse shipping healthy",
+        reasons=reasons,
+        suggested_actions=actions,
+    )
+
+    assert state == ("broken", "red", "Hosted provider-live route proof failed")
+    assert reasons == ["provider_live_route_e2e_warning"]
+    assert actions == ["Run dogfood refresh to investigate the failed hosted provider-live route proof."]
+
+
+def test_fresh_incomplete_route_receipt_is_advisory() -> None:
+    reasons: list[str] = []
+    actions: list[str] = []
+    state = _apply_provider_live_route_e2e_status(
+        proof={"configured": True, "status": "ok", "freshness_status": "fresh", "applies": False},
+        health_state="healthy",
+        severity="green",
+        headline="Longhouse shipping healthy",
+        reasons=reasons,
+        suggested_actions=actions,
+    )
+
+    assert state == ("degraded", "yellow", "Hosted provider-live route proof is stale or unavailable")
+    assert reasons == ["provider_live_route_e2e_warning"]
+    assert actions == ["Refresh the hosted provider-live route proof before diagnosing a provider failure."]
 
 
 def test_expected_route_providers_from_live_proof_uses_current_applying_sidecars() -> None:

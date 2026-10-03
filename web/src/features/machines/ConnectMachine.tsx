@@ -33,8 +33,11 @@ export default function ConnectMachine() {
         </Button>
       </div>
       <p className="connect-machine-hint">
-        It installs Longhouse and opens this site so you can approve the machine. Your past sessions appear
-        here as they import.
+        It installs Longhouse and opens this site so you can approve the machine. New sessions you start from
+        now on appear here as they import.
+      </p>
+      <p className="connect-machine-hint">
+        Existing history stays on the machine unless you choose it with <code>longhouse machine scope</code>.
       </p>
       <p className="connect-machine-hint">
         No browser on that machine? <Link to="/settings/devices">Create a server command</Link> in Settings →

@@ -477,7 +477,7 @@ export default function SessionsPage() {
         <div className="sessions-hero-empty">
           <EmptyState
             title="Connect your first machine"
-            description="Longhouse imports the sessions a machine already has, then keeps them in sync."
+            description="New sessions you start from now on appear here. To import older history, choose it on the machine with longhouse machine scope."
           />
           <div className="sessions-guided-steps">
             <ConnectMachine />

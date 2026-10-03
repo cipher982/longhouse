@@ -132,7 +132,7 @@ export default function RunnersPage() {
             />
           ) : <EmptyState
             title="No machines connected yet"
-            description="Connect a machine and the Claude Code, Codex and Antigravity sessions it already has import here. A Runner is an optional extra for running shell commands on one from the browser."
+            description="Connect a machine. New sessions you start from now on appear here by default; choose older project history later with longhouse machine scope. A Runner is an optional extra for running shell commands on one from the browser."
             action={
               <Button variant="primary" size="lg" data-testid="runners-add-first-button" onClick={() => setShowAddModal(true)}>
                 Connect a machine

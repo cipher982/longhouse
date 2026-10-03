@@ -92,3 +92,21 @@ earlier, never later, and must precede source activity. Source activity cannot
 exceed the expected stored activity. This also repairs old imports that
 fabricated both creation and activity clocks.
 This corrects timeline recency without rewriting immutable transcript objects.
+
+## Session discovery and recovery
+
+Session listings search current catalog titles alongside transcript text. Title
+updates are searchable without rebuilding the transcript index; title-only hits
+do not invent a transcript event or source locator. Conversation recall remains
+transcript-based. Owner, visibility, provider, project and explicit date filters
+apply to title matches too.
+
+An unknown Helm run may prepare a local Resume command when its machine is
+online and its retained continuation contract is valid. Unknown is not ended:
+native Resume still revalidates the exact provider state and atomically refuses
+a live execution owner before admitting a replacement.
+
+Local health reports Python-package, installed-native and running-engine
+identities separately. Restart attribution compares the installed native engine
+with the running engine, not the Python package. Stale provider-route receipts
+are unknown evidence; fresh failures remain failures.

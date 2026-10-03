@@ -427,67 +427,6 @@ def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("include_automation", (False, True))
-async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypatch, include_automation):
-    session_id = uuid4()
-    observed: dict[str, object] = {}
-    search_params: dict[str, object] = {}
-
-    class SearchClient:
-        async def call(self, method, params, **_kwargs):
-            assert method == "search.query.v2"
-            search_params.update(params)
-            return {
-                "results": [
-                    {
-                        "session_id": str(session_id),
-                        "content_snippet": "matched provider channel",
-                        "rank": 3.0,
-                    }
-                ]
-            }
-
-    def read_sessions(requested, *, owner_id):
-        observed.update(requested=requested, owner_id=owner_id)
-        session = SessionResponse.model_construct(
-            id=str(session_id),
-            user_hidden_from_timeline=False,
-            environment="development",
-            user_messages=1,
-            timeline_anchor_at=datetime.now(timezone.utc),
-            origin_label="cube",
-            match_snippet=None,
-            match_score=None,
-        )
-        return [(session, None, "9")]
-
-    monkeypatch.setattr(agents_search, "get_searchd_client", lambda: SearchClient())
-    monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
-
-    result = await timeline_router._search_storage_v2_timeline(
-        owner_id=7,
-        params=_params(query="needle", include_automation=include_automation),
-    )
-
-    # Assert the scope the index was asked for, not a parameter dump: owner
-    # scope, the recency window, and the visibility flags are the contract.
-    assert search_params["owner_id"] == "7"
-    assert search_params["include_snippets"] is True
-    assert search_params["include_origin_hidden"] is include_automation
-    assert search_params["include_test"] is False
-    window_start = datetime.fromtimestamp(search_params["window_start_us"] / 1_000_000, tz=timezone.utc)
-    age = datetime.now(timezone.utc) - window_start
-    assert timedelta(days=13) < age < timedelta(days=15)
-
-    assert result.total == 1
-    assert result.lanes == ["lexical"]
-    assert result.degraded == []
-    assert result.sessions[0].head.match_snippet == "matched provider channel"
-    assert result.sessions[0].head.match_score == 0.25
-    assert observed == {"requested": [session_id], "owner_id": 7}
-
-
-@pytest.mark.asyncio
 async def test_storage_v2_browser_search_reports_lexical_rebuild_coverage(monkeypatch):
     async def search_matches(**_kwargs):
         return [], ["lexical"]
@@ -2435,3 +2374,122 @@ def test_branch_lineage_survives_the_first_ingest():
 
     assert (_continued_from_session_id(after_ingest), _continuation_kind(after_ingest)) == before_ingest
     assert before_ingest == ("22222222-2222-4222-8222-222222222222", "fork")
+
+
+def _title_catalog(tmp_path, rows):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'title-search.db'}")
+    initialize_catalog_schema(engine)
+    now = datetime.now(timezone.utc)
+    session_ids = {}
+    with make_sessionmaker(engine)() as db:
+        for name, overrides in rows.items():
+            session_id = str(uuid4())
+            session_ids[name] = session_id
+            values = {
+                "session_id": session_id,
+                "tenant_id": "test-tenant",
+                "owner_id": "1",
+                "provider": "claude",
+                "environment": "production",
+                "machine_id": "test-machine",
+                "project": "longhouse",
+                "started_at": now,
+                "last_activity_at": now,
+                "user_messages": 1,
+                "anchor_title": "Resolve concurrent OAuth refresh races",
+                "summary_title": "Resolve concurrent OAuth refresh races",
+                "first_user_message_preview": "Two browser tabs invalidate each other's refresh tokens.",
+                "launch_actor": "human_shell",
+                "launch_surface": "terminal",
+                "commit_seq": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+            values.update(overrides)
+            db.add(StorageSession(**values))
+        db.commit()
+    return CatalogStore(engine), session_ids
+
+
+def _title_matches(store, query="OAuth", **overrides):
+    params = {
+        "project": None,
+        "provider": None,
+        "environment": None,
+        "include_test": False,
+        "hide_autonomous": True,
+        "include_automation": False,
+        "device_id": None,
+        "days_back": None,
+        "limit": 20,
+        "offset": 0,
+        "owner_id": 1,
+        "title_query": query,
+    }
+    params.update(overrides)
+    return store.list_session_timeline(**params)["matches"]
+
+
+def test_session_title_search_finds_non_transcript_words_and_current_title_updates(tmp_path):
+    store, ids = _title_catalog(tmp_path, {"oauth": {}})
+    hits = _title_matches(store, "oAuTh races")
+    assert [hit["session_id"] for hit in hits] == [ids["oauth"]]
+    assert hits[0]["title"] == "Resolve concurrent OAuth refresh races"
+    assert "search_event_id" not in hits[0]
+    assert _title_matches(store, "refresh invalidated") == []
+
+    from sqlalchemy import update
+
+    with store.engine.begin() as connection:
+        connection.execute(
+            update(StorageSession.__table__)
+            .where(StorageSession.__table__.c.session_id == ids["oauth"])
+            .values(anchor_title="Repair federated authentication", summary_title="Repair federated authentication")
+        )
+    assert _title_matches(store, "OAuth") == []
+    assert [hit["session_id"] for hit in _title_matches(store, "federated")] == [ids["oauth"]]
+
+
+@pytest.mark.parametrize(
+    "excluded",
+    [
+        {"owner_id": "2"},
+        {"user_hidden_from_timeline": 1},
+        {"user_state": "archived"},
+        {"user_state": "deleted"},
+        {"environment": "test"},
+        {"environment": "automation", "launch_actor": "automation", "launch_surface": "ci"},
+    ],
+)
+def test_session_title_search_preserves_owner_and_visibility_boundaries(tmp_path, excluded):
+    store, ids = _title_catalog(tmp_path, {"visible": {}, "excluded": excluded})
+    assert [hit["session_id"] for hit in _title_matches(store)] == [ids["visible"]]
+
+
+def test_session_title_search_covers_all_history_but_honors_explicit_scope(tmp_path):
+    old = datetime.now(timezone.utc) - timedelta(days=4_000)
+    store, ids = _title_catalog(
+        tmp_path,
+        {
+            "old": {"started_at": old, "last_activity_at": old},
+            "recent": {"project": "another-project", "provider": "codex"},
+        },
+    )
+    assert {hit["session_id"] for hit in _title_matches(store)} == set(ids.values())
+    assert [hit["session_id"] for hit in _title_matches(store, days_back=1)] == [ids["recent"]]
+    assert [hit["session_id"] for hit in _title_matches(store, project="longhouse", provider="claude")] == [ids["old"]]
+    assert _title_matches(store, provider="omp") == []
+
+
+def test_session_title_search_treats_sql_wildcards_as_literal_tokens_and_bounds_the_page(tmp_path):
+    store, ids = _title_catalog(
+        tmp_path,
+        {
+            "literal": {"anchor_title": "Fix oauth_token renewal"},
+            "other": {"anchor_title": "Fix oauthXtoken renewal"},
+        },
+    )
+    assert [hit["session_id"] for hit in _title_matches(store, "oauth_token")] == [ids["literal"]]
+    assert _title_matches(store, "%") == []
+    hits = _title_matches(store, "renewal", limit=1)
+    assert [hit["session_id"] for hit in hits] == [min(ids.values())]

@@ -1093,7 +1093,13 @@ public struct MenuBarPanelView: View {
             }
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
 
-            Text("Version \(snapshot.installedVersionLabel)")
+            if snapshot.hasResolvedPythonPackageVersion {
+                Text("Python package \(snapshot.pythonPackageVersionLabel)")
+                    .foregroundStyle(Color.secondary)
+            }
+            Text("Native pair \(snapshot.nativePairVersionLabel)")
+                .foregroundStyle(Color.secondary)
+            Text("Running engine \(snapshot.runningEngineVersionLabel)")
                 .foregroundStyle(Color.secondary)
 
             Divider()

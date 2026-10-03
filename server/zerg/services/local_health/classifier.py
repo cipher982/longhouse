@@ -78,10 +78,10 @@ _ACTION_IDS_BY_REASON: dict[str, str] = {
     "managed_session_detached": "inspect_managed_session",
     "managed_unknown_phase": "inspect_managed_session",
     "orphaned_managed_bridge": "stop_managed_bridge",
-    "provider_release_blocked": "inspect_provider",
-    "provider_support_needs_attention": "inspect_provider",
     "provider_cli_version_unknown": "inspect_provider",
     "provider_live_route_e2e_warning": "inspect_provider",
+    "provider_release_blocked": "inspect_provider",
+    "provider_support_needs_attention": "inspect_provider",
     "service_artifact_mismatch": "repair_machine",
     "service_generation_mismatch": "repair_machine",
     "service_machine_name_mismatch": "repair_machine",
@@ -104,6 +104,49 @@ def _suggested_action_ids(reasons: list[str]) -> list[str]:
     if reasons and not action_ids:
         action_ids.append("inspect_local_health")
     return action_ids
+
+
+def _apply_provider_live_route_e2e_status(
+    *,
+    proof: dict[str, Any],
+    health_state: str,
+    severity: str,
+    headline: str,
+    reasons: list[str],
+    suggested_actions: list[str],
+) -> tuple[str, str, str]:
+    """Apply route-proof evidence without turning stale history into failure.
+
+    A fresh red receipt is current provider evidence and remains red. A stale,
+    malformed, or unavailable receipt is unknown evidence: it gets a bounded
+    refresh action and yellow attention, but never a current provider failure.
+    """
+    if not proof.get("configured"):
+        return health_state, severity, headline
+
+    route_status = str(proof.get("status") or "").strip().lower()
+    route_is_fresh = proof.get("freshness_status") == "fresh"
+    route_applies = proof.get("applies") is True
+    if route_status == "failed" and route_is_fresh:
+        if "provider_live_route_e2e_warning" not in reasons:
+            reasons.append("provider_live_route_e2e_warning")
+        _with_action(suggested_actions, "Run dogfood refresh to investigate the failed hosted provider-live route proof.")
+        was_broken = health_state == "broken"
+        health_state = "broken"
+        severity = "red"
+        if not was_broken:
+            headline = "Hosted provider-live route proof failed"
+        return health_state, severity, headline
+
+    if not route_is_fresh or route_status != "ok" or not route_applies:
+        if "provider_live_route_e2e_warning" not in reasons:
+            reasons.append("provider_live_route_e2e_warning")
+        _with_action(suggested_actions, "Refresh the hosted provider-live route proof before diagnosing a provider failure.")
+        if health_state == "healthy":
+            health_state = "degraded"
+            severity = "yellow"
+            headline = "Hosted provider-live route proof is stale or unavailable"
+    return health_state, severity, headline
 
 
 def _nonnegative_int(value: Any) -> int:
@@ -1207,6 +1250,7 @@ def _classify_health(
 __all__ = [
     "_HealthClassificationContext",
     "_repair_action_for_launch_readiness",
+    "_apply_provider_live_route_e2e_status",
     "_suggested_action_ids",
     "_add_transport_health_reasons",
     "_add_service_status_reasons",
