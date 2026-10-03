@@ -81,7 +81,7 @@ jobs:
       packages: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -159,7 +159,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -184,7 +184,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -281,7 +281,7 @@ jobs:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -393,7 +393,7 @@ jobs:
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref_lean || needs.prepare-test-image.outputs.image_ref_lean }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -439,7 +439,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -486,7 +486,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -509,7 +509,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -536,12 +536,12 @@ jobs:
     name: "Engine compatibility (previous release)"
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Ship a transcript with the last released engine against the candidate server
         # `make engine-compat` downloads the newest published release that
@@ -575,7 +575,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -619,7 +619,7 @@ jobs:
             filter: "LonghouseSmoke:only:LonghouseIOSUITests/SessionChatUITests LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptLightScreenshot LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptDarkScreenshot"
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -659,7 +659,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -680,7 +680,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
@@ -711,13 +711,13 @@ jobs:
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Smoke test all models
         run: uv run --with openai python scripts/qa/smoke_models.py --ci
@@ -734,7 +734,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
