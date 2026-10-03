@@ -18,6 +18,10 @@ sign-in and sync diagnostics; factory proof assertions remain machine API
 diagnostics, not a customer Admin page. A failed activity/sync read keeps the
 independently available directory and machine actions visible. Cached facts are
 marked last known when refresh fails; missing import progress is not completion.
+Machine filters apply before lexical and semantic result limits, including retained
+history whose display metadata lacks a device ID. The disposable search index adds
+nullable machine identity and uses retained source identity for existing rows; source
+history and embedding vectors are not rewritten.
 
 For ended managed terminal sessions, **Show resume command** appears beside the
 ended-run notice in the composer. It opens a command dialog; it does not restart
@@ -25,8 +29,8 @@ the agent. Run the copied command in a terminal on the named machine to continue
 the same session and conversation. The action also appears when a run ends while
 the page is open; an unsent draft is preserved when messaging becomes available again.
 
-OMP uses the native `longhouse omp --resume-session` entry point with the original
-session ID and working directory; it resumes the session rather than branching it.
+OMP and Pi use their native `longhouse <provider> --resume-session` entry points
+with the original session ID and working directory, not a branch or remote launch.
 
 On wide screens the turn outline follows the visible transcript and pins a clicked
 turn through its smooth scroll. New live output does not move a reader away from

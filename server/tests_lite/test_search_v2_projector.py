@@ -286,6 +286,7 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
                     "project": "longhouse",
                     "provider": "codex",
                     "environment": "test",
+                    "device_id": "canonical-cinder",
                     "cwd": "/workspace/longhouse",
                     "git_repo": "cipher982/longhouse",
                     "started_at": now.isoformat(),
@@ -337,6 +338,7 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
     publish_call = next(params for method, params in search.calls if method == "search.index.publish.v2")
     assert publish_call["object_count"] == 1
     assert publish_call["event_count"] == 1
+    assert publish_call["device_id"] == "canonical-cinder"
     assert publish_call["hidden_from_default_timeline"] is True
     assert publish_call["test_scope_visible"] is False
     complete_call = next(params for method, params in catalog.calls if method == "projector.state.complete.v2")
@@ -383,6 +385,7 @@ async def test_search_projector_reuses_already_indexed_objects_without_reading_t
                     "owner_id": "42",
                     "provider": "claude",
                     "environment": "local",
+                    "device_id": "canonical-cinder",
                     "started_at": "2026-08-01T00:00:00+00:00",
                     "project": "zerg",
                 },
@@ -428,6 +431,7 @@ async def test_search_projector_reuses_already_indexed_objects_without_reading_t
     publish_call = next(params for method, params in search.calls if method == "search.index.publish.v2")
     assert publish_call["object_count"] == 1
     assert publish_call["event_count"] == 3
+    assert publish_call["device_id"] == "canonical-cinder"
     complete_call = next(params for method, params in catalog.calls if method == "projector.state.complete.v2")
     assert complete_call["completed_revision"] == 7
 

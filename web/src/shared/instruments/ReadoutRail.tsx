@@ -41,7 +41,7 @@ export function ReadoutRail({
   waitingOn,
 }: ReadoutRailProps) {
   // Same cache entry as the nav's machine count, so no second request.
-  const { data: directory, isError: directoryUnavailable } = useMachineDirectory();
+  const { data: directory, dataUpdatedAt, isError: directoryUnavailable } = useMachineDirectory();
 
   const hasContext = contextTokens != null && contextWindow != null && contextWindow > 0;
   const machines = directory?.machines ?? [];
@@ -104,9 +104,9 @@ export function ReadoutRail({
       ) : null}
 
       {machines.length > 0 || directoryUnavailable ? (
-        <div className="instrument-readout" data-testid="readout-machines">
-          <span className="instrument-readout__key">{directoryUnavailable ? "Machine status unavailable" : "Machines online"}</span>
-          <Nixie value={directoryUnavailable ? "—" : `${onlineMachines} / ${machines.length}`} dim />
+        <div className="instrument-readout" data-testid="readout-machines" title={directoryUnavailable && directory ? `Last known at ${new Date(dataUpdatedAt).toLocaleTimeString()}` : undefined}>
+          <span className="instrument-readout__key">{directoryUnavailable ? directory ? "Machines online (last known)" : "Machine status unavailable" : "Machines online"}</span>
+          <Nixie value={directory ? `${onlineMachines} / ${machines.length}` : "—"} dim />
         </div>
       ) : null}
     </div>

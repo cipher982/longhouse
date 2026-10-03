@@ -598,7 +598,17 @@ def _build_search_index(live_path: Path, search_path: Path, object_root: Path) -
     catalog_engine = create_catalog_engine(live_path)
     try:
         with catalog_engine.connect() as catalog_connection:
-            sessions = catalog_connection.execute(select(StorageSession.__table__)).mappings().all()
+            session_table = StorageSession.__table__
+            catalog_table = LiveSessionCatalog.__table__
+            sessions = (
+                catalog_connection.execute(
+                    select(session_table, catalog_table.c.device_id.label("catalog_device_id")).select_from(
+                        session_table.outerjoin(catalog_table, catalog_table.c.session_id == session_table.c.session_id)
+                    )
+                )
+                .mappings()
+                .all()
+            )
             for session in sessions:
                 generation_id = session["current_render_generation"]
                 if not generation_id or session["render_state"] != "ready":
@@ -668,6 +678,11 @@ def _build_search_index(live_path: Path, search_path: Path, object_root: Path) -
                     project=session["project"],
                     provider=str(session["provider"]),
                     environment=str(session["environment"]),
+                    device_id=(
+                        str(session["catalog_device_id"])
+                        if session["catalog_device_id"] is not None
+                        else (str(session["machine_id"]) if session["machine_id"] is not None else None)
+                    ),
                     cwd=session["cwd"],
                     git_repo=session["git_repo"],
                     started_at=session["started_at"].isoformat(),

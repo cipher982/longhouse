@@ -303,12 +303,14 @@ class SearchDaemon:
                 return self._result(request, await self._run(self._store.reuse_indexed_objects, **params))
             if request.method == "search.index.publish.v2":
                 params = _publish_params(request.params)
-                # Lexical publication makes the resident dense snapshot stale,
-                # but the embedding projector is the mutation that can make a
-                # new generation resident. Keep serving the prior truthful
-                # snapshot while that durable embedding pass catches up; a
-                # full corpus reload here would run again for the same turn.
-                published = await self._run_with_dense_refresh(self._store.publish_generation, refresh=False, **params)
+                # A metadata-only publication can change dense scope without
+                # changing vectors. Refresh that session's resident metadata;
+                # ordinary publication waits for its embedding write.
+                published = await self._run_with_dense_refresh(
+                    self._store.publish_generation,
+                    refresh=lambda result: bool(result.get("device_identity_changed")),
+                    **params,
+                )
                 return self._result(request, published)
             if request.method == "search.embedding.write.v2":
                 params = _embedding_write_params(request.params)
@@ -950,10 +952,11 @@ def _publish_params(value: dict) -> dict:
         "hidden_from_default_timeline",
         "origin_kind",
     }
-    optional = {"test_scope_visible", "user_hidden_from_timeline", "user_state", "source_commit_seq", "tombstoned"}
+    optional = {"device_id", "test_scope_visible", "user_hidden_from_timeline", "user_state", "source_commit_seq", "tombstoned"}
     if not required.issubset(value) or not set(value).issubset(required | optional):
         raise ValueError("request fields do not match the searchd contract")
     value = {
+        "device_id": None,
         "test_scope_visible": False,
         "user_hidden_from_timeline": False,
         "user_state": "active",
@@ -984,6 +987,7 @@ def _publish_params(value: dict) -> dict:
         "object_count": value["object_count"],
         "object_set_hash": object_set_hash,
         "event_count": value["event_count"],
+        "device_id": _text(value["device_id"], "device_id", 255, optional=True),
         "project": _text(value["project"], "project", 255, optional=True),
         "provider": provider,
         "environment": _text(value["environment"], "environment", 32),
@@ -1182,10 +1186,10 @@ def _embedding_query_params(value: dict) -> dict:
         "exclude_environments",
         "since_iso",
     }
-    optional = {"include_origin_hidden", "include_test"}
+    optional = {"device_id", "include_origin_hidden", "include_test"}
     if not required.issubset(value) or not set(value).issubset(required | optional):
         raise ValueError("request fields do not match the searchd contract")
-    value = {"include_origin_hidden": False, "include_test": False, **value}
+    value = {"device_id": None, "include_origin_hidden": False, "include_test": False, **value}
     dims = value["dims"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("embedding query dimensions or limit are invalid")
@@ -1207,6 +1211,7 @@ def _embedding_query_params(value: dict) -> dict:
     return {
         "model": _text(value["model"], "model", 255),
         "owner_id": _text(value["owner_id"], "owner_id", 64),
+        "device_id": _text(value["device_id"], "device_id", 255, optional=True),
         "dims": dims,
         "query_embedding": query_embedding,
         "limit": value["limit"],
@@ -1221,11 +1226,12 @@ def _embedding_query_params(value: dict) -> dict:
 
 
 def _search_params(value: dict) -> dict:
-    value = {"include_test": False, **value}
+    value = {"device_id": None, "include_test": False, **value}
     _exact_keys(
         value,
         {
             "owner_id",
+            "device_id",
             "query",
             "project",
             "provider",
@@ -1256,6 +1262,7 @@ def _search_params(value: dict) -> dict:
         raise ValueError("provider is not canonical")
     return {
         "owner_id": _text(value["owner_id"], "owner_id", 64),
+        "device_id": _text(value["device_id"], "device_id", 255, optional=True),
         "query": _text(value["query"], "query", 1_000),
         "project": _text(value["project"], "project", 255, optional=True),
         "provider": provider,

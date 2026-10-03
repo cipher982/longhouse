@@ -287,6 +287,7 @@ class SearchV2Projector:
                 "project": session.get("project"),
                 "provider": session["provider"],
                 "environment": session["environment"],
+                "device_id": session.get("device_id"),
                 "cwd": session.get("cwd"),
                 "git_repo": session.get("git_repo"),
                 "started_at": session["started_at"],

@@ -408,7 +408,7 @@ function NavStatus() {
     };
   }, [documentVisible]);
 
-  const { data: directory, isError: directoryUnavailable, error: directoryError } = useMachineDirectory({
+  const { data: directory, dataUpdatedAt, isError: directoryUnavailable, error: directoryError } = useMachineDirectory({
     enabled: queryEnabled,
     refetchInterval: documentVisible ? 30_000 : false,
   });
@@ -420,12 +420,12 @@ function NavStatus() {
   const label = apiError
     ? "Can't reach Longhouse"
     : directoryUnavailable
-      ? "Machine status unavailable"
+      ? directory ? `${online} of ${machines.length} machines online (last known)` : "Machine status unavailable"
       : `${online} of ${machines.length} ${machines.length === 1 ? "machine" : "machines"} online`;
   const title = apiError
     ? apiError.message
     : directoryUnavailable
-      ? directoryError instanceof Error ? directoryError.message : "The machine directory could not be refreshed."
+      ? `${directoryError instanceof Error ? directoryError.message : "The machine directory could not be refreshed."}${directory ? `\nLast known at ${new Date(dataUpdatedAt).toLocaleTimeString()}.` : ""}`
       : machines.map((machine) => `${machine.machine_name}: ${machine.online ? "online" : "offline"}`).join("\n");
 
   return (

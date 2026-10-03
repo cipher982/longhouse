@@ -466,6 +466,7 @@ async def list_sessions(
                         days_back=days_back,
                         limit=limit + offset,
                         include_test=include_test,
+                        device_id=device_id,
                     )
                 except Exception:
                     raise exc

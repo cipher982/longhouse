@@ -329,6 +329,7 @@ async def semantic_search_timeline_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
+    device_id: Optional[str] = None,
     days_back: Optional[int] = Query(None, ge=1, le=3650, description="Days to look back. Omit to search all indexed history."),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
@@ -351,6 +352,7 @@ async def semantic_search_timeline_sessions(
             provider=provider,
             environment=environment,
             include_test=include_test,
+            device_id=device_id,
             days_back=days_back,
             limit=limit,
         )

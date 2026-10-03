@@ -1655,6 +1655,7 @@ async def test_search_republication_after_count_and_semantic_repair_preserves_in
             "storage.session.render_objects.list.v2",
             {**identity, "snapshot_revision": revision, "after_object_id": None, "limit": 100},
         )
+        assert snapshot["session"]["device_id"] == "cinder"
         object_ids = [item["object_id"] for item in snapshot["objects"]]
         search.reuse_indexed_objects(**identity, desired_revision=revision, object_ids=object_ids)
         return search.publish_generation(

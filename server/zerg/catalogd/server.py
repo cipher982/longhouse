@@ -2491,15 +2491,29 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _search_session_titles(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        params = request.params
-        expected = {"owner_id", "query", "project", "provider", "environment", "include_test", "include_automation", "days_back", "limit"}
+        params = dict(request.params)
+        # Older callers omitted the optional machine scope. Treat that shape
+        # as an unscoped search while accepting the explicit nullable field.
+        params.setdefault("device_id", None)
+        expected = {
+            "owner_id",
+            "query",
+            "project",
+            "provider",
+            "environment",
+            "device_id",
+            "include_test",
+            "include_automation",
+            "days_back",
+            "limit",
+        }
         if set(params) != expected:
             return self._error(request, "invalid_request", "session.titles.search.v2 has invalid parameters")
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
         if not isinstance(params["query"], str):
             return self._error(request, "invalid_request", "query must be a string")
-        for field, maximum in (("project", 255), ("provider", 64), ("environment", 32)):
+        for field, maximum in (("project", 255), ("provider", 64), ("environment", 32), ("device_id", 255)):
             value = params[field]
             if value is not None and (not isinstance(value, str) or not value or len(value) > maximum):
                 return self._error(request, "invalid_request", f"{field} must be null or contain 1 to {maximum} characters")
@@ -2519,7 +2533,7 @@ class CatalogDaemon:
             include_test=params["include_test"],
             hide_autonomous=True,
             include_automation=params["include_automation"],
-            device_id=None,
+            device_id=params["device_id"],
             days_back=params["days_back"],
             limit=params["limit"],
             offset=0,

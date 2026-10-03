@@ -103,6 +103,7 @@ class _DenseEpisodeHit(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
     session_id: str
+    device_id: str | None = None
     episode_ordinal: int = Field(ge=0)
     score: float
     event_index_start: int | None = Field(ge=0)
@@ -372,6 +373,7 @@ async def search_storage_v2_rows(
     include_test: bool = False,
     include_titles: bool = False,
     degraded: list[MachineSearchLaneFailure] | None = None,
+    device_id: str | None = None,
 ) -> list[dict[str, object]]:
     """Search the disposable v2 index without opening the retired archive DB.
 
@@ -396,6 +398,7 @@ async def search_storage_v2_rows(
             "project": project,
             "provider": provider,
             "environment": environment,
+            "device_id": device_id,
             "window_start_us": window_start_us,
             "window_end_us": None,
             "limit": min(200, max(1, limit)),
@@ -413,6 +416,7 @@ async def search_storage_v2_rows(
                 days_back=days_back,
                 include_test=include_test,
                 include_automation=include_origin_hidden,
+                device_id=device_id,
                 limit=min(200, max(1, limit)),
                 timeout_seconds=timeout_seconds,
                 degraded=degraded,
@@ -467,6 +471,7 @@ async def _session_title_search(
     limit: int,
     timeout_seconds: float | None,
     degraded: list[MachineSearchLaneFailure] | None,
+    device_id: str | None = None,
 ) -> list[dict[str, object]]:
     """Current title facts join session discovery, never conversation recall.
 
@@ -485,6 +490,7 @@ async def _session_title_search(
             "project": project,
             "provider": provider,
             "environment": environment,
+            "device_id": device_id,
             "include_test": include_test,
             "include_automation": include_automation,
             "days_back": days_back,
@@ -640,6 +646,7 @@ async def search_storage_v2_episode_embeddings(
     environment: str | None = None,
     include_origin_hidden: bool = False,
     include_test: bool = False,
+    device_id: str | None = None,
 ) -> _DenseQueryPayload:
     """Query the derived dense index through searchd, never its SQLite file.
 
@@ -664,6 +671,7 @@ async def search_storage_v2_episode_embeddings(
             "project": project,
             "provider": provider,
             "environment": environment,
+            "device_id": device_id,
             "exclude_environments": exclude_environments,
             "since_iso": since_iso,
             "include_origin_hidden": include_origin_hidden,
@@ -701,6 +709,7 @@ async def search_storage_v2_sessions(
         include_test=include_test,
         include_titles=True,
         degraded=degraded,
+        device_id=device_id,
     )
     best_rows: dict[str, dict[str, object]] = {}
     for row in rows:
@@ -770,7 +779,7 @@ async def search_storage_v2_sessions(
             continue
         if hide_autonomous and session.user_messages <= 0:
             continue
-        if device_id is not None and session.device_id != device_id:
+        if device_id is not None and session.device_id is not None and session.device_id != device_id:
             continue
         snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "") or None
         rank = abs(float(row.get("rank") or 0.0))
@@ -791,11 +800,9 @@ def _search_row_matches_filters(
     include_automation: bool,
     device_id: str | None,
 ) -> bool:
-    # searchd already applies owner, project, provider, environment, hidden,
-    # archived, test, and tombstone policy. These are the remaining filters
-    # that canonical hydration normally proves. Device identity is not in the
-    # derived row, so fail closed if that filter was requested.
-    if device_id is not None:
+    # Searchd applies scope before top-k. A returned device identity also lets
+    # a derived row retain that scope when canonical hydration is unavailable.
+    if device_id is not None and row.get("device_id") != device_id:
         return False
     if hide_autonomous and int(row.get("user_messages") or 0) <= 0:
         return False
@@ -849,6 +856,7 @@ async def _semantic_recall(
     timeout_seconds: float,
     owner_id: int | None = None,
     environment: Optional[str] = None,
+    device_id: str | None = None,
 ) -> _DenseRecallResult:
     """Dense recall over episode-level embeddings via searchd's episode_embeddings.
 
@@ -917,6 +925,7 @@ async def _semantic_recall(
             since_iso=since_iso,
             include_origin_hidden=include_automation,
             include_test=include_test,
+            device_id=device_id,
         )
         if dense_payload.coverage.stale:
             # Catalog advancement precedes the searchd mutation, so a second
@@ -1035,6 +1044,7 @@ async def _semantic_recall_matches(
     timeout_seconds: float,
     owner_id: int | None = None,
     environment: Optional[str] = None,
+    device_id: str | None = None,
 ) -> list[RecallMatch]:
     result = await _semantic_recall(
         query=query,
@@ -1047,6 +1057,7 @@ async def _semantic_recall_matches(
         timeout_seconds=timeout_seconds,
         owner_id=owner_id,
         environment=environment,
+        device_id=device_id,
     )
     return result.matches
 
@@ -1061,6 +1072,7 @@ async def search_storage_v2_semantic_sessions(
     days_back: int | None,
     limit: int,
     include_test: bool,
+    device_id: str | None = None,
 ) -> list[SessionResponse]:
     """Return full session views ranked by the actual resident dense lane."""
 
@@ -1076,6 +1088,7 @@ async def search_storage_v2_semantic_sessions(
         max_results=candidate_depth,
         timeout_seconds=RECALL_ROUTE_TIMEOUT_SECONDS,
         owner_id=owner_id,
+        device_id=device_id,
     )
     # One unreadable session must not fail the whole listing. These projections
     # each hit catalogd, and catalogd is a single writer that a corpus
@@ -1100,6 +1113,8 @@ async def search_storage_v2_semantic_sessions(
             continue
         session, _provider_alias, _commit_seq = projection
         if session is None or session.user_hidden_from_timeline or session.user_messages <= 0 or session.is_sidechain:
+            continue
+        if device_id is not None and session.device_id is not None and session.device_id != device_id:
             continue
         if environment is not None and session.environment != environment:
             continue
@@ -1809,6 +1824,7 @@ async def semantic_search_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
+    device_id: Optional[str] = None,
     days_back: Optional[int] = Query(None, ge=1, le=3650, description="Days to look back. Omit to search all indexed history."),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
@@ -1840,6 +1856,7 @@ async def semantic_search_sessions(
             days_back=days_back,
             limit=limit,
             include_test=include_test,
+            device_id=device_id,
         )
     # Machine surface: identity and provenance, none of the browser's control
     # or presentation state. Ten full session payloads exceeded the MCP token

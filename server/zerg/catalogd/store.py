@@ -7318,6 +7318,7 @@ class CatalogStore:
                             "title": sanitize_timeline_title(row["title"]),
                             "project": row["project"],
                             "provider": row["provider"],
+                            "device_id": row["device_id"],
                             "environment": row["environment"],
                             "started_at": _encode_datetime(row["started_at"]),
                             "user_messages": int(row["user_messages"] or 0),
@@ -12528,6 +12529,7 @@ class CatalogStore:
         """Page one immutable render-object set at a claimed projector revision."""
 
         session_table = StorageSession.__table__
+        catalog_table = LiveSessionCatalog.__table__
         thread_table = LiveSessionThread.__table__
         generation_table = RenderGeneration.__table__
         object_table = RenderObject.__table__
@@ -12539,6 +12541,9 @@ class CatalogStore:
                 select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
             ).scalar_one_or_none()
             session_row = connection.execute(select(session_table).where(session_table.c.session_id == session_key)).mappings().first()
+            canonical_device_id = connection.execute(
+                select(catalog_table.c.device_id).where(catalog_table.c.session_id == session_key)
+            ).scalar_one_or_none()
             primary_branch_kind = connection.execute(
                 select(thread_table.c.branch_kind).where(
                     thread_table.c.session_id == session_key,
@@ -12587,6 +12592,15 @@ class CatalogStore:
             rows = rows[:limit]
             session_dto = _storage_session_dto(session_row) if session_row is not None and deleted is None else None
             if session_dto is not None:
+                # Timeline scope uses the canonical live identity when it is
+                # present, retaining the immutable storage source identity for
+                # legacy/archive sessions without a live catalog row.
+                storage_device_id = session_row["machine_id"]
+                session_dto["device_id"] = (
+                    str(canonical_device_id)
+                    if canonical_device_id is not None
+                    else (str(storage_device_id) if storage_device_id is not None else None)
+                )
                 # Searchd cannot infer worker lineage from the storage session
                 # row. Carry the canonical primary-thread fact in this frozen
                 # projection snapshot so test scope never promotes a worker.

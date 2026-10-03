@@ -2450,6 +2450,39 @@ def test_session_title_search_finds_non_transcript_words_and_current_title_updat
     assert [hit["session_id"] for hit in _title_matches(store, "federated")] == [ids["oauth"]]
 
 
+def test_session_title_search_scopes_canonical_device_before_limit(tmp_path):
+    store, ids = _title_catalog(
+        tmp_path,
+        {
+            "canonical": {"machine_id": "legacy-machine"},
+            "fallback": {"machine_id": "fallback-machine"},
+        },
+    )
+    now = datetime.now(timezone.utc)
+    with make_sessionmaker(store.engine)() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=ids["canonical"],
+                provider="claude",
+                environment="production",
+                device_id="canonical-machine",
+                started_at=now,
+                last_activity_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    canonical = _title_matches(store, "OAuth", device_id="canonical-machine", limit=1)
+    assert [hit["session_id"] for hit in canonical] == [ids["canonical"]]
+    assert canonical[0]["device_id"] == "canonical-machine"
+    assert _title_matches(store, "OAuth", device_id="legacy-machine") == []
+    fallback = _title_matches(store, "OAuth", device_id="fallback-machine", limit=1)
+    assert [hit["session_id"] for hit in fallback] == [ids["fallback"]]
+    assert fallback[0]["device_id"] == "fallback-machine"
+
+
 @pytest.mark.parametrize(
     "excluded",
     [

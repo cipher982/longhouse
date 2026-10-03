@@ -271,6 +271,8 @@ def _publish_visibility_fixture(
     test_scope_visible: bool,
     order_time_us: int,
     source_commit_seq: int = 0,
+    owner_id: str = "42",
+    device_id: str | None = None,
 ) -> None:
     generation_id = str(uuid4())
     object_id = str(uuid4())
@@ -298,7 +300,7 @@ def _publish_visibility_fixture(
         store.publish_generation(
             session_id=session_id,
             generation_id=generation_id,
-            owner_id="42",
+            owner_id=owner_id,
             desired_revision=1,
             object_count=1,
             object_set_hash=object_set_hash([object_id]),
@@ -309,12 +311,83 @@ def _publish_visibility_fixture(
             cwd="/workspace/longhouse",
             git_repo="cipher982/longhouse",
             started_at=datetime.fromtimestamp(order_time_us / 1_000_000, UTC).isoformat(),
+            device_id=device_id,
             hidden_from_default_timeline=hidden,
             test_scope_visible=test_scope_visible,
             source_commit_seq=source_commit_seq,
         )["published"]
         is True
     )
+
+
+def test_lexical_device_scope_filters_before_top_k_and_keeps_owner_isolation(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    target_id = str(uuid4())
+    other_device_id = str(uuid4())
+    other_owner_id = str(uuid4())
+    try:
+        _publish_visibility_fixture(
+            store,
+            session_id=target_id,
+            environment="local",
+            hidden=False,
+            test_scope_visible=False,
+            order_time_us=1_720_780_400_000_000,
+            device_id="cinder",
+        )
+        _publish_visibility_fixture(
+            store,
+            session_id=other_device_id,
+            environment="local",
+            hidden=False,
+            test_scope_visible=False,
+            order_time_us=1_720_780_400_000_100,
+            device_id="olive",
+        )
+        _publish_visibility_fixture(
+            store,
+            session_id=other_owner_id,
+            environment="local",
+            hidden=False,
+            test_scope_visible=False,
+            order_time_us=1_720_780_400_000_200,
+            owner_id="99",
+            device_id="cinder",
+        )
+
+        params = _search_params("scope needle")
+        params.update(device_id="cinder", limit=1, include_snippets=False)
+        scoped = store.search(**params)
+        assert [row["session_id"] for row in scoped["results"]] == [target_id]
+        assert scoped["results"][0]["device_id"] == "cinder"
+
+        other_owner_params = {**params, "owner_id": "99"}
+        assert [row["session_id"] for row in store.search(**other_owner_params)["results"]] == [other_owner_id]
+    finally:
+        connection.close()
+
+
+def test_old_lexical_rows_fall_back_to_retained_machine_identity(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    try:
+        _publish_visibility_fixture(
+            store,
+            session_id=session_id,
+            environment="local",
+            hidden=False,
+            test_scope_visible=False,
+            order_time_us=1_720_780_400_000_000,
+        )
+        params = _search_params("scope needle")
+        params.update(device_id="cinder", include_snippets=False)
+        result = store.search(**params)
+        assert [row["session_id"] for row in result["results"]] == [session_id]
+        assert result["results"][0]["device_id"] == "cinder"
+    finally:
+        connection.close()
 
 
 def test_include_test_reveals_only_test_environment_hidden_rows_in_search_and_worklog(tmp_path):
@@ -1289,7 +1362,7 @@ def test_archive_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
     try:
         plan = connection.execute(
             f"EXPLAIN QUERY PLAN {_SEARCH_SQL}",
-            ("search db", "42", 0, 0, None, None, None, None, None, None, None, None, None, None, 10),
+            ("search db", "42", None, None, 0, 0, None, None, None, None, None, None, None, None, None, None, 10),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("events_fts" in detail and "VIRTUAL TABLE INDEX 32:" in detail for detail in details)
@@ -1308,6 +1381,8 @@ def test_searchable_search_uses_time_ordered_fts_rowids_for_early_exit(tmp_path)
             (
                 "search db",
                 "42",
+                None,
+                None,
                 0,
                 0,
                 None,

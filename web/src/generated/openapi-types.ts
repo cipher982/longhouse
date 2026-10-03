@@ -13523,6 +13523,7 @@ export interface operations {
                 environment?: string | null;
                 /** @description Include test/e2e sessions */
                 include_test?: boolean;
+                device_id?: string | null;
                 /** @description Days to look back. Omit to search all indexed history. */
                 days_back?: number | null;
                 /** @description Max results */
@@ -14826,6 +14827,7 @@ export interface operations {
                 environment?: string | null;
                 /** @description Include test/e2e sessions */
                 include_test?: boolean;
+                device_id?: string | null;
                 /** @description Days to look back. Omit to search all indexed history. */
                 days_back?: number | null;
                 /** @description Max results */

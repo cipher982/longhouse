@@ -66,6 +66,7 @@ _PUBLISH_AGGREGATES_SQL = """
 _ARCHIVE_SEARCH_SQL = """
     SELECT e.id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
+           COALESCE(s.device_id, e.machine_id) AS device_id,
            e.role, e.tool_name,
             NULL AS content_snippet, NULL AS tool_output_snippet,
            s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
@@ -86,6 +87,7 @@ _ARCHIVE_SEARCH_SQL = """
      AND m.desired_revision = s.indexed_through
      AND m.object_id = e.source_object_id
     WHERE events_fts MATCH ? AND s.owner_id = ?
+      AND (? IS NULL OR COALESCE(s.device_id, e.machine_id) = ?)
       AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0
            OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
       AND COALESCE(s.user_hidden_from_timeline, 0) = 0
@@ -128,6 +130,7 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
          AND m.desired_revision = s.indexed_through
          AND m.object_id = e.source_object_id
         WHERE events_fts MATCH ? AND s.owner_id = ?
+          AND (? IS NULL OR COALESCE(s.device_id, e.machine_id) = ?)
           AND (? = 1 OR COALESCE(s.hidden_from_default_timeline, 0) = 0
                OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
           AND COALESCE(s.user_hidden_from_timeline, 0) = 0
@@ -152,6 +155,7 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
     )
     SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
+           COALESCE(s.device_id, e.machine_id) AS device_id,
            e.role, e.tool_name,
            NULL AS content_snippet, NULL AS tool_output_snippet,
            s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
@@ -163,11 +167,7 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
     ORDER BY t.rank ASC
 """
-# Snippets are hydrated from render objects after the query, so both variants
-# are one statement. The with-snippets one used to join events_fts back on
-# rowid WHERE events_fts MATCH ?, a leftover from snippet() in SQL: it ran the
-# full-text match a second time per search, the largest part of T5's recall
-# latency on the owner corpus.
+
 _ARCHIVE_BOUNDED_SEARCH_SQL = _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
 
 # Ranking the whole match set costs time linear in matches, not in results: a
@@ -188,8 +188,8 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
 # Snippets are built only for the rows actually returned. Building them for
 # every candidate made cost scale with stored text rather than with results —
 # real events carry multi-KB tool output, so snippetting a full candidate window
-# cost seconds and still blew the deadline on hosted data even after the ranking
-# fix. Snippetting the final page instead keeps that cost flat.
+# cost seconds and still blew the deadline on hosted data even after the
+# ranking fix. Snippetting the final page instead keeps that cost flat.
 _SEARCHABLE_SEARCH_SQL = """
     WITH candidates AS (
         -- Eligibility filters sit inside the capped walk: filtering after the
@@ -199,8 +199,11 @@ _SEARCHABLE_SEARCH_SQL = """
         SELECT e.source_event_id AS search_event_id, bm25(searchable_fts) AS rank
         FROM searchable_fts
         JOIN searchable_events e ON e.fast_key = searchable_fts.rowid
+        LEFT JOIN events source ON source.id = e.source_event_id
+        JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
         WHERE searchable_fts MATCH ?
           AND e.owner_id = ?
+          AND (? IS NULL OR COALESCE(s.device_id, source.machine_id) = ?)
           AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0
                OR (? = 1 AND COALESCE(e.test_scope_visible, 0) = 1))
           AND COALESCE(e.user_hidden_from_timeline, 0) = 0
@@ -226,6 +229,7 @@ _SEARCHABLE_SEARCH_SQL = """
     )
     SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
+           COALESCE(s.device_id, source.machine_id) AS device_id,
            e.role, e.tool_name,
             NULL AS content_snippet, NULL AS tool_output_snippet,
            s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
@@ -234,6 +238,7 @@ _SEARCHABLE_SEARCH_SQL = """
            t.rank AS rank, t.candidate_count AS candidate_count
      FROM top t
      JOIN searchable_events e ON e.source_event_id = t.search_event_id
+     LEFT JOIN events source ON source.id = e.source_event_id
      JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
     ORDER BY t.rank ASC
 """
@@ -242,10 +247,10 @@ _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL = _SEARCHABLE_SEARCH_SQL
 
 # Most recent matching events considered before ranking. The old 50K window
 # looked cheap on a synthetic 5M-row corpus, but took 4.8s for the retained
-# dogfood query after a cold restart once search.db reached 19 GiB. A 10K walk
-# returned the same requested page in 0.3s warm on that corpus and keeps broad
-# terms honestly marked ``recent_bounded``; rare terms remain exact because the
-# walk still exhausts their whole match set.
+# dogfood query after a cold restart once search.db reached 19 GiB. A 10K
+# walk returned the same requested page in 0.3s warm on that corpus and keeps
+# broad terms honestly marked ``recent_bounded``; rare terms remain exact
+# because the walk still exhausts their whole match set.
 #
 # The fast lane has its own contentless FTS postings. It therefore never walks
 # archive postings just to reject them after a session-ordered rebuild.
@@ -603,6 +608,19 @@ def _add_missing_visibility_columns(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE session_index ADD COLUMN origin_kind TEXT")
 
 
+def _add_missing_device_columns(connection: sqlite3.Connection) -> None:
+    """Add nullable canonical device identity without discarding old rows.
+
+    Older derived rows retain their storage machine identity in ``events``.
+    Queries fall back to that retained fact when ``device_id`` is NULL, so a
+    store upgrade scopes immediately rather than waiting for reprojection.
+    """
+
+    columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(session_index)").fetchall()}
+    if "device_id" not in columns:
+        connection.execute("ALTER TABLE session_index ADD COLUMN device_id TEXT")
+
+
 def _discard_derived_store(path: Path) -> None:
     for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
         candidate.unlink(missing_ok=True)
@@ -748,7 +766,8 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             cwd TEXT,
             git_repo TEXT,
             started_at TEXT NOT NULL,
-            published_at TEXT NOT NULL
+            published_at TEXT NOT NULL,
+            device_id TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_session_index_owner_revision
             ON session_index(owner_id, indexed_through, session_id);
@@ -792,6 +811,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
     )
     _add_missing_episode_columns(connection)
     _add_missing_visibility_columns(connection)
+    _add_missing_device_columns(connection)
     now = datetime.now(UTC).isoformat()
     existing = connection.execute("SELECT schema_version, schema_generation, store_id FROM search_meta WHERE singleton = 1").fetchone()
     if existing is None:
@@ -1593,6 +1613,7 @@ class SearchStore:
         cwd: str | None,
         git_repo: str | None,
         started_at: str,
+        device_id: str | None = None,
         hidden_from_default_timeline: bool = False,
         test_scope_visible: bool = False,
         origin_kind: str | None = None,
@@ -1602,6 +1623,11 @@ class SearchStore:
         tombstoned: bool = False,
     ) -> dict[str, object]:
         now = datetime.now(UTC).isoformat()
+        previous = self.connection.execute(
+            "SELECT device_id FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        device_identity_changed = previous is not None and previous["device_id"] != device_id
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             objects = self.connection.execute(
@@ -1637,8 +1663,8 @@ class SearchStore:
                     user_messages, assistant_messages, tool_calls, is_sidechain,
                     hidden_from_default_timeline, test_scope_visible, origin_kind,
                     user_hidden_from_timeline, user_state, source_commit_seq, tombstoned,
-                    project, provider, environment, cwd, git_repo, started_at, published_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    project, provider, environment, cwd, git_repo, started_at, published_at, device_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     generation_id=excluded.generation_id,
                     owner_id=excluded.owner_id,
@@ -1682,7 +1708,8 @@ class SearchStore:
                     cwd=excluded.cwd,
                     git_repo=excluded.git_repo,
                     started_at=excluded.started_at,
-                    published_at=excluded.published_at
+                    published_at=excluded.published_at,
+                    device_id=excluded.device_id
                 """,
                 (
                     session_id,
@@ -1711,6 +1738,7 @@ class SearchStore:
                     git_repo,
                     started_at,
                     now,
+                    device_id,
                 ),
             )
             self.connection.execute(
@@ -1773,6 +1801,7 @@ class SearchStore:
             "published": True,
             "projection_lag": False,
             "indexed_through": str(desired_revision),
+            "device_identity_changed": device_identity_changed,
             "maintenance": maintenance,
         }
 
@@ -1883,6 +1912,7 @@ class SearchStore:
         self,
         *,
         owner_id: str,
+        device_id: str | None = None,
         query: str,
         project: str | None,
         provider: str | None,
@@ -1903,6 +1933,8 @@ class SearchStore:
         filter_params = (
             fts_query,
             owner_id,
+            device_id,
+            device_id,
             include_hidden_flag,
             include_test_flag,
             project,

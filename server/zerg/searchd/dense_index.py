@@ -21,10 +21,10 @@ consistent matrix rather than one being mutated underneath it. Torn reads of a
 single row would be silent and produce a plausible wrong score, which is the
 failure mode this whole subsystem keeps having.
 
-Filters are applied **before** top-k, not after. The retired SQL query
-scopes by owner, project, provider, environment and recency through
-`session_index` (``store.py:919-939``); selecting a global top-k and filtering it
-afterwards returns a different, silently smaller answer.
+Filters are applied **before** top-k, not after. The retired SQL query scopes
+by owner, project, provider, environment, device identity and recency through
+`session_index` (``store.py:919-939``); selecting a global top-k and filtering
+it afterwards returns a different, silently smaller answer.
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ _TAIL_DEFAULTS = {
     "event_index_starts": -1,
     "event_index_ends": -1,
     "owner_ids": None,
+    "device_ids": None,
     "projects": "",
     "providers": "",
     "environments": "",
@@ -82,6 +83,7 @@ class _Snapshot:
     event_index_starts: np.ndarray  # (N,) int64, -1 when absent
     event_index_ends: np.ndarray  # (N,) int64, -1 when absent
     owner_ids: np.ndarray  # (N,) object
+    device_ids: np.ndarray  # (N,) object; canonical device, or storage fallback
     projects: np.ndarray  # (N,) object
     providers: np.ndarray  # (N,) object
     environments: np.ndarray  # (N,) object
@@ -160,6 +162,7 @@ _EMPTY = _Snapshot(
             ("event_index_starts", "int64"),
             ("event_index_ends", "int64"),
             ("owner_ids", object),
+            ("device_ids", object),
             ("projects", object),
             ("providers", object),
             ("environments", object),
@@ -294,7 +297,13 @@ class ResidentEpisodeIndex:
             """
             SELECT e.session_id, e.episode_ordinal, e.generation_id, e.revision, e.embedding,
                    e.start_order_time_us, e.event_index_start, e.event_index_end,
-                   e.owner_id, e.content_hash, s.project, s.provider, s.environment, s.started_at,
+                   e.owner_id,
+                   COALESCE(s.device_id, (
+                       SELECT e2.machine_id FROM events e2
+                       WHERE e2.session_id = s.session_id AND e2.generation_id = s.generation_id
+                       ORDER BY e2.order_time_us ASC, e2.event_key ASC LIMIT 1
+                   )) AS device_id,
+                   e.content_hash, s.project, s.provider, s.environment, s.started_at,
                    s.hidden_from_default_timeline, s.test_scope_visible, s.user_hidden_from_timeline,
                    s.user_state, s.tombstoned
             FROM episode_embeddings e
@@ -338,7 +347,13 @@ class ResidentEpisodeIndex:
             """
             SELECT e.session_id, e.episode_ordinal, e.generation_id, e.revision, e.embedding,
                    e.start_order_time_us, e.event_index_start, e.event_index_end,
-                   e.owner_id, e.content_hash, s.project, s.provider, s.environment, s.started_at,
+                   e.owner_id,
+                   COALESCE(s.device_id, (
+                       SELECT e2.machine_id FROM events e2
+                       WHERE e2.session_id = s.session_id AND e2.generation_id = s.generation_id
+                       ORDER BY e2.order_time_us ASC, e2.event_key ASC LIMIT 1
+                   )) AS device_id,
+                   e.content_hash, s.project, s.provider, s.environment, s.started_at,
                    s.hidden_from_default_timeline, s.test_scope_visible, s.user_hidden_from_timeline,
                    s.user_state, s.tombstoned
             FROM episode_embeddings e JOIN session_index s
@@ -454,6 +469,7 @@ class ResidentEpisodeIndex:
             ("event_index_starts", "event_index_start", -1),
             ("event_index_ends", "event_index_end", -1),
             ("owner_ids", "owner_id", None),
+            ("device_ids", "device_id", None),
             ("projects", "project", ""),
             ("providers", "provider", ""),
             ("environments", "environment", ""),
@@ -563,6 +579,7 @@ class ResidentEpisodeIndex:
             event_index_starts=column("event_index_start", "int64", -1),
             event_index_ends=column("event_index_end", "int64", -1),
             owner_ids=column("owner_id", object),
+            device_ids=column("device_id", object),
             projects=column("project", object, ""),
             providers=column("provider", object, ""),
             environments=column("environment", object, ""),
@@ -582,6 +599,7 @@ class ResidentEpisodeIndex:
         query: np.ndarray,
         *,
         owner_id: str,
+        device_id: str | None = None,
         limit: int,
         project: str | None = None,
         provider: str | None = None,
@@ -602,6 +620,8 @@ class ResidentEpisodeIndex:
                 return []
 
             keep = snapshot.active & (snapshot.owner_ids == owner_id)
+            if device_id is not None:
+                keep &= snapshot.device_ids == device_id
             if not include_origin_hidden:
                 keep &= ~snapshot.hidden_from_default_timeline | (include_test & snapshot.test_scope_visible)
             keep &= ~snapshot.user_hidden_from_timeline
@@ -667,6 +687,7 @@ class ResidentEpisodeIndex:
                         "event_index_end": int(snapshot.event_index_ends[index]),
                         "generation_id": str(snapshot.generation_ids[index]),
                         "start_order_time_us": None if start < 0 else start,
+                        "device_id": str(snapshot.device_ids[index]) if snapshot.device_ids[index] is not None else None,
                         "project": str(snapshot.projects[index]) or None,
                         "provider": str(snapshot.providers[index]) or None,
                         "started_at": str(snapshot.started_ats[index]) or None,

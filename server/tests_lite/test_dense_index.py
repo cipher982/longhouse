@@ -683,3 +683,75 @@ def test_concurrent_queries_only_observe_complete_before_or_after_slots(tmp_path
     # paired with a reused slot's vector.
     assert observed
     assert set(observed) <= {("old", 1.0), ("new", 0.0)}
+
+
+def test_device_scope_is_before_top_k_and_metadata_refresh_preserves_vectors(tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [
+            ("other-device", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01"),
+            ("target-device", 0, [0.8, 0.6, 0, 0], "42", "zerg", "claude", "local", "2026-07-01"),
+            ("same-device-other-owner", 0, [1, 0, 0, 0], "99", "zerg", "claude", "local", "2026-07-01"),
+        ],
+    )
+    try:
+        connection.execute(
+            """
+            UPDATE session_index
+            SET device_id = CASE session_id
+                WHEN 'other-device' THEN 'spruce'
+                WHEN 'target-device' THEN 'cinder'
+                WHEN 'same-device-other-owner' THEN 'cinder'
+            END
+            """
+        )
+        connection.commit()
+        index.load(connection)
+
+        hits = index.search(_unit([1, 0, 0, 0]), owner_id="42", device_id="cinder", limit=1)
+        assert [hit["session_id"] for hit in hits] == ["target-device"]
+        assert [hit["session_id"] for hit in index.search(_unit([1, 0, 0, 0]), owner_id="99", device_id="cinder", limit=1)] == [
+            "same-device-other-owner"
+        ]
+
+        before = connection.execute("SELECT embedding FROM episode_embeddings WHERE session_id = 'target-device'").fetchone()["embedding"]
+        connection.execute("UPDATE session_index SET device_id = 'olive' WHERE session_id = 'target-device'")
+        connection.commit()
+        index.refresh_session(connection, "target-device")
+        assert index.search(_unit([1, 0, 0, 0]), owner_id="42", device_id="cinder", limit=1) == []
+        assert [hit["session_id"] for hit in index.search(_unit([1, 0, 0, 0]), owner_id="42", device_id="olive", limit=1)] == [
+            "target-device"
+        ]
+        after = connection.execute("SELECT embedding FROM episode_embeddings WHERE session_id = 'target-device'").fetchone()["embedding"]
+        assert after == before
+    finally:
+        connection.close()
+
+
+def test_old_dense_rows_fall_back_to_retained_storage_machine(tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [("legacy", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
+    )
+    try:
+        connection.execute(
+            """
+            INSERT INTO events(
+                event_key, session_id, generation_id, source_object_id, record_ordinal, event_id,
+                order_time_us, opaque_source_id, source_epoch, source_position, event_subordinal,
+                role, tool_name, tool_call_id, thread_id, branch_kind, provider, interaction_kind,
+                title_eligible, machine_id, project, environment, cwd, git_repo
+            ) VALUES (
+                'legacy-event-key', 'legacy', 'g-legacy', 'legacy-object', 0, 'legacy-event',
+                1, 'legacy-source', 'legacy-epoch', '00000000000000000001', 0,
+                'user', NULL, NULL, NULL, 'root', 'codex', 'durable_user_message',
+                1, 'cinder', 'zerg', 'local', NULL, NULL
+            )
+            """
+        )
+        connection.commit()
+        index.load(connection)
+        hits = index.search(_unit([1, 0, 0, 0]), owner_id="42", device_id="cinder", limit=1)
+        assert [hit["session_id"] for hit in hits] == ["legacy"]
+    finally:
+        connection.close()
