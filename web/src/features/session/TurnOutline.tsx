@@ -5,9 +5,21 @@
  * with this file in one commit). Turns derive from the loaded thread that's
  * already fetched — no new requests.
  */
+import { useEffect, useRef } from "react";
 import type { TimelineItem } from "@/shared/session/model";
 import { formatTime } from "@/shared/session/model";
 import type { AgentEventId } from "@/shared/api/agents";
+
+/** DOM id prefix of a transcript row: `event-<eventId>`. */
+export const TURN_ROW_ID_PREFIX = "event-";
+
+export function turnRowId(eventId: AgentEventId | string): string {
+  return `${TURN_ROW_ID_PREFIX}${eventId}`;
+}
+
+export function turnKeyForEventId(eventId: AgentEventId | string): string {
+  return `turn-${eventId}`;
+}
 
 /** How much of the user's ask shows on one outline row. */
 const ASK_PREVIEW_LENGTH = 48;
@@ -33,7 +45,7 @@ export function deriveTurnOutline(items: TimelineItem[]): TurnOutlineTurn[] {
     if (item.kind !== "message" || item.event.role !== "user") continue;
     const raw = (item.event.content_text ?? "").replace(/\s+/g, " ").trim();
     turns.push({
-      key: `turn-${item.event.id}`,
+      key: turnKeyForEventId(item.event.id),
       eventId: item.event.id,
       timestamp: item.event.timestamp,
       askPreview: raw.slice(0, ASK_PREVIEW_LENGTH),
@@ -60,10 +72,34 @@ export function TurnOutline({
   currentTurnKey = null,
   onSelectTurn,
 }: TurnOutlineProps) {
+  const navRef = useRef<HTMLElement | null>(null);
+
+  // Keep the current row inside the outline's own scroll viewport as the
+  // transcript scrolls (long sessions have more turns than the column fits).
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const reveal = () => {
+      const row = nav.querySelector<HTMLElement>('[aria-current="true"]');
+      if (!row) return;
+      const navBox = nav.getBoundingClientRect();
+      const rowBox = row.getBoundingClientRect();
+      if (rowBox.top < navBox.top) nav.scrollTop -= navBox.top - rowBox.top;
+      else if (rowBox.bottom > navBox.bottom) nav.scrollTop += rowBox.bottom - navBox.bottom;
+    };
+    reveal();
+    // The column is hidden below 1600px and resizes with the window: reveal
+    // again when it gains a height.
+    if (typeof ResizeObserver === "undefined") return;
+    const resizes = new ResizeObserver(reveal);
+    resizes.observe(nav);
+    return () => resizes.disconnect();
+  }, [currentTurnKey, turns.length]);
+
   if (turns.length === 0) return null;
 
   return (
-    <nav className="session-turn-outline" data-testid="session-turn-outline" aria-label="Turns">
+    <nav ref={navRef} className="session-turn-outline" data-testid="session-turn-outline" aria-label="Turns">
       <ol className="session-turn-outline__list">
         {turns.map((turn) => {
           const isRunning = turn.key === runningTurnKey;

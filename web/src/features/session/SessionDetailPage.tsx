@@ -33,7 +33,8 @@ import {
   ResumeSessionModal,
 } from "./ResumeSessionModal";
 import { BranchSessionCard } from "./BranchSessionCard";
-import { deriveTurnOutline, TurnOutline, type TurnOutlineTurn } from "./TurnOutline";
+import { deriveTurnOutline, TurnOutline, turnRowId, type TurnOutlineTurn } from "./TurnOutline";
+import { useActiveTurn } from "./useActiveTurn";
 import { SessionStateBadge } from "./SessionStateBadge";
 import {
   buildSessionMetaSentence,
@@ -161,13 +162,24 @@ function SessionDetailWorkspaceRoute({
   // Item 7: the turn outline column. Turns derive from the same loaded
   // thread as everything else on this page — no new fetch.
   const turns = useMemo(() => deriveTurnOutline(items), [items]);
+  // The outline follows the reader: the turn in view (scroll-spy over the
+  // transcript list), or the one they just clicked until they scroll again.
+  const [timelineList, setTimelineList] = useState<HTMLDivElement | null>(null);
+  const attachTimelineList = useCallback(
+    (node: HTMLDivElement | null) => {
+      setTimelineList(node);
+      registerTimelineList(node);
+    },
+    [registerTimelineList],
+  );
+  const { activeKey: activeTurnKey, pin: pinTurn } = useActiveTurn(timelineList);
   const handleSelectTurn = useCallback((turn: TurnOutlineTurn) => {
     selectKey(`message:${turn.eventId}`);
-    document.getElementById(`event-${turn.eventId}`)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  }, [selectKey]);
+    const row = document.getElementById(turnRowId(turn.eventId));
+    if (!row) return;
+    pinTurn(turn.eventId);
+    row.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectKey, pinTurn]);
 
   // Read-on-open acknowledgement for Console results; shared viewers never
   // acknowledge (console-unread-acknowledgement spec).
@@ -440,7 +452,7 @@ function SessionDetailWorkspaceRoute({
   const turnLive = headerState.tone === "live";
   const lastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
   const runningTurnKey = turnLive ? (lastTurn?.key ?? null) : null;
-  const currentTurnKey = runningTurnKey ?? lastTurn?.key ?? null;
+  const currentTurnKey = activeTurnKey;
   const turnElapsedSeconds =
     turnLive && turnStartMs != null
       ? Math.max(0, Math.floor((nowMs - turnStartMs) / 1_000))
@@ -728,7 +740,7 @@ function SessionDetailWorkspaceRoute({
               waitingOn={waitingOn}
             />
           }
-          listRef={registerTimelineList}
+          listRef={attachTimelineList}
           dock={
             <div
               className="session-control-dock session-control-dock--bar"
