@@ -1896,7 +1896,8 @@ async def test_failed_incremental_apply_stays_stale_until_one_full_reload_comple
 
 
 @pytest.mark.asyncio
-async def test_dense_refresh_skips_partial_embedding_batches(tmp_path):
+@pytest.mark.parametrize("refresh", [False, lambda result: bool(result.get("device_identity_changed"))])
+async def test_dense_refresh_skips_partial_embedding_batches(tmp_path, refresh):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
     socket_parent.mkdir(mode=0o700)
     daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
@@ -1912,7 +1913,7 @@ async def test_dense_refresh_skips_partial_embedding_batches(tmp_path):
 
     daemon._dense_index.load = counted_load
     try:
-        assert await daemon._run_with_dense_refresh(lambda: {"committed": True}, refresh=False) == {"committed": True}
+        assert await daemon._run_with_dense_refresh(lambda: {"committed": True}, refresh=refresh) == {"committed": True}
         assert loads == 0
         assert daemon._dense_index.coverage.integrity_ready is True
         assert daemon._dense_index.coverage.stale is True

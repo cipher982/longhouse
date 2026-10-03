@@ -546,8 +546,7 @@ class SearchDaemon:
 
         assert self._executor is not None
         result = await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
-        conditional_refresh = callable(refresh)
-        should_refresh = refresh(result) if conditional_refresh else refresh
+        should_refresh = refresh(result) if callable(refresh) else refresh
         if self._closing or self._dense_index is None or self._connection is None:
             return result
         store = self._store
@@ -555,9 +554,9 @@ class SearchDaemon:
         if store is None or executor is None:
             return result
         dense_index = self._dense_index
-        if conditional_refresh and not should_refresh:
-            # A mutation can be a durable no-op. Do not even mark the resident
-            # snapshot stale when the indexed corpus did not change.
+        if callable(refresh) and not should_refresh and isinstance(result, dict) and result.get("changed") is False:
+            # Only explicit durable no-op evidence can preserve fresh coverage.
+            # A publication awaiting embeddings still invalidates the snapshot.
             return result
         dense_index.invalidate(allow_stale_reads=not self._dense_known_unservable)
         if not should_refresh:
