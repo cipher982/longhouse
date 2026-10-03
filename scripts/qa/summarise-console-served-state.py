@@ -58,8 +58,7 @@ def main() -> int:
     for name, report in sorted(providers.items()):
         verdict = report.get("verdict") if isinstance(report, dict) else "missing"
         print(f"| {_markdown_cell(name)} | {_markdown_cell(verdict)} | {_failure_detail(report)} |")
-
-
+    return 0
 
 
 if __name__ == "__main__":
