@@ -775,6 +775,16 @@ async function installSceneMocks(
       return;
     }
 
+    if (scene === FIRST_RUN_SCENE && pathname === "/api/timeline/machines") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ machines: [] }) });
+      return;
+    }
+
+    if (scene === FIRST_RUN_SCENE && pathname === "/api/runners/status") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: 0, online: 0, offline: 0, runners: [] }) });
+      return;
+    }
+
     if (pathname === "/api/timeline/sessions") {
       const sessions = LANDING_TIMELINE_SCENES.includes(scene)
         ? buildLandingTimelineFixture(requestUrl.searchParams.get("query") ?? "").sessions

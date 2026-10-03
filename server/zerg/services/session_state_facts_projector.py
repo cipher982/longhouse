@@ -496,7 +496,9 @@ def _resume_action_availability(
         return SessionActionAvailability(state="unavailable", reason="not_helm")
     if "resume" not in supported_operations:
         return SessionActionAvailability(state="unavailable", reason="unsupported")
-    if run is not None and run.lifecycle != "ended":
+    # Unknown evidence permits command preparation, not a second owner.
+    # Native Resume admission still revalidates the contract and ownership.
+    if run is not None and run.lifecycle in ("starting", "running"):
         return SessionActionAvailability(state="unavailable", reason="run_active")
     if host.state in {"offline", "stale"}:
         return SessionActionAvailability(state="unavailable", reason="machine_offline")

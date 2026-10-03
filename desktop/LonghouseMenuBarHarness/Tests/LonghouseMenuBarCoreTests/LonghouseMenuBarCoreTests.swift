@@ -1267,8 +1267,10 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(snapshot.parsedSeverity == .green)
         #expect(snapshot.displaySeverity == .green)
-        #expect(snapshot.hasResolvedInstalledVersion == true)
-        #expect(snapshot.installedVersionLabel == "0.1.15-dev+bbbbbbbb.dirty")
+        #expect(snapshot.hasResolvedPythonPackageVersion == true)
+        #expect(snapshot.pythonPackageVersionLabel == "0.2.0-dev+cccccccc.dirty")
+        #expect(snapshot.nativePairVersionLabel == "0.1.64-dev+bbbbbbbb.dirty / 0.1.64-dev+bbbbbbbb.dirty")
+        #expect(snapshot.runningEngineVersionLabel == "0.1.64-dev+aaaaaaaa.dirty")
         #expect(snapshot.engineRestartPending == true)
         #expect(snapshot.restartPendingChipLabel == "RESTART PENDING")
         #expect(snapshot.needsMenuBarAttention == false)

@@ -19,7 +19,7 @@
     "fresh": true,
     "age_seconds": 3,
     "payload": {
-      "version": "0.1.15-dev+aaaaaaaa.dirty",
+      "version": "0.1.64-dev+aaaaaaaa.dirty",
       "daemon_pid": 24653,
       "last_ship_at": "2026-04-24T00:44:58Z",
       "spool_pending_count": 0,
@@ -30,7 +30,7 @@
       "recent_dead_letters": [],
       "last_updated": "2026-04-24T00:44:59Z",
       "build": {
-        "version": "0.1.15",
+        "version": "0.1.64",
         "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "commit_short": "aaaaaaaa",
         "dirty": true,
@@ -39,7 +39,7 @@
       },
       "binary_path": "/Users/example/git/zerg/longhouse/engine/target/release/longhouse-engine",
       "binary_mtime": "2026-04-24T00:44:00Z",
-      "daemon_started_at": "2026-04-24T00:30:05Z"
+      "daemon_started_at": "2026-04-24T00:44:05Z"
     },
     "error": null
   },
@@ -97,16 +97,36 @@
     }
   },
   "build": {
-    "installed": {
-      "version": "0.1.15",
-      "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "commit_short": "bbbbbbbb",
+    "python_package": {
+      "version": "0.2.0",
+      "commit": "cccccccccccccccccccccccccccccccccccccccc",
+      "commit_short": "cccccccc",
       "dirty": true,
       "built_at": "2026-04-24T00:44:00Z",
       "channel": "dev"
     },
-    "engine": {
-      "version": "0.1.15",
+    "installed_native": {
+      "path": "/Users/example/.local/bin/longhouse",
+      "engine_path": "/Users/example/.local/bin/longhouse-engine",
+      "facade": {
+        "version": "0.1.64",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "commit_short": "bbbbbbbb",
+        "dirty": true,
+        "built_at": "2026-04-24T00:44:00Z",
+        "channel": "dev"
+      },
+      "engine": {
+        "version": "0.1.64",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "commit_short": "bbbbbbbb",
+        "dirty": true,
+        "built_at": "2026-04-24T00:44:00Z",
+        "channel": "dev"
+      }
+    },
+    "running_engine": {
+      "version": "0.1.64",
       "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "commit_short": "aaaaaaaa",
       "dirty": true,
@@ -115,8 +135,14 @@
     },
     "engine_restart_pending": true,
     "restart_pending_reasons": {
-      "commit_mismatch": true,
+      "native_engine_commit_mismatch": true,
       "binary_newer_than_daemon": false
-    }
+    },
+    "components": [
+      {"name": "python_package", "commit_short": "cccccccc"},
+      {"name": "native_facade", "commit_short": "bbbbbbbb"},
+      {"name": "installed_native_engine", "commit_short": "bbbbbbbb"},
+      {"name": "running_engine", "commit_short": "aaaaaaaa"}
+    ]
   }
 }

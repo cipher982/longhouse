@@ -149,6 +149,82 @@ def _control(*, observed_at: datetime, state: str = "attached", grants: list[str
     )
 
 
+def _resume_continuation(
+    *,
+    observed_at: datetime = NOW,
+    contract_state: str = "valid",
+    unavailable_reason: str | None = None,
+) -> dict:
+    return {
+        "authority_class": "retained_launch_contract",
+        "provider": "codex",
+        "session_id": "session-1",
+        "provider_session_id": "provider-thread-1",
+        "cwd": "/repo",
+        "contract_state": contract_state,
+        "unavailable_reason": unavailable_reason,
+        "source": "managed_resume_contract_scan",
+        "raw_locator": "/state/contracts/codex/session-1.json",
+        "observed_at": observed_at.isoformat(),
+        "valid_until": (observed_at + timedelta(minutes=20)).isoformat(),
+    }
+
+
+def _resume_projection(
+    *,
+    heads: list[dict],
+    now: datetime = NOW,
+    host_state: str = "online",
+    starting: bool = False,
+):
+    latest_run = (
+        None
+        if starting
+        else {
+            "id": "run-1",
+            "started_at": (NOW - timedelta(minutes=10)).isoformat(),
+            "ended_at": None,
+        }
+    )
+    catalog_facts = {
+        "catalog": {
+            "provider": "codex",
+            "cwd": "/repo",
+            "started_at": (NOW - timedelta(hours=1)).isoformat(),
+            "origin_kind": None,
+            "launch_surface": "terminal",
+        },
+        "readiness": {
+            "state": "pending" if starting else "adopted",
+            "execution_lifetime": "live_control",
+        },
+        "latest_run": latest_run,
+        "connections": [
+            {
+                "run_id": "run-1",
+                "adapter_connection_id": "connection-1",
+                "lease_generation": "lease-1",
+                "control_plane": "codex_app_server",
+                "acquisition_kind": "spawned_control",
+                "state": "attached",
+                "released_at": None,
+            }
+        ],
+        "resume": {"provider_session_id": "provider-thread-1"},
+    }
+    return project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=87,
+        catalog_facts=catalog_facts,
+        heads=heads,
+        supported_operations={"resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=now),
+        host=SessionHostFacts(state=host_state, observed_at=now),
+        now=now,
+    )
+
+
 def _run_projection(*, heads: list[dict], now: datetime, catalog_facts: dict | None = None):
     return project_shadow_session_state_facts(
         session_id="session-1",
@@ -796,6 +872,91 @@ def test_served_console_keeps_live_control_and_fifo_send_without_interrupt_suppo
     assert served.presentation.primary.key == "executing"
     assert served.presentation.access is not None
     assert served.presentation.access.key == "live_control"
+
+
+def test_served_projector_refuses_resume_for_a_current_running_owner():
+    continuation = _head(
+        family="continuation",
+        value=_resume_continuation(),
+        source="managed_resume_contract_scan",
+    )
+    served = _resume_projection(
+        heads=[_control(observed_at=NOW), continuation],
+    )
+
+    assert served.run is not None and served.run.lifecycle == "running"
+    assert served.control is not None
+    assert served.control.actions.resume.state == "unavailable"
+    assert served.control.actions.resume.reason == "run_active"
+
+
+def test_served_projector_refuses_resume_for_a_pending_starting_owner():
+    continuation = _head(
+        family="continuation",
+        value=_resume_continuation(),
+        source="managed_resume_contract_scan",
+    )
+    served = _resume_projection(starting=True, heads=[continuation])
+
+    assert served.run is not None and served.run.lifecycle == "starting"
+    assert served.control is not None
+    assert served.control.actions.resume.state == "unavailable"
+    assert served.control.actions.resume.reason == "run_active"
+
+
+def test_served_projector_prepares_resume_for_expired_run_evidence():
+    expired_at = NOW - timedelta(hours=3)
+    continuation = _head(
+        family="continuation",
+        value=_resume_continuation(observed_at=expired_at),
+        source="managed_resume_contract_scan",
+    )
+    served = _resume_projection(
+        heads=[
+            _control(observed_at=NOW - timedelta(minutes=5)),
+            continuation,
+        ],
+    )
+
+    # Expiry does not manufacture an ended run, but it also does not claim
+    # that an owner is live.  The local resume.v2 admission gets the final
+    # atomic owner decision after this command-preparation gate.
+    assert served.run is not None and served.run.lifecycle == "unknown"
+    assert served.control is not None
+    assert served.control.actions.resume.state == "available"
+
+
+def test_served_projector_keeps_unknown_run_resume_closed_without_machine_admission():
+    continuation = _head(
+        family="continuation",
+        value=_resume_continuation(),
+        source="managed_resume_contract_scan",
+    )
+
+    for host_state, reason in (("offline", "machine_offline"), ("unknown", "machine_unknown")):
+        served = _resume_projection(host_state=host_state, heads=[continuation])
+        assert served.run is not None and served.run.lifecycle == "unknown"
+        assert served.control is not None
+        assert served.control.actions.resume.state == "unavailable"
+        assert served.control.actions.resume.reason == reason
+
+
+def test_served_projector_reports_retained_contract_and_native_owner_failures():
+    missing = _resume_projection(heads=[])
+    assert missing.control is not None
+    assert missing.control.actions.resume.reason == "contract_missing"
+
+    owner_alive = _head(
+        family="continuation",
+        value=_resume_continuation(
+            contract_state="invalid",
+            unavailable_reason="execution_owner_alive",
+        ),
+        source="managed_resume_contract_scan",
+    )
+    refused = _resume_projection(heads=[owner_alive])
+    assert refused.control is not None
+    assert refused.control.actions.resume.reason == "execution_owner_alive"
 
 
 def test_served_projector_offers_cold_resume_only_from_matching_machine_contract():

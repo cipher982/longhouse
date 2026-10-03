@@ -114,6 +114,7 @@ from .classifier import _add_outbox_reasons
 from .classifier import _add_service_status_reasons
 from .classifier import _add_spool_pending_reason
 from .classifier import _add_transport_health_reasons
+from .classifier import _apply_provider_live_route_e2e_status
 from .classifier import _archive_draining_attention_summary
 from .classifier import _archive_draining_state_is_watching
 from .classifier import _broken_health_headline
@@ -676,18 +677,14 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
                 health_state = "degraded"
                 severity = "yellow"
                 headline = "Managed provider support needs attention"
-    if provider_live_route_e2e.get("configured") and provider_live_route_e2e.get("status") != "ok":
-        if "provider_live_route_e2e_warning" not in reasons:
-            reasons.append("provider_live_route_e2e_warning")
-        suggested_actions.append("Run dogfood refresh to refresh the hosted provider-live route proof.")
-        if health_state == "healthy":
-            health_state = "degraded"
-            severity = "yellow"
-            headline = "Hosted provider-live route proof needs attention"
-    elif provider_live_route_e2e.get("configured") and provider_live_route_e2e.get("coverage_status") == "missing":
-        # Coverage gaps are useful operator detail, but a green proof for the
-        # providers it covers must not make managed launch look broken.
-        pass
+    health_state, severity, headline = _apply_provider_live_route_e2e_status(
+        proof=provider_live_route_e2e,
+        health_state=health_state,
+        severity=severity,
+        headline=headline,
+        reasons=reasons,
+        suggested_actions=suggested_actions,
+    )
     build_identity = _collect_build_identity(engine_status=engine_status)
     attention_context = _health_classification_context(
         service=service,

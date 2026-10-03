@@ -30,7 +30,7 @@ def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None, "missing"
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
     if not isinstance(payload, dict):
         return None, "artifact root is not an object"
@@ -46,6 +46,8 @@ def _freshness(generated_at: Any) -> tuple[str, int | None]:
     if generated_at_dt is None:
         return "missing", None
     age_seconds = int((datetime.now(UTC) - generated_at_dt).total_seconds())
+    if age_seconds < 0:
+        return "invalid", age_seconds
     if age_seconds > _max_artifact_age_seconds():
         return "stale", age_seconds
     return "fresh", age_seconds
@@ -106,22 +108,26 @@ def _summarize_results(results: Any) -> list[dict[str, Any]]:
 
 
 def expected_route_providers_from_live_proof(provider_live_proof: Mapping[str, Any] | None) -> list[str]:
-    statuses = dict((provider_live_proof or {}).get("statuses") or {})
+    if not isinstance(provider_live_proof, Mapping):
+        return []
+    raw_statuses = provider_live_proof.get("statuses")
+    if not isinstance(raw_statuses, Mapping):
+        return []
     providers: list[str] = []
-    for provider, raw_info in sorted(statuses.items()):
+    for provider, raw_info in sorted(raw_statuses.items()):
         if provider not in SUPPORTED_ROUTE_PROOF_PROVIDERS:
             continue
-        info = dict(raw_info or {})
-        if info.get("applies") and info.get("status") == "ok":
+        if not isinstance(raw_info, Mapping):
+            continue
+        if raw_info.get("applies") and raw_info.get("status") == "ok":
             providers.append(str(provider))
     return providers
 
 
 def _failure_count(raw: Any) -> int | None:
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
         return None
+    return raw
 
 
 def _coverage(
@@ -171,7 +177,10 @@ def _status_for_artifact(payload: dict[str, Any], *, freshness_status: str) -> s
         return "artifact_kind_mismatch"
     if freshness_status != "fresh":
         return "stale"
-    if str(payload.get("verdict") or "").lower() != "green":
+    raw_verdict = payload.get("verdict")
+    if not isinstance(raw_verdict, str):
+        return "malformed_results"
+    if raw_verdict.strip().lower() != "green":
         return "failed"
     failure_count = _failure_count(payload.get("failure_count"))
     if failure_count is None:
@@ -181,8 +190,14 @@ def _status_for_artifact(payload: dict[str, Any], *, freshness_status: str) -> s
     results = payload.get("results")
     if not isinstance(results, list):
         return "malformed_results"
-    if any(not isinstance(result, dict) or result.get("status") != "pass" for result in results):
-        return "failed"
+    for result in results:
+        if not isinstance(result, dict):
+            return "malformed_results"
+        result_status = result.get("status")
+        if not isinstance(result_status, str):
+            return "malformed_results"
+        if result_status != "pass":
+            return "failed"
     return "ok"
 
 
@@ -221,7 +236,7 @@ def collect_provider_live_route_e2e(
         "enabled": True,
         "configured": True,
         "status": status,
-        "applies": status == "ok" and coverage["coverage_status"] in {"complete", "none_expected", "not_evaluated"},
+        "applies": status == "ok" and coverage["coverage_status"] in {"complete", "not_evaluated"},
         "artifact_schema_version": payload.get("schema_version"),
         "artifact_kind": payload.get("artifact_kind"),
         "generated_at": generated_at,

@@ -1216,6 +1216,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode"
       ]
     },
@@ -2054,6 +2055,7 @@
     {
       "path": "server/zerg/qa/live_session_toolkit.py",
       "providers": [
+        "antigravity",
         "claude",
         "cursor",
         "omp",

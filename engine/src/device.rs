@@ -1169,6 +1169,10 @@ fn collect_native_desktop_health(
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .filter(|value| value.is_object());
+    health.build = Some(native_build_snapshot(
+        engine_payload.as_ref(),
+        collect_installed_native_pair(),
+    ));
 
     let machine_state = std::fs::read_to_string(machine_state_path(state_root)?)
         .ok()
@@ -1200,6 +1204,112 @@ fn collect_native_desktop_health(
         token_path,
         chrono::Utc::now().to_rfc3339(),
     ))
+}
+
+fn complete_identity_commit(identity: &Value) -> Option<&str> {
+    if identity.get("error").is_some_and(|error| !error.is_null()) {
+        return None;
+    }
+    for field in ["version", "commit", "commit_short", "built_at", "channel"] {
+        if identity.get(field)?.as_str()?.trim().is_empty() {
+            return None;
+        }
+    }
+    identity.get("dirty")?.as_bool()?;
+    if !matches!(identity.get("channel")?.as_str()?, "dev" | "release") {
+        return None;
+    }
+    let commit = identity.get("commit")?.as_str()?.trim();
+    let short = identity.get("commit_short")?.as_str()?.trim();
+    commit
+        .get(..short.len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case(short))?;
+    Some(commit)
+}
+
+fn collect_installed_native_pair() -> Value {
+    let facade = env::current_exe().ok().and_then(|engine| {
+        engine.parent().map(|parent| {
+            parent.join(if cfg!(windows) {
+                "longhouse.exe"
+            } else {
+                "longhouse"
+            })
+        })
+    });
+    let Some(facade) = facade.filter(|path| path.is_file()) else {
+        return serde_json::json!({"error": "unavailable", "detail": "paired native facade is unavailable"});
+    };
+    let mut command = Command::new(&facade);
+    command.args(["build-identity", "--json"]);
+    let Some(output) =
+        crate::process_identity::output_with_timeout(command, Duration::from_secs(2))
+    else {
+        return serde_json::json!({"error": "unavailable", "detail": "native pair identity probe did not complete"});
+    };
+    if !output.status.success() {
+        return serde_json::json!({"error": "unavailable", "detail": String::from_utf8_lossy(&output.stderr).trim()});
+    }
+    let Ok(mut pair) = serde_json::from_slice::<Value>(&output.stdout) else {
+        return serde_json::json!({"error": "corrupt", "detail": "native pair identity is not JSON"});
+    };
+    let valid = pair
+        .get("facade")
+        .and_then(complete_identity_commit)
+        .zip(pair.get("engine").and_then(complete_identity_commit))
+        .is_some_and(|(facade_commit, engine_commit)| {
+            facade_commit.eq_ignore_ascii_case(engine_commit)
+        })
+        && pair
+            .get("engine_path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| !path.is_empty());
+    if !valid {
+        return serde_json::json!({"error": "corrupt", "detail": "native pair identity is incomplete or mismatched"});
+    }
+    if let Some(object) = pair.as_object_mut() {
+        object.insert(
+            "path".to_string(),
+            Value::String(facade.display().to_string()),
+        );
+    }
+    pair
+}
+
+fn native_build_snapshot(engine_payload: Option<&Value>, installed_native: Value) -> Value {
+    let running_engine = engine_payload.and_then(|payload| payload.get("build"));
+    let commit_mismatch = installed_native
+        .get("engine")
+        .and_then(complete_identity_commit)
+        .zip(running_engine.and_then(complete_identity_commit))
+        .map(|(installed, running)| !installed.eq_ignore_ascii_case(running));
+    let timestamp = |key| {
+        engine_payload?
+            .get(key)?
+            .as_str()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    };
+    let binary_newer_than_daemon = timestamp("binary_mtime")
+        .zip(timestamp("daemon_started_at"))
+        .map(|(modified, started)| modified > started);
+    let restart_pending = if commit_mismatch == Some(true) || binary_newer_than_daemon == Some(true)
+    {
+        Some(true)
+    } else if commit_mismatch == Some(false) {
+        Some(false)
+    } else {
+        None
+    };
+    serde_json::json!({
+        "python_package": null,
+        "installed_native": installed_native,
+        "running_engine": running_engine,
+        "engine_restart_pending": restart_pending,
+        "restart_pending_reasons": {
+            "native_engine_commit_mismatch": commit_mismatch,
+            "binary_newer_than_daemon": binary_newer_than_daemon,
+        },
+    })
 }
 
 fn native_service_repair_reason(
@@ -5465,6 +5575,49 @@ mod tests {
     use std::collections::BTreeSet;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn native_build_snapshot_compares_full_native_identity() {
+        let installed = json!({
+            "version": "0.1.64",
+            "commit": "bbbbbbbb2222222222222222222222222222cccc",
+            "commit_short": "bbbbbbbb",
+            "dirty": false,
+            "built_at": "2026-10-01T07:17:14Z",
+            "channel": "dev",
+        });
+        let pair = json!({"facade": installed, "engine": installed});
+        let mut payload = json!({"build": installed});
+        assert_eq!(
+            native_build_snapshot(Some(&payload), pair.clone())["engine_restart_pending"],
+            false,
+        );
+        payload["build"]["commit_short"] = json!("bbbb");
+        assert_eq!(
+            native_build_snapshot(Some(&payload), pair.clone())["engine_restart_pending"],
+            false,
+        );
+        payload["build"]["commit"] = json!("bbbbbbbb3333333333333333333333333333dddd");
+        assert_eq!(
+            native_build_snapshot(Some(&payload), pair)["engine_restart_pending"],
+            true,
+        );
+    }
+
+    #[test]
+    fn native_build_snapshot_keeps_unknown_and_replacement_evidence_distinct() {
+        let unavailable = json!({"error": "unavailable"});
+        let mut payload = json!({"build": {"commit_short": "bbbbbbbb"}});
+        assert!(native_build_snapshot(Some(&payload), unavailable.clone())
+            ["engine_restart_pending"]
+            .is_null(),);
+        payload["binary_mtime"] = json!("2026-10-03T12:00:00Z");
+        payload["daemon_started_at"] = json!("2026-10-01T12:00:00Z");
+        assert_eq!(
+            native_build_snapshot(Some(&payload), unavailable)["engine_restart_pending"],
+            true,
+        );
+    }
 
     #[test]
     fn service_path_includes_provider_vendor_install_dirs() {

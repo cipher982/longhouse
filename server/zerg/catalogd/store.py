@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -6946,16 +6947,20 @@ class CatalogStore:
         include_automation: bool,
         include_hidden: bool = False,
         device_id: str | None,
-        days_back: int,
+        days_back: int | None,
         limit: int,
         offset: int,
         owner_id: int | None = None,
         include_state_heads: bool = False,
+        title_query: str | None = None,
     ) -> dict[str, Any]:
         """Return one bounded timeline page and all raw facts in one snapshot."""
 
         observed_at = datetime.now(UTC)
-        since = observed_at - timedelta(days=days_back)
+        since = observed_at - timedelta(days=days_back) if days_back is not None else None
+        title_terms = list(dict.fromkeys(re.findall(r"\w+", title_query, flags=re.UNICODE))) if title_query is not None else []
+        if title_query is not None and not title_terms:
+            return {"matches": []}
         card = LiveTimelineCard.__table__
         catalog = LiveSessionCatalog.__table__
         storage = StorageSession.__table__
@@ -7001,12 +7006,12 @@ class CatalogStore:
                 possibly_open_ids=possibly_open_ids,
             )
             legacy_where = [
-                or_(legacy_activity_at >= since, legacy_unread, legacy_open),
+                or_(legacy_activity_at >= since, legacy_unread, legacy_open) if since is not None else True,
                 catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
-                or_(storage_activity_at >= since, storage_unread, storage_open),
+                or_(storage_activity_at >= since, storage_unread, storage_open) if since is not None else True,
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
             ]
@@ -7113,7 +7118,7 @@ class CatalogStore:
                         ),
                     )
                 )
-            if include_state_heads:
+            if include_state_heads or title_query is not None:
                 if owner_id is None:
                     raise ValueError("canonical timeline projection requires owner_id")
                 owner_text = str(owner_id)
@@ -7133,6 +7138,22 @@ class CatalogStore:
                 storage_owner = func.coalesce(LiveSession.__table__.c.owner_id, storage.c.owner_id)
                 storage_where.append(storage_owner == owner_text)
 
+            legacy_title = func.coalesce(
+                func.nullif(catalog.c.anchor_title, ""), func.nullif(card.c.summary_title, ""), card.c.first_user_message_preview, ""
+            )
+            storage_title = func.coalesce(
+                func.nullif(storage.c.anchor_title, ""), func.nullif(storage.c.summary_title, ""), storage.c.first_user_message_preview, ""
+            )
+            if title_query is not None:
+                for term in title_terms:
+                    legacy_where.append(func.lower(legacy_title).contains(term.lower(), autoescape=True))
+                    storage_where.append(func.lower(storage_title).contains(term.lower(), autoescape=True))
+                # A search range is strict; unlike an ordinary timeline, unread
+                # or current work cannot escape the range the caller requested.
+                if since is not None:
+                    legacy_where.append(legacy_activity_at >= since)
+                    storage_where.append(storage_activity_at >= since)
+
             joined = card.join(catalog, catalog.c.session_id == card.c.session_id)
             storage_joined = storage.outerjoin(catalog, catalog.c.session_id == storage.c.session_id).outerjoin(
                 LiveSession.__table__, LiveSession.__table__.c.session_id == storage.c.session_id
@@ -7141,6 +7162,12 @@ class CatalogStore:
                 select(
                     card.c.session_id.label("session_id"),
                     legacy_activity_at.label("order_at"),
+                    legacy_title.label("title"),
+                    card.c.project.label("project"),
+                    card.c.provider.label("provider"),
+                    card.c.environment.label("environment"),
+                    card.c.started_at.label("started_at"),
+                    card.c.user_messages.label("user_messages"),
                     case((legacy_unread, 1), else_=0).label("unread"),
                     case((legacy_open, 1), else_=0).label("open_now"),
                 )
@@ -7149,12 +7176,37 @@ class CatalogStore:
                 select(
                     storage.c.session_id.label("session_id"),
                     storage_activity_at.label("order_at"),
+                    storage_title.label("title"),
+                    storage_project.label("project"),
+                    storage_provider.label("provider"),
+                    storage_environment.label("environment"),
+                    storage.c.started_at.label("started_at"),
+                    storage.c.user_messages.label("user_messages"),
                     case((storage_unread, 1), else_=0).label("unread"),
                     case((storage_open, 1), else_=0).label("open_now"),
                 )
                 .select_from(storage_joined)
                 .where(*storage_where),
             ).subquery()
+            if title_query is not None:
+                matches = connection.execute(
+                    select(candidates).order_by(candidates.c.order_at.desc(), candidates.c.session_id.asc()).limit(limit)
+                ).mappings()
+                return {
+                    "matches": [
+                        {
+                            "session_id": str(row["session_id"]),
+                            "title": sanitize_timeline_title(row["title"]),
+                            "project": row["project"],
+                            "provider": row["provider"],
+                            "environment": row["environment"],
+                            "started_at": _encode_datetime(row["started_at"]),
+                            "user_messages": int(row["user_messages"] or 0),
+                        }
+                        for row in matches
+                    ]
+                }
+
             # Unread first, then current work, then transcript recency. A
             # session the served state calls open, or whose Console result
             # nobody has read, must never be paged out of the first window.
