@@ -36,6 +36,7 @@ struct SessionView: View {
     @State private var bugReportSavedPending = false
     @State private var bugReportSessionToOpen: String?
     @State private var branchedSessionRoute: SessionRoute?
+    @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var editingClientRequestId: String?
     @State private var isLoadingPickerItems: Bool = false

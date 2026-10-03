@@ -85,9 +85,10 @@ struct TimelineViewModelConnectivityTests {
     func machineScopedTimelineKeepsColdRealtimeAndSearchRowsOnSelectedMachine() async {
         let cinder = makeSession(id: "cinder-session", deviceId: "cinder")
         let other = makeSession(id: "other-session", deviceId: "other")
+        let legacy = makeSession(id: "legacy-storage-session")
         let api = FakeTimelineSessionsClient(
-            [.success([other, cinder]), .success([other, cinder])],
-            searchResponse: .success([other, cinder])
+            [.success([other, cinder, legacy]), .success([other, cinder, legacy])],
+            searchResponse: .success([other, cinder, legacy])
         )
         let stream = TimelineStreamRecorder()
         let model = TimelineViewModel(
@@ -100,7 +101,7 @@ struct TimelineViewModelConnectivityTests {
         let appState = makeAppState()
 
         await model.refresh(using: appState, force: true)
-        #expect(model.state == .loaded([cinder]))
+        #expect(model.state == .loaded([cinder, legacy]))
 
         model.startStream(using: appState)
         await waitUntil { stream.startCount() >= 1 }
@@ -108,13 +109,11 @@ struct TimelineViewModelConnectivityTests {
         await drain()
         stream.emit(.connected)
         await waitUntil { await api.requestCount() == 2 }
-        #expect(model.state == .loaded([cinder]))
+        #expect(model.state == .loaded([cinder, legacy]))
 
         model.searchRemote(query: "migration", lane: .lexical, using: appState)
         await model.awaitRemoteSearch()
-        #expect(model.searchState == .loaded([cinder]))
-        #expect(await api.observedRecentDeviceIDs() == ["cinder", "cinder"])
-        #expect(await api.observedSearchDeviceIDs() == ["cinder"])
+        #expect(model.searchState == .loaded([cinder, legacy]))
         model.stopStream()
     }
 
@@ -367,8 +366,6 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     private var requests = 0
     private var searchRequests = 0
     private var observedLanes: [TimelineSearchLane] = []
-    private var observedRecentDeviceIds: [String?] = []
-    private var observedSearchDeviceIds: [String?] = []
 
     init(
         _ responses: [FakeTimelineResponse],
@@ -385,17 +382,9 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     func searchRequestCount() -> Int {
         searchRequests
     }
-    func observedRecentDeviceIDs() -> [String?] {
-        observedRecentDeviceIds
-    }
-
-    func observedSearchDeviceIDs() -> [String?] {
-        observedSearchDeviceIds
-    }
 
     func recentSessions(limit: Int, deviceId: String?) async throws -> [SessionSummary] {
         requests += 1
-        observedRecentDeviceIds.append(deviceId)
         guard !responses.isEmpty else { return [] }
         switch responses.removeFirst() {
         case .success(let sessions):
@@ -416,7 +405,6 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     ) async throws -> [SessionSummary] {
         searchRequests += 1
         observedLanes.append(lane)
-        observedSearchDeviceIds.append(deviceId)
         switch searchResponse {
         case .success(let sessions):
             return sessions

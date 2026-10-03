@@ -121,9 +121,11 @@ final class TimelineViewModel: ObservableObject {
         if case .loaded = state { return true }
         return false
     }
-    private func scopedSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
+    private func scopedSessions(_ sessions: [SessionSummary], fromScopedEndpoint: Bool = false) -> [SessionSummary] {
         guard let deviceId, !deviceId.isEmpty else { return sessions }
-        return sessions.filter { $0.deviceId == deviceId }
+        // A scoped server response can admit storage rows by machine_id while
+        // their display metadata omits device_id. The global cache cannot.
+        return sessions.filter { $0.deviceId == deviceId || (fromScopedEndpoint && $0.deviceId == nil) }
     }
 
     func load(using appState: AppState) async {
@@ -196,7 +198,7 @@ final class TimelineViewModel: ObservableObject {
                     daysBack: self.searchDaysBack,
                     limit: self.searchLimit,
                     deviceId: self.deviceId
-                ))
+                ), fromScopedEndpoint: true)
                 guard !Task.isCancelled, generation == self.searchGeneration else { return }
                 self.searchState = sessions.isEmpty ? .empty : .loaded(sessions)
             } catch LonghouseAPIError.notAuthenticated {
@@ -241,7 +243,7 @@ final class TimelineViewModel: ObservableObject {
         defer { isRefreshInFlight = false }
 
         do {
-            let sessions = scopedSessions(try await api.recentSessions(limit: limit, deviceId: deviceId))
+            let sessions = scopedSessions(try await api.recentSessions(limit: limit, deviceId: deviceId), fromScopedEndpoint: true)
             // Drop stale snapshots from a previous stream lifetime — a slow
             // reconnect bootstrap mustn't overwrite newer stream-applied state.
             guard generation == streamGeneration || generation == 0 else {
@@ -390,7 +392,7 @@ final class TimelineViewModel: ObservableObject {
                 applyConnectivity(.streamSignal(.firstConnected), generation: generation)
             }
         case .upsert(let card, _, _):
-            guard deviceId == nil || card.sessionSummary.deviceId == deviceId else { continue }
+            if let deviceId, let eventDeviceId = card.sessionSummary.deviceId, eventDeviceId != deviceId { return }
             applyUpsert(card.sessionSummary, appState: appState)
             applyConnectivity(.streamSignal(.upsert), generation: generation)
         case .remove(let threadId, _, _):

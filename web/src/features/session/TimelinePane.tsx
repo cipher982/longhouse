@@ -1288,12 +1288,11 @@ export function TimelinePane({
             : heightDelta;
         if (diff > 0) container.scrollTop += diff;
       }
-      if (appendedCount > 0) {
-        if (wasAtBottomRef.current) {
-          container.scrollTop = container.scrollHeight;
-        } else {
-          setUnreadCount((prev) => prev + appendedCount);
-        }
+      if (wasAtBottomRef.current && (appendedCount > 0 || (prependedCount === 0 && newScrollHeight > prevScrollHeightRef.current))) {
+        // A growing reply or tool group can add height without adding a row.
+        container.scrollTop = container.scrollHeight;
+      } else if (appendedCount > 0) {
+        setUnreadCount((prev) => prev + appendedCount);
       }
     }
 

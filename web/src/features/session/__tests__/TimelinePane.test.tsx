@@ -1200,6 +1200,30 @@ describe("TimelinePane scroll mutation ownership", () => {
     expect(list.scrollTop).toBe(1060);
     expect(screen.queryByTestId("timeline-unread-pill")).not.toBeInTheDocument();
   });
+
+  it("follows a growing tail row only while the reader remains at the bottom", () => {
+    const first = makeTimelineMessage(201, "first");
+    const second = makeTimelineMessage(202, "second");
+    const view = render(timelinePaneForMutation([]));
+    const list = screen.getByTestId("session-timeline-list");
+
+    setTimelineScrollMetrics(list, 1000, 400);
+    view.rerender(timelinePaneForMutation([first, second], 2));
+    list.scrollTop = 600;
+    fireEvent.scroll(list);
+
+    setTimelineScrollMetrics(list, 1180, 400);
+    view.rerender(timelinePaneForMutation([first, makeTimelineMessage(202, "growing reply")], 3));
+    expect(list.scrollTop).toBe(1180);
+    expect(screen.queryByTestId("timeline-unread-pill")).not.toBeInTheDocument();
+
+    list.scrollTop = 200;
+    fireEvent.scroll(list);
+    setTimelineScrollMetrics(list, 1300, 400);
+    view.rerender(timelinePaneForMutation([first, makeTimelineMessage(202, "reply grows again")], 4));
+    expect(list.scrollTop).toBe(200);
+    expect(screen.queryByTestId("timeline-unread-pill")).not.toBeInTheDocument();
+  });
 });
 
 describe("TimelinePane turn footers", () => {
