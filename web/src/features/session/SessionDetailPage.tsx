@@ -430,9 +430,8 @@ function SessionDetailWorkspaceRoute({
     toolCalls: transcriptCounts.toolCalls,
     tone: headerState.tone,
   });
-  // Branching is offered wherever Resume is, because the reason it is not
-  // offered is worth showing too: an ended session that cannot be continued
-  // should say why rather than simply have nothing there.
+  // The branch form sits beside Resume in the Run ended notice. A refusal gets
+  // words only when `branchUnavailableNote` has some; see there for which.
   const branchAction = branchSourceSession.session_state.control.actions.branch;
   // Served from the live thread edge before a branch has shipped, and from the
   // same edge afterwards, so the relationship is visible for the whole life of

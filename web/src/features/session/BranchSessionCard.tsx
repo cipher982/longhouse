@@ -8,11 +8,12 @@ import { Button } from "@/shared/ui";
  *
  * A reason gets words only when it tells the reader something no other part of
  * the screen already does. Resume's own blockers (offline machine, moved
- * folder, missing contract) are explained once, in the ended-run notice, so
- * repeating them here would be a second, competing explanation. A provider
- * that cannot fork yet is a roadmap fact, not something anyone can act on, and
- * showed on most ended sessions. The approval reasons remain: they are about
- * this particular session, and the answer is to resume it at the machine.
+ * folder, missing contract) belong to the Resume affordance and the session
+ * details, so repeating them here would be a second, competing explanation.
+ * A provider that cannot fork yet is a roadmap fact, not something anyone can
+ * act on, and it showed on most ended sessions. The approval reasons remain:
+ * they are about this particular session, and the answer is to resume it at
+ * the machine.
  *
  * iOS keeps the same rule in `branchReasonLabel`.
  */
