@@ -1811,7 +1811,8 @@
         "codex",
         "cursor",
         "omp",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -2442,7 +2443,8 @@
         "codex",
         "cursor",
         "omp",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {

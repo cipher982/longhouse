@@ -30,6 +30,7 @@ _RESUME_FLAG = {
     "cursor": "--resume-session",
     "opencode": "--resume-session",
     "omp": "--resume-session",
+    "pi": "--resume-session",
 }
 
 

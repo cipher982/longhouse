@@ -670,6 +670,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     sendInput: isEndedCodexHelm
                         ? SessionStateAction(state: "unavailable", reason: "run_ended")
                         : available,
+                    startTurn: isEndedCodexHelm ? unavailable : available,
                     interrupt: available,
                     terminate: available,
                     reattach: unavailable,

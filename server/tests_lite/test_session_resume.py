@@ -45,6 +45,7 @@ def test_resume_intent_returns_provider_native_terminal_argv() -> None:
         ("cursor", "--resume-session"),
         ("opencode", "--resume-session"),
         ("omp", "--resume-session"),
+        ("pi", "--resume-session"),
     ],
 )
 def test_resume_intent_command_matches_each_managed_cli_selector(provider: str, selector: str) -> None:
