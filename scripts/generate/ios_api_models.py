@@ -24,7 +24,6 @@ ROOT_SCHEMAS = [
     "EventResponse",
     "SessionInputResponse",
     "QueuedInputSummary",
-    "SessionTurnTimingResponse",
 ]
 
 LEGACY_ENUM_VALUES: dict[str, list[str]] = {}

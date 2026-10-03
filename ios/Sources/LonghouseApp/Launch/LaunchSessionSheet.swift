@@ -42,6 +42,7 @@ struct LaunchSessionSheet: View {
     private let previewMachines: [MachineDirectoryEntry]?
     private let previewWorkspaces: [WorkspaceSuggestion]?
     private let previewRecentModels: [RecentModel]?
+    private let preselectedDeviceId: String?
     @State private var machines: [MachineDirectoryEntry]
     @State private var loadError: String?
     @State private var loading = false
@@ -68,23 +69,31 @@ struct LaunchSessionSheet: View {
         previewMachines: [MachineDirectoryEntry]? = nil,
         previewWorkspaces: [WorkspaceSuggestion]? = nil,
         previewRecentModels: [RecentModel]? = nil,
+        preselectedDeviceId: String? = nil,
         onLaunchSelection: ((ConsoleLaunchSelection) -> Void)? = nil,
         onLaunched: @escaping (String) -> Void
     ) {
         self.previewMachines = previewMachines
         self.previewWorkspaces = previewWorkspaces
         self.previewRecentModels = previewRecentModels
+        self.preselectedDeviceId = preselectedDeviceId
         self.onLaunchSelection = onLaunchSelection
         self.onLaunched = onLaunched
         _machines = State(initialValue: previewMachines ?? [])
         _recentModels = State(initialValue: previewRecentModels ?? [])
         _workspaces = State(initialValue: previewWorkspaces ?? [])
-        if let first = previewMachines?.first(where: { Self.canStartInteractiveSession($0) }) {
+        if let selected = preselectedDeviceId,
+           let machine = previewMachines?.first(where: { $0.deviceId == selected }) {
+            _selectedDeviceId = State(initialValue: machine.deviceId)
+            _selectedProvider = State(initialValue: machine.defaultProvider ?? "")
+        } else if let first = previewMachines?.first(where: { Self.canStartInteractiveSession($0) }) {
             let provider = first.defaultProvider ?? ""
             _selectedDeviceId = State(initialValue: first.deviceId)
             _selectedProvider = State(initialValue: provider)
         } else if let first = previewMachines?.first {
             _selectedDeviceId = State(initialValue: first.deviceId)
+        } else if let preselectedDeviceId {
+            _selectedDeviceId = State(initialValue: preselectedDeviceId)
         }
         if let firstPath = previewWorkspaces?.first?.path {
             _cwd = State(initialValue: firstPath)
@@ -159,7 +168,6 @@ struct LaunchSessionSheet: View {
                     MachineSelectionView(
                         machines: machines,
                         selectedDeviceId: selectedDeviceId,
-                        statusText: launchBlockedLabel,
                         onSelect: selectMachine
                     )
                 } else {
@@ -192,13 +200,15 @@ struct LaunchSessionSheet: View {
                         MachineSelectionView(
                             machines: machines,
                             selectedDeviceId: selectedDeviceId,
-                            statusText: launchBlockedLabel,
                             onSelect: selectMachine
                         )
                     } label: {
                         LaunchSummaryRow(
                             title: selectedMachine?.machineName ?? "Choose a machine",
-                            subtitle: selectedMachine.map { Self.canStartInteractiveSession($0) ? "Ready" : launchBlockedLabel($0) },
+                            subtitle: selectedMachine.map { machine in
+                                let status = deriveMachineStatus(machine: machine)
+                                return [status.text, status.detail].compactMap { $0 }.joined(separator: " · ")
+                            },
                             status: selectedMachine.map(machineStatusStyle),
                             showsChevron: true
                         )
@@ -408,8 +418,11 @@ struct LaunchSessionSheet: View {
                 modelError = nil
                 cwd = ""
                 workspaceSelectionSource = .implicitDefault
+            } else if selectedProvider.isEmpty,
+                      let selected = result.first(where: { $0.deviceId == selectedDeviceId }) {
+                selectedProvider = selected.defaultProvider ?? selected.consoleLaunchProviders.first ?? ""
             }
-
+            await loadWorkspaceSuggestions(for: selectedDeviceId)
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
         }
@@ -576,44 +589,12 @@ struct LaunchSessionSheet: View {
         }
     }
 
-    private func launchBlockedLabel(_ machine: MachineDirectoryEntry) -> String {
-        switch machine.launch.blockedBy {
-        case "control_down":
-            return lastSeenLabel(machine)
-        case "no_launch_support":
-            return "Console launch unavailable"
-        case "engine_too_old":
-            return "Update required"
-        case "auth_failed":
-            return "Needs repair"
-        case "runtime_unreachable":
-            return "Needs repair"
-        case "providers_not_ready":
-            let items = machine.launch.unavailableProviders
-            if items.count == 1, let remediation = items[0].remediation { return remediation }
-            return "Sign in to \(items.map(\.provider).sorted().joined(separator: " or ")) on this machine"
-        default:
-            return machine.online ? "Console launch unavailable" : lastSeenLabel(machine)
-        }
-    }
-
-    private func lastSeenLabel(_ machine: MachineDirectoryEntry) -> String {
-        guard let raw = machine.lastSeenAt else { return "Offline" }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) else { return "Offline" }
-        guard date <= Date() else { return "Offline" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return "Offline · Last seen \(formatter.localizedString(for: date, relativeTo: Date()))"
-    }
-
     private func machineStatusStyle(_ machine: MachineDirectoryEntry) -> LaunchStatusStyle {
-        if Self.canStartInteractiveSession(machine) { return .ready }
-        switch machine.launch.blockedBy {
-        case "control_down": return .offline
-        case "auth_failed", "runtime_unreachable": return .repair
-        default: return .warning
+        switch deriveMachineStatus(machine: machine).role {
+        case .live: return .ready
+        case .quiet, .off: return .offline
+        case .attention: return .warning
+        case .fault: return .repair
         }
     }
 
@@ -899,13 +880,6 @@ struct LaunchSessionUITestFixtureView: View {
                 ),
             ],
             selectedDeviceId: "cinder",
-            statusText: { machine in
-                switch machine.launch.blockedBy {
-                case "auth_failed", "runtime_unreachable": "Needs repair"
-                case "control_down": "Offline · Last seen 2 days ago"
-                default: "Console launch unavailable"
-                }
-            },
             onSelect: { _ in }
         )
     }

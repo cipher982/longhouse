@@ -682,6 +682,8 @@ class CatalogDaemon:
             return await self._list_machine_enrollments(request)
         if request.method == "machine.health.list.v2":
             return await self._list_machine_heartbeats(request)
+        if request.method == "machine.activity.summary.v2":
+            return await self._summarize_machine_activity(request)
         if request.method == "machine.enrollment.rename.v2":
             return await self._rename_machine_enrollment(request)
         if request.method == "machine.workspace.list.v2":
@@ -2824,6 +2826,40 @@ class CatalogDaemon:
             device_id=device_id,
             recent_after=recent_after,
             limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _summarize_machine_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "days_back", "utc_offset_minutes"}:
+            return self._error(request, "invalid_request", "machine.activity.summary.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        days_back = request.params["days_back"]
+        utc_offset_minutes = request.params["utc_offset_minutes"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if type(days_back) is not int or not 1 <= days_back <= 30:
+            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 30")
+        if type(utc_offset_minutes) is not int or not -840 <= utc_offset_minutes <= 840:
+            return self._error(request, "invalid_request", "utc_offset_minutes must be an integer from -840 through 840")
+        assert self._store is not None
+        # The default timeline visibility: the same sessions a person sees on
+        # the Timeline, so machine counts never disagree with it.
+        result = await self._run_read_store(
+            self._store.list_session_timeline,
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            hide_autonomous=True,
+            include_automation=False,
+            include_hidden=False,
+            device_id=None,
+            days_back=days_back,
+            limit=1,
+            offset=0,
+            owner_id=owner_id,
+            machine_activity=True,
+            utc_offset_minutes=utc_offset_minutes,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

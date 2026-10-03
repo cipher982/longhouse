@@ -62,6 +62,7 @@ import {
 import { captureWheelMap } from "./wheel-map";
 import { buildProviderCertificationFixture } from "../ui-fixtures/providerCertification";
 import { buildFirstRunMachineFixture, FIRST_RUN_NOW } from "../ui-fixtures/firstRun";
+import { buildFirstRunMachinesSummary, buildMachinesFleetFixture } from "../ui-fixtures/machinesFleet";
 import { buildTimelineCardStressFixture } from "../ui-fixtures/timelineCardStress";
 import { buildTimelineHearthFixture, buildTimelineHearthStreamBatch } from "../ui-fixtures/timelineHearth";
 import {
@@ -73,8 +74,8 @@ import {
 const PAGE_DEFINITIONS = {
   timeline: { path: "/timeline" },
   "session-detail": { path: `/timeline/${SESSION_DETAIL_STRESS_SESSION_ID}` },
-  machines: { path: "/runners" },
-  health: { path: "/health" },
+  machines: { path: "/machines" },
+  "machine-detail": { path: "/machines/cinder" },
   settings: { path: "/settings" },
   profile: { path: "/profile" },
   integrations: { path: "/settings/integrations" },
@@ -124,6 +125,8 @@ const SCENES = [
   "first-run-machine",
   "login",
   "devices-revoke",
+  "machines-fleet",
+  "machines-unavailable",
 ] as const;
 type SceneName = (typeof SCENES)[number];
 
@@ -145,6 +148,10 @@ const LOGIN_SCENE: SceneName = "login";
 // The Devices page with a machine holding two valid tokens (each `longhouse
 // auth` mints one) and a revoked one, framed on the revoke-machine confirmation.
 const DEVICES_REVOKE_SCENE: SceneName = "devices-revoke";
+// A personal fleet (live Mac, signed-out bench box, idle box, a server with no
+// live connection, quiet machines) for PAGE=machines and PAGE=machine-detail;
+// machines-unavailable serves the same directory but fails the summary read.
+const MACHINES_SCENES: readonly SceneName[] = ["machines-fleet", "machines-unavailable"];
 
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
@@ -324,7 +331,8 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === FIRST_RUN_SCENE ||
     scene === FIRST_RUN_MACHINE_SCENE ||
     scene === LOGIN_SCENE ||
-    scene === DEVICES_REVOKE_SCENE
+    scene === DEVICES_REVOKE_SCENE ||
+    MACHINES_SCENES.includes(scene)
   );
 }
 
@@ -338,8 +346,11 @@ function validateOptions(opts: Options): void {
   if ((opts.scene === LOGIN_SCENE) !== (opts.page === "login")) {
     throw new Error(`PAGE=login and --scene=${LOGIN_SCENE} capture only each other.`);
   }
-  if (opts.scene === FIRST_RUN_MACHINE_SCENE && opts.page !== "timeline" && opts.page !== "machines") {
-    throw new Error(`--scene=${FIRST_RUN_MACHINE_SCENE} captures PAGE=timeline or PAGE=machines.`);
+  if (opts.scene === FIRST_RUN_MACHINE_SCENE && !["timeline", "machines", "machine-detail"].includes(opts.page)) {
+    throw new Error(`--scene=${FIRST_RUN_MACHINE_SCENE} captures PAGE=timeline, PAGE=machines or PAGE=machine-detail.`);
+  }
+  if (MACHINES_SCENES.includes(opts.scene) && opts.page !== "machines" && opts.page !== "machine-detail") {
+    throw new Error(`--scene=${opts.scene} captures PAGE=machines or PAGE=machine-detail.`);
   }
   if (opts.page === "session-detail" && !SESSION_DETAIL_SCENES.includes(opts.scene)) {
     throw new Error(`session-detail requires one of: ${SESSION_DETAIL_SCENES.map((s) => `--scene=${s}`).join(", ")}.`);
@@ -700,6 +711,24 @@ async function installSceneMocks(
     return;
   }
 
+  if (MACHINES_SCENES.includes(scene)) {
+    const fleet = buildMachinesFleetFixture();
+    const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    await context.route(`${appOrigin}/api/**`, async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === "/api/timeline/machines") return route.fulfill(json(fleet.directory));
+      if (pathname === "/api/timeline/machines/summary") {
+        if (scene === "machines-unavailable") {
+          return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: { code: "catalog_unavailable", message: "The session catalog is restarting." } }) });
+        }
+        return route.fulfill(json(fleet.summary));
+      }
+      if (pathname === "/api/runners/" || pathname === "/api/runners") return route.fulfill(json({ runners: fleet.runners }));
+      await sealOrFallback(route, scene, pathname);
+    });
+    return;
+  }
+
   if (scene === FIRST_RUN_MACHINE_SCENE || scene === LOGIN_SCENE) {
     const firstRun = buildFirstRunMachineFixture();
     const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
@@ -715,8 +744,8 @@ async function installSceneMocks(
         if (pathname === "/api/timeline/sessions") return route.fulfill(json(firstRun.sessions));
         if (pathname === "/api/timeline/filters") return route.fulfill(json(firstRun.filters));
         if (pathname === "/api/timeline/machines") return route.fulfill(json(firstRun.machines));
+        if (pathname === "/api/timeline/machines/summary") return route.fulfill(json(buildFirstRunMachinesSummary(firstRun.machines)));
         if (pathname === "/api/runners/" || pathname === "/api/runners") return route.fulfill(json(firstRun.runners));
-        if (pathname === "/api/runners/status") return route.fulfill(json({ total: 0, online: 0, offline: 0, runners: [] }));
         if (pathname === "/api/timeline/sessions/stream") return route.fulfill({ status: 204, body: "" });
       }
       await sealOrFallback(route, scene, pathname);
@@ -783,8 +812,12 @@ async function installSceneMocks(
       return;
     }
 
-    if (scene === FIRST_RUN_SCENE && pathname === "/api/runners/status") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: 0, online: 0, offline: 0, runners: [] }) });
+    if (scene === FIRST_RUN_SCENE && pathname === "/api/timeline/machines/summary") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ generated_at: new Date(FIRST_RUN_NOW).toISOString(), days: 14, utc_offset_minutes: 0, first_day: "2026-04-02", last_day: "2026-04-15", machines: [] }),
+      });
       return;
     }
 
@@ -1023,8 +1056,13 @@ async function sealOrFallback(route: Route, scene: SceneName, pathname: string):
       await route.fulfill({ status: 204, body: "" });
       return;
     }
-    if (pathname === "/api/runners/status") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ total: 2, online: 2, offline: 0, runners: [] }) });
+    // The nav's machine count reads the directory on every page.
+    if (pathname === "/api/timeline/machines") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ machines: buildMachinesFleetFixture().directory.machines.slice(0, 2) }),
+      });
       return;
     }
     const subagents = pathname.match(/^\/api\/timeline\/sessions\/([^/]+)\/subagents$/);
@@ -1044,14 +1082,6 @@ async function sealOrFallback(route: Route, scene: SceneName, pathname: string):
 }
 
 async function installScenePageOverrides(page: Page, scene: SceneName, pageName: PageName): Promise<void> {
-  if (pageName === "health") {
-    await page.addInitScript(() => {
-      Object.defineProperty(window, "__SINGLE_TENANT__", {
-        configurable: true,
-        value: true,
-      });
-    });
-  }
 
   if (!sceneUsesMockApi(scene)) {
     return;
@@ -1161,7 +1191,7 @@ async function captureBundle(
   }
 
   if (scene === FIRST_RUN_SCENE && pageName === "machines") {
-    await page.click("[data-testid='runners-add-first-button']");
+    await page.click("[data-testid='machines-connect-first-button']");
     await page.waitForSelector("[data-testid='connect-machine-command']", { timeout: 5000 });
   }
 

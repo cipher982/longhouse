@@ -2,8 +2,9 @@
 
 ``/agents/machines`` is the per-owner directory of enrolled machines and
 their current control-channel status; it is the launch-sheet data source.
-``/agents/machines/health`` is the richer observability view used by
-operator dashboards.
+``/agents/machines/summary`` joins that directory with per-machine activity
+and sync, the read model behind the Machines surface. ``/agents/machines/health``
+is the raw shipping-transport view.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import MachineRenameRequest
 from zerg.schemas.machines import MachineRenameResponse
+from zerg.schemas.machines import MachinesSummaryResponse
 from zerg.schemas.machines import ProviderLiveProofAcceptedResponse
 from zerg.schemas.machines import ProviderLiveProofRequest
 from zerg.schemas.machines import RecentModel
@@ -51,6 +53,7 @@ from zerg.services.catalog_read_gateway import rename_machine
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import ActiveMachineControlOperationError
 from zerg.services.machines_directory import build_machines_directory
+from zerg.services.machines_summary import build_machines_summary
 from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 
@@ -93,6 +96,21 @@ def list_machines(
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     entries = build_machines_directory(owner_id=owner_id, enrollments=enrollments)
     return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
+
+
+@router.get("/summary", response_model=MachinesSummaryResponse)
+def list_machine_summaries(
+    days: int = Query(14, ge=1, le=30, description="Activity window in local calendar days, today included"),
+    utc_offset_minutes: int = Query(0, ge=-840, le=840, description="Caller's local offset east of UTC, for day buckets"),
+    db: Session | None = Depends(no_request_db),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> MachinesSummaryResponse:
+    """Directory, activity and sync for every enrolled machine."""
+    try:
+        return build_machines_summary(owner_id=_request_owner_id(db, device_token), days=days, utc_offset_minutes=utc_offset_minutes)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
 
 
 @router.patch("/{device_id}", response_model=MachineRenameResponse)

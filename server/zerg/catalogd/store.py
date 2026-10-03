@@ -488,6 +488,92 @@ def _timeline_possibly_open_session_ids(*, observed_at: datetime) -> Any:
     )
 
 
+_MACHINE_ACTIVITY_TOP_PROJECTS = 3
+
+
+def _activity_utc(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _summarize_machine_activity_rows(
+    rows: Any,
+    *,
+    window_start: datetime,
+    utc_offset_minutes: int,
+) -> list[dict[str, Any]]:
+    """Fold timeline candidates into per-machine activity aggregates.
+
+    Days are the caller's local calendar days (``utc_offset_minutes`` east of
+    UTC); only sessions started inside the window count toward ``daily`` and
+    ``top_projects``. ``latest`` is the most recent activity among every
+    candidate, which includes open and unread work older than the window.
+    """
+
+    offset = timedelta(minutes=utc_offset_minutes)
+    machines: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        device_id = str(row["device_id"])
+        entry = machines.setdefault(
+            device_id,
+            {
+                "device_id": device_id,
+                "sessions_started": 0,
+                "daily": {},
+                "projects": {},
+                "latest": None,
+                "latest_at": None,
+                "open_candidates": 0,
+                "unread": 0,
+            },
+        )
+        entry["open_candidates"] += int(row["open_now"] or 0)
+        entry["unread"] += int(row["unread"] or 0)
+        order_at = _activity_utc(row["order_at"])
+        session_id = str(row["session_id"])
+        if order_at is not None and (
+            entry["latest_at"] is None
+            or order_at > entry["latest_at"]
+            or (order_at == entry["latest_at"] and session_id > entry["latest"]["session_id"])
+        ):
+            entry["latest_at"] = order_at
+            entry["latest"] = {
+                "session_id": session_id,
+                "title": sanitize_timeline_title(row["title"]),
+                "project": row["project"],
+                "provider": row["provider"],
+                "last_activity_at": order_at.isoformat(),
+            }
+        started_at = _activity_utc(row["started_at"])
+        if started_at is None or started_at < window_start:
+            continue
+        entry["sessions_started"] += 1
+        day = (started_at + offset).date().isoformat()
+        provider = str(row["provider"] or "unknown")
+        by_provider = entry["daily"].setdefault(day, {})
+        by_provider[provider] = by_provider.get(provider, 0) + 1
+        if row["project"]:
+            project = str(row["project"])
+            entry["projects"][project] = entry["projects"].get(project, 0) + 1
+    result = []
+    for device_id in sorted(machines):
+        entry = machines[device_id]
+        projects = sorted(entry.pop("projects").items(), key=lambda item: (-item[1], item[0]))
+        entry.pop("latest_at")
+        entry["top_projects"] = [{"project": name, "sessions": count} for name, count in projects[:_MACHINE_ACTIVITY_TOP_PROJECTS]]
+        entry["daily"] = [{"date": day, "by_provider": counts} for day, counts in sorted(entry["daily"].items())]
+        result.append(entry)
+    return result
+
+
 _MACHINE_HEALTH_HEARTBEAT_FIELDS = frozenset(
     {
         "device_id",
@@ -528,6 +614,8 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
         "ship_retryable_client_errors_10m",
         "ship_connect_errors_10m",
         "shipping_progress",
+        "storage_v2_outbox",
+        "managed_launch_recovery",
     }
 )
 # This JSON string is encoded again inside the RPC response. A 32 KiB inner
@@ -6953,11 +7041,29 @@ class CatalogStore:
         owner_id: int | None = None,
         include_state_heads: bool = False,
         title_query: str | None = None,
+        machine_activity: bool = False,
+        utc_offset_minutes: int = 0,
     ) -> dict[str, Any]:
-        """Return one bounded timeline page and all raw facts in one snapshot."""
+        """Return one bounded timeline page and all raw facts in one snapshot.
+
+        ``machine_activity`` reuses this exact candidate set (same ownership,
+        visibility and current-work admission) to return per-machine activity
+        aggregates instead of a page: sessions started per local day and
+        provider, top projects, the latest session, and the counts of open
+        and unread candidates. The open count is the SQL superset; callers
+        project the served working set before claiming a session is live.
+        """
 
         observed_at = datetime.now(UTC)
         since = observed_at - timedelta(days=days_back) if days_back is not None else None
+        machine_window_start: datetime | None = None
+        if machine_activity:
+            if days_back is None or owner_id is None:
+                raise ValueError("machine activity requires days_back and owner_id")
+            offset = timedelta(minutes=utc_offset_minutes)
+            local_first_day = (observed_at + offset).date() - timedelta(days=days_back - 1)
+            machine_window_start = datetime.combine(local_first_day, datetime.min.time(), tzinfo=UTC) - offset
+            since = machine_window_start
         title_terms = list(dict.fromkeys(re.findall(r"\w+", title_query, flags=re.UNICODE))) if title_query is not None else []
         if title_query is not None and not title_terms:
             return {"matches": []}
@@ -7118,7 +7224,7 @@ class CatalogStore:
                         ),
                     )
                 )
-            if include_state_heads or title_query is not None:
+            if include_state_heads or title_query is not None or machine_activity:
                 if owner_id is None:
                     raise ValueError("canonical timeline projection requires owner_id")
                 owner_text = str(owner_id)
@@ -7165,6 +7271,7 @@ class CatalogStore:
                     legacy_title.label("title"),
                     card.c.project.label("project"),
                     card.c.provider.label("provider"),
+                    card.c.device_id.label("device_id"),
                     card.c.environment.label("environment"),
                     card.c.started_at.label("started_at"),
                     card.c.user_messages.label("user_messages"),
@@ -7179,6 +7286,7 @@ class CatalogStore:
                     storage_title.label("title"),
                     storage_project.label("project"),
                     storage_provider.label("provider"),
+                    storage_device.label("device_id"),
                     storage_environment.label("environment"),
                     storage.c.started_at.label("started_at"),
                     storage.c.user_messages.label("user_messages"),
@@ -7205,6 +7313,30 @@ class CatalogStore:
                         }
                         for row in matches
                     ]
+                }
+            if machine_activity:
+                assert machine_window_start is not None
+                activity_rows = connection.execute(
+                    select(
+                        candidates.c.session_id,
+                        candidates.c.device_id,
+                        candidates.c.order_at,
+                        candidates.c.title,
+                        candidates.c.project,
+                        candidates.c.provider,
+                        candidates.c.started_at,
+                        candidates.c.unread,
+                        candidates.c.open_now,
+                    ).where(candidates.c.device_id.isnot(None), candidates.c.device_id != "")
+                ).mappings()
+                return {
+                    "observed_at": observed_at.isoformat(),
+                    "window_start": machine_window_start.isoformat(),
+                    "machines": _summarize_machine_activity_rows(
+                        activity_rows,
+                        window_start=machine_window_start,
+                        utc_offset_minutes=utc_offset_minutes,
+                    ),
                 }
 
             # Unread first, then current work, then transcript recency. A

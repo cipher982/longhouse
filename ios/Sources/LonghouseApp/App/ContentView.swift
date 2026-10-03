@@ -6,7 +6,9 @@ struct ContentView: View {
     var body: some View {
         Group {
 #if DEBUG
-            if UITestHooks.shouldUseLaunchSessionFixture {
+            if UITestHooks.shouldUseMachinesFixture {
+                MachinesUITestFixtureView()
+            } else if UITestHooks.shouldUseLaunchSessionFixture {
                 LaunchSessionUITestFixtureView()
             } else if UITestHooks.shouldUseInboxGalleryFixture {
                 InboxGalleryUITestFixtureView()

@@ -9,10 +9,10 @@ enum LaunchStatusStyle {
 
     var color: Color {
         switch self {
-        case .ready: Ember.sage
-        case .offline: .secondary
-        case .warning: Ember.flame
-        case .repair: Ember.ember
+        case .ready: return Ember.signalLive
+        case .offline: return Ember.signalQuiet
+        case .warning: return Ember.signalAttention
+        case .repair: return Ember.signalFault
         }
     }
 }
@@ -217,33 +217,11 @@ struct LaunchSummaryRow: View {
     }
 }
 
-private struct MachineAvailabilityIcon: View {
-    let machine: MachineDirectoryEntry
-
-    var body: some View {
-        Group {
-            switch machine.launch.blockedBy {
-            case "control_down":
-                Circle().stroke(Color.secondary, lineWidth: 2)
-            case "auth_failed", "runtime_unreachable":
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(Ember.ember)
-            default:
-                Image(systemName: "info.circle.fill")
-                    .foregroundStyle(Ember.flame)
-            }
-        }
-        .frame(width: 14, height: 14)
-        .accessibilityHidden(true)
-    }
-}
-
 struct MachineSelectionView: View {
     @Environment(\.dismiss) private var dismiss
 
     let machines: [MachineDirectoryEntry]
     let selectedDeviceId: String
-    let statusText: (MachineDirectoryEntry) -> String
     let onSelect: (MachineDirectoryEntry) -> Void
 
     private var ready: [MachineDirectoryEntry] { machines.filter(\.isLaunchable) }
@@ -261,6 +239,7 @@ struct MachineSelectionView: View {
                 }
                 .listRowBackground(Ember.card)
             }
+
             if !ready.isEmpty {
                 Section("Available") {
                     ForEach(ready, id: \.deviceId) { machine in
@@ -268,25 +247,19 @@ struct MachineSelectionView: View {
                             onSelect(machine)
                             dismiss()
                         } label: {
-                            HStack(spacing: 12) {
-                                Circle().fill(Ember.sage).frame(width: 10, height: 10)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(machine.machineName).foregroundStyle(.primary)
-                                    Text("Ready").font(.subheadline).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if machine.deviceId == selectedDeviceId {
-                                    Image(systemName: "checkmark").fontWeight(.semibold)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 5)
-                            .contentShape(Rectangle())
+                            MachineRow(
+                                machine: machine,
+                                activity: nil,
+                                sync: nil,
+                                showsChevron: false,
+                                showsCheckmark: machine.deviceId == selectedDeviceId
+                            )
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("launch-machine-row-\(machine.deviceId)")
-                        .accessibilityLabel("\(machine.machineName), Ready")
+                        .accessibilityLabel("\(machine.machineName), \(deriveMachineStatus(machine: machine).text)")
                         .accessibilityAddTraits(machine.deviceId == selectedDeviceId ? .isSelected : [])
+                        .listRowInsets(EdgeInsets())
                     }
                 }
                 .listRowBackground(Ember.card)
@@ -295,17 +268,15 @@ struct MachineSelectionView: View {
             if !unavailable.isEmpty {
                 Section("Unavailable") {
                     ForEach(unavailable, id: \.deviceId) { machine in
-                        HStack(spacing: 12) {
-                            MachineAvailabilityIcon(machine: machine)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(machine.machineName).foregroundStyle(.primary)
-                                Text(statusText(machine)).font(.subheadline).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 5)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(machine.machineName), \(statusText(machine)), Not available")
+                        MachineRow(
+                            machine: machine,
+                            activity: nil,
+                            sync: nil,
+                            showsChevron: false
+                        )
+                        .accessibilityIdentifier("launch-machine-row-\(machine.deviceId)")
+                        .accessibilityLabel("\(machine.machineName), \(deriveMachineStatus(machine: machine).text), Not available")
+                        .listRowInsets(EdgeInsets())
                     }
                 }
                 .listRowBackground(Ember.card)

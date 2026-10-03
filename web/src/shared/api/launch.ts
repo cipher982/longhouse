@@ -8,6 +8,21 @@ export async function listMachines(): Promise<MachineDirectoryResponse> {
   return request<MachineDirectoryResponse>("/timeline/machines");
 }
 
+export type MachinesSummaryResponse = components["schemas"]["MachinesSummaryResponse"];
+export type MachineSummary = components["schemas"]["MachineSummary"];
+export type MachineActivity = components["schemas"]["MachineActivity"];
+export type MachineSessionBrief = components["schemas"]["MachineSessionBrief"];
+export type MachineSync = components["schemas"]["MachineSync"];
+
+/** Directory, activity and sync per machine; days bucket in the browser's local calendar. */
+export async function listMachineSummaries(days = 14): Promise<MachinesSummaryResponse> {
+  const params = new URLSearchParams({
+    days: String(days),
+    utc_offset_minutes: String(-new Date().getTimezoneOffset()),
+  });
+  return request<MachinesSummaryResponse>(`/timeline/machines/summary?${params.toString()}`);
+}
+
 export type WorkspaceSuggestion = {
   path: string;
   label: string;

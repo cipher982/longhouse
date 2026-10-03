@@ -82,6 +82,8 @@ _SAFE_RETRY_METHODS = {
     "session.preferences.update.v2",
     "session.active.list.v2",
     "session.timeline.list.v2",
+    # Read-only aggregate over the same snapshot as the timeline.
+    "machine.activity.summary.v2",
     "session.titles.search.v2",
     "directed_input.create.v2",
     "directed_input.link_receipt.v2",

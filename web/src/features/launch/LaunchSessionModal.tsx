@@ -19,6 +19,8 @@ interface LaunchSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
   onLaunched: (sessionId: string) => void;
+  /** Preselect this machine when it can launch (the Machines page's "New session"). */
+  initialDeviceId?: string;
 }
 
 const WORKSPACE_LIMIT = 12;
@@ -41,6 +43,7 @@ export default function LaunchSessionModal({
   isOpen,
   onClose,
   onLaunched,
+  initialDeviceId,
 }: LaunchSessionModalProps) {
   const machinesQuery = useQuery({
     queryKey: ["launch-machines"],
@@ -113,11 +116,13 @@ export default function LaunchSessionModal({
     options[nextIndex]?.focus();
   }, []);
 
-  // Auto-select the first launchable machine.
+  // Start on the machine the caller named when it can launch, else the first
+  // launchable machine.
   useEffect(() => {
     if (!isOpen || !launchable.length || deviceId) return;
-    setDeviceId(launchable[0].device_id);
-  }, [isOpen, launchable, deviceId]);
+    const preferred = initialDeviceId ? launchable.find((m) => m.device_id === initialDeviceId) : undefined;
+    setDeviceId((preferred ?? launchable[0]).device_id);
+  }, [isOpen, launchable, deviceId, initialDeviceId]);
 
   // Keep the provider valid for the selected machine.
   useEffect(() => {

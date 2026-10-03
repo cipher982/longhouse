@@ -33,8 +33,8 @@ import { Spinner } from "@/shared/ui/Spinner";
 const ProfilePage = lazy(() => import("@/features/auth/ProfilePage"));
 const SettingsPage = lazy(() => import("@/features/auth/SettingsPage"));
 const DevicesPage = lazy(() => import("@/features/machines/DevicesPage"));
-const ObservabilityPage = lazy(() => import("@/features/observability/ObservabilityPage"));
-const RunnersPage = lazy(() => import("@/features/runners/RunnersPage"));
+const MachinesPage = lazy(() => import("@/features/machines/MachinesPage"));
+const MachineDetailPage = lazy(() => import("@/features/machines/MachineDetailPage"));
 const RunnerDetailPage = lazy(() => import("@/features/runners/RunnerDetailPage"));
 const SessionsPage = lazy(() => import("@/features/timeline/SessionsPage"));
 const SessionDetailPage = lazy(() => import("@/features/session/SessionDetailPage"));
@@ -281,23 +281,32 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                   </ErrorBoundary>
                 ),
               },
+              // Health and the Runners list folded into Machines (2026-10).
               {
                 path: "/health",
+                element: <Navigate to="/machines" replace />,
+              },
+              {
+                path: "/observability",
+                element: <Navigate to="/machines" replace />,
+              },
+              {
+                path: "/runners",
+                element: <Navigate to="/machines" replace />,
+              },
+              {
+                path: "/machines",
                 element: (
                   <ErrorBoundary>
-                    <ObservabilityPage />
+                    <MachinesPage />
                   </ErrorBoundary>
                 ),
               },
               {
-                path: "/observability",
-                element: <Navigate to="/health" replace />,
-              },
-              {
-                path: "/runners",
+                path: "/machines/:deviceId",
                 element: (
                   <ErrorBoundary>
-                    <RunnersPage />
+                    <MachineDetailPage />
                   </ErrorBoundary>
                 ),
               },

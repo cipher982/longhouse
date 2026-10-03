@@ -24,9 +24,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionTurn
-from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
-from zerg.services.agent_heartbeat_health import MachineTransportHealthSummary
-from zerg.services.agent_heartbeat_health import load_machine_transport_health_map
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
@@ -104,7 +101,6 @@ SESSION_TURN_ERROR_VERIFICATION_TIMEOUT = "verification_timeout"
 SESSION_TURN_ERROR_TURN_TIMEOUT = "turn_timeout"
 SESSION_TURN_RECONSTRUCTED_REQUEST_PREFIX = "native"
 
-RECENT_MANAGED_TURN_MATERIALIZATION_LIMIT = 200
 SESSION_TURN_MATERIALIZATION_STALE_AFTER_DAYS = 7
 
 T = TypeVar("T")
@@ -130,15 +126,6 @@ class SessionTurnSnapshot:
     durable_at: datetime | None
     created_at: datetime | None
     updated_at: datetime | None
-
-
-@dataclass(frozen=True)
-class ManagedCompletedTurnSummary:
-    session: AgentSession
-    turn: SessionTurn
-    completed_at: datetime
-    total_turn_time_ms: int
-    machine: MachineTransportHealthSummary | None
 
 
 def hash_user_text(text: str) -> str:
@@ -566,44 +553,6 @@ def _transcript_materialization_event_floor(existing_turns: list[SessionTurn]) -
     return max(assistant_event_ids)
 
 
-def materialize_recent_managed_transcript_turns(
-    db: Session,
-    *,
-    provider: str | None = None,
-    project: str | None = None,
-    device_id: str | None = None,
-    hours_back: int = 24,
-    session_limit: int = RECENT_MANAGED_TURN_MATERIALIZATION_LIMIT,
-    owned_session_ids: frozenset[str] | None = None,
-) -> int:
-    lookback_start = utc_now() - timedelta(hours=max(1, hours_back))
-    activity_anchor = func.coalesce(AgentSession.last_activity_at, AgentSession.started_at)
-    # Session-identity-kernel cleanup: ``managed_transport`` was dropped.
-    # Approximate by anchoring on activity window only; managed/unmanaged
-    # split now lives on SessionConnection which downstream code consults.
-    query = db.query(AgentSession.id).filter(
-        activity_anchor >= lookback_start,
-    )
-    if owned_session_ids is not None:
-        if not owned_session_ids:
-            return 0
-        query = query.filter(AgentSession.id.in_(owned_session_ids))
-    if provider:
-        query = query.filter(AgentSession.provider == provider)
-    if project:
-        query = query.filter(AgentSession.project == project)
-    if device_id:
-        query = query.filter(AgentSession.device_id == device_id)
-    query = query.order_by(activity_anchor.desc(), AgentSession.started_at.desc(), AgentSession.id.desc()).limit(max(1, session_limit))
-
-    created = 0
-    for (session_id,) in query.all():
-        created += materialize_managed_transcript_turns(db, session_id=session_id)
-        if materialize_pending_managed_transcript_turn(db, session_id=session_id):
-            created += 1
-    return created
-
-
 def get_session_turn(
     db: Session,
     *,
@@ -863,140 +812,6 @@ def list_session_turns(
     return turns, total
 
 
-def list_slow_session_turns(
-    db: Session,
-    *,
-    provider: str | None = None,
-    project: str | None = None,
-    device_id: str | None = None,
-    state: str | None = None,
-    machine_status: str | None = None,
-    min_total_turn_time_ms: int = 30_000,
-    hours_back: int = 24,
-    stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
-    limit: int = 20,
-    offset: int = 0,
-    owned_session_ids: frozenset[str] | None = None,
-) -> tuple[list[ManagedCompletedTurnSummary], int]:
-    summaries = list_managed_completed_turns(
-        db,
-        provider=provider,
-        project=project,
-        device_id=device_id,
-        state=state,
-        machine_status=machine_status,
-        min_total_turn_time_ms=min_total_turn_time_ms,
-        hours_back=hours_back,
-        stale_after_seconds=stale_after_seconds,
-        owned_session_ids=owned_session_ids,
-    )
-    # Keep the threshold authoritative even if a future dialect cannot express
-    # the SQL pre-filter and list_managed_completed_turns returns the broader
-    # completed-turn slice.
-    summaries = [item for item in summaries if item.total_turn_time_ms >= min_total_turn_time_ms]
-    summaries.sort(
-        key=lambda item: (
-            -item.total_turn_time_ms,
-            -item.completed_at.timestamp(),
-            -int(item.turn.id),
-        )
-    )
-    # total reflects the fully filtered slow-turn set, including current
-    # machine-status enrichment that is only available after the heartbeat map
-    # join in Python.
-    total = len(summaries)
-    page = summaries[max(0, offset) : max(0, offset) + max(1, limit)]
-    return page, total
-
-
-def list_managed_completed_turns(
-    db: Session,
-    *,
-    provider: str | None = None,
-    project: str | None = None,
-    device_id: str | None = None,
-    state: str | None = None,
-    machine_status: str | None = None,
-    min_total_turn_time_ms: int | None = None,
-    hours_back: int = 24,
-    stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
-    owned_session_ids: frozenset[str] | None = None,
-) -> list[ManagedCompletedTurnSummary]:
-    submitted_after = utc_now() - timedelta(hours=max(1, hours_back))
-    completed_at_expr = func.coalesce(SessionTurn.durable_at, SessionTurn.terminal_at)
-    total_turn_time_expr = _completed_turn_time_ms_sql(db)
-
-    # Session-identity-kernel cleanup: ``managed_transport`` was dropped.
-    # Managed-vs-unmanaged truth lives on ``session_connections``: a session
-    # is managed iff one of its primary-thread runs has a connection whose
-    # control_plane is one of the managed transports. Filter via EXISTS so
-    # we don't double-count sessions with multiple connections.
-    from zerg.models.agents import SessionConnection
-    from zerg.models.agents import SessionRun
-    from zerg.models.agents import SessionThread
-
-    managed_session_exists = (
-        db.query(SessionThread.id)
-        .join(SessionRun, SessionRun.thread_id == SessionThread.id)
-        .join(SessionConnection, SessionConnection.run_id == SessionRun.id)
-        .filter(SessionThread.session_id == AgentSession.id)
-        .filter(SessionConnection.control_plane.in_(tuple(sorted(_MANAGED_TURN_CONTROL_PLANES))))
-        .exists()
-    )
-
-    query = (
-        db.query(SessionTurn, AgentSession)
-        .join(AgentSession, AgentSession.id == SessionTurn.session_id)
-        .filter(
-            SessionTurn.user_submitted_at >= submitted_after,
-            completed_at_expr.isnot(None),
-            managed_session_exists,
-        )
-    )
-    if owned_session_ids is not None:
-        if not owned_session_ids:
-            return []
-        query = query.filter(AgentSession.id.in_(owned_session_ids))
-    if provider:
-        query = query.filter(AgentSession.provider == provider)
-    if project:
-        query = query.filter(AgentSession.project == project)
-    if device_id:
-        query = query.filter(AgentSession.device_id == device_id)
-    if state:
-        query = query.filter(SessionTurn.state == state)
-    if min_total_turn_time_ms is not None and total_turn_time_expr is not None:
-        query = query.filter(total_turn_time_expr >= int(min_total_turn_time_ms))
-
-    rows = query.order_by(completed_at_expr.desc(), SessionTurn.id.desc()).all()
-    device_ids = {str(session.device_id).strip() for _, session in rows if str(session.device_id or "").strip()}
-    machine_map = load_machine_transport_health_map(
-        db,
-        device_ids=device_ids,
-        stale_after_seconds=stale_after_seconds,
-    )
-
-    summaries: list[ManagedCompletedTurnSummary] = []
-    for turn, session in rows:
-        completed_at = normalize_utc(turn.durable_at) or normalize_utc(turn.terminal_at)
-        total_turn_time_ms = _completed_turn_time_ms(turn)
-        if completed_at is None or total_turn_time_ms is None:
-            continue
-        machine = machine_map.get(str(session.device_id or "").strip()) if session.device_id else None
-        if machine_status and (machine is None or machine.status != machine_status):
-            continue
-        summaries.append(
-            ManagedCompletedTurnSummary(
-                session=session,
-                turn=turn,
-                completed_at=completed_at,
-                total_turn_time_ms=total_turn_time_ms,
-                machine=machine,
-            )
-        )
-    return summaries
-
-
 def get_session_turn_snapshot(
     *,
     db_bind,
@@ -1027,31 +842,6 @@ def get_session_turn_snapshot(
             created_at=normalize_utc(turn.created_at),
             updated_at=normalize_utc(turn.updated_at),
         )
-
-
-def _completed_turn_time_ms(turn: SessionTurn) -> int | None:
-    user_submitted_at = normalize_utc(turn.user_submitted_at)
-    completed_at = normalize_utc(turn.durable_at) or normalize_utc(turn.terminal_at)
-    if user_submitted_at is None or completed_at is None:
-        return None
-    elapsed_ms = round((completed_at - user_submitted_at).total_seconds() * 1000)
-    return max(0, int(elapsed_ms))
-
-
-def _completed_turn_time_ms_sql(db: Session):
-    completed_at_expr = func.coalesce(SessionTurn.durable_at, SessionTurn.terminal_at)
-    bind = getattr(db, "bind", None)
-    dialect = getattr(bind, "dialect", None)
-    dialect_name = str(getattr(dialect, "name", "") or "").lower()
-    if dialect_name == "sqlite":
-        # julianday() returns days as a float; convert to milliseconds.
-        return func.round((func.julianday(completed_at_expr) - func.julianday(SessionTurn.user_submitted_at)) * 86400000)
-    if dialect_name == "postgresql":
-        return func.floor(func.extract("epoch", completed_at_expr - SessionTurn.user_submitted_at) * 1000)
-    # Unknown dialects still stay correct because list_slow_session_turns
-    # re-checks the threshold in Python after load; this only loses the SQL
-    # pre-filter.
-    return None
 
 
 def mark_session_turn_send_accepted(

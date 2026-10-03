@@ -42,6 +42,7 @@ from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
+from zerg.schemas.machines import MachinesSummaryResponse
 from zerg.schemas.machines import RecentModel
 from zerg.schemas.machines import RecentModelsResponse
 from zerg.schemas.machines import WorkspaceSuggestion
@@ -59,6 +60,7 @@ from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
 from zerg.services.machines_directory import build_machines_directory
+from zerg.services.machines_summary import build_machines_summary
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import resolve_search_days_back
 from zerg.services.session_resume import SessionResumeIntentResponse
@@ -252,6 +254,19 @@ def list_browser_machines(
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     entries = build_machines_directory(owner_id=owner_id, enrollments=enrollments)
     return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
+
+
+@router.get("/machines/summary", response_model=MachinesSummaryResponse)
+def list_browser_machine_summaries(
+    days: int = Query(14, ge=1, le=30, description="Activity window in local calendar days, today included"),
+    utc_offset_minutes: int = Query(0, ge=-840, le=840, description="Caller's local offset east of UTC, for day buckets"),
+    current_user=Depends(get_current_browser_caller),
+) -> MachinesSummaryResponse:
+    """Browser Machines surface. Same body shape as ``/api/agents/machines/summary``."""
+    try:
+        return build_machines_summary(owner_id=int(current_user.owner_id), days=days, utc_offset_minutes=utc_offset_minutes)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
 
 
 @router.get("/machines/{device_id}/workspaces", response_model=WorkspaceSuggestionsResponse)

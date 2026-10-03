@@ -20,17 +20,16 @@ describe("getNavItems", () => {
     const { getNavItems } = await import("./navItems");
     expect(getNavItems()).toEqual([
       { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
-      { label: "Machines", href: "/runners", testId: "global-runners-tab" },
+      { label: "Machines", href: "/machines", testId: "global-machines-tab" },
     ]);
   });
 
-  it("adds Health in single-tenant mode", async () => {
+  it("has no separate Health tab in single-tenant mode", async () => {
     configState.singleTenant = true;
     const { getNavItems } = await import("./navItems");
     expect(getNavItems().map((item) => item.href)).toEqual([
       "/timeline",
-      "/runners",
-      "/health",
+      "/machines",
     ]);
   });
 

@@ -1,7 +1,6 @@
 import clsx from "clsx";
 import { useState, useCallback, useEffect, useRef, type PropsWithChildren } from "react";
-import { useLocation, useNavigate } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { Link, useLocation, useNavigate } from "react-router";
 import { useAuth, useAuthMethods } from "@/features/auth/auth";
 import { buildLoginUrl } from "@/features/auth/loginRedirect";
 import { clearLogoutBarrier } from "@/features/auth/auth-refresh";
@@ -13,13 +12,13 @@ import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useWebClientPresence } from "./useWebClientPresence";
 import { useConfirm } from "@/shared/ui/confirm";
-import { fetchRunnerStatus } from "@/shared/api/index";
+import { useMachineDirectory } from "@/features/machines/useMachines";
 import { SwarmLogo } from "@/shared/ui/SwarmLogo";
 import "./styles/layout.css";
 import { XIcon } from "@/shared/ui/icons";
 import { getNavItems } from "./navigation/navItems";
 
-const RUNNER_STATUS_INITIAL_DELAY_MS = 2_500;
+const MACHINE_STATUS_INITIAL_DELAY_MS = 2_500;
 
 type AvatarUser = { avatar_url?: string | null } | null | undefined;
 
@@ -387,9 +386,9 @@ function WelcomeHeader() {
   );
 }
 
-// Folded into the nav's right cluster (was a separate footer status bar).
-// Same data sources as before: useApiHealth for API reachability, the
-// runnerStatus query for the machine count — just rendered as one sentence.
+// Folded into the nav's right cluster. It says how many enrolled machines hold
+// a live connection, from the machine directory (never the optional Runner
+// count), and only names the API when a request the app tracks has failed.
 function NavStatus() {
   const documentVisible = useDocumentVisible();
   const [queryEnabled, setQueryEnabled] = useState(false);
@@ -402,46 +401,40 @@ function NavStatus() {
 
     const timerId = window.setTimeout(() => {
       setQueryEnabled(true);
-    }, RUNNER_STATUS_INITIAL_DELAY_MS);
+    }, MACHINE_STATUS_INITIAL_DELAY_MS);
 
     return () => {
       window.clearTimeout(timerId);
     };
   }, [documentVisible]);
 
-  const { data: runnerStatus } = useQuery({
-    queryKey: ["runnerStatus"],
-    queryFn: fetchRunnerStatus,
+  const { data: directory } = useMachineDirectory({
     enabled: queryEnabled,
-    refetchInterval: documentVisible ? 30000 : false,
-    staleTime: 15000,
-    retry: false, // Don't retry on failure - just show stale data
+    refetchInterval: documentVisible ? 30_000 : false,
   });
 
-  const healthy = !apiError;
-  const label = healthy ? "API healthy" : "API degraded";
-  const machinesLabel =
-    runnerStatus && runnerStatus.total > 0
-      ? `, ${runnerStatus.online} of ${runnerStatus.total} machines up`
-      : "";
-  // Per-machine breakdown (name: status, one per line) lives on the title
-  // attribute — folded in from the old RunnerStatusIndicator tooltip, which
-  // this sentence replaced without carrying the detail forward.
-  const runnersTitle =
-    runnerStatus && runnerStatus.runners.length > 0
-      ? runnerStatus.runners.map((r) => `${r.name}: ${r.status}`).join("\n")
-      : null;
-  const title = apiError ? apiError.message : (runnersTitle ?? "API responding normally");
+  const machines = directory?.machines ?? [];
+  const online = machines.filter((machine) => machine.online).length;
+  if (!apiError && machines.length === 0) return null;
+
+  const label = apiError
+    ? "Can't reach Longhouse"
+    : `${online} of ${machines.length} ${machines.length === 1 ? "machine" : "machines"} online`;
+  const title = apiError
+    ? apiError.message
+    : machines.map((machine) => `${machine.machine_name}: ${machine.online ? "online" : "offline"}`).join("\n");
 
   return (
-    <span className="nav-status" data-testid="nav-status" title={title} aria-live="polite">
+    <Link to="/machines" className="nav-status" data-testid="nav-status" title={title} aria-live="polite">
       <span
-        className={clsx("nav-status-dot", { "nav-status-dot--error": !healthy })}
+        className={clsx("nav-status-dot", {
+          "nav-status-dot--error": Boolean(apiError),
+          "nav-status-dot--off": !apiError && online === 0,
+        })}
         aria-hidden="true"
       />
       {label}
-      {machinesLabel}
-    </span>
+    </Link>
   );
 }
 

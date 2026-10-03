@@ -12,6 +12,7 @@ snapshot reconciliation, the shadow reducers -- belongs to catalogd and is
 covered in ``test_catalogd_heartbeat``. What these tests own is the route: what
 it rejects, what it retains, and what it hands the catalog.
 """
+# ruff: noqa: F811
 
 from __future__ import annotations
 
@@ -32,8 +33,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401, F811
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401, F811
 from zerg.catalogd.models import FactHead  # noqa: E402
 from zerg.catalogd.schema import create_catalog_engine  # noqa: E402
 from zerg.dependencies.agents_auth import verify_agents_caller  # noqa: E402
@@ -451,6 +452,96 @@ def test_heartbeat_endpoint_creates_row(live_catalog, live_catalog_client):
     assert stamp["ship_latency_p95_ms_1h"] is None
     assert stamp["disk_free_bytes"] == 50_000_000_000
     assert stamp["is_offline"] == 0
+
+
+def test_heartbeat_shipping_progress_reaches_machine_health_route(live_catalog, live_catalog_client):
+    device_id = "shipping-progress-machine"
+    owner_id = live_catalog.create_user("owner@heartbeat-shipping.test")
+    headers = {"X-Agents-Token": live_catalog.create_device_token(owner_id=owner_id, device_id=device_id)}
+    live_catalog_client.cookies.set(
+        "longhouse_session",
+        live_catalog.browser_cookie(owner_id=owner_id, email="owner@heartbeat-shipping.test"),
+    )
+    observed_at = datetime.now(UTC).isoformat()
+    payload = {
+        "version": "shipping-progress",
+        "daemon_pid": 42,
+        "last_ship_result": "ok",
+        "spool_pending_count": 0,
+        "spool_dead_count": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "shipping_progress": {
+            "pending_work": False,
+            "stalled": False,
+            "seconds_without_progress": 0,
+            "observed_at": observed_at,
+        },
+    }
+
+    response = live_catalog_client.post("/agents/heartbeat", headers=headers, json=payload)
+    assert response.status_code == 204, response.text
+    health = live_catalog_client.get(
+        f"/observability/machines/health?device_id={device_id}&stale_after_seconds=3600",
+    )
+    assert health.status_code == 200, health.text
+    assert health.json()["machines"][0]["status"] == "healthy"
+
+    payload.pop("shipping_progress")
+    response = live_catalog_client.post("/agents/heartbeat", headers=headers, json=payload)
+    assert response.status_code == 204, response.text
+    health = live_catalog_client.get(
+        f"/observability/machines/health?device_id={device_id}&stale_after_seconds=3600",
+    )
+    assert health.status_code == 200, health.text
+    assert health.json()["machines"][0]["status"] == "unknown"
+
+
+def test_heartbeat_raw_health_allowlist_preserves_storage_and_recovery(live_catalog, live_catalog_client):
+    device_id = "raw-health-allowlist-machine"
+    owner_id = live_catalog.create_user("owner@heartbeat-raw-health.test")
+    headers = {"X-Agents-Token": live_catalog.create_device_token(owner_id=owner_id, device_id=device_id)}
+    live_catalog_client.cookies.set(
+        "longhouse_session",
+        live_catalog.browser_cookie(owner_id=owner_id, email="owner@heartbeat-raw-health.test"),
+    )
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=headers,
+        json={
+            "version": "raw-health-allowlist",
+            "daemon_pid": 42,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "ship_attempts_1h": 1,
+            "ship_successes_1h": 1,
+            "shipping_progress": {
+                "pending_work": False,
+                "stalled": False,
+                "seconds_without_progress": 0,
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+            "storage_v2_outbox": {
+                "blocked_source_count": 2,
+                "unresolved_blocked_source_count": 1,
+            },
+            "managed_launch_recovery": {
+                "active_count": 0,
+                "exhausted_count": 1,
+                "scan_error": False,
+            },
+        },
+    )
+    assert response.status_code == 204, response.text
+
+    health = live_catalog_client.get(
+        f"/observability/machines/health?device_id={device_id}&stale_after_seconds=3600",
+    )
+    assert health.status_code == 200, health.text
+    machine = health.json()["machines"][0]
+    assert machine["status"] == "broken"
+    assert "storage_v2_sources_unresolved" in machine["reasons"]
+    assert "managed_launch_recovery_exhausted" in machine["reasons"]
 
 
 def test_heartbeat_auth_disabled_honors_explicit_machine_identity(live_catalog):

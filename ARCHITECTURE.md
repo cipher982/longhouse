@@ -180,9 +180,8 @@ Features import across folders with `@/`; within a folder, relative.
 | `web/src/features/timeline/` | Sessions page, rows (`SessionRow.tsx`), inbox model, recall panel, timeline stream hook |
 | `web/src/features/session/` | Session detail page, `TimelinePane.tsx`, runtime strip, header state; the composer is `web/src/features/session/chat/SessionChat.tsx` |
 | `web/src/features/launch/` | Launch modal, model picker, provider sign-in |
-| `web/src/features/machines/` | Devices page, connect-machine flow |
-| `web/src/features/runners/` | Runner pages and add-runner modal |
-| `web/src/features/observability/` | Observability page |
+| `web/src/features/machines/` | Machines page and a machine's page (`MachinesPage.tsx`, `MachineDetailPage.tsx`, status words in `machinePresentation.ts`, served by `/api/timeline/machines/summary` from `server/zerg/services/machines_summary.py`), Devices page, connect-machine flow |
+| `web/src/features/runners/` | Runner detail page (optional shell-command tooling, shown under its machine) and the connect/add-runner modal |
 | `web/src/features/auth/` | Login, profile, settings, auth and token refresh |
 | `web/src/features/marketing/` | Landing, hero demo, remote scene, blog, docs, legal, share |
 | `web/scripts/prerender.mjs` | Build step after `vite build`: renders every sitemap route (`web/src/app/prerender.tsx`) to static HTML under `_prerender` in the build output, each with its own title, description, canonical and OpenGraph tags, so crawlers and link unfurlers get content; the browser hydrates it (`web/src/app/main.tsx`). `server/zerg/frontend_pages.py` serves those pages on the public (demo) site only |

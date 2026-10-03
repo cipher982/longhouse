@@ -111,6 +111,8 @@ _HEARTBEAT_READER_FIELDS = (
     "archive_backlog",
     "history_import",
     "shipping_progress",
+    "storage_v2_outbox",
+    "managed_launch_recovery",
     "last_ship_at",
     "last_ship_result",
     "last_ship_error_kind",
@@ -452,6 +454,20 @@ class ResolvedLocalSessionIn(UTCBaseModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
+class ShippingProgressIn(BaseModel):
+    """Engine's shipping-progress snapshot.
+
+    The daemon always sends this complete object; ``None`` keeps heartbeats
+    from older engines compatible while preserving absence as unknown health
+    evidence.
+    """
+
+    pending_work: bool
+    stalled: bool
+    seconds_without_progress: int
+    observed_at: str
+
+
 class HeartbeatIn(BaseModel):
     """Payload from the engine daemon."""
 
@@ -465,6 +481,7 @@ class HeartbeatIn(BaseModel):
     last_ship_error_kind: Optional[str] = None
     last_ship_error_message: Optional[str] = None
     spool_pending_count: int = 0
+    shipping_progress: ShippingProgressIn | None = None
     spool_dead_count: int = 0
     archive_backlog: dict[str, object] = Field(default_factory=dict)
     storage_v2_outbox: dict[str, object] = Field(default_factory=dict)
@@ -1020,6 +1037,11 @@ async def ingest_heartbeat(
         payload_for_retention = payload.model_dump(mode="json")
         if "history_import" not in payload.model_fields_set:
             payload_for_retention.pop("history_import", None)
+        if "shipping_progress" not in payload.model_fields_set:
+            payload_for_retention.pop("shipping_progress", None)
+        for field_name in ("storage_v2_outbox", "managed_launch_recovery"):
+            if field_name not in payload.model_fields_set:
+                payload_for_retention.pop(field_name, None)
         payload_for_retention.pop("machine_evidence", None)
         pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
             payload.machine_evidence,

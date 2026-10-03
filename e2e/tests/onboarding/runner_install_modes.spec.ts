@@ -2,12 +2,13 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Runner onboarding install modes', () => {
   test('machines page leads with the Machine Agent; the Runner is an optional extra', async ({ page }) => {
-    await page.goto('/runners', { waitUntil: 'domcontentloaded' });
+    await page.goto('/machines', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-ready="true"]', { timeout: 15_000 });
 
-    const addRunnerButton = page.getByTestId('runners-add-button');
-    await expect(addRunnerButton).toBeVisible();
-    await addRunnerButton.click();
+    // An empty host offers the first connection; a host with machines keeps it in the header.
+    const connectButton = page.getByTestId('machines-connect-first-button').or(page.getByTestId('machines-connect-button'));
+    await expect(connectButton).toBeVisible();
+    await connectButton.click();
 
     const modal = page.getByTestId('add-runner-modal');
     await expect(modal).toBeVisible();

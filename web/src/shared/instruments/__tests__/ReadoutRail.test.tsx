@@ -2,13 +2,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReadoutRail, type ReadoutRailProps } from "../ReadoutRail";
-import { fetchRunnerStatus } from "@/shared/api/index";
+import { listMachines, type MachineDirectoryEntry } from "@/shared/api/index";
 
 vi.mock("@/shared/api/index", () => ({
-  fetchRunnerStatus: vi.fn(),
+  listMachines: vi.fn(),
 }));
 
-const fetchRunnerStatusMock = vi.mocked(fetchRunnerStatus);
+const listMachinesMock = vi.mocked(listMachines);
+
+function machine(deviceId: string, online: boolean): MachineDirectoryEntry {
+  return {
+    device_id: deviceId,
+    machine_name: deviceId,
+    online,
+    control_channel_status: online ? "connected" : "disconnected",
+    launch: { providers: [], blocked_by: online ? "no_launch_support" : "control_down" },
+  } as MachineDirectoryEntry;
+}
 
 function renderRail(props: Partial<ReadoutRailProps> = {}) {
   const queryClient = new QueryClient({
@@ -33,12 +43,7 @@ function renderRail(props: Partial<ReadoutRailProps> = {}) {
 describe("ReadoutRail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    fetchRunnerStatusMock.mockResolvedValue({
-      total: 0,
-      online: 0,
-      offline: 0,
-      runners: [],
-    });
+    listMachinesMock.mockResolvedValue({ machines: [] });
   });
 
   it("renders only the entries it has real data for", () => {
@@ -90,22 +95,19 @@ describe("ReadoutRail", () => {
     expect(labelEl).toHaveAttribute("title", longLabel);
   });
 
-  it("omits Machines up when the runner status is unavailable", async () => {
+  it("omits the machine count when no machine is enrolled", async () => {
     renderRail({});
-    await waitFor(() => expect(fetchRunnerStatusMock).toHaveBeenCalled());
+    await waitFor(() => expect(listMachinesMock).toHaveBeenCalled());
     expect(screen.queryByTestId("readout-machines")).not.toBeInTheDocument();
   });
 
-  it("shows Machines up, dim, once the runner status resolves", async () => {
-    fetchRunnerStatusMock.mockResolvedValue({
-      total: 12,
-      online: 4,
-      offline: 8,
-      runners: [],
+  it("counts connected Machine Agents, not Runners", async () => {
+    listMachinesMock.mockResolvedValue({
+      machines: [machine("cinder", true), machine("cube", true), machine("cube-canary", false), machine("pepper", false)],
     });
     renderRail({});
     await waitFor(() => expect(screen.getByTestId("readout-machines")).toBeInTheDocument());
-    expect(screen.getByTestId("readout-machines")).toHaveTextContent("4 / 12");
+    expect(screen.getByTestId("readout-machines")).toHaveTextContent("2 / 4");
     expect(screen.getByTestId("readout-machines").querySelector(".instrument-nixie--dim")).toBeTruthy();
   });
 });

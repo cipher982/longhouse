@@ -802,12 +802,3 @@ struct APISessionInputResponse: Codable, Hashable, Sendable {
     let intent: String
     let queued: [APIQueuedInputSummary]?
 }
-
-struct APISessionTurnTimingResponse: Codable, Hashable, Sendable {
-    let submitToSendMs: Int?
-    let submitToActiveMs: Int?
-    let submitToTerminalMs: Int?
-    let activeToTerminalMs: Int?
-    let terminalToDurableMs: Int?
-    let totalTurnTimeMs: Int?
-}

@@ -25,6 +25,13 @@ struct SettingsView: View {
                             .foregroundStyle(Ember.gold)
                     }
                 }
+                Section {
+                    NavigationLink {
+                        MachinesView()
+                    } label: {
+                        Label("Machines", systemImage: "desktopcomputer")
+                    }
+                }
                 .listRowBackground(Ember.card)
 
                 Section {

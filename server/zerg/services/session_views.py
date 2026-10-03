@@ -30,7 +30,6 @@ from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLaunchAttempt
-from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.input_attachments_support import attachments_supported
@@ -1597,66 +1596,6 @@ class EventsListResponse(BaseModel):
     has_more: bool = Field(False, description="Whether another storage-v2 page is available")
 
 
-class SessionTurnTimingResponse(UTCBaseModel):
-    """Derived durations computed from canonical turn timestamps."""
-
-    submit_to_send_ms: Optional[int] = Field(None, description="send_accepted_at - user_submitted_at")
-    submit_to_active_ms: Optional[int] = Field(None, description="active_phase_observed_at - user_submitted_at")
-    submit_to_terminal_ms: Optional[int] = Field(None, description="terminal_at - user_submitted_at")
-    active_to_terminal_ms: Optional[int] = Field(None, description="terminal_at - active_phase_observed_at")
-    terminal_to_durable_ms: Optional[int] = Field(None, description="durable_at - terminal_at")
-    total_turn_time_ms: Optional[int] = Field(
-        None,
-        description="Best available completion time: (durable_at or terminal_at) - user_submitted_at",
-    )
-
-
-class SessionTurnResponse(UTCBaseModel):
-    """Canonical public timing fields for one session turn."""
-
-    id: int = Field(..., description="Turn integer id")
-    session_id: str = Field(..., description="Owning session UUID")
-    request_id: Optional[str] = Field(
-        None,
-        description=("Transport request id when available, otherwise a synthetic canonical id for reconstructed native turns"),
-    )
-    session_input_id: Optional[int] = Field(
-        None,
-        description="SessionInput row that authored this turn, when any",
-    )
-    state: str = Field(..., description="created|send_accepted|active|terminal|durable|failed")
-    terminal_phase: Optional[str] = Field(None, description="Observed terminal phase when known")
-    error_code: Optional[str] = Field(None, description="Canonical irrecoverable error code when failed")
-    user_event_id: Optional[int] = Field(None, description="Triggering durable user event id")
-    durable_assistant_event_id: Optional[int] = Field(None, description="Durable assistant event id that closed the turn")
-    baseline_event_id: Optional[int] = Field(None, description="Latest durable event id observed before the turn began")
-    baseline_observation_cursor: Optional[int] = Field(None, description="Latest runtime observation cursor before the turn began")
-    user_submitted_at: datetime = Field(..., description="When the user prompt was accepted as a turn")
-    send_accepted_at: Optional[datetime] = Field(None, description="When transport accepted the prompt send")
-    active_phase_observed_at: Optional[datetime] = Field(None, description="When Longhouse first observed active runtime work")
-    terminal_at: Optional[datetime] = Field(None, description="When the turn reached terminal phase")
-    durable_at: Optional[datetime] = Field(None, description="When transcript durability was established")
-    created_at: Optional[datetime] = Field(None, description="Row creation timestamp")
-    updated_at: Optional[datetime] = Field(None, description="Row update timestamp")
-    timing: SessionTurnTimingResponse = Field(
-        ...,
-        description="Derived read-time durations between canonical turn milestones",
-    )
-
-
-class SessionTurnsListResponse(BaseModel):
-    """Response for a stable per-session turn listing."""
-
-    turns: List[SessionTurnResponse]
-    total: int
-
-
-class SessionTurnEnvelopeResponse(BaseModel):
-    """Envelope for turn detail responses."""
-
-    turn: SessionTurnResponse
-
-
 class SessionProjectionItemResponse(UTCBaseModel):
     """One stitched item in a selected session's projected lineage path."""
 
@@ -2573,57 +2512,6 @@ def build_tool_call_state_map(
         else:
             result[int(event.id)] = ToolCallState.RUNNING
     return result
-
-
-def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:
-    timing = build_session_turn_timing_response(turn)
-    return SessionTurnResponse(
-        id=int(turn.id),
-        session_id=str(turn.session_id),
-        request_id=turn.request_id,
-        session_input_id=turn.session_input_id,
-        state=turn.state,
-        terminal_phase=turn.terminal_phase,
-        error_code=turn.error_code,
-        user_event_id=turn.user_event_id,
-        durable_assistant_event_id=turn.durable_assistant_event_id,
-        baseline_event_id=turn.baseline_event_id,
-        baseline_observation_cursor=turn.baseline_observation_cursor,
-        user_submitted_at=turn.user_submitted_at,
-        send_accepted_at=turn.send_accepted_at,
-        active_phase_observed_at=turn.active_phase_observed_at,
-        terminal_at=turn.terminal_at,
-        durable_at=turn.durable_at,
-        created_at=turn.created_at,
-        updated_at=turn.updated_at,
-        timing=timing,
-    )
-
-
-def build_session_turn_timing_response(turn: SessionTurn) -> SessionTurnTimingResponse:
-    user_submitted_at = normalize_utc(turn.user_submitted_at)
-    send_accepted_at = normalize_utc(turn.send_accepted_at)
-    active_phase_observed_at = normalize_utc(turn.active_phase_observed_at)
-    terminal_at = normalize_utc(turn.terminal_at)
-    durable_at = normalize_utc(turn.durable_at)
-    completed_at = durable_at or terminal_at
-
-    return SessionTurnTimingResponse(
-        submit_to_send_ms=_duration_ms(user_submitted_at, send_accepted_at),
-        submit_to_active_ms=_duration_ms(user_submitted_at, active_phase_observed_at),
-        submit_to_terminal_ms=_duration_ms(user_submitted_at, terminal_at),
-        active_to_terminal_ms=_duration_ms(active_phase_observed_at, terminal_at),
-        terminal_to_durable_ms=_duration_ms(terminal_at, durable_at),
-        total_turn_time_ms=_duration_ms(user_submitted_at, completed_at),
-    )
-
-
-def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
-    if start is None or end is None:
-        return None
-    # Clamp small ordering/clock skew glitches to 0 so derived durations stay monotonic.
-    elapsed_ms = round((end - start).total_seconds() * 1000)
-    return max(0, int(elapsed_ms))
 
 
 def format_age(dt: datetime) -> str:

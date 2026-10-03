@@ -146,7 +146,7 @@ describe("RunnerDetailPage", () => {
     await waitFor(() => {
       expect(confirmMock).toHaveBeenCalled();
       expect(deleteMutation).toHaveBeenCalledWith(1);
-      expect(navigateMock).toHaveBeenCalledWith("/runners");
+      expect(navigateMock).toHaveBeenCalledWith("/machines");
     });
   });
 

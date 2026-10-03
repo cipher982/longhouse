@@ -159,7 +159,7 @@ async function openMachinesFromTimeline(
   page: Page,
 ): Promise<void> {
   // Navigate directly — the Machines nav item is the primary entry point
-  await page.goto("/runners");
+  await page.goto("/machines");
   await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 }
 
@@ -179,12 +179,12 @@ test.describe("Session activation surfaces", () => {
     if (runnerActionText !== null) {
       expect(runnerActionText.trim()).toBe("Machines");
     }
-    const globalRunnerTab = page.getByTestId("global-runners-tab");
-    await expect(globalRunnerTab).toBeVisible();
-    await expect(globalRunnerTab).toHaveText("Machines");
-    await globalRunnerTab.click();
+    const machinesTab = page.getByTestId("global-machines-tab");
+    await expect(machinesTab).toBeVisible();
+    await expect(machinesTab).toHaveText("Machines");
+    await machinesTab.click();
 
-    await page.waitForURL("**/runners", { timeout: 10_000 });
+    await page.waitForURL("**/machines", { timeout: 10_000 });
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
   });
 
@@ -204,16 +204,16 @@ test.describe("Session activation surfaces", () => {
 
       await openMachinesFromTimeline(page);
 
-      const runnerCard = page.getByTestId(`runner-card-${runner.id}`);
-      await expect(runnerCard).toBeVisible();
-      await expect(runnerCard).toContainText(runner.name);
-      await expect(runnerCard).toContainText("online");
+      // A Runner with no Machine Agent of the same name is listed on its own.
+      const runners = page.getByTestId("machines-unmatched-runners");
+      await expect(runners).toBeVisible();
+      await expect(runners).toContainText(`${runner.name} (online)`);
     } finally {
       await disconnectRunner();
     }
   });
 
-  test("multiple ready machines keep runner detail one click away from the machines grid", async ({
+  test("multiple ready runners keep runner detail one click away from the machines page", async ({
     page,
     request,
     backendUrl,
@@ -233,9 +233,9 @@ test.describe("Session activation surfaces", () => {
 
       await openMachinesFromTimeline(page);
 
-      const secondRunnerCard = page.getByTestId(`runner-card-${secondRunner.id}`);
-      await expect(secondRunnerCard).toContainText(secondRunner.name);
-      await secondRunnerCard.click();
+      const secondRunnerLink = page.getByTestId("machines-unmatched-runners").getByRole("link", { name: secondRunner.name });
+      await expect(secondRunnerLink).toBeVisible();
+      await secondRunnerLink.click();
 
       await page.waitForURL(`**/runners/${secondRunner.id}`, { timeout: 15_000 });
       await expect(page.getByRole("heading", { name: secondRunner.name })).toBeVisible();

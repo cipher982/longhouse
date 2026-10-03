@@ -60,6 +60,8 @@ _READ_BUDGETS = {
     "machine.workspace.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
     "machine.models.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
     "session.timeline.list.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
+    # The same candidate statement as the timeline, aggregated instead of paged.
+    "machine.activity.summary.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "session.shadow_state.read.v2": (_SHADOW_STATE_DEADLINE_SECONDS, _SHADOW_STATE_ATTEMPT_SECONDS),
     "session.shadow_state.read.batch.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "storage.session.title.dependency.health.v2": (_TITLE_HEALTH_DEADLINE_SECONDS, _TITLE_HEALTH_ATTEMPT_SECONDS),
@@ -163,6 +165,13 @@ def machine_heartbeats(
             "recent_after": recent_after,
             "limit": limit,
         },
+    )
+
+
+def machine_activity(*, owner_id: int, days_back: int, utc_offset_minutes: int) -> dict[str, Any]:
+    return _call(
+        "machine.activity.summary.v2",
+        {"owner_id": owner_id, "days_back": days_back, "utc_offset_minutes": utc_offset_minutes},
     )
 
 

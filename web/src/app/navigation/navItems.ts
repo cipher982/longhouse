@@ -8,7 +8,7 @@ export type NavItem = {
 
 const BASE_ITEMS: NavItem[] = [
   { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
-  { label: "Machines", href: "/runners", testId: "global-runners-tab" },
+  { label: "Machines", href: "/machines", testId: "global-machines-tab" },
 ];
 
 const DEMO_ITEMS: NavItem[] = [
@@ -16,10 +16,5 @@ const DEMO_ITEMS: NavItem[] = [
 ];
 
 export function getNavItems(): NavItem[] {
-  if (config.demoMode) return [...DEMO_ITEMS];
-  const items = [...BASE_ITEMS];
-  if (config.singleTenant) {
-    items.push({ label: "Health", href: "/health", testId: "global-health-tab" });
-  }
-  return items;
+  return config.demoMode ? [...DEMO_ITEMS] : [...BASE_ITEMS];
 }

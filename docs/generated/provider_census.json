@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 299,
+  "file_count": 303,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -465,6 +465,27 @@
       ]
     },
     {
+      "path": "ios/Sources/LonghouseApp/Machines/MachineActivityPalette.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/Machines/MachinePreviewFixtures.swift",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "omp"
+      ]
+    },
+    {
       "path": "ios/Sources/LonghouseApp/Previews/InboxViewPreviews.swift",
       "providers": [
         "antigravity",
@@ -521,6 +542,15 @@
       "path": "ios/Tests/LonghouseIOSTests/API/LonghouseAPITests.swift",
       "providers": [
         "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode"
+      ]
+    },
+    {
+      "path": "ios/Tests/LonghouseIOSTests/API/MachinesTests.swift",
+      "providers": [
         "codex",
         "cursor",
         "omp",
@@ -822,6 +852,18 @@
       ]
     },
     {
+      "path": "scripts/ui-fixtures/machinesFleet.ts",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
       "path": "scripts/ui-fixtures/providerCertification.ts",
       "providers": [
         "claude",
@@ -895,13 +937,6 @@
     },
     {
       "path": "server/tests_lite/test_agents_sessions_queryless_listing.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_agents_slow_turns.py",
       "providers": [
         "claude",
         "codex"
@@ -1258,6 +1293,14 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_machine_activity_summary.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_machines_directory.py",
       "providers": [
         "antigravity",
@@ -1342,13 +1385,6 @@
         "claude",
         "codex",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_observability_routes.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {
@@ -2498,6 +2534,24 @@
       ]
     },
     {
+      "path": "web/src/features/machines/__tests__/MachinesPage.test.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "omp"
+      ]
+    },
+    {
+      "path": "web/src/features/machines/__tests__/machinePresentation.test.ts",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "omp",
+        "opencode"
+      ]
+    },
+    {
       "path": "web/src/features/marketing/docs/IntegrationsPage.tsx",
       "providers": [
         "claude",
@@ -2505,14 +2559,6 @@
         "omp",
         "opencode",
         "pi"
-      ]
-    },
-    {
-      "path": "web/src/features/observability/__tests__/ObservabilityPage.test.tsx",
-      "providers": [
-        "claude",
-        "codex",
-        "cursor"
       ]
     },
     {

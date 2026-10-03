@@ -7,8 +7,7 @@
  * (>= 1180px; hidden below that in CSS). Ships only entries the caller can
  * actually back with real data — never a fabricated "Shipped" row.
  */
-import { useQuery } from "@tanstack/react-query";
-import { fetchRunnerStatus } from "@/shared/api/index";
+import { useMachineDirectory } from "@/features/machines/useMachines";
 import { formatElapsedClock } from "@/features/session/sessionHeaderState";
 import { Nixie } from "./Nixie";
 
@@ -41,17 +40,12 @@ export function ReadoutRail({
   toolCallsLive,
   waitingOn,
 }: ReadoutRailProps) {
-  // Same query key as the nav's status read (components/Layout.tsx) — the
-  // cache is shared, so this doesn't add a second network request.
-  const { data: runnerStatus } = useQuery({
-    queryKey: ["runnerStatus"],
-    queryFn: fetchRunnerStatus,
-    staleTime: 15_000,
-    retry: false,
-  });
+  // Same cache entry as the nav's machine count, so no second request.
+  const { data: directory } = useMachineDirectory();
 
   const hasContext = contextTokens != null && contextWindow != null && contextWindow > 0;
-  const hasMachines = Boolean(runnerStatus && runnerStatus.total > 0);
+  const machines = directory?.machines ?? [];
+  const onlineMachines = machines.filter((machine) => machine.online).length;
 
   return (
     <div className="instrument-readout-rail" data-testid="session-readout-rail">
@@ -109,10 +103,10 @@ export function ReadoutRail({
         </div>
       ) : null}
 
-      {hasMachines ? (
+      {machines.length > 0 ? (
         <div className="instrument-readout" data-testid="readout-machines">
-          <span className="instrument-readout__key">Machines up</span>
-          <Nixie value={`${runnerStatus!.online} / ${runnerStatus!.total}`} dim />
+          <span className="instrument-readout__key">Machines online</span>
+          <Nixie value={`${onlineMachines} / ${machines.length}`} dim />
         </div>
       ) : null}
     </div>

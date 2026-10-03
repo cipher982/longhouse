@@ -1314,6 +1314,41 @@ private struct APISemanticSearchResponse: Decodable {
 }
 
 extension LonghouseAPI {
+    static func machineSummariesURL(
+        baseURL: URL,
+        days: Int = 14,
+        utcOffsetMinutes: Int = TimeZone.current.secondsFromGMT() / 60
+    ) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/machines/summary"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "days", value: String(days)),
+            URLQueryItem(name: "utc_offset_minutes", value: String(utcOffsetMinutes)),
+        ]
+        return components.url!
+    }
+
+    func listMachineSummaries(days: Int = 14) async throws -> MachinesSummaryResponse {
+        var request = URLRequest(
+            url: Self.machineSummariesURL(
+                baseURL: baseURL,
+                days: days,
+                utcOffsetMinutes: TimeZone.current.secondsFromGMT() / 60
+            )
+        )
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if httpResponse.statusCode == 404 {
+                throw LonghouseAPIError.unexpectedResponse("Update your Longhouse server to see Machines.")
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(MachinesSummaryResponse.self, from: data)
+    }
+
     func listMachines() async throws -> [MachineDirectoryEntry] {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/machines"))
         request.addValue("application/json", forHTTPHeaderField: "Accept")

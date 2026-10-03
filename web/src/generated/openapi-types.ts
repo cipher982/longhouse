@@ -919,57 +919,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/observability/checks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Product Health Checks */
-        get: operations["list_product_health_checks_observability_checks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observability/checks/live_preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Live Preview Health Check */
-        get: operations["read_live_preview_health_check_observability_checks_live_preview_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observability/sessions/{session_id}/latency": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Session Realtime Latency */
-        get: operations["read_session_realtime_latency_observability_sessions__session_id__latency_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/observability/machines/health": {
         parameters: {
             query?: never;
@@ -979,80 +928,6 @@ export interface paths {
         };
         /** List Machine Health */
         get: operations["list_machine_health_observability_machines_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observability/turns/slow": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Slow Turns */
-        get: operations["list_slow_turns_observability_turns_slow_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observability/turns/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Summarize Turns */
-        get: operations["summarize_turns_observability_turns_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observability/overview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Observability Overview */
-        get: operations["read_observability_overview_observability_overview_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/observability/checks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Agent Product Health Checks
-         * @description Machine-readable product health over the canonical agents authority.
-         *
-         *     Factory assurance consumes this projection exactly like any Machine Agent;
-         *     it never receives a credential-rotation or dependency-probe operation.
-         */
-        get: operations["list_agent_product_health_checks_agents_observability_checks_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1815,6 +1690,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/machines/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Browser Machine Summaries
+         * @description Browser Machines surface. Same body shape as ``/api/agents/machines/summary``.
+         */
+        get: operations["list_browser_machine_summaries_timeline_machines_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/machines/{device_id}/workspaces": {
         parameters: {
             query?: never;
@@ -2304,6 +2199,26 @@ export interface paths {
          * @description List enrolled machines for this owner with live control-channel status.
          */
         get: operations["list_machines_agents_machines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/machines/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Machine Summaries
+         * @description Directory, activity and sync for every enrolled machine.
+         */
+        get: operations["list_machine_summaries_agents_machines_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4800,6 +4715,7 @@ export interface components {
              * @default 0
              */
             spool_pending_count: number;
+            shipping_progress?: components["schemas"]["ShippingProgressIn"] | null;
             /**
              * Spool Dead Count
              * @default 0
@@ -5067,6 +4983,52 @@ export interface components {
          * @enum {string}
          */
         Lifecycle: "open" | "closed" | "unknown";
+        /** MachineActivity */
+        MachineActivity: {
+            /**
+             * Sessions Started
+             * @description Sessions started on this machine inside the window (default timeline visibility).
+             */
+            sessions_started: number;
+            /**
+             * Daily
+             * @description Exactly `days` entries, oldest first, zero-filled.
+             */
+            daily: components["schemas"]["MachineActivityDay"][];
+            /**
+             * Top Projects
+             * @description Up to three projects by sessions started.
+             */
+            top_projects: components["schemas"]["MachineProjectCount"][];
+            latest_session?: components["schemas"]["MachineSessionBrief"] | null;
+            /**
+             * Live Count
+             * @description Sessions on this machine the Timeline shows under Live now (working_set open).
+             */
+            live_count: number;
+            /**
+             * Live Sessions
+             * @description Up to five, most recent first.
+             */
+            live_sessions: components["schemas"]["MachineSessionBrief"][];
+        };
+        /** MachineActivityDay */
+        MachineActivityDay: {
+            /**
+             * Date
+             * @description Local calendar day (YYYY-MM-DD) in the requested UTC offset.
+             */
+            date: string;
+            /** Total */
+            total: number;
+            /**
+             * By Provider
+             * @description Sessions started that day, by provider.
+             */
+            by_provider: {
+                [key: string]: number;
+            };
+        };
         /** MachineControlOperationResponse */
         MachineControlOperationResponse: {
             /**
@@ -5311,39 +5273,21 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** MachineHealthStatusCountsResponse */
-        MachineHealthStatusCountsResponse: {
+        /** MachineHistorySync */
+        MachineHistorySync: {
             /**
-             * Total
-             * @description Total machines in the current filtered slice before machine_limit is applied.
-             * @default 0
+             * State
+             * @description History import state reported by the Machine Agent (current, importing, ...).
              */
-            total: number;
-            /**
-             * Healthy
-             * @default 0
-             */
-            healthy: number;
-            /**
-             * Degraded
-             * @default 0
-             */
-            degraded: number;
-            /**
-             * Offline
-             * @default 0
-             */
-            offline: number;
-            /**
-             * Broken
-             * @default 0
-             */
-            broken: number;
-            /**
-             * Unknown
-             * @default 0
-             */
-            unknown: number;
+            state: string;
+            /** Source Count */
+            source_count?: number | null;
+            /** Remaining Bytes */
+            remaining_bytes?: number | null;
+            /** Remaining Records */
+            remaining_records?: number | null;
+            /** Acknowledged Records */
+            acknowledged_records?: number | null;
         };
         /** MachineLaunchProjection */
         MachineLaunchProjection: {
@@ -5442,6 +5386,13 @@ export interface components {
              */
             received_at: string;
         };
+        /** MachineProjectCount */
+        MachineProjectCount: {
+            /** Project */
+            project: string;
+            /** Sessions */
+            sessions: number;
+        };
         /** MachineRenameRequest */
         MachineRenameRequest: {
             /**
@@ -5513,6 +5464,24 @@ export interface components {
             message: string;
             /** Reason */
             reason?: string | null;
+        };
+        /** MachineSessionBrief */
+        MachineSessionBrief: {
+            /** Session Id */
+            session_id: string;
+            /** Title */
+            title: string;
+            /** Project */
+            project?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Last Activity At */
+            last_activity_at?: string | null;
+            /**
+             * Activity State
+             * @description Served activity axis: idle, thinking, executing, ...
+             */
+            activity_state?: string | null;
         };
         /**
          * MachineSessionResponse
@@ -5725,6 +5694,62 @@ export interface components {
             /** @description Scope and freshness of the lexical index that was searched. A false `complete` means the projector has not finished, so hits and misses are not exhaustive. */
             coverage?: components["schemas"]["MachineSearchCoverage"] | null;
         };
+        /** MachineSummary */
+        MachineSummary: {
+            machine: components["schemas"]["MachineDirectoryEntry"];
+            activity: components["schemas"]["MachineActivity"];
+            /** @description Null when no shipping heartbeat is on record in the last 30 days. */
+            sync?: components["schemas"]["MachineSync"] | null;
+        };
+        /** MachineSync */
+        MachineSync: {
+            /**
+             * Reported At
+             * Format: date-time
+             * @description When the Runtime Host received the latest shipping heartbeat.
+             */
+            reported_at: string;
+            /** Report Age Seconds */
+            report_age_seconds: number;
+            /** Stale */
+            stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "broken" | "offline" | "unknown";
+            /** Status Summary */
+            status_summary: string;
+            /** Engine Version */
+            engine_version?: string | null;
+            /** Last Upload At */
+            last_upload_at?: string | null;
+            /** Upload P95 Ms */
+            upload_p95_ms?: number | null;
+            /** Waiting Uploads */
+            waiting_uploads?: number | null;
+            /** Failed Uploads */
+            failed_uploads?: number | null;
+            history: components["schemas"]["MachineHistorySync"];
+        };
+        /** MachinesSummaryResponse */
+        MachinesSummaryResponse: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Days */
+            days: number;
+            /** Utc Offset Minutes */
+            utc_offset_minutes: number;
+            /** First Day */
+            first_day: string;
+            /** Last Day */
+            last_day: string;
+            /** Machines */
+            machines: components["schemas"]["MachineSummary"][];
+        };
         /**
          * ManagedLocalLaunchOutcomeRequest
          * @description Provider-observed result for a registered Helm launch transaction.
@@ -5910,52 +5935,6 @@ export interface components {
          * @enum {string}
          */
         ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process" | "cursor_exec" | "cursor_acp" | "cursor_helm" | "pi_print" | "pi_helm_channel" | "omp_helm_channel";
-        /** ManagedTurnProviderSummaryResponse */
-        ManagedTurnProviderSummaryResponse: {
-            /** Completed Turns */
-            completed_turns: number;
-            /** Slow Turns */
-            slow_turns: number;
-            /** Durable Turns */
-            durable_turns: number;
-            /** Terminal Only Turns */
-            terminal_only_turns: number;
-            submit_to_send_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            submit_to_active_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            submit_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            active_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            terminal_to_durable_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            total_turn_time_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            /** Provider */
-            provider: string;
-        };
-        /** ManagedTurnSummaryResponse */
-        ManagedTurnSummaryResponse: {
-            /** Completed Turns */
-            completed_turns: number;
-            /** Slow Turns */
-            slow_turns: number;
-            /** Durable Turns */
-            durable_turns: number;
-            /** Terminal Only Turns */
-            terminal_only_turns: number;
-            submit_to_send_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            submit_to_active_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            submit_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            active_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            terminal_to_durable_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-            total_turn_time_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
-        };
-        /** ManagedTurnsSummaryEnvelopeResponse */
-        ManagedTurnsSummaryEnvelopeResponse: {
-            /** Hours Back */
-            hours_back: number;
-            /** Slow Threshold Ms */
-            slow_threshold_ms: number;
-            summary: components["schemas"]["ManagedTurnSummaryResponse"];
-            /** Providers */
-            providers: components["schemas"]["ManagedTurnProviderSummaryResponse"][];
-        };
         /** MediaClaimItem */
         MediaClaimItem: {
             /** Sha256 */
@@ -6033,40 +6012,6 @@ export interface components {
              * @default false
              */
             revoke_authority: boolean;
-        };
-        /** ObservabilityOverviewResponse */
-        ObservabilityOverviewResponse: {
-            /**
-             * Generated At
-             * Format: date-time
-             */
-            generated_at: string;
-            /** Hours Back */
-            hours_back: number;
-            /** Slow Threshold Ms */
-            slow_threshold_ms: number;
-            /** Stale After Seconds */
-            stale_after_seconds: number;
-            summary: components["schemas"]["ManagedTurnSummaryResponse"];
-            /** Providers */
-            providers: components["schemas"]["ManagedTurnProviderSummaryResponse"][];
-            /**
-             * Machines
-             * @description Machine rows in the current filtered slice, truncated by machine_limit.
-             */
-            machines: components["schemas"]["MachineHealthItemResponse"][];
-            /** @description Status counts for the current filtered machine slice before machine_limit truncation. */
-            machine_counts: components["schemas"]["MachineHealthStatusCountsResponse"];
-            /**
-             * Slow Turns
-             * @description Slow-turn rows in the current filtered turn slice, truncated by slow_turn_limit.
-             */
-            slow_turns: components["schemas"]["SlowTurnItemResponse"][];
-            /**
-             * Slow Turn Total
-             * @description Total slow turns in the current filtered turn slice before slow_turn_limit truncation.
-             */
-            slow_turn_total: number;
         };
         /** PasswordLoginRequest */
         PasswordLoginRequest: {
@@ -6196,105 +6141,6 @@ export interface components {
          * @enum {string}
          */
         PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
-        /** ProductHealthCheckEvidenceRefResponse */
-        ProductHealthCheckEvidenceRefResponse: {
-            /** Kind */
-            kind: string;
-            /** Id */
-            id: string;
-            /** Reason */
-            reason: string;
-            /** Latency Ms */
-            latency_ms?: number | null;
-        };
-        /** ProductHealthCheckListResponse */
-        ProductHealthCheckListResponse: {
-            /** Checks */
-            checks: components["schemas"]["ProductHealthCheckSummaryResponse"][];
-        };
-        /** ProductHealthCheckLivePreviewCellResponse */
-        ProductHealthCheckLivePreviewCellResponse: {
-            dimension: components["schemas"]["ProductHealthCheckLivePreviewDimensionResponse"];
-            /** Applicable */
-            applicable: boolean;
-            /**
-             * Coverage
-             * @enum {string}
-             */
-            coverage: "full" | "partial" | "none";
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "ok" | "degraded" | "failing" | "unknown";
-            /**
-             * Truncated
-             * @default false
-             */
-            truncated: boolean;
-            signals: components["schemas"]["ProductHealthCheckLivePreviewSignalsResponse"];
-            thresholds: components["schemas"]["ProductHealthCheckThresholdsResponse"];
-            /** Missing */
-            missing: string[];
-            /** Evidence Refs */
-            evidence_refs: components["schemas"]["ProductHealthCheckEvidenceRefResponse"][];
-        };
-        /** ProductHealthCheckLivePreviewDimensionResponse */
-        ProductHealthCheckLivePreviewDimensionResponse: {
-            /** Provider */
-            provider?: string | null;
-            /** Surface */
-            surface?: string | null;
-            /** Managed */
-            managed?: boolean | null;
-        };
-        /** ProductHealthCheckLivePreviewResponse */
-        ProductHealthCheckLivePreviewResponse: {
-            /**
-             * Check
-             * @constant
-             */
-            check: "live_preview";
-            /** Window */
-            window: string;
-            /**
-             * Generated At
-             * Format: date-time
-             */
-            generated_at: string;
-            /** Cells */
-            cells: components["schemas"]["ProductHealthCheckLivePreviewCellResponse"][];
-        };
-        /** ProductHealthCheckLivePreviewSignalsResponse */
-        ProductHealthCheckLivePreviewSignalsResponse: {
-            /**
-             * Events
-             * @default 0
-             */
-            events: number;
-            /**
-             * Sessions
-             * @default 0
-             */
-            sessions: number;
-            /** Render P50 Ms */
-            render_p50_ms?: number | null;
-            /** Render P95 Ms */
-            render_p95_ms?: number | null;
-            /** Render Max Ms */
-            render_max_ms?: number | null;
-            /**
-             * Ios Render Duration Events
-             * @default 0
-             */
-            ios_render_duration_events: number;
-            /** Ios Render Duration P50 Ms */
-            ios_render_duration_p50_ms?: number | null;
-            /** Ios Render Duration P95 Ms */
-            ios_render_duration_p95_ms?: number | null;
-            /** Ios Render Duration Max Ms */
-            ios_render_duration_max_ms?: number | null;
-        };
         /** ProductHealthCheckSummaryResponse */
         ProductHealthCheckSummaryResponse: {
             /** Check */
@@ -6322,13 +6168,6 @@ export interface components {
             signals?: {
                 [key: string]: unknown;
             } | null;
-        };
-        /** ProductHealthCheckThresholdsResponse */
-        ProductHealthCheckThresholdsResponse: {
-            /** Render P95 Ms Ok */
-            render_p95_ms_ok: number;
-            /** Render P95 Ms Failing */
-            render_p95_ms_failing: number;
         };
         /** ProviderActionCoverageItemResponse */
         ProviderActionCoverageItemResponse: {
@@ -6609,259 +6448,6 @@ export interface components {
             receipt_id?: string | null;
             /** Detail */
             detail?: string | null;
-        };
-        /** RealtimePropagationBottleneckResponse */
-        RealtimePropagationBottleneckResponse: {
-            /** Stage Key */
-            stage_key: string;
-            /** Label */
-            label: string;
-            /** Duration Ms */
-            duration_ms: number;
-        };
-        /** RealtimePropagationClientRenderResponse */
-        RealtimePropagationClientRenderResponse: {
-            /** Surface */
-            surface: string;
-            /** Event Id */
-            event_id?: string | null;
-            /** Matched By */
-            matched_by: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Received At
-             * Format: date-time
-             */
-            received_at: string;
-            /** Emitted At Ms */
-            emitted_at_ms?: number | null;
-            /** Rendered At Ms */
-            rendered_at_ms?: number | null;
-            /** Clock Skew Ms */
-            clock_skew_ms?: number | null;
-            /** Server Fanout At Ms */
-            server_fanout_at_ms?: number | null;
-            /** Client Received At Ms */
-            client_received_at_ms?: number | null;
-            /** Pubsub Seq */
-            pubsub_seq?: number | null;
-            /** Latency Ms */
-            latency_ms?: number | null;
-            /** Webkit Stage */
-            webkit_stage?: string | null;
-            /** Latest Item Id */
-            latest_item_id?: string | null;
-        };
-        /** RealtimePropagationEventResponse */
-        RealtimePropagationEventResponse: {
-            /** Event Id */
-            event_id: number;
-            /** Role */
-            role: string;
-            /**
-             * Timestamp
-             * Format: date-time
-             */
-            timestamp: string;
-            /** Source Path */
-            source_path?: string | null;
-            /** Source Offset */
-            source_offset?: number | null;
-            /** Event Uuid */
-            event_uuid?: string | null;
-            /** Event Origin */
-            event_origin?: string | null;
-            provider_observation?: components["schemas"]["RealtimePropagationObservationRefResponse"] | null;
-            ship_trace?: components["schemas"]["RealtimePropagationShipTraceResponse"] | null;
-            server_fanout?: components["schemas"]["RealtimePropagationServerFanoutResponse"] | null;
-            /** Client Renders */
-            client_renders: components["schemas"]["RealtimePropagationClientRenderResponse"][];
-            first_client_render?: components["schemas"]["RealtimePropagationClientRenderResponse"] | null;
-            /** Total Provider To First Render Ms */
-            total_provider_to_first_render_ms?: number | null;
-            /** Measured Total Ms */
-            measured_total_ms?: number | null;
-            /** Unaccounted Ms */
-            unaccounted_ms?: number | null;
-            /** Client Clock Skew Ms */
-            client_clock_skew_ms?: number | null;
-            bottleneck?: components["schemas"]["RealtimePropagationBottleneckResponse"] | null;
-            /** Stages */
-            stages: components["schemas"]["RealtimePropagationStageResponse"][];
-            /** Gaps */
-            gaps: string[];
-        };
-        /** RealtimePropagationObservationRefResponse */
-        RealtimePropagationObservationRefResponse: {
-            /** Observation Id */
-            observation_id: string;
-            /** Source */
-            source: string;
-            /** Kind */
-            kind: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Received At
-             * Format: date-time
-             */
-            received_at: string;
-            /** Source Offset */
-            source_offset?: number | null;
-            /** Source Cursor */
-            source_cursor?: string | null;
-        };
-        /** RealtimePropagationServerFanoutResponse */
-        RealtimePropagationServerFanoutResponse: {
-            /** Observation Id */
-            observation_id: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Received At
-             * Format: date-time
-             */
-            received_at: string;
-            /** Latest Event Id */
-            latest_event_id?: number | null;
-            /** Server Fanout At Ms */
-            server_fanout_at_ms?: number | null;
-            /** Session Pubsub Seq */
-            session_pubsub_seq?: number | null;
-            /** Timeline Pubsub Seq */
-            timeline_pubsub_seq?: number | null;
-            /** Ship Trace Id */
-            ship_trace_id?: string | null;
-        };
-        /** RealtimePropagationSessionReportResponse */
-        RealtimePropagationSessionReportResponse: {
-            /**
-             * Generated At
-             * Format: date-time
-             */
-            generated_at: string;
-            session: components["schemas"]["RealtimePropagationSessionResponse"];
-            /** Event Limit */
-            event_limit: number;
-            /** Surface */
-            surface?: string | null;
-            /** Events */
-            events: components["schemas"]["RealtimePropagationEventResponse"][];
-            /** Gaps */
-            gaps: string[];
-            /** Known Unimplemented Probes */
-            known_unimplemented_probes: string[];
-        };
-        /** RealtimePropagationSessionResponse */
-        RealtimePropagationSessionResponse: {
-            /** Session Id */
-            session_id: string;
-            /** Provider */
-            provider: string;
-            /** Project */
-            project?: string | null;
-            /** Device Id */
-            device_id?: string | null;
-            /** Device Name */
-            device_name?: string | null;
-            /** Managed Transport */
-            managed_transport?: string | null;
-            /** Execution Home */
-            execution_home?: string | null;
-            /**
-             * Started At
-             * Format: date-time
-             */
-            started_at: string;
-            /** Last Activity At */
-            last_activity_at?: string | null;
-        };
-        /** RealtimePropagationShipTraceResponse */
-        RealtimePropagationShipTraceResponse: {
-            /** Trace Id */
-            trace_id: string;
-            /** Work Context */
-            work_context?: string | null;
-            /** Observation Source */
-            observation_source?: string | null;
-            /** Event Count */
-            event_count?: number | null;
-            /** Offset */
-            offset?: number | null;
-            /** New Offset */
-            new_offset?: number | null;
-            /** Range Bytes */
-            range_bytes?: number | null;
-            /** Observed At */
-            observed_at?: string | null;
-            /** Enqueued At */
-            enqueued_at?: string | null;
-            /** Job Started At */
-            job_started_at?: string | null;
-            /** Http Send Started At */
-            http_send_started_at?: string | null;
-            /** Server Handler Entered At */
-            server_handler_entered_at?: string | null;
-            /** Server Store Returned At */
-            server_store_returned_at?: string | null;
-            /** Observation To Enqueue Ms */
-            observation_to_enqueue_ms?: number | null;
-            /** Enqueue To Job Ms */
-            enqueue_to_job_ms?: number | null;
-            /** Job To Http Ms */
-            job_to_http_ms?: number | null;
-            /** Server Store Write Ms */
-            server_store_write_ms?: number | null;
-            /**
-             * Raw
-             * @description Trace timing metadata only. Transcript payload/content is not included.
-             */
-            raw?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Raw Dropped Keys
-             * @description Count of ship_trace keys omitted by the safe metadata allowlist.
-             * @default 0
-             */
-            raw_dropped_keys: number;
-        };
-        /** RealtimePropagationStageResponse */
-        RealtimePropagationStageResponse: {
-            /** Key */
-            key: string;
-            /** Label */
-            label: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "measured" | "missing";
-            /**
-             * Confidence
-             * @enum {string}
-             */
-            confidence: "observed" | "derived" | "missing";
-            /** Started At */
-            started_at?: string | null;
-            /** Ended At */
-            ended_at?: string | null;
-            /** Duration Ms */
-            duration_ms?: number | null;
-            /** Source */
-            source?: string | null;
-            /** Note */
-            note?: string | null;
         };
         /**
          * RecallContextResponse
@@ -9984,42 +9570,6 @@ export interface components {
             stale_reason?: ("freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable") | null;
         };
         /**
-         * SessionTurnTimingResponse
-         * @description Derived durations computed from canonical turn timestamps.
-         */
-        SessionTurnTimingResponse: {
-            /**
-             * Submit To Send Ms
-             * @description send_accepted_at - user_submitted_at
-             */
-            submit_to_send_ms?: number | null;
-            /**
-             * Submit To Active Ms
-             * @description active_phase_observed_at - user_submitted_at
-             */
-            submit_to_active_ms?: number | null;
-            /**
-             * Submit To Terminal Ms
-             * @description terminal_at - user_submitted_at
-             */
-            submit_to_terminal_ms?: number | null;
-            /**
-             * Active To Terminal Ms
-             * @description terminal_at - active_phase_observed_at
-             */
-            active_to_terminal_ms?: number | null;
-            /**
-             * Terminal To Durable Ms
-             * @description durable_at - terminal_at
-             */
-            terminal_to_durable_ms?: number | null;
-            /**
-             * Total Turn Time Ms
-             * @description Best available completion time: (durable_at or terminal_at) - user_submitted_at
-             */
-            total_turn_time_ms?: number | null;
-        };
-        /**
          * SessionWorkspaceResponse
          * @description Response for the primary session workspace bootstrap payload.
          */
@@ -10231,85 +9781,28 @@ export interface components {
             count: number;
         };
         /**
+         * ShippingProgressIn
+         * @description Engine's shipping-progress snapshot.
+         *
+         *     The daemon always sends this complete object; ``None`` keeps heartbeats
+         *     from older engines compatible while preserving absence as unknown health
+         *     evidence.
+         */
+        ShippingProgressIn: {
+            /** Pending Work */
+            pending_work: boolean;
+            /** Stalled */
+            stalled: boolean;
+            /** Seconds Without Progress */
+            seconds_without_progress: number;
+            /** Observed At */
+            observed_at: string;
+        };
+        /**
          * SignalTier
          * @enum {string}
          */
         SignalTier: "none" | "phase_signal" | "process_binding" | "transcript_progress";
-        /** SlowTurnItemResponse */
-        SlowTurnItemResponse: {
-            /** Turn Id */
-            turn_id: number;
-            /** Session Id */
-            session_id: string;
-            /** Request Id */
-            request_id?: string | null;
-            /** Provider */
-            provider: string;
-            /** Project */
-            project?: string | null;
-            /** Device Id */
-            device_id?: string | null;
-            /** Device Name */
-            device_name?: string | null;
-            /** Managed Transport */
-            managed_transport?: string | null;
-            /** State */
-            state: string;
-            /** Terminal Phase */
-            terminal_phase?: string | null;
-            /** Error Code */
-            error_code?: string | null;
-            /**
-             * User Submitted At
-             * Format: date-time
-             */
-            user_submitted_at: string;
-            /**
-             * Completed At
-             * Format: date-time
-             */
-            completed_at: string;
-            /** Total Turn Time Ms */
-            total_turn_time_ms: number;
-            timing: components["schemas"]["SessionTurnTimingResponse"];
-            machine?: components["schemas"]["SlowTurnMachineResponse"] | null;
-        };
-        /** SlowTurnMachineResponse */
-        SlowTurnMachineResponse: {
-            /** Device Id */
-            device_id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "healthy" | "degraded" | "offline" | "broken" | "unknown";
-            /** Status Reason */
-            status_reason: string;
-            /** Status Summary */
-            status_summary: string;
-            /**
-             * Last Heartbeat At
-             * Format: date-time
-             */
-            last_heartbeat_at: string;
-            /** Heartbeat Age Seconds */
-            heartbeat_age_seconds: number;
-            /** Is Stale */
-            is_stale: boolean;
-            /** Version */
-            version?: string | null;
-        };
-        /** SlowTurnsListResponse */
-        SlowTurnsListResponse: {
-            /** Turns */
-            turns: components["schemas"]["SlowTurnItemResponse"][];
-            /** Total */
-            total: number;
-            /** Hours Back */
-            hours_back: number;
-            /** Min Total Turn Time Ms */
-            min_total_turn_time_ms: number;
-        };
         /** SourceInventory */
         SourceInventory: {
             /**
@@ -10768,15 +10261,6 @@ export interface components {
              * @enum {string}
              */
             outcome: "completed" | "aborted";
-        };
-        /** TurnLatencyPercentilesResponse */
-        TurnLatencyPercentilesResponse: {
-            /** P50 */
-            p50?: number | null;
-            /** P95 */
-            p95?: number | null;
-            /** Max */
-            max?: number | null;
         };
         /**
          * UnmanagedSessionBindingIn
@@ -12564,118 +12048,6 @@ export interface operations {
             };
         };
     };
-    list_product_health_checks_observability_checks_get: {
-        parameters: {
-            query?: {
-                /** @description Recent observation window such as 15m, 1h, or 7d */
-                window?: string;
-                /** @description Filter live-preview observations by provider */
-                provider?: string | null;
-                /** @description Filter live-preview observations by client surface */
-                surface?: string | null;
-                /** @description Filter live-preview observations by managed-session flag */
-                managed?: boolean | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductHealthCheckListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_live_preview_health_check_observability_checks_live_preview_get: {
-        parameters: {
-            query?: {
-                /** @description Recent observation window such as 15m, 1h, or 7d */
-                window?: string;
-                /** @description Filter observations by provider */
-                provider?: string | null;
-                /** @description Filter observations by client surface */
-                surface?: string | null;
-                /** @description Filter observations by managed-session flag */
-                managed?: boolean | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductHealthCheckLivePreviewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_session_realtime_latency_observability_sessions__session_id__latency_get: {
-        parameters: {
-            query?: {
-                /** @description Recent durable transcript events to inspect */
-                event_limit?: number;
-                /** @description Optional client surface filter such as web or ios */
-                surface?: string | null;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RealtimePropagationSessionReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_machine_health_observability_machines_health_get: {
         parameters: {
             query?: {
@@ -12703,186 +12075,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineHealthListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_slow_turns_observability_turns_slow_get: {
-        parameters: {
-            query?: {
-                /** @description Filter by session provider */
-                provider?: string | null;
-                /** @description Filter by project */
-                project?: string | null;
-                /** @description Filter by device */
-                device_id?: string | null;
-                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
-                state?: string | null;
-                /** @description Filter by current machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
-                /** @description Only return completed turns at or above this total duration */
-                min_total_turn_time_ms?: number;
-                /** @description Only consider turns submitted within this recent window */
-                hours_back?: number;
-                /** @description Max slow-turn rows to return */
-                limit?: number;
-                /** @description Offset for pagination */
-                offset?: number;
-                /** @description Treat heartbeats older than this as offline when enriching machine status */
-                stale_after_seconds?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SlowTurnsListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    summarize_turns_observability_turns_summary_get: {
-        parameters: {
-            query?: {
-                /** @description Filter by session provider */
-                provider?: string | null;
-                /** @description Filter by project */
-                project?: string | null;
-                /** @description Filter by device */
-                device_id?: string | null;
-                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
-                state?: string | null;
-                /** @description Filter by current machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
-                /** @description Count turns at or above this total duration as slow */
-                slow_threshold_ms?: number;
-                /** @description Only consider completed turns submitted within this recent window */
-                hours_back?: number;
-                /** @description Treat heartbeats older than this as offline when enriching machine status */
-                stale_after_seconds?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManagedTurnsSummaryEnvelopeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_observability_overview_observability_overview_get: {
-        parameters: {
-            query?: {
-                /** @description Filter turn telemetry by session provider */
-                provider?: string | null;
-                /** @description Filter turn telemetry by project */
-                project?: string | null;
-                /** @description Filter machines and turns by device */
-                device_id?: string | null;
-                /** @description Filter completed turns by state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
-                state?: string | null;
-                /** @description Filter both the machine list and turn enrichment by machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
-                /** @description Count turns at or above this total duration as slow */
-                slow_threshold_ms?: number;
-                /** @description Only consider recent completed turns in this lookback window */
-                hours_back?: number;
-                /** @description Max machine rows to include in the overview */
-                machine_limit?: number;
-                /** @description Max slow-turn rows to include in the overview */
-                slow_turn_limit?: number;
-                /** @description Treat heartbeats older than this as offline when enriching machine status */
-                stale_after_seconds?: number;
-                /** @description Only include machines with a heartbeat in this recent window */
-                recent_within_hours?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservabilityOverviewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_agent_product_health_checks_agents_observability_checks_get: {
-        parameters: {
-            query?: {
-                /** @description Recent observation window such as 15m, 1h, or 7d */
-                window?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductHealthCheckListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -14211,6 +13403,40 @@ export interface operations {
             };
         };
     };
+    list_browser_machine_summaries_timeline_machines_summary_get: {
+        parameters: {
+            query?: {
+                /** @description Activity window in local calendar days, today included */
+                days?: number;
+                /** @description Caller's local offset east of UTC, for day buckets */
+                utc_offset_minutes?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachinesSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_browser_machine_workspaces_timeline_machines__device_id__workspaces_get: {
         parameters: {
             query?: {
@@ -15239,6 +14465,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineDirectoryResponse"];
+                };
+            };
+        };
+    };
+    list_machine_summaries_agents_machines_summary_get: {
+        parameters: {
+            query?: {
+                /** @description Activity window in local calendar days, today included */
+                days?: number;
+                /** @description Caller's local offset east of UTC, for day buckets */
+                utc_offset_minutes?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachinesSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

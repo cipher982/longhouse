@@ -14,8 +14,7 @@ export interface PageDef {
 
 export const APP_PAGES: PageDef[] = [
   { name: "timeline", path: `/timeline?${BASE_QUERY}`, ready: "page" },
-  { name: "machines", path: `/runners?${BASE_QUERY}`, ready: "page" },
-  { name: "health", path: `/health?${BASE_QUERY}`, ready: "page" },
+  { name: "machines", path: `/machines?${BASE_QUERY}`, ready: "page" },
   { name: "settings", path: `/settings?${BASE_QUERY}`, ready: "settings" },
   { name: "profile", path: `/profile?${BASE_QUERY}`, ready: "page" },
   { name: "integrations", path: `/settings/integrations?${BASE_QUERY}`, ready: "page" },

@@ -109,6 +109,72 @@ class MachineDirectoryResponse(UTCBaseModel):
     machines: list[MachineDirectoryEntry] = Field(default_factory=list)
 
 
+class MachineSessionBrief(UTCBaseModel):
+    session_id: str
+    title: str
+    project: str | None = None
+    provider: str | None = None
+    last_activity_at: datetime | None = None
+    activity_state: str | None = Field(default=None, description="Served activity axis: idle, thinking, executing, ...")
+
+
+class MachineActivityDay(UTCBaseModel):
+    date: str = Field(..., description="Local calendar day (YYYY-MM-DD) in the requested UTC offset.")
+    total: int
+    by_provider: dict[str, int] = Field(..., description="Sessions started that day, by provider.")
+
+
+class MachineProjectCount(UTCBaseModel):
+    project: str
+    sessions: int
+
+
+class MachineActivity(UTCBaseModel):
+    sessions_started: int = Field(..., description="Sessions started on this machine inside the window (default timeline visibility).")
+    daily: list[MachineActivityDay] = Field(..., description="Exactly `days` entries, oldest first, zero-filled.")
+    top_projects: list[MachineProjectCount] = Field(..., description="Up to three projects by sessions started.")
+    latest_session: MachineSessionBrief | None = None
+    live_count: int = Field(..., description="Sessions on this machine the Timeline shows under Live now (working_set open).")
+    live_sessions: list[MachineSessionBrief] = Field(..., description="Up to five, most recent first.")
+
+
+class MachineHistorySync(UTCBaseModel):
+    state: str = Field(..., description="History import state reported by the Machine Agent (current, importing, ...).")
+    source_count: int | None = None
+    remaining_bytes: int | None = None
+    remaining_records: int | None = None
+    acknowledged_records: int | None = None
+
+
+class MachineSync(UTCBaseModel):
+    reported_at: datetime = Field(..., description="When the Runtime Host received the latest shipping heartbeat.")
+    report_age_seconds: int
+    stale: bool
+    status: Literal["healthy", "degraded", "broken", "offline", "unknown"]
+    status_summary: str
+    engine_version: str | None = None
+    last_upload_at: datetime | None = None
+    upload_p95_ms: int | None = None
+    waiting_uploads: int | None = None
+    failed_uploads: int | None = None
+    history: MachineHistorySync
+
+
+class MachineSummary(UTCBaseModel):
+    machine: MachineDirectoryEntry
+    activity: MachineActivity
+    sync: MachineSync | None = Field(default=None, description="Null when no shipping heartbeat is on record in the last 30 days.")
+
+
+class MachinesSummaryResponse(UTCBaseModel):
+    generated_at: datetime
+    days: int
+    utc_offset_minutes: int
+    first_day: str
+    last_day: str
+    machines: list[MachineSummary]
+
+
 class MachineRenameRequest(UTCBaseModel):
     machine_name: str = Field(..., min_length=1, max_length=255, description="Durable human-facing machine label.")
 

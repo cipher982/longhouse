@@ -12,6 +12,8 @@ enum UITestHooks {
     static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
     static let inboxGalleryFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_INBOX_GALLERY_FIXTURE"
     static let launchSessionFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE"
+    static let machinesFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_MACHINES_FIXTURE"
+    static let machineFixtureScreenEnvironmentKey = "LONGHOUSE_UI_TEST_MACHINE_SCREEN"
     static let mobileDetailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_DETAIL_DELAY_MS"
     static let mobileTailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
     static let transcriptBenchmarkRendererEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_RENDERER"
@@ -75,7 +77,7 @@ enum UITestHooks {
     /// continuously redrawing view never lets it. Fixture-driven runs hold
     /// ambient motion still; the state they assert on does not depend on it.
     static var holdsAmbientMotion: Bool {
-        chatFixtureName != nil || shouldUseTimelineOpenFixture || shouldUseLaunchSessionFixture || shouldUseInboxGalleryFixture
+        chatFixtureName != nil || shouldUseTimelineOpenFixture || shouldUseLaunchSessionFixture || shouldUseInboxGalleryFixture || shouldUseMachinesFixture
     }
 
     static var shouldUseInboxGalleryFixture: Bool {
@@ -84,6 +86,16 @@ enum UITestHooks {
 
     static var shouldUseLaunchSessionFixture: Bool {
         ProcessInfo.processInfo.environment[launchSessionFixtureEnvironmentKey] == "1"
+    }
+    static var shouldUseMachinesFixture: Bool {
+        ProcessInfo.processInfo.environment[machinesFixtureEnvironmentKey] == "1"
+    }
+
+    static var machineFixtureScreen: String {
+        let value = ProcessInfo.processInfo.environment[machineFixtureScreenEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return value?.isEmpty == false ? value! : "machines"
     }
     static var mobileDetailDelayMs: Int? {
         guard let raw = ProcessInfo.processInfo.environment[mobileDetailDelayMsEnvironmentKey] else {

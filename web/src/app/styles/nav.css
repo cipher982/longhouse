@@ -584,6 +584,11 @@
   font-family: var(--font-family-base);
   color: var(--color-text-secondary);
   white-space: nowrap;
+  text-decoration: none;
+}
+
+.nav-status:hover {
+  color: var(--color-text-primary);
 }
 
 .nav-status-dot {
@@ -591,12 +596,18 @@
   height: 6px;
   border-radius: 999px;
   flex: none;
-  background: var(--color-intent-success);
-  opacity: 0.85;
+  background: var(--color-signal-live);
+  box-shadow: 0 0 6px rgba(70, 214, 140, 0.45);
+}
+
+.nav-status-dot--off {
+  background: var(--color-signal-off);
+  box-shadow: none;
 }
 
 .nav-status-dot--error {
-  background: var(--color-intent-error);
+  background: var(--color-signal-fault);
+  box-shadow: none;
 }
 
 /* User menu / avatar (top-right) */

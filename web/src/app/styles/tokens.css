@@ -30,6 +30,24 @@
   /* Cool foil — the one cold accent: idle / ended state */
   --color-state-cool: #7C8790;
 
+  /* Signal colours — machine status (Machines page, nav status). Their own
+     hues and chroma so live / needs-you / broken / quiet read at a glance
+     against the warm ground; amber stays the brand and primary action.
+     iOS mirrors these in Ember.swift (signal*). */
+  --color-signal-live: #46D68C;
+  --color-signal-live-text: #8EEDB9;
+  --color-signal-live-soft: rgba(70, 214, 140, 0.14);
+  --color-signal-attention: #F5A33B;
+  --color-signal-attention-text: #FFC37A;
+  --color-signal-attention-soft: rgba(245, 163, 59, 0.12);
+  --color-signal-fault: #F0605A;
+  --color-signal-fault-text: #FF9B95;
+  --color-signal-fault-soft: rgba(240, 96, 90, 0.12);
+  --color-signal-quiet: #8D96A8;
+  --color-signal-quiet-text: #B3BCCB;
+  --color-signal-quiet-soft: rgba(141, 150, 168, 0.12);
+  --color-signal-off: #4A4038;
+
   /* Provider Colors — real brand marks (not theme-harmonized).
      Claude and OMP use warm accents; Pi and OMP retain their own
      multicolour geometry; OpenAI stays monochrome on a dark plate. */

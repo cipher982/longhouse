@@ -159,7 +159,7 @@ export default function RunnerDetailPage() {
     setActionError(null);
     try {
       await revokeRunnerMutation.mutateAsync(runnerId);
-      navigate("/runners");
+      navigate("/machines");
     } catch (err) {
       console.error("Failed to revoke runner:", err);
       setActionError("Failed to revoke runner. Please try again.");
@@ -182,7 +182,7 @@ export default function RunnerDetailPage() {
     setActionError(null);
     try {
       await deleteRunnerMutation.mutateAsync(runnerId);
-      navigate("/runners");
+      navigate("/machines");
     } catch (err) {
       console.error("Failed to delete runner:", err);
       setActionError("Failed to forget this machine. Please try again.");
@@ -278,7 +278,7 @@ export default function RunnerDetailPage() {
           title="Machine not found"
           description="This machine might have been disconnected, revoked, or removed."
           action={
-            <Button variant="secondary" onClick={() => navigate("/runners")}>
+            <Button variant="secondary" onClick={() => navigate("/machines")}>
               Back to Machines
             </Button>
           }
@@ -308,7 +308,7 @@ export default function RunnerDetailPage() {
                   {versionStatusLabel(runner.version_status)}
                 </Badge>
               )}
-              <Button variant="ghost" size="sm" onClick={() => navigate("/runners")}>
+              <Button variant="ghost" size="sm" onClick={() => navigate("/machines")}>
                 ← Back
               </Button>
             </div>

@@ -45,6 +45,18 @@ enum Ember {
     static let sage = dynamic(dark: 0xB9C48A, light: 0x5F6E2C)
     /// The one cold foil: idle and ended.
     static let ash = dynamic(dark: 0x7C8790, light: 0x6E7881)
+    /// Machine and navigation signals. These intentionally stay separate from
+    /// the older fire ramp: machine health has its own calm green/amber/red
+    /// vocabulary shared with the web surface.
+    static let signalLive = dynamic(dark: 0x46D68C, light: 0x1E8A55)
+    static let signalLiveText = dynamic(dark: 0x8EEDB9, light: 0x1E8A55)
+    static let signalAttention = dynamic(dark: 0xF5A33B, light: 0xB5650A)
+    static let signalAttentionText = dynamic(dark: 0xFFC37A, light: 0xB5650A)
+    static let signalFault = dynamic(dark: 0xF0605A, light: 0xC23B34)
+    static let signalFaultText = dynamic(dark: 0xFF9B95, light: 0xC23B34)
+    static let signalQuiet = dynamic(dark: 0x8D96A8, light: 0x5E6779)
+    static let signalQuietText = dynamic(dark: 0xB3BCCB, light: 0x5E6779)
+    static let signalOff = dynamic(dark: 0x4A4038, light: 0xA89A88)
     /// Live numerals (timers, counts) in the Nixie capsule.
     static let nixie = dynamic(dark: 0xFFB25A, light: 0xA9570A)
 
