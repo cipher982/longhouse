@@ -72,11 +72,10 @@ final class LiveConsoleControlUITests: XCTestCase {
         defer { app.terminate() }
 
         app.launch()
-        let transcript = app.descendants(matching: .any)["session-chat-transcript"]
-        XCTAssertTrue(
-            transcript.waitForExistence(timeout: Self.uiTimeout),
-            "headless app did not open the real OMP Console transcript"
-        )
+        // A newly created Console session is intentionally rendered as the
+        // native empty state; WebKit mounts only after the first event exists.
+        // Assert the real composer first, then require the WKWebView after the
+        // served idle reply below.
         let composer = app.textFields["session-chat-composer"]
         let send = app.buttons["session-chat-send"]
         XCTAssertTrue(composer.waitForExistence(timeout: Self.uiTimeout), "real composer did not load")

@@ -314,7 +314,7 @@ path = sys.argv[1]
 with open(path, encoding="utf-8") as stream:
     payload = json.load(stream)
 
-COUNT_KEYS = {"testscount", "testcount", "testsran", "executedtests"}
+COUNT_KEYS = {"testscount", "testcount", "totaltestcount", "testsran", "executedtests"}
 SKIP_KEYS = {"testsskipped", "skippedtests", "skippedtestcount"}
 STATUS_KEYS = {"teststatus", "status", "result"}
 
