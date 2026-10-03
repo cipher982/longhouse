@@ -667,10 +667,10 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     unread: false,
                     lastResultAt: nil,
                     lastResultOutcome: nil,
+                    startTurn: isEndedCodexHelm ? unavailable : available,
                     sendInput: isEndedCodexHelm
                         ? SessionStateAction(state: "unavailable", reason: "run_ended")
                         : available,
-                    startTurn: isEndedCodexHelm ? unavailable : available,
                     interrupt: available,
                     terminate: available,
                     reattach: unavailable,
