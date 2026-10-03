@@ -489,12 +489,6 @@ def _timeline_possibly_open_session_ids(*, observed_at: datetime) -> Any:
 
 
 _MACHINE_ACTIVITY_TOP_PROJECTS = 3
-# Every open candidate is returned, newest first: the flag is a superset of the
-# served working set, so callers project each id before counting a session
-# live. It already requires current evidence (an activity or control lease, a
-# pending interaction, an active Console turn, pending delegated work), so its
-# size is bounded by what is running now, not by history; a cap here would
-# turn an exact count into a silent undercount.
 
 
 def _activity_utc(value: Any) -> datetime | None:
@@ -577,6 +571,12 @@ def _summarize_machine_activity_rows(
         entry = machines[device_id]
         projects = sorted(entry.pop("projects").items(), key=lambda item: (-item[1], item[0]))
         entry.pop("latest_at")
+        # Every open candidate is returned, newest first: the flag is a superset
+        # of the served working set, so callers project each id before counting
+        # a session live. It already requires current evidence (an activity or
+        # control lease, a pending interaction, an active Console turn, pending
+        # delegated work), so its size is bounded by what is running now, not by
+        # history; a cap here would turn an exact count into a silent undercount.
         opened = sorted(entry.pop("open"), key=lambda item: (item[0], item[1]), reverse=True)
         entry["open_session_ids"] = [session_id for _, session_id in opened]
         entry["top_projects"] = [{"project": name, "sessions": count} for name, count in projects[:_MACHINE_ACTIVITY_TOP_PROJECTS]]
