@@ -380,9 +380,8 @@ function SessionDetailWorkspaceRoute({
   };
   const runtimeHostLabel =
     displaySession.control?.source_runner_name?.trim() ||
-    interaction.sourceOriginLabel ||
-    displaySession.home_label ||
-    "host";
+    displaySession.device_id ||
+    "the original machine";
   // Who and where, once, under the title. The host is only named when the
   // server actually recorded a machine; home_label can be a phrase such as
   // "On this Mac", and a placeholder would claim a machine. Same order as
