@@ -249,3 +249,24 @@ def test_summary_zero_fills_days_and_counts_only_served_open_sessions(monkeypatc
     assert len(cube.activity.daily) == 7
     assert cube.sync is None
     assert (summary.first_day, summary.last_day) == ("2026-09-27", "2026-10-03")
+
+
+def test_live_sessions_behind_an_unread_backlog_are_still_counted(monkeypatch):
+    # 450 unread rows sort ahead of the machine's one open session.
+    calls = []
+
+    def timeline(*, params, owner_id):
+        calls.append((params.offset, params.limit))
+        rows = [
+            _head(f"unread-{index}", working_set="history", minutes_ago=5) for index in range(params.offset, params.offset + params.limit)
+        ]
+        if params.offset <= 450 < params.offset + params.limit:
+            rows[450 - params.offset] = _head("open", working_set="open", minutes_ago=1)
+        return SimpleNamespace(sessions=[SimpleNamespace(head=row) for row in rows[: max(0, 451 - params.offset)]])
+
+    monkeypatch.setattr(machines_summary, "list_live_catalog_timeline", timeline)
+    count, sessions = machines_summary._live_sessions(owner_id=1, device_id="cinder", days=14, candidates=451, has_open_candidates=True)
+
+    assert count == 1
+    assert [item.session_id for item in sessions] == ["open"]
+    assert calls == [(0, 200), (200, 200), (400, 51)]

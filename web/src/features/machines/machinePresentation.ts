@@ -167,7 +167,9 @@ export function machineAgents(
     .map((item) => item.provider)
     .filter((provider) => !launchable.includes(provider))
     .sort(byUsage);
-  if (launchable.length === 0 && unavailable.length === 0) {
+  // Only a disconnected machine, which reports no agents at all, falls back to
+  // what it ran; a connected one shows exactly what it reports.
+  if (!machine.online) {
     return [...usage.keys()].map((provider) => ({ provider, unavailable: false }));
   }
   return [

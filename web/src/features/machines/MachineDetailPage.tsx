@@ -14,7 +14,6 @@ import {
   connectionLine,
   durationSince,
   historyLine,
-  machineAgents,
   machineStatus,
   providerTotals,
   relativeTime,
@@ -31,10 +30,12 @@ function shortDate(isoDate: string): string {
 
 function Agents({ summary }: { summary: MachineSummary }) {
   const { machine } = summary;
-  // Most used first, the same order as the Machines list.
-  const ready = machineAgents(machine, summary.activity)
-    .filter((agent) => !agent.unavailable)
-    .map((agent) => agent.provider);
+  // Only what the machine can start now reads Ready, most used first. History
+  // never stands in for readiness.
+  const usage = Object.fromEntries(providerTotals(summary.activity));
+  const ready = machine.launch.providers
+    .map((option) => option.provider)
+    .sort((a, b) => (usage[b] ?? 0) - (usage[a] ?? 0) || a.localeCompare(b));
   const readiness = machine.provider_readiness ?? {};
   // Everything the engine reported, so an installed agent that has not been
   // checked reads as installed rather than vanishing.

@@ -5,7 +5,11 @@ struct MachineDetailView: View {
     @EnvironmentObject private var appState: AppState
     @State private var showingLaunchSheet = false
     @State private var openedSession: SessionRoute?
-    let summary: MachineSummary
+    @State private var summary: MachineSummary
+
+    init(summary: MachineSummary) {
+        _summary = State(initialValue: summary)
+    }
 
     private var status: MachineStatus {
         deriveMachineStatus(machine: summary.machine, activity: summary.activity, sync: summary.sync)
@@ -91,7 +95,7 @@ struct MachineDetailView: View {
 
     private var connectionLabel: String? {
         if summary.machine.online {
-            guard let raw = summary.machine.lastSeenAt,
+            guard let raw = summary.machine.connectedSince,
                   let date = LonghouseDateParser.parse(raw) else {
                 return "online"
             }
@@ -166,7 +170,7 @@ struct MachineDetailView: View {
                             displayName: ProviderBrands.displayName(item.provider),
                             canRelay: summary.machine.supports.contains("\(item.provider).sign_in"),
                             makeAPI: { LonghouseAPI(host: appState.serverURL) },
-                            refreshMachines: { }
+                            refreshMachines: { await refreshSummary() }
                         )
                     } else {
                         MachineAgentRow(
@@ -177,6 +181,18 @@ struct MachineDetailView: View {
                 }
             }
             .machineSurfaceCard()
+        }
+    }
+
+    private func refreshSummary() async {
+        guard let api = LonghouseAPI(host: appState.serverURL) else { return }
+        do {
+            let response = try await api.listMachineSummaries()
+            if let updated = response.machines.first(where: { $0.machine.deviceId == summary.machine.deviceId }) {
+                summary = updated
+            }
+        } catch {
+            // The existing detail remains honest if a refresh is unavailable.
         }
     }
 

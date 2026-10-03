@@ -18,6 +18,7 @@ enum MachinePreviewFixtures {
             id: "cinder",
             name: "cinder",
             online: true,
+            connectedSince: "2026-10-03T04:08:00Z",
             supports: ["omp.sign_in"],
             providers: ["omp", "claude", "cursor", "codex"]
         ),
@@ -106,6 +107,7 @@ enum MachinePreviewFixtures {
         name: String,
         online: Bool,
         lastSeenAt: String? = "2026-10-03T16:40:00Z",
+        connectedSince: String? = nil,
         supports: [String] = [],
         providers: [String] = [],
         unavailable: [MachineLaunchUnavailableProvider] = [],
@@ -118,6 +120,7 @@ enum MachinePreviewFixtures {
             controlChannelStatus: online ? "connected" : "down",
             supports: supports,
             lastSeenAt: lastSeenAt,
+            connectedSince: connectedSince,
             engineBuild: nil,
             launch: MachineLaunchProjection(
                 blockedBy: blockedBy,

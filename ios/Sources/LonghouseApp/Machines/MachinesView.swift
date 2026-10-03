@@ -6,6 +6,7 @@ struct MachinesView: View {
     @State private var response: MachinesSummaryResponse?
     @State private var loading = false
     @State private var errorMessage: String?
+    @State private var showingAllRecent = false
     private let previewResponse: MachinesSummaryResponse?
 
     init(previewResponse: MachinesSummaryResponse? = nil) {
@@ -119,7 +120,10 @@ struct MachinesView: View {
             }
             if !recent.isEmpty {
                 Section("Not seen recently") {
-                    ForEach(Array(recent.prefix(2)), id: \.machine.deviceId) { summary in
+                    ForEach(
+                        Array(recent.prefix(showingAllRecent ? recent.count : 2)),
+                        id: \.machine.deviceId
+                    ) { summary in
                         NavigationLink {
                             MachineDetailView(summary: summary)
                         } label: {
@@ -134,10 +138,18 @@ struct MachinesView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Ember.card)
                     }
+                    if recent.count > 2 {
+                        Button(showingAllRecent ? "Show fewer" : "Show all") {
+                            showingAllRecent.toggle()
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Ember.textSecondary)
+                        .listRowBackground(Color.clear)
+                    }
                 }
                 .listRowBackground(Ember.card)
 
-                if recent.count > 2 {
+                if recent.count > 2 && !showingAllRecent {
                     Text("\(recent.count - 2) more not seen recently")
                         .font(.caption)
                         .foregroundStyle(Ember.textMuted)

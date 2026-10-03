@@ -53,57 +53,54 @@ func deriveMachineStatus(
     now: Date = Date()
 ) -> MachineStatus {
     let liveCount = activity?.liveCount ?? 0
-    let unavailable = machine.launch.unavailableProviders
+    let syncFresh = sync.map { !$0.stale } ?? false
+    let blockedBy = machine.launch.blockedBy
 
-    // Live takes precedence over attention in the primary status. The detail
-    // remains available for the row/detail sign-in hint.
-    if machine.online, liveCount > 0 {
+    // Repair is deliberately first. A live session does not hide a broken
+    // shipping/control path that needs the person's attention.
+    if blockedBy == "auth_failed"
+        || blockedBy == "runtime_unreachable"
+        || (syncFresh && sync?.status.lowercased() == "broken") {
         return MachineStatus(
-            text: "\(liveCount) live",
-            detail: unavailableHint(unavailable),
-            role: .live
+            text: "Needs repair",
+            detail: syncFresh && sync?.status.lowercased() == "broken"
+                ? "Run longhouse machine repair on this machine"
+                : nil,
+            role: .fault
         )
-    }
-
-    if machine.online, let attention = unavailableStatus(unavailable) {
-        return MachineStatus(
-            text: attention,
-            detail: unavailableHint(unavailable),
-            role: .attention
-        )
-    }
-
-    if sync?.status.lowercased() == "broken" {
-        return MachineStatus(text: "Needs repair", role: .fault)
-    }
-    switch machine.launch.blockedBy {
-    case "auth_failed", "runtime_unreachable":
-        return MachineStatus(text: "Needs repair", role: .fault)
-    case "engine_too_old":
-        return MachineStatus(text: "Update required", role: .attention)
-    case "no_launch_support":
-        return MachineStatus(text: "Can't start sessions", role: .quiet)
-    default:
-        break
-    }
-
-    if !machine.online,
-       machine.launch.blockedBy == "control_down",
-       let sync,
-       !sync.stale {
-        return MachineStatus(text: "Sync only", role: .quiet)
     }
 
     if machine.online {
+        let needs = machineSignInNeed(machine)
+        if liveCount > 0 {
+            return MachineStatus(text: "\(liveCount) live", detail: needs?.hint, role: .live)
+        }
+        if let needs {
+            return MachineStatus(text: needs.label, detail: needs.hint, role: .attention)
+        }
+        switch blockedBy {
+        case "engine_too_old":
+            return MachineStatus(text: "Update required", role: .attention)
+        case "no_launch_support":
+            // Amber, as on the web: connected but unable to start a session.
+            return MachineStatus(text: "Can't start sessions", role: .attention)
+        default:
+            break
+        }
         // The directory-only launch chooser has no activity snapshot. A
-        // launchable online machine is ready, not "idle" (which would claim
-        // knowledge of its live session set).
+        // launchable online machine is ready, not "idle".
         if activity == nil, !machine.launch.providers.isEmpty {
             return MachineStatus(text: "Ready", role: .live)
         }
         return MachineStatus(text: "Online, idle", role: .live)
     }
 
+    if liveCount > 0 {
+        return MachineStatus(text: "\(liveCount) live", role: .live)
+    }
+    if syncFresh {
+        return MachineStatus(text: "Sync only", role: .quiet)
+    }
     return MachineStatus(
         text: "Offline",
         detail: lastConnectedText(machine.lastSeenAt, now: now),
@@ -111,27 +108,43 @@ func deriveMachineStatus(
     )
 }
 
-private func unavailableStatus(_ unavailable: [MachineLaunchUnavailableProvider]) -> String? {
-    guard let item = unavailable.sorted(by: { $0.provider < $1.provider }).first else { return nil }
-    let name = ProviderBrands.displayName(item.provider)
-    if item.reason == "cli_missing" {
-        return "\(name) not installed"
-    }
-    return "\(name) signed out"
+
+private struct MachineSignInNeed {
+    let label: String
+    let hint: String
 }
-private func unavailableHint(_ unavailable: [MachineLaunchUnavailableProvider]) -> String? {
-    guard !unavailable.isEmpty else { return nil }
-    if unavailable.count == 1, let remediation = unavailable[0].remediation, !remediation.isEmpty {
-        return remediation
+
+private func machineSignInNeed(_ machine: MachineDirectoryEntry) -> MachineSignInNeed? {
+    let unavailable = machine.launch.unavailableProviders
+    let signedOut = unavailable.filter { $0.reason == "not_authenticated" }
+    // A missing CLI only matters when it leaves nothing launchable; otherwise
+    // it is an agent this person simply does not use.
+    let missing = machine.launch.providers.isEmpty
+        ? unavailable.filter { $0.reason == "cli_missing" }
+        : []
+    let actionable = signedOut.isEmpty ? missing : signedOut
+    guard !actionable.isEmpty else { return nil }
+
+    let signedOutState = !signedOut.isEmpty
+    let verb = signedOutState ? "signed out" : "not installed"
+    if actionable.count == 1, let item = actionable.first {
+        let name = ProviderBrands.displayName(item.provider)
+        let fallback = signedOutState
+            ? "Sign in to \(name) on \(machine.machineName)"
+            : "Install \(name) on \(machine.machineName)"
+        return MachineSignInNeed(
+            label: "\(name) \(verb)",
+            hint: item.remediation ?? fallback
+        )
     }
-    let names = unavailable
+    let names = actionable
         .map { ProviderBrands.displayName($0.provider) }
         .sorted()
-        .joined(separator: " or ")
-    if unavailable.allSatisfy({ $0.reason == "cli_missing" }) {
-        return "Install \(names) on this machine"
-    }
-    return "Sign in to \(names) on this machine"
+        .joined(separator: " and ")
+    return MachineSignInNeed(
+        label: "\(actionable.count) agents \(verb)",
+        hint: "\(signedOutState ? "Sign in to" : "Install") \(names) on \(machine.machineName)"
+    )
 }
 
 func machineRelativeTime(_ raw: String?, now: Date = Date()) -> String? {

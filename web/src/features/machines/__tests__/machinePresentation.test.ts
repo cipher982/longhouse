@@ -120,6 +120,14 @@ describe("machineAgents", () => {
     });
     expect(agents).toEqual([{ provider: "opencode", unavailable: false }]);
   });
+
+  it("never lends a connected machine the agents it used to run", () => {
+    const agents = machineAgents(
+      machine({ launch: { providers: [], blocked_by: "providers_not_ready", unavailable_providers: [] } }),
+      { daily: [{ date: "2026-10-01", total: 2, by_provider: { opencode: 2 } }] },
+    );
+    expect(agents).toEqual([]);
+  });
 });
 
 describe("runners", () => {

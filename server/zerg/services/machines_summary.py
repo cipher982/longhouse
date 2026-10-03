@@ -40,6 +40,10 @@ LIVE_SESSIONS_SHOWN = 5
 SYNC_EVIDENCE_WINDOW = timedelta(days=30)
 # The catalog's timeline RPC pages at most this many rows.
 _TIMELINE_PAGE_LIMIT = 200
+# Unread-plus-open rows read per machine to find its live sessions: five pages.
+# A real machine has a handful of open sessions; this bounds a pathological
+# unread backlog without silently cutting at the first page.
+_MAX_LIVE_ROWS = 5 * _TIMELINE_PAGE_LIMIT
 
 
 def build_machines_summary(*, owner_id: int, days: int, utc_offset_minutes: int) -> MachinesSummaryResponse:
@@ -103,8 +107,8 @@ def _activity(
         owner_id=owner_id,
         device_id=device_id,
         days=days,
-        # Unread rows sort ahead of open ones, so this page holds every open
-        # candidate on the machine.
+        # Unread rows sort ahead of open ones, so the first unread + open
+        # rows of the machine's timeline hold every open candidate.
         candidates=int(raw.get("open_candidates") or 0) + int(raw.get("unread") or 0),
         has_open_candidates=int(raw.get("open_candidates") or 0) > 0,
     )
@@ -136,31 +140,43 @@ def _live_sessions(
     candidates: int,
     has_open_candidates: bool,
 ) -> tuple[int, list[MachineSessionBrief]]:
-    """Project the served working set; the SQL open flag is only a superset."""
+    """Project the served working set; the SQL open flag is only a superset.
+
+    The timeline orders unread, then open, then recency, so every open
+    candidate sits inside its first ``candidates`` rows. Those rows are paged
+    rather than cut at one RPC page; a machine with more unread-plus-open
+    sessions than ``_MAX_LIVE_ROWS`` reports the open ones it found there.
+    """
 
     if not has_open_candidates:
         return 0, []
-    listed = list_live_catalog_timeline(
-        params=TimelineSessionListParams(
-            project=None,
-            provider=None,
-            environment=None,
-            include_test=False,
-            hide_autonomous=True,
-            include_automation=False,
-            include_hidden=False,
-            device_id=device_id,
-            days_back=days,
-            query=None,
-            limit=max(1, min(_TIMELINE_PAGE_LIMIT, candidates)),
-            offset=0,
-            sort=None,
-            mode="lexical",
-            context_mode="forensic",
-        ),
-        owner_id=owner_id,
-    )
-    live = [card.head for card in listed.sessions if card.head.session_state.working_set == "open"]
+    live = []
+    wanted = min(candidates, _MAX_LIVE_ROWS)
+    for offset in range(0, wanted, _TIMELINE_PAGE_LIMIT):
+        limit = min(_TIMELINE_PAGE_LIMIT, wanted - offset)
+        listed = list_live_catalog_timeline(
+            params=TimelineSessionListParams(
+                project=None,
+                provider=None,
+                environment=None,
+                include_test=False,
+                hide_autonomous=True,
+                include_automation=False,
+                include_hidden=False,
+                device_id=device_id,
+                days_back=days,
+                query=None,
+                limit=limit,
+                offset=offset,
+                sort=None,
+                mode="lexical",
+                context_mode="forensic",
+            ),
+            owner_id=owner_id,
+        )
+        live.extend(card.head for card in listed.sessions if card.head.session_state.working_set == "open")
+        if len(listed.sessions) < limit:
+            break
     live.sort(key=lambda head: head.last_activity_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return len(live), [
         MachineSessionBrief(

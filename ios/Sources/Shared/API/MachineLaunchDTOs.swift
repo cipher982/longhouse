@@ -81,6 +81,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let supports: [String]
     public let controlOperationsByProvider: [String: [String]]
     public let lastSeenAt: String?
+    public let connectedSince: String?
     public let engineBuild: String?
     public let launch: MachineLaunchProjection
 
@@ -92,6 +93,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         supports: [String],
         controlOperationsByProvider: [String: [String]] = [:],
         lastSeenAt: String?,
+        connectedSince: String? = nil,
         engineBuild: String?,
         launch: MachineLaunchProjection
     ) {
@@ -102,13 +104,14 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         self.supports = supports
         self.controlOperationsByProvider = controlOperationsByProvider
         self.lastSeenAt = lastSeenAt
+        self.connectedSince = connectedSince
         self.engineBuild = engineBuild
         self.launch = launch
     }
 
     private enum CodingKeys: String, CodingKey {
         case deviceId, machineName, online, controlChannelStatus, supports
-        case controlOperationsByProvider, lastSeenAt, engineBuild, launch
+        case controlOperationsByProvider, lastSeenAt, connectedSince, engineBuild, launch
     }
 
     public init(from decoder: Decoder) throws {
@@ -120,6 +123,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         supports = try c.decodeIfPresent([String].self, forKey: .supports) ?? []
         controlOperationsByProvider = try c.decodeIfPresent([String: [String]].self, forKey: .controlOperationsByProvider) ?? [:]
         lastSeenAt = try c.decodeIfPresent(String.self, forKey: .lastSeenAt)
+        connectedSince = try c.decodeIfPresent(String.self, forKey: .connectedSince)
         engineBuild = try c.decodeIfPresent(String.self, forKey: .engineBuild)
         launch = try c.decode(MachineLaunchProjection.self, forKey: .launch)
     }

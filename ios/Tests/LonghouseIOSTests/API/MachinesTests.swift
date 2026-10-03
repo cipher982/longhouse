@@ -88,11 +88,12 @@ struct MachinesTests {
         let now = Date(timeIntervalSince1970: 1_791_043_200)
         let cases: [(MachineDirectoryEntry, MachineActivity?, MachineSync?, String, MachineStatusRole)] = [
             (machine(online: true), MachineActivity(liveCount: 9), nil, "9 live", .live),
+            (machine(online: true), MachineActivity(liveCount: 9), MachineSync(stale: false, status: "broken"), "Needs repair", .fault),
             (machine(online: true, unavailable: [unavailable("codex", reason: "not_authenticated")]), nil, nil, "Codex signed out", .attention),
             (machine(online: true, unavailable: [unavailable("codex", reason: "cli_missing")]), nil, nil, "Codex not installed", .attention),
             (machine(online: true, blockedBy: "auth_failed"), nil, nil, "Needs repair", .fault),
             (machine(online: true, blockedBy: "engine_too_old"), nil, nil, "Update required", .attention),
-            (machine(online: true, blockedBy: "no_launch_support"), nil, nil, "Can't start sessions", .quiet),
+            (machine(online: true, blockedBy: "no_launch_support"), nil, nil, "Can't start sessions", .attention),
             (machine(online: true), nil, nil, "Online, idle", .live),
             (machine(online: false, blockedBy: "control_down"), nil, MachineSync(stale: false), "Sync only", .quiet),
             (machine(online: true), nil, MachineSync(status: "broken"), "Needs repair", .fault),
