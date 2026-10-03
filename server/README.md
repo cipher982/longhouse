@@ -100,6 +100,8 @@ updates are searchable without rebuilding the transcript index; title-only hits
 do not invent a transcript event or source locator. Conversation recall remains
 transcript-based. Owner, visibility, provider, project and explicit date filters
 apply to title matches too.
+Current-title matches prioritize session discovery. When the transcript matches
+too, its snippet, source locator and lexical score remain authoritative.
 
 An unknown Helm run may prepare a local Resume command when its machine is
 online and its retained continuation contract is valid. Unknown is not ended:

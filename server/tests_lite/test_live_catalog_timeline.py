@@ -2493,3 +2493,141 @@ def test_session_title_search_treats_sql_wildcards_as_literal_tokens_and_bounds_
     assert _title_matches(store, "%") == []
     hits = _title_matches(store, "renewal", limit=1)
     assert [hit["session_id"] for hit in hits] == [min(ids.values())]
+
+
+@pytest.mark.asyncio
+async def test_title_and_transcript_overlap_keeps_source_navigation(tmp_path, monkeypatch):
+    import tempfile
+    from pathlib import Path
+    from uuid import UUID
+
+    from sqlalchemy import insert
+
+    from zerg.catalogd.client import CatalogClient
+    from zerg.catalogd.server import CatalogDaemon
+    from zerg.models.live_store import LiveUser
+    from zerg.searchd.server import SearchDaemon
+    from zerg.searchd.store import object_set_hash
+    from zerg.storage_v2.render_objects import RenderObjectSpec
+    from zerg.storage_v2.render_objects import RenderRecord
+    from zerg.storage_v2.render_objects import seal_render_object
+
+    store, ids = _title_catalog(tmp_path, {"oauth": {}})
+    session_id = ids["oauth"]
+    with store.engine.begin() as connection:
+        connection.execute(insert(LiveUser.__table__), {"id": 1, "email": "owner@overlap.test", "is_active": True})
+    objects = tmp_path / "objects"
+    monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(objects))
+    generation, epoch = uuid4(), uuid4()
+    event_id = str(uuid4())
+    text = "OAuth refresh coordination was fixed in the credential broker."
+    order_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+    sealed = seal_render_object(
+        objects,
+        RenderObjectSpec(
+            session_id=UUID(session_id),
+            render_generation=generation,
+            parser_revision="test",
+            ordering_revision="test",
+            machine_id="test-machine",
+            provider="claude",
+            opaque_source_id="overlap-source",
+            source_epoch=epoch,
+            source_envelope_id="a" * 64,
+            records=(
+                RenderRecord(
+                    event_id=event_id,
+                    order_time_us=order_us,
+                    source_position=0,
+                    event_subordinal=0,
+                    role="assistant",
+                    content_text=text,
+                    raw_record_ordinal=0,
+                ),
+            ),
+        ),
+    )
+    Path("/tmp/agents").mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="lh-overlap-", dir="/tmp/agents") as socket_root:
+        catalog = CatalogDaemon(database_path=Path(store.engine.url.database), socket_path=Path(socket_root) / "c")
+        search = SearchDaemon(database_path=tmp_path / "search.db", socket_path=Path(socket_root) / "s")
+        try:
+            await catalog.start()
+            await search.start()
+            catalog_client = CatalogClient(Path(socket_root) / "c")
+            search_client = CatalogClient(Path(socket_root) / "s")
+            monkeypatch.setattr(agents_search, "get_catalogd_client", lambda: catalog_client)
+            monkeypatch.setattr(agents_search, "get_searchd_client", lambda: search_client)
+            await search_client.call(
+                "search.index.object.v2",
+                {
+                    "session_id": session_id,
+                    "generation_id": str(generation),
+                    "object_id": sealed.object_id,
+                    "desired_revision": "1",
+                    "provider": "claude",
+                    "machine_id": "test-machine",
+                    "project": "longhouse",
+                    "environment": "production",
+                    "cwd": None,
+                    "git_repo": None,
+                    "opaque_source_id": "overlap-source",
+                    "source_epoch": str(epoch),
+                    "records": [
+                        {
+                            "event_id": event_id,
+                            "record_ordinal": 0,
+                            "order_time_us": order_us,
+                            "source_position": 0,
+                            "event_subordinal": 0,
+                            "role": "assistant",
+                            "interaction_kind": "durable_assistant_message",
+                            "content_text": text,
+                            "tool_name": None,
+                            "tool_output_text": None,
+                            "tool_call_id": None,
+                            "thread_id": None,
+                            "branch_kind": "root",
+                        }
+                    ],
+                },
+            )
+            await search_client.call(
+                "search.index.publish.v2",
+                {
+                    "session_id": session_id,
+                    "generation_id": str(generation),
+                    "owner_id": "1",
+                    "desired_revision": "1",
+                    "event_count": 1,
+                    "object_count": 1,
+                    "object_set_hash": object_set_hash([sealed.object_id]),
+                    "project": "longhouse",
+                    "provider": "claude",
+                    "environment": "production",
+                    "cwd": None,
+                    "git_repo": None,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "hidden_from_default_timeline": False,
+                    "origin_kind": None,
+                },
+            )
+            rows = await agents_search.search_storage_v2_rows(
+                owner_id=1,
+                query="OAuth",
+                project=None,
+                provider=None,
+                environment=None,
+                days_back=None,
+                limit=20,
+                include_titles=True,
+            )
+            assert [row["session_id"] for row in rows] == [session_id]
+            assert rows[0]["generation_id"] == str(generation)
+            assert rows[0]["source_object_id"] == sealed.object_id
+            assert rows[0]["search_event_id"] is not None
+            assert "credential broker" in rows[0]["content_snippet"]
+        finally:
+            await search.close()
+            await catalog.close()
+            store.engine.dispose()

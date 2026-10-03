@@ -440,7 +440,18 @@ async def search_storage_v2_rows(
                 "reason": reason,
             },
         ) from exc
-    return title_rows + [row for row in (result.get("results") or []) if isinstance(row, dict)]
+    transcript_rows = [row for row in (result.get("results") or []) if isinstance(row, dict)]
+    if not title_rows:
+        return transcript_rows
+    transcript_by_session: dict[str, dict[str, object]] = {}
+    for row in transcript_rows:
+        transcript_by_session.setdefault(str(row.get("session_id") or ""), row)
+    title_ids = {str(row["session_id"]) for row in title_rows}
+    # Titles prioritize session discovery, but a matching transcript still owns
+    # its source locator, snippet and lexical score.
+    return [transcript_by_session.get(str(row["session_id"]), row) for row in title_rows] + [
+        row for row in transcript_rows if str(row.get("session_id") or "") not in title_ids
+    ]
 
 
 async def _session_title_search(
