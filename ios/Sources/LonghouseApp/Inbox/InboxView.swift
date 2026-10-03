@@ -319,7 +319,7 @@ struct TimelineView: View {
                 SettingsView()
             }
             .sheet(isPresented: $launchSheetPresented) {
-                LaunchSessionSheet { sessionId in
+                LaunchSessionSheet(preselectedDeviceId: initialDeviceId, onLaunchSelection: nil) { sessionId in
                     launchSheetPresented = false
                     path.append(SessionRoute(sessionId: sessionId, fallbackTitle: "New session"))
                 }
