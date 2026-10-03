@@ -492,9 +492,6 @@ struct SessionView: View {
                     retryRevision: viewModel.transcriptRenderRetryRevision,
                     sourceRevision: viewModel.benchmarkSourceRevision,
                     sourceOperation: viewModel.benchmarkSourceOperation,
-                    onRefresh: {
-                        await viewModel.reload(sessionId: sessionId, appState: appState)
-                    },
                     onNearTop: {
                         Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                     },
@@ -513,6 +510,9 @@ struct SessionView: View {
                     },
                     onLifecycle: { stage in
                         viewModel.recordTranscriptLifecycle(stage)
+                    },
+                    onRefresh: {
+                        await viewModel.reload(sessionId: sessionId, appState: appState)
                     },
                     onOpenSubagent: onOpenSubagent,
                     onEditSubmittedInput: { clientRequestId in
