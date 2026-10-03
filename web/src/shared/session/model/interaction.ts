@@ -43,6 +43,10 @@ export function getSessionInteractionCapabilities({
   const hostReattachAvailable = facts.control.actions.reattach.state === "available";
   const isManagedLocalSession = facts.control.ownership === "owned";
   const sourceOriginLabel = getSessionOriginLabel(session);
+  const sourceHostLabel =
+    session.control?.source_runner_name?.trim() ||
+    session.device_id ||
+    "the original machine";
 
   // A Console turn can be blocked while the machine channel is still connected
   // — `execution_target_missing` is exactly that — so connection alone does not
@@ -87,13 +91,13 @@ export function getSessionInteractionCapabilities({
       return `This ${providerLabel} session is closed.`;
     }
     if (launchInFlight) {
-      return `Longhouse is starting this ${providerLabel} session on ${sourceOriginLabel}.`;
+      return `Longhouse is starting this ${providerLabel} session on ${sourceHostLabel}.`;
     }
     if (launchFailed) {
       const detail = facts.launch?.error_message?.trim();
       return detail
         ? `This ${providerLabel} session did not start: ${detail}`
-        : `This ${providerLabel} session did not start on ${sourceOriginLabel}.`;
+        : `This ${providerLabel} session did not start on ${sourceHostLabel}.`;
     }
     // An ended Helm run is not a control fault. Ending the run clears the
     // durable run id, which rejects every run-bound control head by design, so
