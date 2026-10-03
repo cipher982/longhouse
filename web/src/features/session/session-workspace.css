@@ -1151,6 +1151,10 @@
   position: sticky;
   bottom: var(--space-2);
   align-self: flex-end;
+  /* Short or empty transcripts: the auto margin takes the free space above
+     the anchor, so it rests at the bottom of the pane instead of under the
+     last row, where the rail would grow upward out of the scroller. */
+  margin-top: auto;
   flex: none;
   width: 0;
   height: 0;

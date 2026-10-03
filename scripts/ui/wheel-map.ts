@@ -59,6 +59,7 @@ const COLLECT_SCRIPT = `(() => {
   };
   consider(document.scrollingElement);
   for (const el of document.querySelectorAll("*")) consider(el);
+  window.__wmOrig = els.map((el) => el.scrollTop);
   return out;
 })()`;
 
@@ -112,8 +113,10 @@ export async function captureWheelMap(
       cells.push({ x, y, owner, under });
     }
   }
-  // Restore: leave scroll positions where a user would find them.
-  await page.evaluate("delete window.__wmEls; delete window.__wmSnap");
+  // Restore the scroll positions the page had before the probe parked them.
+  await page.evaluate(
+    "window.__wmEls.forEach((el, i) => { el.scrollTop = window.__wmOrig[i]; }); delete window.__wmEls; delete window.__wmSnap; delete window.__wmOrig",
+  );
 
   const cols = Math.ceil((vp.width - Math.floor(step / 2)) / step);
   const rows: string[] = [];
