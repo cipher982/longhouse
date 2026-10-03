@@ -18,29 +18,19 @@ describe("getNavItems", () => {
 
   it("includes core items in the authenticated app navigation", async () => {
     const { getNavItems } = await import("./navItems");
-    expect(getNavItems(null)).toEqual([
+    expect(getNavItems()).toEqual([
       { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
       { label: "Machines", href: "/runners", testId: "global-runners-tab" },
-    ]);
-  });
-
-  it("preserves admin navigation", async () => {
-    const { getNavItems } = await import("./navItems");
-    expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
-      "/timeline",
-      "/runners",
-      "/admin/provider-capabilities",
     ]);
   });
 
   it("adds Health in single-tenant mode", async () => {
     configState.singleTenant = true;
     const { getNavItems } = await import("./navItems");
-    expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
+    expect(getNavItems().map((item) => item.href)).toEqual([
       "/timeline",
       "/runners",
       "/health",
-      "/admin/provider-capabilities",
     ]);
   });
 
@@ -50,7 +40,7 @@ describe("getNavItems", () => {
       const { getNavItems } = await import("./navItems");
       const { buildAppRoutes } = await import("../App");
 
-      for (const item of getNavItems("ADMIN")) {
+      for (const item of getNavItems()) {
         const matches = matchRoutes(
           buildAppRoutes({ demoMode: false, singleTenant: true }),
           item.href,
@@ -73,7 +63,7 @@ describe("getNavItems", () => {
   it("keeps demo navigation minimal", async () => {
     configState.demoMode = true;
     const { getNavItems } = await import("./navItems");
-    expect(getNavItems("ADMIN")).toEqual([
+    expect(getNavItems()).toEqual([
       { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
     ]);
   });

@@ -7,9 +7,11 @@ import os
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from fastapi import status
@@ -24,6 +26,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.main import app
 from zerg.routers import provider_capability_proofs as routes
+from zerg.services.provider_capability_blob_resolver import factory_blob_key
 from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -210,9 +213,15 @@ def _factory_headers() -> dict[str, str]:
     return {"X-Provider-Capability-Factory-Token": "factory-secret"}
 
 
-def _write_trusted(store: ProviderCapabilityProofStore, record: ProviderCapabilityProofRecord) -> None:
+def _write_trusted(
+    store: ProviderCapabilityProofStore,
+    record: ProviderCapabilityProofRecord,
+    *,
+    blob_contents: dict[str, bytes] | None = None,
+) -> None:
+    contents = {**_BLOB_CONTENT, **(blob_contents or {})}
     for digest in record.referenced_content_digests():
-        store.write_blob(_BLOB_CONTENT[digest], expected_digest=digest)
+        store.write_blob(contents[digest], expected_digest=digest)
     store.write(
         record,
         publication=ProofPublication(
@@ -223,6 +232,59 @@ def _write_trusted(store: ProviderCapabilityProofStore, record: ProviderCapabili
             bundle_digest=_blob_digest("published-bundle"),
         ),
     )
+
+
+def _write_reference_trusted(store: ProviderCapabilityProofStore, record: ProviderCapabilityProofRecord) -> None:
+    refs = tuple(
+        {
+            "digest": digest,
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "logical_role": "proof_evidence",
+            "key": factory_blob_key(digest),
+        }
+        for digest in record.referenced_content_digests()
+    )
+    verification = tuple(
+        {
+            "digest": ref["digest"],
+            "key": ref["key"],
+            "content_length": ref["byte_length"],
+            "content_type": ref["media_type"],
+            "metadata_sha256": ref["digest"].removeprefix("sha256:"),
+            "checksum_sha256": base64.b64encode(bytes.fromhex(ref["digest"].removeprefix("sha256:"))).decode("ascii"),
+            "body_sha256": ref["digest"].removeprefix("sha256:"),
+            "complete": True,
+        }
+        for ref in refs
+    )
+    publication_payload = {
+        "worker_id": "factory-worker-1",
+        "worker_census_digest": _blob_digest("census"),
+        "auth_mechanism": "factory_token_v1",
+        "published_at": "2026-07-22T18:01:00Z",
+    }
+    bundle = {
+        "schema_version": 4,
+        "artifact_kind": "provider_capability_proof_bundle",
+        "records": [record.serialize()],
+        "blobs": list(refs),
+        "publication": publication_payload,
+    }
+    publication = ProofPublication(
+        **publication_payload,
+        bundle_digest=routes._bundle_digest(bundle),
+        bundle_schema_version=4,
+    )
+    metadata = store.build_reference_metadata(
+        record,
+        bundle_digest=publication.bundle_digest,
+        publication=publication,
+        refs=refs,
+        verification=verification,
+    )
+    store.write_reference_metadata(record, metadata)
+    store.write(record, publication=publication)
 
 
 def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_derived(monkeypatch, tmp_path: Path) -> None:
@@ -597,6 +659,24 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
         scenario_revision=6,
     )
     _write_trusted(store, proof)
+    claude_raw = b"claude-raw"
+    claude_raw_digest = _blob_digest("claude-raw")
+    claude_proof = _record(
+        provider="claude",
+        provider_version="2.1.0",
+        scenario_id="claude_coordination_awareness_create",
+        scenario_revision=4,
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        outcome=AssertionOutcome.PASS,
+        generated_at=generated_at,
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        invocation_id="factory-run-claude",
+        raw_reference_digests=(claude_raw_digest,),
+    )
+    _write_trusted(store, claude_proof, blob_contents={claude_raw_digest: claude_raw})
+    unrelated = b"unrelated-retained-evidence"
+    store.write_blob(unrelated, expected_digest=_blob_digest("unrelated-retained-evidence"))
     client = _client(monkeypatch, tmp_path)
     try:
         response = client.get("/api/agents/provider-capabilities")
@@ -619,28 +699,35 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
     assert proven["disposition"] == "implemented"
     assert proven["proof_status"] == "pass"
     assert proven["generated_at"] == generated_at
-    other_codex_proven = by_key.get(("cursor", "coordination_instructions_model_visible"))
-    if other_codex_proven is not None:
-        assert other_codex_proven["proof_status"] == "never_proven"
+    assert proven["proof_artifact_id"] == proof.artifact_id
+    claude_proven = by_key[("claude", "coordination_instructions_model_visible")]
+    assert claude_proven["proof_status"] == "pass"
+    assert claude_proven["generated_at"] == generated_at
+    assert claude_proven["proof_artifact_id"] == claude_proof.artifact_id
+    assert claude_proven["proof_artifact_id"] != proven["proof_artifact_id"]
+    cursor_proven = by_key.get(("cursor", "coordination_instructions_model_visible"))
+    if cursor_proven is not None:
+        assert cursor_proven["proof_status"] == "never_proven"
     # Every other declared assertion has no proof in this store at all --
     # the row must still exist, labeled, not silently dropped.
-    unproven = [row for key, row in by_key.items() if key != ("codex", "coordination_instructions_model_visible")]
+    unproven = [
+        row
+        for key, row in by_key.items()
+        if key
+        not in {
+            ("codex", "coordination_instructions_model_visible"),
+            ("claude", "coordination_instructions_model_visible"),
+        }
+    ]
     assert unproven
     assert all(row["proof_status"] == "never_proven" for row in unproven)
     assert all(row["generated_at"] is None for row in unproven)
 
 
-def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp_path: Path) -> None:
-    # docs/specs/provider-factory-coherence.md, Phase 5 UI: browsers
-    # authenticate with the session cookie, never a device token, so the
-    # web app cannot call GET /agents/provider-capabilities directly.
-    # GET /admin/provider-capabilities is the cookie-authenticated mirror
-    # that calls the exact same build_capability_projection_payload() --
-    # this proves both surfaces return identical data from one proof store,
-    # not two projection code paths that can drift apart.
-    from zerg.dependencies.auth import get_current_user
-    from zerg.dependencies.auth import require_admin
-
+@pytest.mark.parametrize("damage", ["mutate", "delete"])
+def test_capability_projection_disqualifies_inline_proof_when_referenced_evidence_is_damaged(
+    monkeypatch, tmp_path: Path, damage: str
+) -> None:
     generated_at = datetime.now(UTC).isoformat()
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
@@ -648,29 +735,118 @@ def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp
         assertion_id="coordination_instructions_model_visible",
         assertion_variant=None,
         scenario_id="codex_coordination_awareness_create",
+        scenario_revision=6,
         outcome=AssertionOutcome.PASS,
+        evidence_class=EvidenceClass.LIVE_TOKEN,
         generated_at=generated_at,
     )
     _write_trusted(store, proof)
-    api_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_admin=True)
-    api_app.dependency_overrides[require_admin] = lambda: None
-    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="machine-1", owner_id=1)
-    client = TestClient(app, backend="asyncio")
+    digest = proof.raw_reference_digests[0]
+    evidence_path = tmp_path / "proofs" / "_blobs" / "sha256" / digest.removeprefix("sha256:")
+    if damage == "mutate":
+        evidence_path.write_bytes(b"tampered evidence")
+    else:
+        evidence_path.unlink()
+
+    client = _client(monkeypatch, tmp_path)
     try:
-        agents_response = client.get(
-            "/api/agents/provider-capabilities",
-            headers={"X-Agents-Token": "irrelevant-in-auth-disabled-tests"},
-        )
-        admin_response = client.get("/api/admin/provider-capabilities")
+        response = client.get("/api/agents/provider-capabilities")
     finally:
         api_app.dependency_overrides.clear()
 
-    assert admin_response.status_code == 200
-    payload = admin_response.json()
-    assert payload["artifact_kind"] == "provider_capability_projection"
-    assert payload["capabilities"]
-    assert agents_response.status_code == 200
-    assert admin_response.json() == agents_response.json()
+    assert response.status_code == 200
+    row = next(
+        item
+        for item in response.json()["capabilities"]
+        if (item["provider"], item["assertion_id"]) == ("codex", "coordination_instructions_model_visible")
+    )
+    assert row["proof_status"] == "unacceptable_evidence"
+    assert "proof_referenced_content_missing" in row["admissibility_reasons"]
+
+
+def test_capability_projection_uses_older_intact_pass_when_latest_pass_evidence_is_tampered(monkeypatch, tmp_path: Path) -> None:
+    moment = datetime.now(UTC)
+    older_generated_at = (moment - timedelta(minutes=5)).isoformat()
+    latest_generated_at = moment.isoformat()
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    older = _record(
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        scenario_id="codex_coordination_awareness_create",
+        scenario_revision=6,
+        outcome=AssertionOutcome.PASS,
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        generated_at=older_generated_at,
+        invocation_id="factory-run-older",
+    )
+    latest_raw = b"latest-raw"
+    latest_raw_digest = _blob_digest("latest-raw")
+    latest = _record(
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        scenario_id="codex_coordination_awareness_create",
+        scenario_revision=6,
+        outcome=AssertionOutcome.PASS,
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        generated_at=latest_generated_at,
+        invocation_id="factory-run-latest",
+        raw_reference_digests=(latest_raw_digest,),
+    )
+    _write_trusted(store, older)
+    _write_trusted(store, latest, blob_contents={latest_raw_digest: latest_raw})
+    latest_path = tmp_path / "proofs" / "_blobs" / "sha256" / latest_raw_digest.removeprefix("sha256:")
+    latest_path.write_bytes(b"tampered latest evidence")
+
+    client = _client(monkeypatch, tmp_path)
+    try:
+        response = client.get("/api/agents/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    row = next(
+        item
+        for item in response.json()["capabilities"]
+        if (item["provider"], item["assertion_id"]) == ("codex", "coordination_instructions_model_visible")
+    )
+    assert row["proof_status"] == "pass"
+    assert row["proof_artifact_id"] == older.artifact_id
+    assert row["generated_at"] == older_generated_at
+    assert row["latest_proof_artifact_id"] == latest.artifact_id
+    assert row["latest_outcome"] == "pass"
+
+
+def test_capability_projection_keeps_v4_reference_proof_without_local_evidence(monkeypatch, tmp_path: Path) -> None:
+    generated_at = datetime.now(UTC).isoformat()
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    proof = _record(
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        scenario_id="codex_coordination_awareness_create",
+        scenario_revision=6,
+        outcome=AssertionOutcome.PASS,
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+        generated_at=generated_at,
+    )
+    _write_reference_trusted(store, proof)
+    assert not (tmp_path / "proofs" / "_blobs").exists()
+
+    client = _client(monkeypatch, tmp_path)
+    try:
+        response = client.get("/api/agents/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    row = next(
+        item
+        for item in response.json()["capabilities"]
+        if (item["provider"], item["assertion_id"]) == ("codex", "coordination_instructions_model_visible")
+    )
+    assert row["proof_status"] == "pass"
+    assert row["proof_artifact_id"] == proof.artifact_id
 
 
 def test_capability_projection_translates_malformed_schema_to_a_clean_500(monkeypatch, tmp_path: Path) -> None:

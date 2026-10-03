@@ -34,7 +34,6 @@ const ProfilePage = lazy(() => import("@/features/auth/ProfilePage"));
 const SettingsPage = lazy(() => import("@/features/auth/SettingsPage"));
 const DevicesPage = lazy(() => import("@/features/machines/DevicesPage"));
 const ObservabilityPage = lazy(() => import("@/features/observability/ObservabilityPage"));
-const ProviderCapabilitiesPage = lazy(() => import("@/features/admin/ProviderCapabilitiesPage"));
 const RunnersPage = lazy(() => import("@/features/runners/RunnersPage"));
 const RunnerDetailPage = lazy(() => import("@/features/runners/RunnerDetailPage"));
 const SessionsPage = lazy(() => import("@/features/timeline/SessionsPage"));
@@ -279,14 +278,6 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                 element: (
                   <ErrorBoundary>
                     <DevicesPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/admin/provider-capabilities",
-                element: (
-                  <ErrorBoundary>
-                    <ProviderCapabilitiesPage />
                   </ErrorBoundary>
                 ),
               },

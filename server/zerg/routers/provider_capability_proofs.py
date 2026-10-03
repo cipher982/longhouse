@@ -9,6 +9,7 @@ import hmac
 import json
 import re
 import time
+from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
 from typing import Any
@@ -654,21 +655,39 @@ def get_provider_capability_proof_blob(
     )
 
 
-def _published_records() -> tuple[list[ProviderCapabilityProofRecord], dict[str, tuple[str, ...]]]:
+def _published_records() -> tuple[
+    list[ProviderCapabilityProofRecord],
+    dict[str, tuple[str, ...]],
+    Callable[[ProviderCapabilityProofRecord], tuple[str, ...]],
+]:
     store = _proof_store()
-    all_records: list[ProviderCapabilityProofRecord] = []
+    providers = sorted(managed_provider_names())
+    all_records = [record for provider in providers for record in store.records(provider)]
     integrity_reasons: dict[str, tuple[str, ...]] = {}
-    for provider in sorted(managed_provider_names()):
-        all_records.extend(store.records(provider))
-        integrity_reasons.update(
-            {item.artifact_id: item.reason_codes for item in store.integrity_report(provider).artifacts if not item.admissible}
-        )
+    publication_by_provider: dict[str, dict[str, frozenset[tuple[str, str, str, int]]]] = {}
+
+    def read_integrity(record: ProviderCapabilityProofRecord) -> tuple[str, ...]:
+        if record.artifact_id not in integrity_reasons:
+            if record.provider not in publication_by_provider:
+                publication_by_provider[record.provider] = store.publication_facts(record.provider)
+            # Only candidates that can support a current result (or the latest
+            # rejected attempt) need evidence validation. Historical attempts
+            # and unrelated retained blobs remain the full audit's concern.
+            report = store.integrity_report(
+                record.provider,
+                records=(record,),
+                available=store.available_blob_digests(records=(record,)),
+                publication_facts=publication_by_provider[record.provider],
+            )
+            integrity_reasons[record.artifact_id] = report.artifacts[0].reason_codes
+        return integrity_reasons[record.artifact_id]
+
     legacy_store = _legacy_proof_store()
-    for provider in sorted(managed_provider_names()):
+    for provider in providers:
         legacy_records = legacy_store.records(provider)
         all_records.extend(legacy_records)
         integrity_reasons.update({record.artifact_id: ("proof_schema_legacy", "historical_schema_v2") for record in legacy_records})
-    return all_records, integrity_reasons
+    return all_records, integrity_reasons, read_integrity
 
 
 def build_capability_projection_payload(
@@ -682,12 +701,10 @@ def build_capability_projection_payload(
     one row, whether or not it has ever been proven -- the schema is the
     source of truth for what should exist.
 
-    Shared by both the device-token machine surface
-    (GET /agents/provider-capabilities) and the cookie-authenticated admin
-    surface (GET /admin/provider-capabilities) so there is exactly one
-    projection code path, not two that can drift.
+    This is the device-token machine diagnostic. The public certification
+    response uses the same proof reader and projection rules.
     """
-    all_records, integrity_reasons = _published_records()
+    all_records, integrity_reasons, read_integrity = _published_records()
     try:
         assertions = load_capability_assertions()
     except SystemExit as exc:
@@ -712,6 +729,7 @@ def build_capability_projection_payload(
         expected_longhouse_sha=expected_longhouse_sha,
         expected_epoch_digest=expected_epoch_digest,
         verdicts=_cell_verdict_store().verdicts(),
+        integrity_reader=read_integrity,
     )
     return {
         "schema_version": 1,
@@ -786,10 +804,15 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
     """
 
     edges = load_chip_edge_assertions()
-    all_records, integrity_reasons = _published_records()
+    all_records, integrity_reasons, read_integrity = _published_records()
     flat = tuple(assertion for chips in edges.values() for chip in chips.values() if chip for assertion in chip)
     projected = project_capabilities(
-        flat, all_records, now=now, integrity_reasons=integrity_reasons, verdicts=_cell_verdict_store().verdicts()
+        flat,
+        all_records,
+        now=now,
+        integrity_reasons=integrity_reasons,
+        verdicts=_cell_verdict_store().verdicts(),
+        integrity_reader=read_integrity,
     )
     by_identity = {(p.provider, p.capability, p.scenario_id, p.assertion_id, p.variant): p for p in projected}
     moment = (now or datetime.now(UTC)).astimezone(UTC)

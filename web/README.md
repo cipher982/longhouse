@@ -13,6 +13,10 @@ iOS transcript document. Folder-by-folder layout: the Code map in
 Run: `make dev` (UI against your Runtime Host) or `make dev-demo` (seeded local
 backend). Test: `make test-frontend`. See a page: `make ui-capture PAGE=timeline`.
 
+The app navigation is Timeline, Machines, and (for single-tenant instances)
+Health. Provider readiness and sign-in live with Machines and launch; factory
+proof assertions are machine API diagnostics, not a customer Admin page.
+
 For ended managed terminal sessions, **Show resume command** appears beside the
 ended-run notice in the composer. It opens a command dialog; it does not restart
 the agent. Run the copied command in a terminal on the named machine to continue

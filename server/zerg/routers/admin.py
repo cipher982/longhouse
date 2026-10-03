@@ -88,18 +88,6 @@ async def reset_database():
     }
 
 
-@router.get("/provider-capabilities")
-def get_provider_capabilities() -> dict[str, object]:
-    """Cookie-authenticated mirror of GET /agents/provider-capabilities.
-
-    Same projection, same code path -- the device-token machine surface and
-    this admin page read identical data, they just authenticate differently.
-    """
-    from zerg.routers.provider_capability_proofs import build_capability_projection_payload
-
-    return build_capability_projection_payload()
-
-
 # ---------------------------------------------------------------------------
 # Test Configuration Endpoints (E2E testing only)
 # ---------------------------------------------------------------------------

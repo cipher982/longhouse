@@ -15,14 +15,11 @@ const DEMO_ITEMS: NavItem[] = [
   { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
 ];
 
-export function getNavItems(role?: string | null): NavItem[] {
+export function getNavItems(): NavItem[] {
   if (config.demoMode) return [...DEMO_ITEMS];
   const items = [...BASE_ITEMS];
   if (config.singleTenant) {
     items.push({ label: "Health", href: "/health", testId: "global-health-tab" });
-  }
-  if (role === "ADMIN") {
-    items.push({ label: "Admin", href: "/admin/provider-capabilities", testId: "global-admin-tab" });
   }
   return items;
 }

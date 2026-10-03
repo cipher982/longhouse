@@ -23,6 +23,13 @@ acceptance, retaining attested metadata rather than copying evidence bytes.
 Existing inline proofs remain immutable and readable. Evidence downloads require
 owner-capable authentication; managed-session credentials cannot read them.
 
+`GET /api/agents/provider-capabilities` is the authenticated assurance diagnostic;
+`GET /api/public/provider-certification` supplies the public provider chart.
+These reads validate current qualifying proof candidates and the latest rejected
+attempt, reusing publication facts within the request. They do not hash unrelated
+blobs or run orphan-history audits. Full store integrity audits remain available;
+missing or tampered supporting evidence still rejects a proof.
+
 Live background qualification uses `claude_background_v1` and
 `omp_background_v1` through the existing provider qualification dispatcher.
 The oracles retain native source, read canonical workspace state rather than

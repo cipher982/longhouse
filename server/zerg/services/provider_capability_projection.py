@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC
@@ -122,6 +123,7 @@ def project_capabilities(
     expected_longhouse_sha: str | None = None,
     expected_epoch_digest: str | None = None,
     verdicts: Mapping[CellKey, CellVerdict] | None = None,
+    integrity_reader: Callable[[ProviderCapabilityProofRecord], tuple[str, ...]] | None = None,
 ) -> tuple[CapabilityProjection, ...]:
     """Join every exact assertion variant to its currently admissible proof.
 
@@ -156,21 +158,21 @@ def project_capabilities(
             reverse=True,
         )
         exact = [record for record in nearby if record.assertion_variant == assertion.variant]
-        evaluated = [
-            (
+        qualifying = None
+        for record in exact:
+            reasons = _rejection_reasons(
+                assertion,
                 record,
-                _rejection_reasons(
-                    assertion,
-                    record,
-                    moment=moment,
-                    integrity_reasons=integrity_reasons,
-                    expected_longhouse_sha=expected_longhouse_sha,
-                    expected_epoch_digest=expected_epoch_digest,
-                ),
+                moment=moment,
+                integrity_reasons=integrity_reasons,
+                expected_longhouse_sha=expected_longhouse_sha,
+                expected_epoch_digest=expected_epoch_digest,
             )
-            for record in exact
-        ]
-        qualifying = next((record for record, reasons in evaluated if not reasons), None)
+            if not reasons and integrity_reader is not None:
+                reasons = integrity_reader(record)
+            if not reasons:
+                qualifying = record
+                break
         latest = exact[0] if exact else nearby[0] if nearby else None
         verdict = verdicts.get((assertion.provider, assertion.assertion_id, assertion.scenario_id, assertion.variant))
         latest_time = _parse_timestamp(latest.generated_at) if latest else None
@@ -201,6 +203,8 @@ def project_capabilities(
                 expected_longhouse_sha=expected_longhouse_sha,
                 expected_epoch_digest=expected_epoch_digest,
             )
+            if integrity_reader is not None:
+                reasons = tuple(dict.fromkeys((*integrity_reader(latest), *reasons)))
             status = _status_for_rejection(latest, reasons)
         else:
             support = None

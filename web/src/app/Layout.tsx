@@ -182,7 +182,7 @@ function WelcomeHeader() {
     }
   };
 
-  const navItems = getNavItems(user?.role);
+  const navItems = getNavItems();
 
   return (
     <>

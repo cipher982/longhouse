@@ -8,6 +8,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -319,16 +320,29 @@ class ProviderCapabilityProofStore:
         ]
         return tuple(sorted(records, key=lambda record: (record.generated_at, record.artifact_id)))
 
-    def available_blob_digests(self) -> frozenset[str]:
-        if not self._blob_root.exists():
-            return frozenset()
-        values = []
-        for path in self._blob_root.iterdir():
-            if path.is_file() and re.fullmatch(r"[0-9a-f]{64}", path.name):
-                digest = f"sha256:{path.name}"
-                if self._digest_bytes(path.read_bytes()) == digest:
-                    values.append(digest)
-        return frozenset(values)
+    def available_blob_digests(
+        self,
+        *,
+        records: Iterable[ProviderCapabilityProofRecord] | None = None,
+    ) -> frozenset[str]:
+        if records is None:
+            if not self._blob_root.exists():
+                return frozenset()
+            values = []
+            for path in self._blob_root.iterdir():
+                if path.is_file() and re.fullmatch(r"[0-9a-f]{64}", path.name):
+                    digest = f"sha256:{path.name}"
+                    if self._digest_bytes(path.read_bytes()) == digest:
+                        values.append(digest)
+            return frozenset(values)
+
+        referenced = {digest for record in records for digest in record.referenced_content_digests()}
+        available: set[str] = set()
+        for digest in referenced:
+            path = self._blob_root / self._digest_name(digest)
+            if path.is_file() and self._digest_bytes(path.read_bytes()) == digest:
+                available.add(digest)
+        return frozenset(available)
 
     def _all_referenced_content_digests(self) -> frozenset[str]:
         if not self.root.exists():
@@ -346,6 +360,7 @@ class ProviderCapabilityProofStore:
         *,
         records: tuple[ProviderCapabilityProofRecord, ...] | None = None,
         available: frozenset[str] | None = None,
+        publication_facts: Mapping[str, frozenset[tuple[str, str, str, int]]] | None = None,
     ) -> ProofStoreIntegrityReport:
         """Check retained records, optionally restricting the scan to a batch.
 
@@ -364,7 +379,10 @@ class ProviderCapabilityProofStore:
         # this check O(records * events), which turns a normal proof batch into
         # an increasingly slow request. Build the authenticated artifact set
         # once and use constant-time membership checks below.
-        published_artifact_facts = self._published_artifact_facts(provider) if self.require_authenticated_publication else {}
+        if publication_facts is None:
+            published_artifact_facts = self.publication_facts(provider) if self.require_authenticated_publication else {}
+        else:
+            published_artifact_facts = publication_facts
         artifacts: list[ProofArtifactIntegrity] = []
         for record in records:
             reasons: list[str] = []
@@ -420,7 +438,7 @@ class ProviderCapabilityProofStore:
             orphan_blob_digests=(tuple(sorted(available - self._all_referenced_content_digests())) if full_scan else ()),
         )
 
-    def _published_artifact_facts(self, provider: str) -> dict[str, frozenset[tuple[str, str, str, int]]]:
+    def publication_facts(self, provider: str) -> dict[str, frozenset[tuple[str, str, str, int]]]:
         """Return valid authenticated publication identities for one provider.
 
         The event directory is append-only and each event names its artifact.
@@ -466,7 +484,7 @@ class ProviderCapabilityProofStore:
 
     def _has_publication_event(self, record: ProviderCapabilityProofRecord) -> bool:
         expected = (record.worker_id, record.worker_census_digest, record.auth_mechanism)
-        return any(fact[:3] == expected for fact in self._published_artifact_facts(record.provider).get(record.artifact_id, frozenset()))
+        return any(fact[:3] == expected for fact in self.publication_facts(record.provider).get(record.artifact_id, frozenset()))
 
     def _reference_path(self, record: ProviderCapabilityProofRecord) -> Path:
         return self._reference_root / self._provider_root(record.provider).name / f"{record.artifact_id}.json"

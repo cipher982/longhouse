@@ -78,7 +78,6 @@ const PAGE_DEFINITIONS = {
   profile: { path: "/profile" },
   integrations: { path: "/settings/integrations" },
   devices: { path: "/settings/devices" },
-  admin: { path: "/admin" },
   // The public marketing page (always reachable, even when authenticated).
   landing: { path: "/landing" },
   // Public legal pages: static copy. Capture them with SCENE=first-run so the
