@@ -71,13 +71,14 @@ def _reply_text(payload: dict) -> str:
 # the marker is answered only once that tool's result comes back, so the turn
 # really runs a tool for six seconds before it replies.
 TOOL_COMMAND = "sleep 6"
-SHELL_TOOL_NAMES = ("bash", "shell", "exec_command", "shell_command", "run_shell_command")
+SHELL_TOOL_NAMES = ("bash", "shell", "exec_command", "shell_command", "run_shell_command", "run_command")
 TOOL_RESULT_TYPES = {"tool_result", "function_call_output", "custom_tool_call_output", "local_shell_call_output"}
 
 
 def _has_tool_result(value: object) -> bool:
     if isinstance(value, dict):
-        if value.get("type") in TOOL_RESULT_TYPES or value.get("role") == "tool" or "functionResponse" in value:
+        kind = value.get("type")
+        if (isinstance(kind, str) and kind in TOOL_RESULT_TYPES) or value.get("role") == "tool" or "functionResponse" in value:
             return True
         return any(_has_tool_result(item) for item in value.values())
     if isinstance(value, list):
@@ -114,7 +115,9 @@ def _shell_call(payload: dict) -> tuple[str, dict]:
     else:
         raise ValueError(f"no shell tool offered; tools: {sorted(by_name)}")
     props = schema.get("properties") or {}
-    key = next((k for k in ("command", "cmd") if k in props), None)
+    print(f"shell tool {name}: {json.dumps(schema, sort_keys=True)[:2000]}", flush=True)
+    lowered = {k.lower(): k for k in props}
+    key = next((lowered[k] for k in ("command", "cmd", "commandline") if k in lowered), None)
     if key is None:
         raise ValueError(f"shell tool {name!r} has no command parameter: {sorted(props)}")
     args: dict = {key: ["bash", "-lc", TOOL_COMMAND] if props[key].get("type") == "array" else TOOL_COMMAND}
@@ -122,7 +125,16 @@ def _shell_call(payload: dict) -> tuple[str, dict]:
         if required in args:
             continue
         kind = (props.get(required) or {}).get("type")
-        args[required] = {"integer": 30_000, "number": 30_000, "boolean": False}.get(kind, "Wait six seconds")
+        lname = required.lower()
+        if kind == "boolean":
+            # Wait for the command: anything asking to background it is off.
+            args[required] = not any(word in lname for word in ("background", "async"))
+        elif kind in ("integer", "number"):
+            args[required] = 30_000
+        elif lname in ("cwd", "workdir", "working_directory", "directory", "dir"):
+            args[required] = "."
+        else:
+            args[required] = "Wait six seconds"
     return name, args
 
 
@@ -132,7 +144,8 @@ def _plan(payload: dict) -> tuple[str, str | tuple[str, dict]]:
     A request offering no tools at all (a title or summary side call) gets text.
     """
     text = _reply_text(payload)
-    if text.startswith("LH_SERVED_") and payload.get("tools") and not _has_tool_result(payload):
+    conversation = {key: value for key, value in payload.items() if key != "tools"}
+    if text.startswith("LH_SERVED_") and payload.get("tools") and not _has_tool_result(conversation):
         return "tool", _shell_call(payload)
     return "text", text
 
