@@ -1288,6 +1288,7 @@ def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, li
         assert receipt["archive_session_input_id"] is None
     finally:
         asyncio.run(_clear_machine_control_registry())
+        reset_pubsub_for_test()
 
 
 def test_cancel_live_queued_input_uses_live_receipt(live_catalog, live_catalog_client):  # noqa: F811

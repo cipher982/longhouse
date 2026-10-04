@@ -315,18 +315,18 @@ def publish_session_read_update(*, session_id: str) -> None:
     bus.publish(TOPIC_TIMELINE, payload)
 
 
-def publish_session_input_queued(*, session_id: str) -> None:
-    """Wake session viewers after a sender queues input behind a running turn.
+def publish_session_input_queued(*, session_id: str, source: str) -> None:
+    """Wake session viewers after a sender's input is left waiting as queued.
 
     Only the input receipt changes, so no runtime, transcript or provider frame
-    follows until the turn ends. Clients refetch the workspace, which is the
-    surface that carries the receipts.
+    follows until delivery. Clients refetch the workspace, which is the surface
+    that carries the receipts.
     """
     payload = {
         "kind": "input_queued",
         "session_id": session_id,
         "provider": None,
-        "source": "console_turn_queued",
+        "source": source,
         "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
     }
     get_pubsub().publish(topic_session(session_id), payload)

@@ -384,7 +384,7 @@ async def enqueue_catalog_console_turn(
         # a viewer on a healthy stream never learned another sender queued it.
         from zerg.services.session_pubsub import publish_session_input_queued
 
-        publish_session_input_queued(session_id=str(session_id))
+        publish_session_input_queued(session_id=str(session_id), source="console_turn_queued")
     if state == SESSION_TURN_STATE_QUEUED:
         # A follow-up is the first reliable opportunity to recover a current
         # starting turn while the Machine Agent remains connected. Rebuild the

@@ -407,7 +407,7 @@ async def test_queued_console_turn_wakes_session_viewers_once(monkeypatch, creat
     )
 
     assert outcome.state == "queued"
-    assert wakes == ([{"session_id": str(session_id)}] if created else [])
+    assert wakes == ([{"session_id": str(session_id), "source": "console_turn_queued"}] if created else [])
 
 
 @pytest.mark.asyncio

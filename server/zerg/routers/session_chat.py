@@ -2101,13 +2101,12 @@ async def _dispatch_provider_native_send(
                 status_value=INPUT_STATUS_QUEUED,
             )
             await session_lock_manager.release(lock_scope_id, delivery_request_id)
-            return SessionInputResponse(
-                outcome="queued",
-                input_id=None,
-                live_input_id=receipt_id,
+            return await _queued_input_response(
+                source_session=source_session,
+                receipt_id=receipt_id,
                 client_request_id=client_request_id,
-                intent=body.intent,
-                queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+                body=body,
+                source="provider_channel_unreached",
             )
         await _finish_catalog_input_receipt(
             receipt_id=receipt_id,
@@ -2192,11 +2191,32 @@ async def _park_catalog_session_input(
     # that acquires it next must be able to see this message already waiting.
     if send_lock is not None:
         await session_lock_manager.release(send_lock[0], send_lock[1])
-    # Only the receipt changed: without a wake, a viewer on a healthy stream
-    # never sees another sender's parked message until the turn ends.
+    return await _queued_input_response(
+        source_session=source_session,
+        receipt_id=receipt_id,
+        client_request_id=client_request_id,
+        body=body,
+        source="parked_for_turn_boundary",
+    )
+
+
+async def _queued_input_response(
+    *,
+    source_session,
+    receipt_id: str,
+    client_request_id: str,
+    body: SessionInputRequest,
+    source: str,
+) -> SessionInputResponse:
+    """Answer a SEND whose durable receipt now waits as `queued`, and say so.
+
+    Only the receipt changed: no runtime, transcript or provider frame follows
+    until delivery, so without this wake a viewer on a healthy stream never
+    sees another sender's waiting message.
+    """
     from zerg.services.session_pubsub import publish_session_input_queued
 
-    publish_session_input_queued(session_id=str(source_session.id))
+    publish_session_input_queued(session_id=str(source_session.id), source=source)
     return SessionInputResponse(
         outcome="queued",
         input_id=None,
@@ -2872,13 +2892,12 @@ async def _create_catalog_session_input_response(
                     status_value="queued",
                     error=error,
                 )
-                return SessionInputResponse(
-                    outcome="queued",
-                    input_id=None,
-                    live_input_id=receipt_id,
+                return await _queued_input_response(
+                    source_session=source_session,
+                    receipt_id=receipt_id,
                     client_request_id=client_request_id,
-                    intent=body.intent,
-                    queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+                    body=body,
+                    source="managed_control_momentarily_unavailable",
                 )
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
