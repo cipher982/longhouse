@@ -199,7 +199,9 @@ def _print_overlay_key(event) -> tuple | None:
         return None
     if not isinstance(seq, int) or isinstance(seq, bool):
         return None
-    return (str(event.session_id), overlay, event.run_id, payload.get("turn_id"), payload.get("assistant_message_index"))
+    # omp names the message by assistant_message_index, pi by item_id.
+    message = payload.get("assistant_message_index", payload.get("item_id"))
+    return (str(event.session_id), overlay, event.run_id, payload.get("turn_id"), message)
 
 
 def _without_superseded_print_overlays(events: list) -> list:
@@ -213,16 +215,16 @@ def _without_superseded_print_overlays(events: list) -> list:
     turn stayed running and its queued follow-up never started). Keeping only
     the newest per message leaves the stored preview exactly the same.
     """
+    keys = [_print_overlay_key(event) for event in events]
     newest: dict[tuple, tuple[int, int]] = {}
-    for index, event in enumerate(events):
-        key = _print_overlay_key(event)
+    for index, key in enumerate(keys):
         if key is None:
             continue
-        seq = event.payload["seq"]
+        seq = events[index].payload["seq"]
         if key not in newest or seq >= newest[key][0]:
             newest[key] = (seq, index)
     keep = {index for _seq, index in newest.values()}
-    return [event for index, event in enumerate(events) if index in keep or _print_overlay_key(event) is None]
+    return [event for index, event in enumerate(events) if keys[index] is None or index in keep]
 
 
 def _is_bridge_live_transcript_event(event) -> bool:
