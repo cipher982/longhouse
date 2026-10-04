@@ -145,6 +145,46 @@ def test_runtime_batch_sends_catalogd_only_the_newest_print_overlay_per_message(
     assert (result.accepted, result.ignored) == (len(events), 39)
 
 
+def test_runtime_batch_keeps_the_newest_overlay_of_each_pi_item(monkeypatch):
+    """pi names its message by item_id; two items in one turn are two previews."""
+    import zerg.routers.runtime as runtime_router
+
+    def pi(seq: int, item: str) -> dict:
+        return {
+            "runtime_key": "pi:pi-session",
+            "session_id": "8a1f6a4e-6d1f-4c5e-9a4b-0f1e2d3c4b5a",
+            "provider": "pi",
+            "device_id": "wisp",
+            "source": "pi_print",
+            "kind": "progress_signal",
+            "occurred_at": f"2026-10-04T04:00:{seq:02d}Z",
+            "dedupe_key": f"pi-print:{seq}",
+            "payload": {"progress_kind": "pi_print_stream", "seq": seq, "turn_id": "turn-1", "item_id": item},
+        }
+
+    sent = []
+
+    class CatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            sent.extend(params["events"])
+            return {"accepted": len(params["events"]), "duplicates": 0, "ignored": 0, "updated_runtime_keys": [], "commit_seq": "8"}
+
+    monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: CatalogClient())
+    monkeypatch.setattr(runtime_router, "_publish_live_transcript_previews", lambda *_args, **_kwargs: None)
+
+    asyncio.run(
+        runtime_router.ingest_runtime_observation_batch(
+            RuntimeEventBatchIngest(events=[pi(1, "a"), pi(2, "a"), pi(3, "b"), pi(4, "b")]),
+            Response(),
+            None,
+            SimpleNamespace(device_id="wisp", id="token-1", owner_id=1),
+            None,
+        )
+    )
+
+    assert [(event["payload"]["item_id"], event["payload"]["seq"]) for event in sent] == [("a", 2), ("b", 4)]
+
+
 def test_presence_live_store_delegates_to_runtime_batch_without_archive_wait(monkeypatch):
     import zerg.routers.presence as presence_router
     import zerg.routers.runtime as runtime_router

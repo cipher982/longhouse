@@ -200,7 +200,9 @@ def _print_overlay_key(event) -> tuple | None:
     if not isinstance(seq, int) or isinstance(seq, bool):
         return None
     # omp names the message by assistant_message_index, pi by item_id.
-    message = payload.get("assistant_message_index", payload.get("item_id"))
+    message = payload.get("assistant_message_index")
+    if message is None:  # not `or`: omp's first message is index 0
+        message = payload.get("item_id")
     return (str(event.session_id), overlay, event.run_id, payload.get("turn_id"), message)
 
 

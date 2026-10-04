@@ -1649,7 +1649,8 @@
       "path": "server/tests_lite/test_runtime_route_guardrails.py",
       "providers": [
         "codex",
-        "omp"
+        "omp",
+        "pi"
       ]
     },
     {
