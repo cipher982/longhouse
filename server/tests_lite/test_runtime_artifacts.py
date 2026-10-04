@@ -36,7 +36,9 @@ def test_extract_app_bundle_archive_preserves_member_modes_under_restrictive_uma
         for source_path in (executable, info_plist):
             member = zipfile.ZipInfo(source_path.relative_to(tmp_path).as_posix())
             member.create_system = 3
-            member.external_attr = stat.S_IMODE(source_path.stat().st_mode) << 16
+            # A setuid bit from the archive must not survive installation.
+            extra = stat.S_ISUID if source_path == executable else 0
+            member.external_attr = (stat.S_IMODE(source_path.stat().st_mode) | extra) << 16
             archive.writestr(member, source_path.read_bytes())
 
     destination = tmp_path / "installed" / "Longhouse.app"

@@ -432,7 +432,7 @@ def _extract_app_bundle_archive(source_path: Path, destination_path: Path) -> No
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     with archive.open(member) as source_handle, target_path.open("wb") as target_handle:
                         shutil.copyfileobj(source_handle, target_handle)
-                mode = stat.S_IMODE(member_mode)
+                mode = member_mode & 0o777  # setuid/setgid/sticky never come from an archive
                 if mode:
                     target_path.chmod(mode)
 
