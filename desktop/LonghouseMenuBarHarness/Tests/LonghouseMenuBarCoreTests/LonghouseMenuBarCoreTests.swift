@@ -2131,11 +2131,12 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
-    func setupRequiredKeepsRefreshingUntilSignInFinishesThenStops() async throws {
+    func setupRequiredKeepsRefreshingUntilFreshLocalStatusThenStops() async throws {
         // Sign-in completes in Terminal and the browser; no engine status file
-        // exists yet to wake the store, so "Finish setup" stayed up after the
-        // Mac was connected until a manual Refresh.
-        func snapshot(_ state: String, _ headline: String) -> HealthSnapshot {
+        // exists yet to wake the store. The window kept "Finish setup", and once
+        // that was fixed, "Local status is stale" from the first post-sign-in
+        // snapshot (stranger runs 100402498d26, 10041609a760).
+        func snapshot(_ state: String, _ headline: String, engineFresh: Bool?) -> HealthSnapshot {
             HealthSnapshot(
                 schemaVersion: 1,
                 collectedAt: "2026-10-04T02:53:00Z",
@@ -2145,15 +2146,18 @@ struct LonghouseMenuBarCoreTests {
                 reasons: state == "healthy" ? [] : ["machine_setup_required"],
                 suggestedActions: [],
                 service: nil,
-                engineStatus: nil,
+                engineStatus: engineFresh.map {
+                    EngineStatusSnapshot(path: nil, exists: $0, fresh: $0, ageSeconds: nil, payload: nil, error: nil)
+                },
                 outbox: nil,
                 activitySummary: nil,
                 launchReadiness: nil
             )
         }
-        let setup = snapshot("setup_required", "Sign in to connect this machine to Longhouse")
-        let healthy = snapshot("healthy", "Longhouse native health is healthy")
-        let source = CountingHealthSnapshotSource(snapshots: [setup, setup, healthy])
+        let setup = snapshot("setup_required", "Sign in to connect this machine to Longhouse", engineFresh: nil)
+        let starting = snapshot("healthy", "Engine starting", engineFresh: false)
+        let healthy = snapshot("healthy", "Longhouse native health is healthy", engineFresh: true)
+        let source = CountingHealthSnapshotSource(snapshots: [setup, setup, starting, healthy])
         let store = SnapshotStore(source: source, cacheURL: nil, setupRefreshInterval: 0.02)
 
         store.refresh(reason: .manual)
