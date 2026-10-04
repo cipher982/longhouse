@@ -64,7 +64,8 @@ jobs:
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         if: ${{ inputs.target == 'simlab-run' || inputs.target == 'test-e2e-onboarding' }}
       - name: Install XcodeGen
-        if: ${{ inputs.target != 'menubar-harness' && inputs.target != 'test-runtime-packaging-macos' && inputs.target != 'test-e2e-onboarding' && inputs.target != 'test-install' }}
+        # The menu bar harness needs it only for its XCUITest lane.
+        if: ${{ (inputs.target != 'menubar-harness' || contains(inputs.options_json, '"xcuitest"')) && inputs.target != 'test-runtime-packaging-macos' && inputs.target != 'test-e2e-onboarding' && inputs.target != 'test-install' }}
         run: scripts/ci/install_xcodegen.sh
       - name: Run native fixtures in disposable VM
         env:
