@@ -234,6 +234,10 @@ struct InitializedCodexWorker {
 struct CodexConsoleWorkerPool {
     workers: Vec<InitializedCodexWorker>,
     spawning: usize,
+    /// When the in-flight prewarm reserved its slot. A turn waits on a spawn
+    /// only while it is younger than the prewarm's own budget; an older one is
+    /// a counter that was never released, and must not block every turn.
+    spawn_started_at: Option<std::time::Instant>,
     active_process_groups: HashMap<u32, i32>,
     shutting_down: bool,
     spawn_finished: Arc<tokio::sync::Notify>,
@@ -245,6 +249,7 @@ impl Default for CodexConsoleWorkerPool {
         Self {
             workers: Vec::new(),
             spawning: 0,
+            spawn_started_at: None,
             active_process_groups: HashMap::new(),
             shutting_down: false,
             spawn_finished: Arc::new(tokio::sync::Notify::new()),
@@ -259,7 +264,15 @@ impl CodexConsoleWorkerPool {
             return false;
         }
         self.spawning += 1;
+        self.spawn_started_at = Some(std::time::Instant::now());
         true
+    }
+
+    fn prewarm_in_flight(&self) -> bool {
+        self.spawning > 0
+            && self.spawn_started_at.is_none_or(|started| {
+                started.elapsed() < PREWARM_INITIALIZE_BUDGET + Duration::from_secs(10)
+            })
     }
 }
 
@@ -589,6 +602,9 @@ pub async fn prewarm_codex_console_workers() {
     .await;
     let mut pool = console_worker_pool().lock().await;
     pool.spawning = pool.spawning.saturating_sub(1);
+    if pool.spawning == 0 {
+        pool.spawn_started_at = None;
+    }
     let spawn_finished = pool.spawn_finished.clone();
     let mut discard = None;
     match result {
@@ -637,7 +653,7 @@ async fn lease_warm_worker_by(deadline: tokio::time::Instant) -> WarmLease {
                 // The prewarm finished between the lease and this lock.
                 continue;
             }
-            if pool.shutting_down || pool.spawning == 0 {
+            if pool.shutting_down || !pool.prewarm_in_flight() {
                 return WarmLease::Cold;
             }
             let mut wait = Box::pin(pool.spawn_finished.clone().notified_owned());
@@ -867,7 +883,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let mut worker = match lease {
         WarmLease::Worker(worker) => worker,
         WarmLease::StillStarting => anyhow::bail!(
-            "Codex is still starting on this machine (its first start can take tens of seconds while the machine is busy); send again in a moment"
+            "Codex is still starting on this machine; its first start can take up to a minute while the machine is busy. Send again in a minute."
         ),
         WarmLease::Cold => {
             spawn_initialized_codex_worker(
@@ -2757,8 +2773,21 @@ for line in sys.stdin:
             "no prewarm in flight: lease answers at once"
         );
 
+        // A slot reserved longer ago than any prewarm can run is a leaked
+        // counter: turns cold-start rather than all failing behind it.
+        {
+            let mut pool = console_worker_pool().lock().await;
+            pool.spawning += 1;
+            pool.spawn_started_at = Some(
+                std::time::Instant::now() - PREWARM_INITIALIZE_BUDGET - Duration::from_secs(11),
+            );
+        }
+        let leaked =
+            lease_warm_worker_by(tokio::time::Instant::now() + Duration::from_secs(5)).await;
+        assert!(matches!(leaked, WarmLease::Cold));
+
         // A prewarm that outlives the turn budget is reported, not raced.
-        console_worker_pool().lock().await.spawning += 1;
+        console_worker_pool().lock().await.spawn_started_at = Some(std::time::Instant::now());
         let late =
             lease_warm_worker_by(tokio::time::Instant::now() + Duration::from_millis(50)).await;
         assert!(matches!(late, WarmLease::StillStarting));
@@ -2781,6 +2810,7 @@ for line in sys.stdin:
             .unwrap();
             let mut pool = console_worker_pool().lock().await;
             pool.spawning -= 1;
+            pool.spawn_started_at = None;
             pool.workers.push(worker);
             let finished = pool.spawn_finished.clone();
             drop(pool);
@@ -3451,6 +3481,7 @@ for line in sys.stdin:
     #[tokio::test]
     #[ignore = "calls the installed Codex provider; run explicitly as an external contract canary"]
     async fn installed_codex_completes_through_production_console_adapter() {
+        let _serial = WARM_POOL_TEST_LOCK.lock().await;
         let (api_url, mut received) = spawn_runtime_capture_server().await;
         let mut run_config = config();
         run_config.cwd = std::env::current_dir().unwrap();
