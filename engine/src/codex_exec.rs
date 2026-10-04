@@ -28,6 +28,17 @@ const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
 const STDERR_TAIL_LINES: usize = 40;
 const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const CONSOLE_WARM_POOL_TARGET: usize = 1;
+/// A user waits on this one, and the Runtime Host waits only 10 s for the
+/// turn-start reply (`CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS`), so it stays
+/// well inside that.
+const TURN_INITIALIZE_BUDGET: Duration = Duration::from_secs(5);
+/// The machine-global warm worker nobody waits on. On a fresh 4-vCPU Mac
+/// still importing history the prewarm and then the first turn both timed out
+/// at 5 s (stranger run 10041621cd97), and under import-like load
+/// `initialize` took over 20 s in 4/15 tries (control-plane spec
+/// stranger-run.md F11). A prewarm that dies at 5 s leaves every later turn
+/// cold; 60 s = 3x that measured 20 s tail.
+const PREWARM_INITIALIZE_BUDGET: Duration = Duration::from_secs(60);
 const DEFAULT_CODEX_BIN: &str = "codex";
 pub const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
 // Console runs unattended: there is no terminal and no human to answer a
@@ -573,6 +584,7 @@ pub async fn prewarm_codex_console_workers() {
         None,
         None,
         None,
+        PREWARM_INITIALIZE_BUDGET,
     )
     .await;
     let mut pool = console_worker_pool().lock().await;
@@ -655,6 +667,7 @@ async fn spawn_initialized_codex_worker(
     session_id: Option<&str>,
     launch_actor: Option<&str>,
     launch_surface: Option<&str>,
+    initialize_budget: Duration,
 ) -> Result<InitializedCodexWorker> {
     let config = CodexExecRunConfig {
         session_id: session_id.unwrap_or("warm-anonymous").to_string(),
@@ -749,7 +762,7 @@ async fn spawn_initialized_codex_worker(
         next_id: 2,
         seq: 0,
     };
-    let initialize_result = tokio::time::timeout(Duration::from_secs(5), async {
+    let initialize_result = tokio::time::timeout(initialize_budget, async {
         rpc.write(&json!({
             "id": 1,
             "method": "initialize",
@@ -823,6 +836,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 Some(&config.session_id),
                 normalized_optional(&config.launch_actor).as_deref(),
                 normalized_optional(&config.launch_surface).as_deref(),
+                TURN_INITIALIZE_BUDGET,
             )
             .await?
         }
@@ -2640,6 +2654,7 @@ for line in sys.stdin:
             None,
             None,
             None,
+            TURN_INITIALIZE_BUDGET,
         )
         .await
         .unwrap();
