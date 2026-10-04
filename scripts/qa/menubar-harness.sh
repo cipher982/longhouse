@@ -363,11 +363,25 @@ capture_window_render_args() (
   fi
 
   if [[ $capture_status -eq 0 ]]; then
-    if screencapture -x -l "$window_id" "$output_png"; then
-      :
-    else
-      capture_status=$?
+    local attempt
+    for attempt in 1 2 3 4 5; do
+      if screencapture -x -l "$window_id" "$output_png" 2>"$output_png.capture.err"; then
+        capture_status=0
+        break
+      fi
+      capture_status=1
+      sleep 0.4
+    done
+    if [[ $capture_status -ne 0 ]]; then
+      cat "$output_png.capture.err" >&2
+      swift - "$window_id" >&2 <<'SWIFT' || true
+import CoreGraphics
+let id = CGWindowID(CommandLine.arguments[1]) ?? 0
+let rows = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]] ?? []
+print("window \(id) after 5 capture attempts: \(rows.first.map { "\($0)" } ?? "gone")")
+SWIFT
     fi
+    rm -f "$output_png.capture.err"
   fi
 
   if [[ $capture_status -eq 0 ]]; then

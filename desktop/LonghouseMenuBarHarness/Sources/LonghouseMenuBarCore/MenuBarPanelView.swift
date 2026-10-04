@@ -1014,16 +1014,27 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    /// The health line's sentence and the fact behind it (nil = all normal).
-    /// Derived from the facts alone, never from session attention: a session
-    /// waiting on the user must not make an offline transport read connected,
-    /// and a configured address is not connection evidence.
-    var healthSummary: (text: String, flagged: MenuBarSystemFact?) {
+    /// The health line's sentence and how wrong it is (nil = all normal).
+    /// Read from the facts, never from session attention: a session waiting
+    /// on the user must not make an offline transport read connected, and a
+    /// configured address is not connection evidence. A system warning with
+    /// no matching fact (provider release blocked, launch recovery, archive
+    /// review) still surfaces as the reducer's headline, never as green.
+    var healthSummary: (text: String, promotion: MenuBarPromotion?) {
         let considered = displayedFacts.filter { $0.id != "cleanup-scan" }
-        let flagged = considered.first { $0.promotion == .repair || $0.promotion == .inspect }
-            ?? considered.first { $0.promotion == .unavailable }
-        if let flagged {
-            return ("\(flagged.label): \(flagged.value)", flagged)
+        // Order: a fact that is wrong, then the reducer's own warning, then a
+        // fact that is merely unknown.
+        if let wrong = considered.first(where: { $0.promotion == .repair || $0.promotion == .inspect }) {
+            return ("\(wrong.label): \(wrong.value)", wrong.promotion)
+        }
+        if presentation.promotion == .repair || presentation.promotion == .inspect {
+            return (presentation.headline, presentation.promotion)
+        }
+        if let unknown = considered.first(where: { $0.promotion == .unavailable }) {
+            return ("\(unknown.label): \(unknown.value)", .unavailable)
+        }
+        if presentation.promotion == .unavailable {
+            return (presentation.headline, .unavailable)
         }
         if snapshot.hostValueLabel != "-" {
             return ("Connected to \(snapshot.hostValueLabel)", nil)
@@ -1034,8 +1045,8 @@ public struct MenuBarPanelView: View {
     /// One line while nothing needs a repair; tap for the per-plane facts.
     private func healthLine(_ presentation: MenuBarPresentation) -> some View {
         let facts = displayedFacts
-        let (summary, flagged) = healthSummary
-        let dot = flagged?.promotion.factColor ?? HearthPalette.ok
+        let (summary, promotion) = healthSummary
+        let dot = promotion?.factColor ?? HearthPalette.ok
 
         return VStack(alignment: .leading, spacing: 8) {
             Divider().opacity(0.6)

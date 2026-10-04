@@ -3549,8 +3549,21 @@ struct LonghouseMenuBarCoreTests {
         let view = panel(snapshot)
         #expect(view.displayedFacts.first { $0.id == "transport" }?.value == "Offline")
         let summary = view.healthSummary
-        #expect(summary.flagged != nil)
+        #expect(summary.promotion != nil)
         #expect(!summary.text.hasPrefix("Connected"))
+    }
+
+    /// A system warning with no matching fact still owns the health line.
+    @Test
+    @MainActor
+    func healthLineCarriesWarningsThatHaveNoFact() {
+        let snapshot = presentationSnapshot(reasons: ["managed_launch_recovery_exhausted"], sessions: [])
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        #expect(presentation.promotion == .inspect)
+
+        let summary = panel(snapshot).healthSummary
+        #expect(summary.promotion == .inspect)
+        #expect(summary.text == presentation.headline)
     }
 
     /// Unknown storage proof is only an inspect promotion; its scoped action

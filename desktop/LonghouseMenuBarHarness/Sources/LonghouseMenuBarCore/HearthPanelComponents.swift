@@ -86,7 +86,9 @@ struct HearthFocusCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 4) {
                         ProviderGlyph(provider: entry.provider, size: 11, variant: .bare)
-                        Text(entry.ageLabel == "-" ? HealthSnapshot.providerDisplayName(entry.provider) : "\(HealthSnapshot.providerDisplayName(entry.provider)) · waiting \(entry.ageLabel)")
+                        // Last activity, not when the wait began: nothing
+                        // served says when the question was asked.
+                        Text(entry.ageLabel == "-" ? HealthSnapshot.providerDisplayName(entry.provider) : "\(HealthSnapshot.providerDisplayName(entry.provider)) · active \(entry.ageLabel) ago")
                             .lineLimit(1)
                     }
                     .font(.system(size: 11))
