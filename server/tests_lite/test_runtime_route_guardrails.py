@@ -74,6 +74,77 @@ def test_catalog_runtime_batch_uses_one_rpc_without_opening_sqlite(monkeypatch):
     asyncio.run(run_test())
 
 
+def test_runtime_batch_sends_catalogd_only_the_newest_print_overlay_per_message(monkeypatch):
+    """Each OMP print event repeats the whole reply so far; a backlog of them
+    outran catalogd's budget and wedged the terminal event queued behind it."""
+    import zerg.routers.runtime as runtime_router
+
+    session_id = "2cdaffff-971c-419f-9740-5aecae9681eb"
+    run_id = "3c1ebcb7-b230-43f9-8af2-d04da2f16ac4"
+
+    def stream(seq: int, message_index: int, text: str) -> dict:
+        return {
+            "runtime_key": f"omp:{session_id}",
+            "session_id": session_id,
+            "run_id": run_id,
+            "provider": "omp",
+            "device_id": "wisp",
+            "source": "omp_print",
+            "kind": "progress_signal",
+            "occurred_at": f"2026-10-04T03:55:{seq:02d}Z",
+            "dedupe_key": f"omp-print:{session_id}:{run_id}:stdout:{seq}",
+            "payload": {
+                "progress_kind": "omp_print_stream",
+                "seq": seq,
+                "turn_id": "turn-1",
+                "assistant_message_index": message_index,
+                "event": {"type": "message_update"},
+                "live_text": text,
+            },
+        }
+
+    terminal = {
+        "runtime_key": f"omp:{session_id}",
+        "session_id": session_id,
+        "run_id": run_id,
+        "provider": "omp",
+        "device_id": "wisp",
+        "source": "omp_print",
+        "kind": "terminal_signal",
+        "occurred_at": "2026-10-04T03:55:59Z",
+        "dedupe_key": f"omp-print:{session_id}:{run_id}:terminal",
+        "payload": {"terminal_state": "completed"},
+    }
+    events = [stream(seq, 0, "x" * seq) for seq in range(1, 41)] + [stream(41, 1, "next message"), terminal]
+    sent = []
+
+    class CatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            sent.extend(params["events"])
+            return {"accepted": len(params["events"]), "duplicates": 0, "ignored": 0, "updated_runtime_keys": [], "commit_seq": "7"}
+
+    monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: CatalogClient())
+    monkeypatch.setattr(runtime_router, "_publish_live_transcript_previews", lambda *_args, **_kwargs: None)
+
+    result = asyncio.run(
+        runtime_router.ingest_runtime_observation_batch(
+            RuntimeEventBatchIngest(events=events),
+            Response(),
+            None,
+            SimpleNamespace(device_id="wisp", id="token-1", owner_id=1),
+            None,
+        )
+    )
+
+    assert [(event["kind"], event["payload"].get("seq")) for event in sent] == [
+        ("progress_signal", 40),
+        ("progress_signal", 41),
+        ("terminal_signal", None),
+    ]
+    assert sent[0]["payload"]["live_text"] == "x" * 40
+    assert (result.accepted, result.ignored) == (len(events), 39)
+
+
 def test_presence_live_store_delegates_to_runtime_batch_without_archive_wait(monkeypatch):
     import zerg.routers.presence as presence_router
     import zerg.routers.runtime as runtime_router

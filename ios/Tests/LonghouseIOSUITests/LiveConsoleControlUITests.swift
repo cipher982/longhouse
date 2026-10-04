@@ -182,6 +182,7 @@ final class LiveConsoleControlUITests: XCTestCase {
         actions.tap()
         let attach = app.buttons["session-chat-attach"]
         XCTAssertTrue(attach.waitForExistence(timeout: 10), "OMP Console did not advertise image attachments while idle")
+        attach.tap()
         try chooseRealPhoto(in: app)
         XCTAssertTrue(
             app.descendants(matching: .any)["session-chat-attachment-tray"].waitForExistence(timeout: 15),

@@ -113,10 +113,11 @@ async def ingest_runtime_observation_batch(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
             )
+        catalog_events = _without_superseded_print_overlays(events)
         try:
             raw_result = await catalogd.call(
                 "session.runtime.apply.v2",
-                {"events": [event.model_dump(mode="json") for event in events]},
+                {"events": [event.model_dump(mode="json") for event in catalog_events]},
                 timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
             )
         except CatalogUnavailable as exc:
@@ -163,6 +164,12 @@ async def ingest_runtime_observation_batch(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "catalog_protocol_error", "message": "Catalog returned an invalid runtime result."},
             ) from exc
+        superseded = len(events) - len(catalog_events)
+        if superseded:
+            # Received and deliberately not applied: a newer overlay in this
+            # batch carries everything they said.
+            result.accepted += superseded
+            result.ignored += superseded
         response.headers["X-Catalog-Commit-Seq"] = commit_seq
         response.headers["X-Runtime-Label"] = "catalogd-runtime-state"
         _publish_runtime_updates(result, catalog_commit_seq=commit_seq)
@@ -179,6 +186,43 @@ async def ingest_runtime_observation_batch(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to ingest runtime observations",
         ) from exc
+
+
+_PRINT_STREAM_OVERLAYS = {("pi", "pi_print", "pi_print_stream"), ("omp", "omp_print", "omp_print_stream")}
+
+
+def _print_overlay_key(event) -> tuple | None:
+    payload = event.payload or {}
+    overlay = ((event.provider or "").strip().lower(), (event.source or "").strip().lower(), payload.get("progress_kind"))
+    seq = payload.get("seq")
+    if event.kind != "progress_signal" or overlay not in _PRINT_STREAM_OVERLAYS:
+        return None
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        return None
+    return (str(event.session_id), overlay, event.run_id, payload.get("turn_id"), payload.get("assistant_message_index"))
+
+
+def _without_superseded_print_overlays(events: list) -> list:
+    """Drop print-stream overlays a newer one in the same batch replaces.
+
+    Each pi/omp print stream event carries the whole reply so far, and the
+    catalog applies them only as that message's live preview, keeping the
+    highest ``seq``. A backlog of 128 of them for a 25 KB reply outran
+    catalogd's 2 s budget, so the batch 503'd and was resent unchanged and the
+    run's terminal event behind it never landed (OMP Console, 2026-10-04: the
+    turn stayed running and its queued follow-up never started). Keeping only
+    the newest per message leaves the stored preview exactly the same.
+    """
+    newest: dict[tuple, tuple[int, int]] = {}
+    for index, event in enumerate(events):
+        key = _print_overlay_key(event)
+        if key is None:
+            continue
+        seq = event.payload["seq"]
+        if key not in newest or seq >= newest[key][0]:
+            newest[key] = (seq, index)
+    keep = {index for _seq, index in newest.values()}
+    return [event for index, event in enumerate(events) if index in keep or _print_overlay_key(event) is None]
 
 
 def _is_bridge_live_transcript_event(event) -> bool:
