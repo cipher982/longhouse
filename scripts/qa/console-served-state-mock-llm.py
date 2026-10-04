@@ -21,8 +21,12 @@ HOST = "127.0.0.1"
 INPUT_TOKENS = 32
 OUTPUT_TOKENS = 8
 TOTAL_TOKENS = INPUT_TOKENS + OUTPUT_TOKENS
-PROMPT_MARKER = re.compile(r'concatenate the prefix "([^"]+)" and suffix "([^"]+)"', re.IGNORECASE)
-GEMINI_GENERATE = re.compile(r"(?:^|/)models/(.+):(streamGenerateContent|generateContent|countTokens)$")
+PROMPT_MARKER = re.compile(
+    r'concatenate the prefix "([^"]+)" and suffix "([^"]+)"', re.IGNORECASE
+)
+GEMINI_GENERATE = re.compile(
+    r"(?:^|/)models/(.+):(streamGenerateContent|generateContent|countTokens)$"
+)
 
 
 def _string_leaves(value: object):
@@ -72,12 +76,31 @@ def _reply_text(payload: dict) -> str:
 # the marker is answered only once that tool's result comes back, so the turn
 # really runs a tool for six seconds before it replies.
 TOOL_COMMAND = "sleep 6"
-SHELL_TOOL_NAMES = ("bash", "shell", "exec_command", "shell_command", "run_shell_command", "run_command")
-TOOL_RESULT_TYPES = {"tool_result", "function_call_output", "custom_tool_call_output", "local_shell_call_output"}
+SHELL_TOOL_NAMES = (
+    "bash",
+    "shell",
+    "exec_command",
+    "shell_command",
+    "run_shell_command",
+    "run_command",
+)
+TOOL_RESULT_TYPES = {
+    "tool_result",
+    "function_call_output",
+    "custom_tool_call_output",
+    "local_shell_call_output",
+}
 # A result for the issued call arriving sooner than the command can run means it
-# failed, was refused, or was backgrounded; the marker then never goes out.
+# failed, was refused, or was backgrounded; the marker then never goes out for
+# that call, even if the same result is sent again later.
 TOOL_MIN_SECONDS = 6.0
+# `sleep 6` prints nothing; a shell result naming a nonzero exit is a failure.
+NONZERO_EXIT = re.compile(
+    r"\bexit(?:ed)?(?:\s+with)?(?:\s+(?:code|status))?\s*[:=]?\s*(-?[1-9]\d*)\b",
+    re.IGNORECASE,
+)
 _issued: dict[str, float] = {}
+_rejected: set[str] = set()
 _issued_lock = threading.Lock()
 
 
@@ -86,26 +109,49 @@ def _issue(key: str) -> None:
         _issued[key] = time.monotonic()
 
 
-def _tool_results(value: object) -> list[tuple[str, bool]]:
-    """(call key, reported error) for every tool result in a conversation."""
+def _gemini_key(name: object, marker: str) -> str:
+    # Gemini function calls carry no id the CLI must echo, so a call is the
+    # function name within this prompt's marker, not the name alone.
+    return f"name:{name}|{marker}"
+
+
+def _result_failed(result: dict, flagged: bool) -> bool:
+    return flagged or any(NONZERO_EXIT.search(text) for text in _string_leaves(result))
+
+
+def _tool_results(value: object, marker: str) -> list[tuple[str, bool]]:
+    """(call key, failed) for every tool result in a conversation."""
     found: list[tuple[str, bool]] = []
     if isinstance(value, dict):
         kind = value.get("type")
         if kind == "tool_result":  # Anthropic Messages
-            found.append((f"id:{value.get('tool_use_id')}", value.get("is_error") is True))
+            found.append(
+                (
+                    f"id:{value.get('tool_use_id')}",
+                    _result_failed(value, value.get("is_error") is True),
+                )
+            )
         elif isinstance(kind, str) and kind in TOOL_RESULT_TYPES:  # Responses
-            found.append((f"id:{value.get('call_id')}", False))
+            found.append((f"id:{value.get('call_id')}", _result_failed(value, False)))
         elif value.get("role") == "tool":  # Chat Completions
-            found.append((f"id:{value.get('tool_call_id')}", False))
+            found.append(
+                (f"id:{value.get('tool_call_id')}", _result_failed(value, False))
+            )
         response = value.get("functionResponse")
-        if isinstance(response, dict):  # Gemini: correlated by function name
+        if isinstance(response, dict):  # Gemini
             body = response.get("response")
-            found.append((f"name:{response.get('name')}", isinstance(body, dict) and "error" in body))
+            flagged = isinstance(body, dict) and "error" in body
+            found.append(
+                (
+                    _gemini_key(response.get("name"), marker),
+                    _result_failed(response, flagged),
+                )
+            )
         for item in value.values():
-            found.extend(_tool_results(item))
+            found.extend(_tool_results(item, marker))
     elif isinstance(value, list):
         for item in value:
-            found.extend(_tool_results(item))
+            found.extend(_tool_results(item, marker))
     return found
 
 
@@ -113,15 +159,24 @@ def _round_trip_failure(results: list[tuple[str, bool]]) -> str | None:
     """Why the issued shell call did not complete, or None when it did."""
     now = time.monotonic()
     with _issued_lock:
-        matched = [(_issued[key], error) for key, error in results if key in _issued]
-    if not matched:
-        return "no result for the shell call this endpoint issued"
-    if any(error for _, error in matched):
-        return "the shell call reported an error"
-    elapsed = max(now - issued for issued, _ in matched)
-    if elapsed < TOOL_MIN_SECONDS:
-        return f"the shell call returned after {elapsed:.1f} s, before '{TOOL_COMMAND}' could finish"
-    return None
+        matched = [
+            (key, _issued[key], failed) for key, failed in results if key in _issued
+        ]
+        if not matched:
+            return "no result for the shell call this endpoint issued"
+        keys = {key for key, _, _ in matched}
+        if keys & _rejected:
+            return "the shell call's result was already rejected"
+        failure = None
+        if any(failed for _, _, failed in matched):
+            failure = "the shell call reported an error or a nonzero exit"
+        else:
+            elapsed = max(now - issued for _, issued, _ in matched)
+            if elapsed < TOOL_MIN_SECONDS:
+                failure = f"the shell call returned after {elapsed:.1f} s, before '{TOOL_COMMAND}' could finish"
+        if failure:
+            _rejected.update(keys)
+        return failure
 
 
 def _declared_tools(payload: dict) -> list[tuple[str, dict]]:
@@ -131,12 +186,19 @@ def _declared_tools(payload: dict) -> list[tuple[str, dict]]:
         if not isinstance(tool, dict):
             continue
         if isinstance(tool.get("function"), dict):  # Chat Completions
-            found.append((str(tool["function"].get("name", "")), tool["function"].get("parameters") or {}))
+            found.append(
+                (
+                    str(tool["function"].get("name", "")),
+                    tool["function"].get("parameters") or {},
+                )
+            )
         elif "input_schema" in tool:  # Anthropic Messages
             found.append((str(tool.get("name", "")), tool.get("input_schema") or {}))
         elif isinstance(tool.get("functionDeclarations"), list):  # Gemini
             for decl in tool["functionDeclarations"]:
-                schema = decl.get("parametersJsonSchema") or decl.get("parameters") or {}
+                schema = (
+                    decl.get("parametersJsonSchema") or decl.get("parameters") or {}
+                )
                 found.append((str(decl.get("name", "")), schema))
         elif tool.get("type") == "function":  # Responses
             found.append((str(tool.get("name", "")), tool.get("parameters") or {}))
@@ -155,10 +217,18 @@ def _shell_call(payload: dict) -> tuple[str, dict]:
     props = schema.get("properties") or {}
     print(f"shell tool {name}: {json.dumps(schema, sort_keys=True)[:2000]}", flush=True)
     lowered = {k.lower(): k for k in props}
-    key = next((lowered[k] for k in ("command", "cmd", "commandline") if k in lowered), None)
+    key = next(
+        (lowered[k] for k in ("command", "cmd", "commandline") if k in lowered), None
+    )
     if key is None:
-        raise ValueError(f"shell tool {name!r} has no command parameter: {sorted(props)}")
-    args: dict = {key: ["bash", "-lc", TOOL_COMMAND] if props[key].get("type") == "array" else TOOL_COMMAND}
+        raise ValueError(
+            f"shell tool {name!r} has no command parameter: {sorted(props)}"
+        )
+    args: dict = {
+        key: ["bash", "-lc", TOOL_COMMAND]
+        if props[key].get("type") == "array"
+        else TOOL_COMMAND
+    }
     for required in schema.get("required") or []:
         if required in args:
             continue
@@ -188,7 +258,9 @@ def _plan(payload: dict) -> tuple[str, str | tuple[str, dict]]:
         return "text", text
     if not payload.get("tools"):
         return "text", "Console served-state check"
-    results = _tool_results({key: value for key, value in payload.items() if key != "tools"})
+    results = _tool_results(
+        {key: value for key, value in payload.items() if key != "tools"}, text
+    )
     if not results:
         return "tool", _shell_call(payload)
     failure = _round_trip_failure(results)
@@ -278,7 +350,11 @@ class MockHandler(BaseHTTPRequestHandler):
             for event, data in frames:
                 if event:
                     self.wfile.write(f"event: {event}\n".encode("utf-8"))
-                encoded = data if isinstance(data, str) else json.dumps(data, separators=(",", ":"))
+                encoded = (
+                    data
+                    if isinstance(data, str)
+                    else json.dumps(data, separators=(",", ":"))
+                )
                 self.wfile.write(f"data: {encoded}\n\n".encode("utf-8"))
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -316,7 +392,10 @@ class MockHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(200, self._models())
             return
-        self._send_json(404, {"error": {"message": "unsupported fake endpoint", "type": "not_found"}})
+        self._send_json(
+            404,
+            {"error": {"message": "unsupported fake endpoint", "type": "not_found"}},
+        )
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
@@ -339,15 +418,24 @@ class MockHandler(BaseHTTPRequestHandler):
                 model = unquote(gemini.group(1))
                 method = gemini.group(2)
                 if method == "countTokens":
-                    self._send_json(200, {"totalTokens": INPUT_TOKENS, "cachedContentTokenCount": 0})
+                    self._send_json(
+                        200, {"totalTokens": INPUT_TOKENS, "cachedContentTokenCount": 0}
+                    )
                 else:
-                    self._gemini(payload, model, stream=method == "streamGenerateContent")
+                    self._gemini(
+                        payload, model, stream=method == "streamGenerateContent"
+                    )
                 return
         except ValueError as exc:
             print(f"POST {path} -> 400 {exc}", flush=True)
-            self._send_json(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
+            self._send_json(
+                400, {"error": {"message": str(exc), "type": "invalid_request_error"}}
+            )
             return
-        self._send_json(404, {"error": {"message": "unsupported fake endpoint", "type": "not_found"}})
+        self._send_json(
+            404,
+            {"error": {"message": "unsupported fake endpoint", "type": "not_found"}},
+        )
 
     @staticmethod
     def _models() -> dict:
@@ -360,7 +448,12 @@ class MockHandler(BaseHTTPRequestHandler):
             "display_name": "Longhouse Mock Model",
             "created_at": "2026-01-01T00:00:00Z",
         }
-        return {"data": [model], "has_more": False, "first_id": model["id"], "last_id": model["id"]}
+        return {
+            "data": [model],
+            "has_more": False,
+            "first_id": model["id"],
+            "last_id": model["id"],
+        }
 
     @staticmethod
     def _gemini_models() -> dict:
@@ -372,7 +465,11 @@ class MockHandler(BaseHTTPRequestHandler):
                     "displayName": "Longhouse Mock Model",
                     "inputTokenLimit": 200000,
                     "outputTokenLimit": 8192,
-                    "supportedGenerationMethods": ["generateContent", "streamGenerateContent", "countTokens"],
+                    "supportedGenerationMethods": [
+                        "generateContent",
+                        "streamGenerateContent",
+                        "countTokens",
+                    ],
                 }
             ],
             "nextPageToken": "",
@@ -380,7 +477,9 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def _responses(self, payload: dict) -> None:
         kind, plan = _plan(payload)
-        print(f"POST /responses -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
+        print(
+            f"POST /responses -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True
+        )
         if kind == "tool":
             self._responses_tool(payload, *plan)
             return
@@ -388,7 +487,9 @@ class MockHandler(BaseHTTPRequestHandler):
         model = str(payload.get("model") or "mock-model")
         response_id = f"resp_{uuid4().hex}"
         if not payload.get("stream", True):
-            self._send_json(200, _response_object(response_id, model, text, status="completed"))
+            self._send_json(
+                200, _response_object(response_id, model, text, status="completed")
+            )
             return
 
         item_id = f"msg_{uuid4().hex}"
@@ -412,10 +513,17 @@ class MockHandler(BaseHTTPRequestHandler):
         chunks = [text[:cut], text[cut:]] if text[cut:] else [text]
         frames: list[tuple[str | None, dict | str]] = [
             ("response.created", {"type": "response.created", "response": created}),
-            ("response.in_progress", {"type": "response.in_progress", "response": created}),
+            (
+                "response.in_progress",
+                {"type": "response.in_progress", "response": created},
+            ),
             (
                 "response.output_item.added",
-                {"type": "response.output_item.added", "output_index": 0, "item": message},
+                {
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item": message,
+                },
             ),
             (
                 "response.content_part.added",
@@ -460,21 +568,34 @@ class MockHandler(BaseHTTPRequestHandler):
                         "item_id": item_id,
                         "output_index": 0,
                         "content_index": 0,
-                        "part": {"type": "output_text", "text": text, "annotations": []},
+                        "part": {
+                            "type": "output_text",
+                            "text": text,
+                            "annotations": [],
+                        },
                     },
                 ),
                 (
                     "response.output_item.done",
-                    {"type": "response.output_item.done", "output_index": 0, "item": final_message},
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": final_message,
+                    },
                 ),
-                ("response.completed", {"type": "response.completed", "response": final_response}),
+                (
+                    "response.completed",
+                    {"type": "response.completed", "response": final_response},
+                ),
             ]
         )
         self._send_sse(frames)
 
     def _anthropic(self, payload: dict) -> None:
         kind, plan = _plan(payload)
-        print(f"POST /messages -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
+        print(
+            f"POST /messages -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True
+        )
         if kind == "tool":
             self._anthropic_tool(payload, *plan)
             return
@@ -509,12 +630,23 @@ class MockHandler(BaseHTTPRequestHandler):
                     },
                 },
             ),
-            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
         ]
         frames.extend(
             (
                 "content_block_delta",
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": chunk}},
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": chunk},
+                },
             )
             for chunk in chunks
         )
@@ -536,7 +668,10 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def _chat_completions(self, payload: dict) -> None:
         kind, plan = _plan(payload)
-        print(f"POST /chat/completions -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
+        print(
+            f"POST /chat/completions -> {kind} {plan[0] if kind == 'tool' else ''}",
+            flush=True,
+        )
         if kind == "tool":
             self._chat_tool(payload, *plan)
             return
@@ -573,7 +708,13 @@ class MockHandler(BaseHTTPRequestHandler):
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model,
-                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "finish_reason": None,
+                        }
+                    ],
                 },
             )
         ]
@@ -585,7 +726,9 @@ class MockHandler(BaseHTTPRequestHandler):
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model,
-                    "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+                    "choices": [
+                        {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
+                    ],
                 },
             )
             for chunk in chunks
@@ -641,7 +784,10 @@ class MockHandler(BaseHTTPRequestHandler):
         self._send_sse(
             [
                 ("response.created", {"type": "response.created", "response": created}),
-                ("response.in_progress", {"type": "response.in_progress", "response": created}),
+                (
+                    "response.in_progress",
+                    {"type": "response.in_progress", "response": created},
+                ),
                 (
                     "response.output_item.added",
                     {
@@ -652,20 +798,43 @@ class MockHandler(BaseHTTPRequestHandler):
                 ),
                 (
                     "response.function_call_arguments.delta",
-                    {"type": "response.function_call_arguments.delta", **ref, "delta": arguments},
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        **ref,
+                        "delta": arguments,
+                    },
                 ),
                 (
                     "response.function_call_arguments.done",
-                    {"type": "response.function_call_arguments.done", **ref, "arguments": arguments},
+                    {
+                        "type": "response.function_call_arguments.done",
+                        **ref,
+                        "arguments": arguments,
+                    },
                 ),
-                ("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": call}),
-                ("response.completed", {"type": "response.completed", "response": final}),
+                (
+                    "response.output_item.done",
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": call,
+                    },
+                ),
+                (
+                    "response.completed",
+                    {"type": "response.completed", "response": final},
+                ),
             ]
         )
 
     def _anthropic_tool(self, payload: dict, name: str, args: dict) -> None:
         model = str(payload.get("model") or "mock-model")
-        block = {"type": "tool_use", "id": f"toolu_{uuid4().hex}", "name": name, "input": args}
+        block = {
+            "type": "tool_use",
+            "id": f"toolu_{uuid4().hex}",
+            "name": name,
+            "input": args,
+        }
         _issue(f"id:{block['id']}")
         message = {
             "id": f"msg_{uuid4().hex}",
@@ -691,14 +860,21 @@ class MockHandler(BaseHTTPRequestHandler):
                 ("message_start", {"type": "message_start", "message": start}),
                 (
                     "content_block_start",
-                    {"type": "content_block_start", "index": 0, "content_block": {**block, "input": {}}},
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {**block, "input": {}},
+                    },
                 ),
                 (
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
                         "index": 0,
-                        "delta": {"type": "input_json_delta", "partial_json": json.dumps(args)},
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": json.dumps(args),
+                        },
                     },
                 ),
                 ("content_block_stop", {"type": "content_block_stop", "index": 0}),
@@ -718,7 +894,11 @@ class MockHandler(BaseHTTPRequestHandler):
         model = str(payload.get("model") or "mock-model")
         completion_id = f"chatcmpl_{uuid4().hex}"
         created = int(time.time())
-        call = {"id": f"call_{uuid4().hex}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+        call = {
+            "id": f"call_{uuid4().hex}",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args)},
+        }
         _issue(f"id:{call['id']}")
         if not payload.get("stream", False):
             self._send_json(
@@ -731,7 +911,11 @@ class MockHandler(BaseHTTPRequestHandler):
                     "choices": [
                         {
                             "index": 0,
-                            "message": {"role": "assistant", "content": None, "tool_calls": [call]},
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [call],
+                            },
                             "finish_reason": "tool_calls",
                         }
                     ],
@@ -739,30 +923,65 @@ class MockHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-        chunk = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+        chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+        }
         self._send_sse(
             [
-                (None, {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}),
                 (
                     None,
                     {
                         **chunk,
-                        "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, **call}]}, "finish_reason": None}],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant"},
+                                "finish_reason": None,
+                            }
+                        ],
                     },
                 ),
-                (None, {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+                (
+                    None,
+                    {
+                        **chunk,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": [{"index": 0, **call}]},
+                                "finish_reason": None,
+                            }
+                        ],
+                    },
+                ),
+                (
+                    None,
+                    {
+                        **chunk,
+                        "choices": [
+                            {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+                        ],
+                    },
+                ),
                 (None, {**chunk, "choices": [], "usage": _openai_usage()}),
                 (None, "[DONE]"),
             ]
         )
 
-    def _gemini_payload(self, text: str, model: str, *, call: tuple[str, dict] | None = None) -> dict:
+    def _gemini_payload(
+        self, text: str, model: str, *, call: tuple[str, dict] | None = None
+    ) -> dict:
         return {
             "candidates": [
                 {
                     "content": {
                         "role": "model",
-                        "parts": [{"functionCall": {"name": call[0], "args": call[1]}}] if call else [{"text": text}],
+                        "parts": [{"functionCall": {"name": call[0], "args": call[1]}}]
+                        if call
+                        else [{"text": text}],
                     },
                     "finishReason": "STOP",
                     "index": 0,
@@ -782,7 +1001,7 @@ class MockHandler(BaseHTTPRequestHandler):
         kind, plan = _plan(payload)
         print(f"POST gemini -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
         if kind == "tool":
-            _issue(f"name:{plan[0]}")
+            _issue(_gemini_key(plan[0], _reply_text(payload)))
             result = self._gemini_payload("", model, call=plan)
         else:
             result = self._gemini_payload(plan, model)
@@ -792,7 +1011,6 @@ class MockHandler(BaseHTTPRequestHandler):
             self._send_json(200, result)
 
 
-
 class ThreadedServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
@@ -800,8 +1018,12 @@ class ThreadedServer(ThreadingHTTPServer):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=0, help="listen port (0 chooses a free port)")
-    parser.add_argument("--port-file", type=Path, help="write the bound port here after listening")
+    parser.add_argument(
+        "--port", type=int, default=0, help="listen port (0 chooses a free port)"
+    )
+    parser.add_argument(
+        "--port-file", type=Path, help="write the bound port here after listening"
+    )
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
