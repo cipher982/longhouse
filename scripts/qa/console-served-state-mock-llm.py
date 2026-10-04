@@ -67,6 +67,76 @@ def _reply_text(payload: dict) -> str:
     return user_text
 
 
+# The e2e prompt asks for exactly this command through the CLI's own shell tool;
+# the marker is answered only once that tool's result comes back, so the turn
+# really runs a tool for six seconds before it replies.
+TOOL_COMMAND = "sleep 6"
+SHELL_TOOL_NAMES = ("bash", "shell", "exec_command", "shell_command", "run_shell_command")
+TOOL_RESULT_TYPES = {"tool_result", "function_call_output", "custom_tool_call_output", "local_shell_call_output"}
+
+
+def _has_tool_result(value: object) -> bool:
+    if isinstance(value, dict):
+        if value.get("type") in TOOL_RESULT_TYPES or value.get("role") == "tool" or "functionResponse" in value:
+            return True
+        return any(_has_tool_result(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_tool_result(item) for item in value)
+    return False
+
+
+def _declared_tools(payload: dict) -> list[tuple[str, dict]]:
+    """(name, JSON schema) for every function tool, across the four wire shapes."""
+    found: list[tuple[str, dict]] = []
+    for tool in payload.get("tools") or []:
+        if not isinstance(tool, dict):
+            continue
+        if isinstance(tool.get("function"), dict):  # Chat Completions
+            found.append((str(tool["function"].get("name", "")), tool["function"].get("parameters") or {}))
+        elif "input_schema" in tool:  # Anthropic Messages
+            found.append((str(tool.get("name", "")), tool.get("input_schema") or {}))
+        elif isinstance(tool.get("functionDeclarations"), list):  # Gemini
+            for decl in tool["functionDeclarations"]:
+                schema = decl.get("parametersJsonSchema") or decl.get("parameters") or {}
+                found.append((str(decl.get("name", "")), schema))
+        elif tool.get("type") == "function":  # Responses
+            found.append((str(tool.get("name", "")), tool.get("parameters") or {}))
+    return found
+
+
+def _shell_call(payload: dict) -> tuple[str, dict]:
+    tools = _declared_tools(payload)
+    by_name = {name.lower(): (name, schema) for name, schema in tools}
+    for wanted in SHELL_TOOL_NAMES:
+        if wanted in by_name:
+            name, schema = by_name[wanted]
+            break
+    else:
+        raise ValueError(f"no shell tool offered; tools: {sorted(by_name)}")
+    props = schema.get("properties") or {}
+    key = next((k for k in ("command", "cmd") if k in props), None)
+    if key is None:
+        raise ValueError(f"shell tool {name!r} has no command parameter: {sorted(props)}")
+    args: dict = {key: ["bash", "-lc", TOOL_COMMAND] if props[key].get("type") == "array" else TOOL_COMMAND}
+    for required in schema.get("required") or []:
+        if required in args:
+            continue
+        kind = (props.get(required) or {}).get("type")
+        args[required] = {"integer": 30_000, "number": 30_000, "boolean": False}.get(kind, "Wait six seconds")
+    return name, args
+
+
+def _plan(payload: dict) -> tuple[str, str | tuple[str, dict]]:
+    """("text", reply) or ("tool", (name, arguments)) for one generation request.
+
+    A request offering no tools at all (a title or summary side call) gets text.
+    """
+    text = _reply_text(payload)
+    if text.startswith("LH_SERVED_") and payload.get("tools") and not _has_tool_result(payload):
+        return "tool", _shell_call(payload)
+    return "text", text
+
+
 def _openai_usage() -> dict[str, int]:
     return {
         "prompt_tokens": INPUT_TOKENS,
@@ -213,6 +283,7 @@ class MockHandler(BaseHTTPRequestHandler):
                     self._gemini(payload, model, stream=method == "streamGenerateContent")
                 return
         except ValueError as exc:
+            print(f"POST {path} -> 400 {exc}", flush=True)
             self._send_json(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
             return
         self._send_json(404, {"error": {"message": "unsupported fake endpoint", "type": "not_found"}})
@@ -247,7 +318,12 @@ class MockHandler(BaseHTTPRequestHandler):
         }
 
     def _responses(self, payload: dict) -> None:
-        text = _reply_text(payload)
+        kind, plan = _plan(payload)
+        print(f"POST /responses -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
+        if kind == "tool":
+            self._responses_tool(payload, *plan)
+            return
+        text = plan
         model = str(payload.get("model") or "mock-model")
         response_id = f"resp_{uuid4().hex}"
         if not payload.get("stream", True):
@@ -336,7 +412,12 @@ class MockHandler(BaseHTTPRequestHandler):
         self._send_sse(frames)
 
     def _anthropic(self, payload: dict) -> None:
-        text = _reply_text(payload)
+        kind, plan = _plan(payload)
+        print(f"POST /messages -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
+        if kind == "tool":
+            self._anthropic_tool(payload, *plan)
+            return
+        text = plan
         model = str(payload.get("model") or "mock-model")
         message_id = f"msg_{uuid4().hex}"
         message = {
@@ -393,7 +474,12 @@ class MockHandler(BaseHTTPRequestHandler):
         self._send_sse(frames)
 
     def _chat_completions(self, payload: dict) -> None:
-        text = _reply_text(payload)
+        kind, plan = _plan(payload)
+        print(f"POST /chat/completions -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
+        if kind == "tool":
+            self._chat_tool(payload, *plan)
+            return
+        text = plan
         model = str(payload.get("model") or "mock-model")
         completion_id = f"chatcmpl_{uuid4().hex}"
         created = int(time.time())
@@ -471,11 +557,149 @@ class MockHandler(BaseHTTPRequestHandler):
         )
         self._send_sse(frames)
 
-    def _gemini_payload(self, text: str, model: str) -> dict:
+    def _responses_tool(self, payload: dict, name: str, args: dict) -> None:
+        model = str(payload.get("model") or "mock-model")
+        response_id = f"resp_{uuid4().hex}"
+        arguments = json.dumps(args)
+        call = {
+            "id": f"fc_{uuid4().hex}",
+            "type": "function_call",
+            "call_id": f"call_{uuid4().hex}",
+            "name": name,
+            "arguments": arguments,
+            "status": "completed",
+        }
+        final = _response_object(response_id, model, "", status="completed")
+        final["output"] = [call]
+        if not payload.get("stream", True):
+            self._send_json(200, final)
+            return
+        created = _response_object(response_id, model, "", status="in_progress")
+        ref = {"item_id": call["id"], "output_index": 0}
+        self._send_sse(
+            [
+                ("response.created", {"type": "response.created", "response": created}),
+                ("response.in_progress", {"type": "response.in_progress", "response": created}),
+                (
+                    "response.output_item.added",
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": {**call, "arguments": "", "status": "in_progress"},
+                    },
+                ),
+                (
+                    "response.function_call_arguments.delta",
+                    {"type": "response.function_call_arguments.delta", **ref, "delta": arguments},
+                ),
+                (
+                    "response.function_call_arguments.done",
+                    {"type": "response.function_call_arguments.done", **ref, "arguments": arguments},
+                ),
+                ("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": call}),
+                ("response.completed", {"type": "response.completed", "response": final}),
+            ]
+        )
+
+    def _anthropic_tool(self, payload: dict, name: str, args: dict) -> None:
+        model = str(payload.get("model") or "mock-model")
+        block = {"type": "tool_use", "id": f"toolu_{uuid4().hex}", "name": name, "input": args}
+        message = {
+            "id": f"msg_{uuid4().hex}",
+            "type": "message",
+            "role": "assistant",
+            "content": [block],
+            "model": model,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": INPUT_TOKENS, "output_tokens": OUTPUT_TOKENS},
+        }
+        if not payload.get("stream", False):
+            self._send_json(200, message)
+            return
+        start = {
+            **message,
+            "content": [],
+            "stop_reason": None,
+            "usage": {"input_tokens": INPUT_TOKENS, "output_tokens": 0},
+        }
+        self._send_sse(
+            [
+                ("message_start", {"type": "message_start", "message": start}),
+                (
+                    "content_block_start",
+                    {"type": "content_block_start", "index": 0, "content_block": {**block, "input": {}}},
+                ),
+                (
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "input_json_delta", "partial_json": json.dumps(args)},
+                    },
+                ),
+                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                (
+                    "message_delta",
+                    {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                        "usage": {"output_tokens": OUTPUT_TOKENS},
+                    },
+                ),
+                ("message_stop", {"type": "message_stop"}),
+            ]
+        )
+
+    def _chat_tool(self, payload: dict, name: str, args: dict) -> None:
+        model = str(payload.get("model") or "mock-model")
+        completion_id = f"chatcmpl_{uuid4().hex}"
+        created = int(time.time())
+        call = {"id": f"call_{uuid4().hex}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+        if not payload.get("stream", False):
+            self._send_json(
+                200,
+                {
+                    "id": completion_id,
+                    "object": "chat.completion",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": None, "tool_calls": [call]},
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "usage": _openai_usage(),
+                },
+            )
+            return
+        chunk = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+        self._send_sse(
+            [
+                (None, {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}),
+                (
+                    None,
+                    {
+                        **chunk,
+                        "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, **call}]}, "finish_reason": None}],
+                    },
+                ),
+                (None, {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+                (None, {**chunk, "choices": [], "usage": _openai_usage()}),
+                (None, "[DONE]"),
+            ]
+        )
+
+    def _gemini_payload(self, text: str, model: str, *, call: tuple[str, dict] | None = None) -> dict:
         return {
             "candidates": [
                 {
-                    "content": {"role": "model", "parts": [{"text": text}]},
+                    "content": {
+                        "role": "model",
+                        "parts": [{"functionCall": {"name": call[0], "args": call[1]}}] if call else [{"text": text}],
+                    },
                     "finishReason": "STOP",
                     "index": 0,
                 }
@@ -491,8 +715,9 @@ class MockHandler(BaseHTTPRequestHandler):
         }
 
     def _gemini(self, payload: dict, model: str, *, stream: bool) -> None:
-        text = _reply_text(payload)
-        result = self._gemini_payload(text, model)
+        kind, plan = _plan(payload)
+        print(f"POST gemini -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
+        result = self._gemini_payload("", model, call=plan) if kind == "tool" else self._gemini_payload(plan, model)
         if stream:
             self._send_sse([(None, result)])
         else:

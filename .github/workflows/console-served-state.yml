@@ -269,18 +269,12 @@ jobs:
           port_file="$CONSOLE_FIXTURE_ROOT/mock-llm.port"
           owner_file="$CONSOLE_FIXTURE_ROOT/mock-llm.owner"
           log_file="$CONSOLE_FIXTURE_ROOT/mock-llm.log"
-          setsid python3 "$GITHUB_WORKSPACE/scripts/qa/console-served-state-mock-llm.py" \
+          # One process with no children: ownership is its PID, which cleanup
+          # re-checks against the script name before signalling.
+          nohup python3 "$GITHUB_WORKSPACE/scripts/qa/console-served-state-mock-llm.py" \
             --port-file "$port_file" > "$log_file" 2>&1 < /dev/null &
           endpoint_pid=$!
-          # setsid gives the server its own process group; retain exact ownership
-          # in the fixture root so the always-run cleanup can stop it.
-          printf '%s %s\n' "$endpoint_pid" "$endpoint_pid" > "$owner_file"
-          endpoint_pgid="$(ps -o pgid= -p "$endpoint_pid" | tr -d '[:space:]')"
-          if [[ ! "$endpoint_pgid" =~ ^[0-9]+$ ]]; then
-            echo "::error::Could not record the loopback fake LLM process group." >&2
-            exit 1
-          fi
-          printf '%s %s\n' "$endpoint_pid" "$endpoint_pgid" > "$owner_file"
+          printf '%s\n' "$endpoint_pid" > "$owner_file"
           for attempt in {1..40}; do
             if [[ -s "$port_file" ]]; then
               break
@@ -473,6 +467,9 @@ jobs:
             if [[ -f "$fixture_root/codex-auth-receipt.txt" ]]; then
               cp -- "$fixture_root/codex-auth-receipt.txt" "$diagnostics/codex-auth-receipt.txt"
             fi
+            if [[ -f "$fixture_root/mock-llm.log" ]]; then
+              cp -- "$fixture_root/mock-llm.log" "$diagnostics/mock-llm.log"
+            fi
             antigravity_logs="$fixture_root/home/.longhouse/agent/antigravity-console"
             if [[ -d "$antigravity_logs" ]]; then
               mkdir -p "$diagnostics/antigravity-console"
@@ -499,10 +496,10 @@ jobs:
           if [[ -n "$fixture_root" ]]; then
             owner_file="$fixture_root/mock-llm.owner"
             if [[ -f "$owner_file" ]]; then
-              read -r endpoint_pid endpoint_pgid < "$owner_file"
-              if [[ "$endpoint_pid" =~ ^[0-9]+$ && "$endpoint_pgid" =~ ^[0-9]+$ ]] &&
-                kill -0 "$endpoint_pid" 2>/dev/null; then
-                kill -TERM -- "-$endpoint_pgid" 2>/dev/null || true
+              read -r endpoint_pid < "$owner_file"
+              if [[ "$endpoint_pid" =~ ^[0-9]+$ ]] &&
+                grep -qa console-served-state-mock-llm.py "/proc/$endpoint_pid/cmdline" 2>/dev/null; then
+                kill -TERM "$endpoint_pid" 2>/dev/null || true
                 for attempt in {1..20}; do
                   if ! kill -0 "$endpoint_pid" 2>/dev/null; then
                     break
@@ -510,7 +507,7 @@ jobs:
                   sleep 0.1
                 done
                 if kill -0 "$endpoint_pid" 2>/dev/null; then
-                  kill -KILL -- "-$endpoint_pgid" 2>/dev/null || true
+                  kill -KILL "$endpoint_pid" 2>/dev/null || true
                   for attempt in {1..20}; do
                     if ! kill -0 "$endpoint_pid" 2>/dev/null; then
                       break
