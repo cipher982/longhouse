@@ -355,7 +355,9 @@ public final class SnapshotStore: ObservableObject {
     private func scheduleSetupFollowUpIfNeeded(for snapshot: HealthSnapshot) {
         setupFollowUpTask?.cancel()
         setupFollowUpTask = nil
-        guard snapshot.isSetupRequired || !isWatchingLocalStatus else { return }
+        // Fixture sources never watch anything, so they must not poll either.
+        guard source.supportsLiveMonitoring,
+              snapshot.isSetupRequired || !isWatchingLocalStatus else { return }
         setupFollowUpTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: .seconds(self.setupRefreshInterval))
@@ -390,7 +392,13 @@ public final class SnapshotStore: ObservableObject {
         localStatusMonitor = nil
         localStatusPath = path
         guard let path, !path.isEmpty else { return }
-        let monitor = LocalStatusMonitor(statusPath: path) { [weak self] projection in
+        let monitor = LocalStatusMonitor(
+            statusPath: path,
+            onWatchLost: { [weak self] in
+                // The next refresh re-arms the watch, or polls until it can.
+                Task { @MainActor [weak self] in self?.refresh(reason: .background) }
+            }
+        ) { [weak self] projection in
             Task { @MainActor [weak self] in
                 guard let self, let snapshot = self.snapshot else { return }
                 let currentIds = Set((snapshot.managedSessions ?? []).compactMap(\.sessionId))

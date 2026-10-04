@@ -15,6 +15,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
     private let statusURL: URL
     private let queue = DispatchQueue(label: "ai.longhouse.menu-bar.local-status", qos: .userInitiated)
     private let onChange: @Sendable (Projection) -> Void
+    private let onWatchLost: @Sendable () -> Void
     private var source: DispatchSourceFileSystemObject?
     private var directoryHandle: CInt = -1
     private var fingerprint: Data?
@@ -22,8 +23,13 @@ final class LocalStatusMonitor: @unchecked Sendable {
     private let watchingLock = NSLock()
     private var watching = false
 
-    init(statusPath: String, onChange: @escaping @Sendable (Projection) -> Void) {
+    init(
+        statusPath: String,
+        onWatchLost: @escaping @Sendable () -> Void = {},
+        onChange: @escaping @Sendable (Projection) -> Void
+    ) {
         statusURL = URL(fileURLWithPath: statusPath)
+        self.onWatchLost = onWatchLost
         self.onChange = onChange
     }
 
@@ -38,13 +44,11 @@ final class LocalStatusMonitor: @unchecked Sendable {
         watchingLock.withLock { watching = value }
     }
 
-    /// Returns whether the watch was armed. Opening happens here, not on the
-    /// queue, so the caller learns synchronously that a missing directory
-    /// means nothing is being watched.
-    @discardableResult
-    func start() -> Bool {
+    /// Opens the status directory here, not on the queue, so `isWatching` is
+    /// false at once when the directory does not exist yet.
+    func start() {
         let handle = open(statusURL.deletingLastPathComponent().path, O_EVTONLY)
-        guard handle >= 0 else { return false }
+        guard handle >= 0 else { return }
         setWatching(true)
         queue.async { [self] in
             guard source == nil else {
@@ -64,6 +68,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
                     self.setWatching(false)
                     newSource?.cancel()
                     self.source = nil
+                    self.onWatchLost()
                     return
                 }
                 self.scheduleRead()
@@ -76,7 +81,6 @@ final class LocalStatusMonitor: @unchecked Sendable {
             source = newSource
             newSource.resume()
         }
-        return true
     }
 
     func stop() {
