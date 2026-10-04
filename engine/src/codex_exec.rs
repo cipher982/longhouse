@@ -865,28 +865,34 @@ async fn spawn_initialized_codex_worker(
     })
 }
 
-pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
-    // Held until the turn task ends (moved into it below), so a Stop that lands
-    // while the worker is leased or `turn/start` is in flight waits for the turn.
-    let starting = ConsoleStartingGuard::new(&config.run_id);
-    let warm_compatible = warm_pool_compatible(&config);
-    // A user is waiting: an in-flight prewarm gets the whole turn budget, and a
-    // cold start happens only when nothing is starting. A second `codex`
-    // started beside a slow prewarm competes with it for the same disk and
-    // fails the same way, so say what is happening instead.
+/// Get an initialized worker for a turn by `deadline`, the turn's one start
+/// budget. A user is waiting: an in-flight prewarm gets the budget, and a cold
+/// start happens only when nothing is starting. A second `codex` started
+/// beside a slow prewarm competes with it for the same disk and fails the same
+/// way, so say what is happening instead. A cold start after the prewarm failed
+/// gets only what the wait left, so the turn-start reply still reaches the
+/// Runtime Host inside its 10 s (`CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS`).
+async fn start_console_worker_by(
+    config: &CodexExecRunConfig,
+    warm_compatible: bool,
+    deadline: tokio::time::Instant,
+) -> Result<(InitializedCodexWorker, bool)> {
     let lease = if warm_compatible {
-        lease_warm_worker_by(tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET).await
+        lease_warm_worker_by(deadline).await
     } else {
         WarmLease::Cold
     };
-    let warm_hit = matches!(lease, WarmLease::Worker(_));
-    let mut worker = match lease {
-        WarmLease::Worker(worker) => worker,
+    match lease {
+        WarmLease::Worker(worker) => Ok((worker, true)),
         WarmLease::StillStarting => anyhow::bail!(
             "Codex is still starting on this machine; its first start can take up to a minute while the machine is busy. Send again in a minute."
         ),
         WarmLease::Cold => {
-            spawn_initialized_codex_worker(
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                anyhow::bail!("Codex could not start on this machine in time. Send again.");
+            }
+            let worker = spawn_initialized_codex_worker(
                 &config.codex_bin,
                 normalized_optional(&config.approval_policy).as_deref(),
                 normalized_optional(&config.sandbox).as_deref(),
@@ -894,11 +900,25 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 Some(&config.session_id),
                 normalized_optional(&config.launch_actor).as_deref(),
                 normalized_optional(&config.launch_surface).as_deref(),
-                TURN_INITIALIZE_BUDGET,
+                remaining,
             )
-            .await?
+            .await?;
+            Ok((worker, false))
         }
-    };
+    }
+}
+
+pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
+    // Held until the turn task ends (moved into it below), so a Stop that lands
+    // while the worker is leased or `turn/start` is in flight waits for the turn.
+    let starting = ConsoleStartingGuard::new(&config.run_id);
+    let warm_compatible = warm_pool_compatible(&config);
+    let (mut worker, warm_hit) = start_console_worker_by(
+        &config,
+        warm_compatible,
+        tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET,
+    )
+    .await?;
     if !warm_hit && !register_active_worker(&worker).await {
         shutdown_worker_process_group(&mut worker.child, worker.pgid).await?;
         anyhow::bail!("Codex Console worker rejected because the Machine Agent is shutting down");
@@ -2831,6 +2851,71 @@ for line in sys.stdin:
         shutdown_worker_process_group(&mut worker.child, worker.pgid)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_cold_start_after_a_failed_prewarm_gets_only_the_budget_left() {
+        // Review rv-20261004T213524Z-7c287cb-e292 F1: a prewarm failing just
+        // before the turn's deadline handed the cold start a fresh full budget,
+        // so the start could outlast the Runtime Host's 10 s turn-start wait.
+        let _serial = WARM_POOL_TEST_LOCK.lock().await;
+        let temp = tempfile::tempdir().unwrap();
+        let fake_codex = temp.path().join("codex");
+        fs::write(
+            &fake_codex,
+            r#"#!/usr/bin/env python3
+import json, sys, time
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        time.sleep(1.5)
+        print(json.dumps({"id": msg["id"], "result": {"userAgent": "fake/1"}}), flush=True)
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_codex, permissions).unwrap();
+        let mut run = config();
+        run.codex_bin = fake_codex.to_str().unwrap().to_string();
+        run.cwd = temp.path().to_path_buf();
+
+        {
+            let mut pool = console_worker_pool().lock().await;
+            pool.spawning += 1;
+            pool.spawn_started_at = Some(std::time::Instant::now());
+        }
+        let prewarm_fails = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let mut pool = console_worker_pool().lock().await;
+            pool.spawning -= 1;
+            pool.spawn_started_at = None;
+            let finished = pool.spawn_finished.clone();
+            drop(pool);
+            finished.notify_waiters();
+        });
+
+        let started = std::time::Instant::now();
+        let result = start_console_worker_by(
+            &run,
+            true,
+            tokio::time::Instant::now() + Duration::from_millis(400),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        prewarm_fails.await.unwrap();
+        console_worker_pool()
+            .lock()
+            .await
+            .active_process_groups
+            .clear();
+        assert!(
+            result.is_err(),
+            "the cold start got more than the 150 ms the wait left"
+        );
+        // 400 ms budget plus the process-group cleanup grace, far short of
+        // the 1.5 s a fresh budget would have allowed.
+        assert!(elapsed < Duration::from_millis(1400), "took {elapsed:?}");
     }
 
     fn runtime_sink(transcript_wake_socket: Option<PathBuf>) -> CodexExecRuntimeSink {
