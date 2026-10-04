@@ -107,7 +107,7 @@ final class ActivityPulseStore: ObservableObject {
         switch changeKind {
         case "ingest": return .toolResult
         case "transcript_preview": return .textDelta
-        case "read_update", "title_update": return nil
+        case "read_update", "title_update", "input_queued": return nil
         default: return .state
         }
     }

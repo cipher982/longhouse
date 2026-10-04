@@ -733,7 +733,12 @@ final class SessionViewModel: ObservableObject {
                         return
                     }
                     if self.detailWasLoadedFromTail, let existing = self.detail {
-                        self.detail = loaded.preservingOptionalEnrichment(from: existing)
+                        // The compact lane serves no input receipts (only the
+                        // workspace tail does); its empty list must not erase
+                        // the queue line the tail last read.
+                        var compact = loaded
+                        compact.inputReceipts = nil
+                        self.detail = compact.preservingOptionalEnrichment(from: existing)
                     } else {
                         self.detail = loaded
                     }
@@ -1368,9 +1373,12 @@ final class SessionViewModel: ObservableObject {
                     return response.outcome
                 }
             }()
-            queuedInputCount = response.pendingInputCount
             let ownClientRequestIds = Set(submittedInputs.map(\.clientRequestId))
             queuedElsewhereCount = response.queuedElsewhereCount(excluding: ownClientRequestIds)
+            queuedInputCount = Self.queuedLineTotal(
+                (response.pendingInputCount, queuedElsewhereCount),
+                isConsole: detail?.stateFacts.mode == "console"
+            )
             failedInputCount = response.visibleFailedInputCount(ownClientRequestIds: ownClientRequestIds)
             switch response.disposition {
             case .unknown:
@@ -3287,9 +3295,8 @@ final class SessionViewModel: ObservableObject {
 
     /// Re-read the queue line from the served receipts, so it follows the queue
     /// draining or expiring instead of keeping the count from the last send.
-    /// Console shows each queued turn as its own bubble and keeps no line.
     private func refreshQueuedIndicator() {
-        guard let detail, let receipts = detail.inputReceipts, detail.stateFacts.mode != "console" else { return }
+        guard let detail, let receipts = detail.inputReceipts else { return }
         let counts = QueuedInputIndicator.counts(
             receipts: receipts,
             ownClientRequestIds: Set(submittedInputs.map(\.clientRequestId)),
@@ -3297,8 +3304,16 @@ final class SessionViewModel: ObservableObject {
                 submittedInputs.filter { $0.phase == .queued && $0.turnId == nil }.map(\.clientRequestId)
             )
         )
-        if queuedInputCount != counts.total { queuedInputCount = counts.total }
+        let total = Self.queuedLineTotal(counts, isConsole: detail.stateFacts.mode == "console")
+        if queuedInputCount != total { queuedInputCount = total }
         if queuedElsewhereCount != counts.elsewhere { queuedElsewhereCount = counts.elsewhere }
+    }
+
+    /// Console shows each of this phone's queued turns as its own bubble, so its
+    /// line counts only what another sender parked: that turn has no bubble here
+    /// and was otherwise invisible until it started.
+    static func queuedLineTotal(_ counts: (total: Int, elsewhere: Int), isConsole: Bool) -> Int {
+        isConsole ? counts.elsewhere : counts.total
     }
 
     private func updateSubmittedInput(

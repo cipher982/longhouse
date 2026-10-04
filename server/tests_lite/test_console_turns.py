@@ -374,6 +374,43 @@ async def test_follow_up_enqueue_replays_current_starting_turn_while_connected(m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("created", [True, False])
+async def test_queued_console_turn_wakes_session_viewers_once(monkeypatch, created):
+    """Another sender's queued turn changes only its receipt; without a wake a
+    phone on a healthy stream never shows it. An idempotent replay is no change."""
+    session_id = uuid4()
+
+    class Catalog:
+        async def call(self, method, params, **_kwargs):
+            if method == "session.console.turn.enqueue.v2":
+                return {
+                    "found": True,
+                    "created": created,
+                    "turn": {"turn_id": str(uuid4()), "run_id": None, "state": "queued", "provider": "omp"},
+                }
+            assert method == "session.console.turn.current.v2"
+            return {"found": True, "turn": None}
+
+    wakes = []
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: Catalog())
+    monkeypatch.setattr(
+        "zerg.services.session_pubsub.publish_session_input_queued",
+        lambda **kwargs: wakes.append(kwargs),
+    )
+
+    outcome = await enqueue_catalog_console_turn(
+        owner_id=1,
+        session_id=session_id,
+        message="from another sender",
+        client_request_id="machine-sender",
+        registry=SimpleNamespace(),
+    )
+
+    assert outcome.state == "queued"
+    assert wakes == ([{"session_id": str(session_id)}] if created else [])
+
+
+@pytest.mark.asyncio
 async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monkeypatch):
     session_id = uuid4()
     thread_id = uuid4()

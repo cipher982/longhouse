@@ -378,6 +378,13 @@ async def enqueue_catalog_console_turn(
     run_id = UUID(str(turn["run_id"])) if turn.get("run_id") else None
     receipt_id = UUID(str(turn["receipt_id"])) if turn.get("receipt_id") else None
     state = str(turn.get("state") or "queued")
+    if result.get("created") is True and state == SESSION_TURN_STATE_QUEUED:
+        # A queued turn writes only its receipt: no provider frame, runtime
+        # change or transcript event follows until the running turn ends, so
+        # a viewer on a healthy stream never learned another sender queued it.
+        from zerg.services.session_pubsub import publish_session_input_queued
+
+        publish_session_input_queued(session_id=str(session_id))
     if state == SESSION_TURN_STATE_QUEUED:
         # A follow-up is the first reliable opportunity to recover a current
         # starting turn while the Machine Agent remains connected. Rebuild the

@@ -74,6 +74,7 @@ export function classifyWorkspaceChange(
         return "text_delta";
       case "read_update":
       case "title_update":
+      case "input_queued":
         return null;
       default:
         return "state";
