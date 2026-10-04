@@ -191,42 +191,38 @@ async def ingest_runtime_observation_batch(
 _PRINT_STREAM_OVERLAYS = {("pi", "pi_print", "pi_print_stream"), ("omp", "omp_print", "omp_print_stream")}
 
 
-def _print_overlay_key(event) -> tuple | None:
+def _print_overlay_key(event) -> tuple[tuple[str, str], int] | None:
     payload = event.payload or {}
     overlay = ((event.provider or "").strip().lower(), (event.source or "").strip().lower(), payload.get("progress_kind"))
-    seq = payload.get("seq")
     if event.kind != "progress_signal" or overlay not in _PRINT_STREAM_OVERLAYS:
         return None
-    if not isinstance(seq, int) or isinstance(seq, bool):
+    candidate = live_preview_candidate_from_runtime_event(event, observation_id=event.dedupe_key)
+    if candidate is None or candidate.seq is None:
         return None
-    # omp names the message by assistant_message_index, pi by item_id.
-    message = payload.get("assistant_message_index")
-    if message is None:  # not `or`: omp's first message is index 0
-        message = payload.get("item_id")
-    return (str(event.session_id), overlay, event.run_id, payload.get("turn_id"), message)
+    return (str(candidate.session_id), candidate.turn_key), candidate.seq
 
 
 def _without_superseded_print_overlays(events: list) -> list:
-    """Drop print-stream overlays a newer one in the same batch replaces.
+    """Drop only print-stream preview candidates replaced by newer candidates in the batch.
 
-    Each pi/omp print stream event carries the whole reply so far, and the
-    catalog applies them only as that message's live preview, keeping the
-    highest ``seq``. A backlog of 128 of them for a 25 KB reply outran
+    The catalog applies these candidates as each message's live preview, keeping
+    the highest ``seq``. A backlog of 128 of them for a 25 KB reply outran
     catalogd's 2 s budget, so the batch 503'd and was resent unchanged and the
     run's terminal event behind it never landed (OMP Console, 2026-10-04: the
-    turn stayed running and its queued follow-up never started). Keeping only
-    the newest per message leaves the stored preview exactly the same.
+    turn stayed running and its queued follow-up never started). The canonical
+    preview builder supplies both candidate eligibility and per-item identity;
+    lifecycle events pass through without displacing a preview.
     """
-    keys = [_print_overlay_key(event) for event in events]
-    newest: dict[tuple, tuple[int, int]] = {}
-    for index, key in enumerate(keys):
-        if key is None:
+    overlays = [_print_overlay_key(event) for event in events]
+    newest: dict[tuple[str, str], tuple[int, int]] = {}
+    for index, overlay in enumerate(overlays):
+        if overlay is None:
             continue
-        seq = events[index].payload["seq"]
+        key, seq = overlay
         if key not in newest or seq >= newest[key][0]:
             newest[key] = (seq, index)
     keep = {index for _seq, index in newest.values()}
-    return [event for index, event in enumerate(events) if keys[index] is None or index in keep]
+    return [event for index, event in enumerate(events) if overlays[index] is None or index in keep]
 
 
 def _is_bridge_live_transcript_event(event) -> bool:

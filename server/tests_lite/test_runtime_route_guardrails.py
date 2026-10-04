@@ -159,7 +159,17 @@ def test_runtime_batch_keeps_the_newest_overlay_of_each_pi_item(monkeypatch):
             "kind": "progress_signal",
             "occurred_at": f"2026-10-04T04:00:{seq:02d}Z",
             "dedupe_key": f"pi-print:{seq}",
-            "payload": {"progress_kind": "pi_print_stream", "seq": seq, "turn_id": "turn-1", "item_id": item},
+            "payload": {
+                "progress_kind": "pi_print_stream",
+                "seq": seq,
+                "turn_id": "turn-1",
+                "item_id": item,
+                "event": {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": f"reply-{seq}"},
+                },
+                "live_text": f"reply-{seq}",
+            },
         }
 
     sent = []
@@ -183,6 +193,110 @@ def test_runtime_batch_keeps_the_newest_overlay_of_each_pi_item(monkeypatch):
     )
 
     assert [(event["payload"]["item_id"], event["payload"]["seq"]) for event in sent] == [("a", 2), ("b", 4)]
+
+
+def test_runtime_batch_preserves_pi_message_end_preview_before_agent_settled(monkeypatch):
+    """Pi settles the same item after message_end, but settlement is not a preview."""
+    import zerg.routers.runtime as runtime_router
+    from zerg.services.session_live_previews import preview_payload_from_runtime_event
+    from zerg.services.session_runtime import RuntimeEventIngest
+
+    session_id = "8a1f6a4e-6d1f-4c5e-9a4b-0f1e2d3c4b5a"
+    thread_id = "5fb2ee22-9de6-4c93-8d85-0174108e0a5c"
+    run_id = "3c1ebcb7-b230-43f9-8af2-d04da2f16ac4"
+    item_id = f"{run_id}:assistant:0"
+    preview_text = "The final Pi answer."
+
+    def stream(seq: int, native_event: dict) -> dict:
+        return {
+            "runtime_key": f"pi:{session_id}",
+            "session_id": session_id,
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "provider": "pi",
+            "device_id": "wisp",
+            "source": "pi_print",
+            "kind": "progress_signal",
+            "occurred_at": f"2026-10-04T03:55:{seq:02d}Z",
+            "dedupe_key": f"pi-print:{session_id}:{run_id}:stdout:{seq}",
+            "payload": {
+                "progress_kind": "pi_print_stream",
+                "seq": seq,
+                "thread_id": thread_id,
+                "turn_id": "turn-1",
+                "item_id": item_id,
+                "live_text": preview_text,
+                "event": native_event,
+            },
+        }
+
+    message_end = stream(
+        1,
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": preview_text}],
+                "stopReason": "stop",
+            },
+        },
+    )
+    agent_settled = stream(2, {"type": "agent_settled"})
+    terminal = {
+        "runtime_key": f"pi:{session_id}",
+        "session_id": session_id,
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "provider": "pi",
+        "device_id": "wisp",
+        "source": "pi_print",
+        "kind": "terminal_signal",
+        "occurred_at": "2026-10-04T03:55:03Z",
+        "dedupe_key": f"pi-print:{session_id}:{run_id}:terminal",
+        "payload": {
+            "execution_lifetime": "one_shot",
+            "terminal_state": "run_completed",
+            "terminal_reason": "run_completed",
+            "terminal_source": "pi_print",
+            "exit_code": 0,
+        },
+    }
+    stored_preview = []
+
+    class CatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            for event_data in params["events"]:
+                event = RuntimeEventIngest.model_validate(event_data)
+                preview = preview_payload_from_runtime_event(event, observation_id=event.dedupe_key)
+                if preview is not None:
+                    stored_preview.append((event, preview))
+            return {
+                "accepted": len(params["events"]),
+                "duplicates": 0,
+                "ignored": 0,
+                "updated_runtime_keys": [],
+                "commit_seq": "9",
+            }
+
+    monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: CatalogClient())
+    monkeypatch.setattr(runtime_router, "_publish_live_transcript_previews", lambda *_args, **_kwargs: None)
+
+    asyncio.run(
+        runtime_router.ingest_runtime_observation_batch(
+            RuntimeEventBatchIngest(events=[message_end, agent_settled, terminal]),
+            Response(),
+            None,
+            SimpleNamespace(device_id="wisp", id="token-1", owner_id=1),
+            None,
+        )
+    )
+
+    assert len(stored_preview) == 1
+    stored_event, served_preview = stored_preview[0]
+    assert stored_event.payload["event"]["type"] == "message_end"
+    assert stored_event.payload["seq"] == 1
+    assert served_preview["text"] == preview_text
+    assert served_preview["is_complete"] is True
 
 
 def test_presence_live_store_delegates_to_runtime_batch_without_archive_wait(monkeypatch):
