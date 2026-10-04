@@ -16,14 +16,16 @@ final class MenuBarStatusController: NSObject {
     private var renderedStatusItem = false
     private var renderedAttentionColor: NSColor?
     private var renderedTooltip: String?
+    private let panelVisibility: PanelVisibility
 
     init(
         store: SnapshotStore,
         actionSink: SpyHealthActionSink,
-        refreshIntervalSeconds: TimeInterval?,
-        headerSummaryVariant: HeaderSummaryVariant = .default
+        refreshIntervalSeconds: TimeInterval?
     ) {
         self.store = store
+        let panelVisibility = PanelVisibility()
+        self.panelVisibility = panelVisibility
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.panelController = MenuBarPanelWindowController(
             rootView: HarnessRootView(
@@ -31,7 +33,7 @@ final class MenuBarStatusController: NSObject {
                 actionSink: actionSink,
                 refreshIntervalSeconds: nil,
                 managePresentationUpdates: false,
-                headerSummaryVariant: headerSummaryVariant
+                visibility: panelVisibility
             )
         )
 
@@ -121,6 +123,7 @@ final class MenuBarStatusController: NSObject {
         store.beginPresentationUpdates()
         store.refreshForPresentation()
         panelController.show(relativeTo: button)
+        panelVisibility.isOnScreen = true
         installEventMonitors(for: panelGeneration)
     }
 
@@ -129,6 +132,7 @@ final class MenuBarStatusController: NSObject {
         store.endPresentationUpdates()
         store.clearFeedback()
         panelController.hide()
+        panelVisibility.isOnScreen = false
         removeEventMonitors()
     }
 
@@ -178,7 +182,7 @@ final class MenuBarStatusController: NSObject {
             case .neverLoaded:
                 return .systemRed
             case .lastKnown:
-                return .systemOrange
+                return .systemYellow
             case .current:
                 break
             }
@@ -190,9 +194,10 @@ final class MenuBarStatusController: NSObject {
         case .normal:
             return nil
         case .needsUser:
-            return .systemBlue
+            // The flame's amber: the one colour that means "a session wants you".
+            return NSColor(srgbRed: 1.0, green: 0.706, blue: 0.290, alpha: 1)
         case .inspect:
-            return .systemOrange
+            return .systemYellow
         case .unavailable:
             return .systemGray
         case .repair:

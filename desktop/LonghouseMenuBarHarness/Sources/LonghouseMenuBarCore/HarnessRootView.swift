@@ -1,24 +1,44 @@
 import SwiftUI
 
+/// Whether one host's panel is actually on screen. Hosts that order their
+/// window in and out (the menu bar panel, the status window) own one and set
+/// it; a SwiftUI window host passes none and the root view follows its own
+/// appear/disappear. Store-wide presentation counts cannot answer this: a
+/// hidden window's hosting view also "appears" when AppKit sizes it.
+@MainActor
+public final class PanelVisibility: ObservableObject {
+    @Published public var isOnScreen: Bool
+
+    public init(isOnScreen: Bool = false) {
+        self.isOnScreen = isOnScreen
+    }
+
+    /// Placeholder for self-managed hosts; never published to.
+    fileprivate static let selfManaged = PanelVisibility()
+}
+
 public struct HarnessRootView: View {
     @ObservedObject private var store: SnapshotStore
+    @ObservedObject private var visibility: PanelVisibility
+    @State private var appeared = false
     private let actionSink: any HealthActionSink
     private let refreshIntervalSeconds: TimeInterval?
     private let managePresentationUpdates: Bool
-    private let headerSummaryVariant: HeaderSummaryVariant
 
+    /// `visibility` is required when the host manages presentation itself
+    /// (`managePresentationUpdates: false`).
     public init(
         store: SnapshotStore,
         actionSink: any HealthActionSink,
         refreshIntervalSeconds: TimeInterval?,
         managePresentationUpdates: Bool = true,
-        headerSummaryVariant: HeaderSummaryVariant = .default
+        visibility: PanelVisibility? = nil
     ) {
         self.store = store
         self.actionSink = actionSink
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.managePresentationUpdates = managePresentationUpdates
-        self.headerSummaryVariant = headerSummaryVariant
+        self.visibility = visibility ?? .selfManaged
     }
 
     public var body: some View {
@@ -43,7 +63,6 @@ public struct HarnessRootView: View {
                     setFeedback: store.setFeedback,
                     actionSink: actionSink,
                     isManualRefreshing: store.isManualRefreshActive || store.isBrieflyRecovering,
-                    headerSummaryVariant: headerSummaryVariant,
                     // Recomputed against presentationDate so the banner appears
                     // and its age advances while the panel stays open.
                     dataTrust: store.dataTrust(relativeTo: store.presentationDate),
@@ -59,17 +78,21 @@ public struct HarnessRootView: View {
                 }
             }
         }
+        // Flames animate only while this host is on screen.
+        .environment(\.hearthAnimating, managePresentationUpdates ? appeared : visibility.isOnScreen)
         .onAppear {
             guard managePresentationUpdates else {
                 return
             }
             store.beginPresentationUpdates()
+            appeared = true
         }
         .onDisappear {
             guard managePresentationUpdates else {
                 return
             }
             store.endPresentationUpdates()
+            appeared = false
         }
         .task {
             guard let refreshIntervalSeconds else {

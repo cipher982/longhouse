@@ -191,7 +191,7 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .normal)
-        #expect(presentation.headline == "1 Helm session open")
+        #expect(presentation.headline == "1 session open")
         #expect(presentation.backgroundActivity == "Archive projection scanning 1.4 GB · 2 ranges")
         #expect(!presentation.needsStatusItemBadge)
     }
@@ -214,7 +214,7 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .normal)
-        #expect(presentation.subheadline.contains("1 phase unavailable"))
+        #expect(presentation.subheadline.contains("1 without live status"))
         #expect(!presentation.headline.contains("needs you"))
     }
 
@@ -225,7 +225,7 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .normal)
-        #expect(presentation.subheadline.contains("1 phase unavailable"))
+        #expect(presentation.subheadline.contains("1 without live status"))
         #expect(!presentation.needsStatusItemBadge)
     }
 
@@ -241,7 +241,7 @@ struct LonghouseMenuBarCoreTests {
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
-        #expect(presentation.headline == "No sessions running")
+        #expect(presentation.headline == "1 session open")
         #expect(!presentation.headline.contains("Helm"))
     }
 
@@ -1325,7 +1325,7 @@ struct LonghouseMenuBarCoreTests {
             "--output", "/tmp/example.png",
             "--action-log", "/tmp/actions.jsonl",
             "--ui-url", "https://longhouse.ai",
-            "--header-variant", "telemetry-rail",
+            "--appearance", "light",
             "--effect-mode", "log-only",
             "--exercise-actions", "refresh,copyDiagnostics",
             "--quit-after", "2.5",
@@ -1337,7 +1337,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(config.actionLogURL?.path == "/tmp/actions.jsonl")
         #expect(config.uiURL?.absoluteString == "https://longhouse.ai")
         #expect(config.effectMode == .logOnly)
-        #expect(config.headerSummaryVariant == .telemetryRail)
+        #expect(config.renderAppearance == .light)
         #expect(config.exerciseActions == [.refresh, .copyDiagnostics])
         #expect(config.quitAfterSeconds == 2.5)
         #expect(config.refreshIntervalSeconds == 5)
@@ -2915,6 +2915,29 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.storageBlockRequiresRepair)
     }
 
+    /// A session that lost its control path must never fold into "quiet", and
+    /// only sessions that ask for the user may take the focus card or burn low
+    /// amber; working sessions burn, everything else is unlit.
+    @Test
+    func hearthGroupsSessionsByWhatTheyAskOfTheUser() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/hearth-busy.json")
+        let sessions = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load().currentManagedSessions
+
+        #expect(sessions.map(\.hearthKind) == [
+            .needsYou, .working, .working, .working, .lostControl, .quiet, .quiet,
+        ])
+        #expect(sessions.filter { $0.hearthKind.asksForUser }.map(\.sessionId) == ["sess-cad"])
+        let executing = sessions[1].hearthHeat, waiting = sessions[0].hearthHeat
+        #expect(executing > sessions[2].hearthHeat && sessions[2].hearthHeat > waiting)
+        // Lit above 0.12; lost control and quiet are cold ash.
+        #expect(waiting > 0.12)
+        #expect(sessions[4].hearthHeat <= 0.12 && sessions[5].hearthHeat <= 0.12)
+    }
+
     @Test
     func managedUIPresenceSeparatesBackgroundFromRuntimeAttached() throws {
         let data = Data("""
@@ -2967,7 +2990,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.backgroundManagedCount == 1)
         #expect(snapshot.managedSummaryLabel == "2 sessions")
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_715_648_400))
-        #expect(presentation.headline == "1 Helm session open")
+        #expect(presentation.headline == "2 sessions open")
         #expect(presentation.subheadline.contains("1 background"))
         #expect(terminal.launchMode == "tui")
         #expect(terminal.uiAttached == true)

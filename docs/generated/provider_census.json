@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 303,
+  "file_count": 302,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -21,16 +21,6 @@
     },
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/HealthSnapshot.swift",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "opencode"
-      ]
-    },
-    {
-      "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/MenuBarPanelComponents.swift",
       "providers": [
         "antigravity",
         "claude",

@@ -247,7 +247,7 @@ public struct HarnessRuntimeConfig {
     public let healthExecutablePath: String?
     public let healthArguments: [String]
     public let showStatusWindowOnLaunch: Bool
-    public let headerSummaryVariant: HeaderSummaryVariant
+    public let renderAppearance: PanelAppearance
 
     public init(
         outputURL: URL?,
@@ -265,7 +265,7 @@ public struct HarnessRuntimeConfig {
         healthExecutablePath: String?,
         healthArguments: [String],
         showStatusWindowOnLaunch: Bool,
-        headerSummaryVariant: HeaderSummaryVariant
+        renderAppearance: PanelAppearance
     ) {
         self.outputURL = outputURL
         self.source = source
@@ -282,7 +282,7 @@ public struct HarnessRuntimeConfig {
         self.healthExecutablePath = healthExecutablePath
         self.healthArguments = healthArguments
         self.showStatusWindowOnLaunch = showStatusWindowOnLaunch
-        self.headerSummaryVariant = headerSummaryVariant
+        self.renderAppearance = renderAppearance
     }
 
     public static func parse(arguments: [String]) throws -> HarnessRuntimeConfig {
@@ -302,7 +302,7 @@ public struct HarnessRuntimeConfig {
         var healthExecutablePath: String?
         var healthArguments: [String] = []
         var explicitLiveMode = false
-        var headerSummaryVariant = HeaderSummaryVariant.default
+        var renderAppearance = PanelAppearance.dark
 
         var index = 0
         while index < arguments.count {
@@ -388,13 +388,12 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected numeric seconds after --refresh-seconds")
                 }
                 refreshIntervalSeconds = parsed
-            case "--header-variant":
+            case "--appearance":
                 index += 1
-                guard index < arguments.count, let parsed = HeaderSummaryVariant(rawValue: arguments[index]) else {
-                    let allowed = HeaderSummaryVariant.allCases.map(\.rawValue).joined(separator: ", ")
-                    throw SnapshotSourceError.invalidArguments("Expected --header-variant \(allowed)")
+                guard index < arguments.count, let parsed = PanelAppearance(rawValue: arguments[index]) else {
+                    throw SnapshotSourceError.invalidArguments("Expected --appearance dark, light")
                 }
-                headerSummaryVariant = parsed
+                renderAppearance = parsed
             case "--health-command":
                 index += 1
                 guard index < arguments.count else {
@@ -461,7 +460,7 @@ public struct HarnessRuntimeConfig {
             healthExecutablePath: healthExecutablePath,
             healthArguments: healthArguments,
             showStatusWindowOnLaunch: showStatusWindowOnLaunch,
-            headerSummaryVariant: headerSummaryVariant
+            renderAppearance: renderAppearance
         )
     }
 }

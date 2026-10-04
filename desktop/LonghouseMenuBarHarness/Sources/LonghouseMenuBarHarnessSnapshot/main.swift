@@ -16,7 +16,7 @@ struct LonghouseMenuBarHarnessSnapshot {
             snapshot: snapshot,
             actionSink: actionSink,
             outputURL: outputURL,
-            headerSummaryVariant: config.headerSummaryVariant
+            appearance: config.renderAppearance
         )
         print(outputURL.path)
     }

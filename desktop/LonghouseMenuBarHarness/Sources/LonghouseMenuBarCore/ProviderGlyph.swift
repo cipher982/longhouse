@@ -76,26 +76,36 @@ struct ProviderGlyph: View {
         return config.markColor
     }
 
+    @MainActor private static var imageCache: [String: NSImage] = [:]
+
+    /// The raw PDF when the bundle carries the catalog as files, else the
+    /// compiled catalog (`Assets.car`), which newer SwiftPM builds produce.
+    /// Loaded once per provider, not on every body evaluation.
     private var providerImage: NSImage? {
-        guard let assetPDF,
-              let url = LonghouseResourceLocator.coreBundle()?.url(
-                forResource: assetPDF.file,
-                withExtension: "pdf",
-                subdirectory: assetPDF.subdirectory
-              ) else {
-            return nil
+        guard let assetPDF else { return nil }
+        if let cached = Self.imageCache[assetPDF.file] { return cached }
+        guard let bundle = LonghouseResourceLocator.coreBundle() else { return nil }
+        let image: NSImage?
+        if let url = bundle.url(forResource: assetPDF.file, withExtension: "pdf", subdirectory: assetPDF.subdirectory) {
+            image = NSImage(contentsOf: url)
+        } else {
+            let imageSet = (assetPDF.subdirectory as NSString).lastPathComponent
+            image = bundle.image(forResource: (imageSet as NSString).deletingPathExtension)
         }
-        return NSImage(contentsOf: url)
+        if let image { Self.imageCache[assetPDF.file] = image }
+        return image
     }
 
     @ViewBuilder
     private var mark: some View {
         if let providerImage {
             if let templateMarkColor {
+                // A bare mark has no chip behind it; a template mark tinted for
+                // the dark chip vanishes on light glass, so it follows the text.
                 Image(nsImage: providerImage)
                     .resizable()
                     .renderingMode(.template)
-                    .foregroundStyle(templateMarkColor)
+                    .foregroundStyle(variant == .bare ? AnyShapeStyle(Color.primary.opacity(0.8)) : AnyShapeStyle(templateMarkColor))
                     .aspectRatio(contentMode: .fit)
             } else {
                 Image(nsImage: providerImage)

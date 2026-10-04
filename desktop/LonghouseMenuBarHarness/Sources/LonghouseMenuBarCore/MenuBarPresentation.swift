@@ -90,7 +90,6 @@ extension HealthSnapshot {
         projectionTrust: DataTrust = .current
     ) -> MenuBarPresentation {
         let sessions = currentManagedSessions
-        let openHelmCount = foregroundManagedCount
         let needsUser = sessions.filter { $0.explicitlyNeedsUser }.count
         let working = sessions.filter { $0.menuBarAttentionKind == .working }.count
         let blocked = sessions.filter { $0.menuBarAttentionKind == .blocked && !$0.explicitlyNeedsUser }.count
@@ -226,10 +225,13 @@ extension HealthSnapshot {
             headline = "Local status is stale"
         case .unavailable:
             headline = "Current local status unavailable"
-        case .normal where openHelmCount > 0:
-            headline = "\(openHelmCount) Helm session\(openHelmCount == 1 ? "" : "s") open"
-        case .normal where backgroundManagedCount > 0:
-            headline = "\(backgroundManagedCount) background session\(backgroundManagedCount == 1 ? "" : "s")"
+        case .normal where working > 0:
+            headline = "\(working) agent\(working == 1 ? "" : "s") working"
+        case .normal where !sessions.isEmpty:
+            // "Idle" only when every session is observed idle; missing phase
+            // evidence is not idleness.
+            let state = idle == sessions.count ? "idle" : "open"
+            headline = "\(sessions.count) session\(sessions.count == 1 ? "" : "s") \(state)"
         case .normal:
             headline = "No sessions running"
         }
@@ -242,7 +244,7 @@ extension HealthSnapshot {
         if blocked > 0 { counts.append("\(blocked) blocked") }
         if degraded > 0 { counts.append("\(degraded) limited") }
         if unavailable > 0 {
-            counts.append("\(unavailable) phase\(unavailable == 1 ? "" : "s") unavailable")
+            counts.append("\(unavailable) without live status")
         }
         if unknown > 0 { counts.append("\(unknown) unknown") }
         if backgroundManagedCount > 0 { counts.append("\(backgroundManagedCount) background") }

@@ -2,21 +2,29 @@ import AppKit
 import Combine
 import SwiftUI
 
-public final class StatusWindowController: NSWindowController {
+public final class StatusWindowController: NSWindowController, NSWindowDelegate {
     private let hostingController: NSHostingController<HarnessRootView>
+    private let store: SnapshotStore
+    private let visibility: PanelVisibility
     private var cancellables: Set<AnyCancellable> = []
 
     public init(
         store: SnapshotStore,
         actionSink: any HealthActionSink,
-        refreshIntervalSeconds: TimeInterval?,
-        headerSummaryVariant: HeaderSummaryVariant = .default
+        refreshIntervalSeconds: TimeInterval?
     ) {
+        self.store = store
+        let visibility = PanelVisibility()
+        self.visibility = visibility
+        // This window is created hidden and laid out for sizing, which fires
+        // SwiftUI onAppear. Presentation updates and animation follow the
+        // window's real show/close instead.
         let rootView = HarnessRootView(
             store: store,
             actionSink: actionSink,
             refreshIntervalSeconds: refreshIntervalSeconds,
-            headerSummaryVariant: headerSummaryVariant
+            managePresentationUpdates: false,
+            visibility: visibility
         )
         self.hostingController = NSHostingController(rootView: rootView)
         if #available(macOS 13.0, *) {
@@ -40,6 +48,7 @@ public final class StatusWindowController: NSWindowController {
         window.contentViewController = self.hostingController
 
         super.init(window: window)
+        window.delegate = self
 
         observe(store: store)
         DispatchQueue.main.async { [weak self] in
@@ -57,8 +66,20 @@ public final class StatusWindowController: NSWindowController {
             return
         }
         updateContentSizeToFit()
+        if !visibility.isOnScreen {
+            store.beginPresentationUpdates()
+            visibility.isOnScreen = true
+        }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    public func windowWillClose(_ notification: Notification) {
+        guard visibility.isOnScreen else {
+            return
+        }
+        store.endPresentationUpdates()
+        visibility.isOnScreen = false
     }
 
     private func observe(store: SnapshotStore) {

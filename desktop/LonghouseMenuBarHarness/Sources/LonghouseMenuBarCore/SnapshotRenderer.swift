@@ -8,7 +8,7 @@ public enum SnapshotRenderer {
         actionSink: any HealthActionSink,
         outputURL: URL,
         presentationDate: Date? = nil,
-        headerSummaryVariant: HeaderSummaryVariant = .default
+        appearance: PanelAppearance = .dark
     ) throws {
         // Fixture renders have no SnapshotStore/producer trust context. Anchor
         // their relative labels to the captured snapshot instead of making a
@@ -22,13 +22,16 @@ public enum SnapshotRenderer {
             setFeedback: { _ in },
             actionSink: actionSink,
             isManualRefreshing: false,
-            headerSummaryVariant: headerSummaryVariant,
             refresh: {}
         )
-        .environment(\.colorScheme, .dark)
-        .background(Color.black)
+        .environment(\.colorScheme, appearance.colorScheme)
+        .background(appearance == .dark ? Color.black : Color(white: 0.92))
 
         let hostingView = NSHostingView(rootView: rootView)
+        // AppKit-backed controls (glass buttons, menus) read the view's
+        // appearance, not SwiftUI's colorScheme; without this they draw for
+        // the wrong scheme offscreen.
+        hostingView.appearance = NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
         let renderSize = MenuBarPanelSizing.measuredSize(for: hostingView)
         hostingView.frame = NSRect(origin: .zero, size: renderSize)
         hostingView.layoutSubtreeIfNeeded()

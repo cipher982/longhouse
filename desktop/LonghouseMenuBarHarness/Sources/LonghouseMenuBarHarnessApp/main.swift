@@ -49,8 +49,7 @@ struct LonghouseMenuBarHarnessApp: App {
             HarnessRootView(
                 store: store,
                 actionSink: actionSink,
-                refreshIntervalSeconds: config.refreshIntervalSeconds,
-                headerSummaryVariant: config.headerSummaryVariant
+                refreshIntervalSeconds: config.refreshIntervalSeconds
             )
         }
         .windowResizability(.contentSize)

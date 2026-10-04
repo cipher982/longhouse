@@ -30,7 +30,7 @@ Usage:
   scripts/qa/menubar-harness.sh snapshot-live [output.png]
   scripts/qa/menubar-harness.sh raw-snapshot-fixture <fixture-name> [output.png]
   scripts/qa/menubar-harness.sh raw-snapshot-live [output.png]
-  scripts/qa/menubar-harness.sh compare-header-variants <fixture-name>
+  scripts/qa/menubar-harness.sh compare-appearances <fixture-name>
   scripts/qa/menubar-harness.sh render-fixtures
   scripts/qa/menubar-harness.sh render-trust-states
   scripts/qa/menubar-harness.sh smoke [fixture-name]
@@ -560,16 +560,16 @@ case "$cmd" in
     raw_snapshot_exec --input "$tmp_json" --output "$output"
     echo "$output"
     ;;
-  compare-header-variants)
+  compare-appearances)
     fixture="${1:-}"
     if [[ -z "$fixture" ]]; then
       usage
       exit 2
     fi
     fixture_file="$(fixture_path "$fixture")"
-    for variant in minimal telemetry-rail session-ribbon; do
-      output="$ARTIFACT_DIR/${fixture}-${variant}.png"
-      raw_snapshot_exec --input "$fixture_file" --output "$output" --header-variant "$variant"
+    for appearance in dark light; do
+      output="$ARTIFACT_DIR/${fixture}-${appearance}.png"
+      raw_snapshot_exec --input "$fixture_file" --output "$output" --appearance "$appearance"
       echo "$output"
     done
     ;;
