@@ -956,12 +956,15 @@ public struct MenuBarPanelView: View {
             || snapshot.reasons.contains("engine_projection_stale")
     }
 
-    private var showsTroubleCard: Bool {
+    /// Whether the machine needs a card with an action rather than one line.
+    var showsTroubleCard: Bool {
         presentation.promotion == .repair
             || shouldOfferNativeRepair
             || !dataTrust.isCurrent
             || !projectionTrust.isCurrent
             || shouldRetryLocalStatus
+            || snapshot.storageBlockProofUnknown
+            || snapshot.suggestedActionIds?.contains("inspect_storage_source") == true
             || snapshot.suggestedActionIds?.contains("inspect_transport") == true
             || snapshot.suggestedActionIds?.contains("inspect_shipping") == true
     }
@@ -985,23 +988,28 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    /// One line while everything is normal; tap for the per-plane facts.
+    /// The health line's sentence and the fact behind it (nil = all normal).
+    /// Derived from the facts alone, never from session attention: a session
+    /// waiting on the user must not make an offline transport read connected,
+    /// and a configured address is not connection evidence.
+    var healthSummary: (text: String, flagged: MenuBarSystemFact?) {
+        let considered = displayedFacts.filter { $0.id != "cleanup-scan" }
+        let flagged = considered.first { $0.promotion == .repair || $0.promotion == .inspect }
+            ?? considered.first { $0.promotion == .unavailable }
+        if let flagged {
+            return ("\(flagged.label): \(flagged.value)", flagged)
+        }
+        if snapshot.hostValueLabel != "-" {
+            return ("Connected to \(snapshot.hostValueLabel)", nil)
+        }
+        return ("Local agent running", nil)
+    }
+
+    /// One line while nothing needs a repair; tap for the per-plane facts.
     private func healthLine(_ presentation: MenuBarPresentation) -> some View {
         let facts = displayedFacts
-        let flagged = facts.first { $0.promotion == .repair || $0.promotion == .inspect }
-        let dot: Color = flagged == nil
-            ? (presentation.promotion == .unavailable ? Color.secondary : HearthPalette.ok)
-            : flagged!.promotion.factColor
-        let summary: String
-        if let flagged {
-            summary = "\(flagged.label): \(flagged.value)"
-        } else if presentation.promotion == .unavailable {
-            summary = facts.first { $0.promotion == .unavailable }.map { "\($0.label): \($0.value)" } ?? "Status unknown"
-        } else if snapshot.hostValueLabel != "-" {
-            summary = "Connected to \(snapshot.hostValueLabel)"
-        } else {
-            summary = "Local agent running"
-        }
+        let (summary, flagged) = healthSummary
+        let dot = flagged?.promotion.factColor ?? HearthPalette.ok
 
         return VStack(alignment: .leading, spacing: 8) {
             Divider().opacity(0.6)

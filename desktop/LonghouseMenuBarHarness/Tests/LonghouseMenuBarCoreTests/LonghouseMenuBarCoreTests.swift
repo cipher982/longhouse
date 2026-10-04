@@ -3519,6 +3519,54 @@ struct LonghouseMenuBarCoreTests {
 
     }
 
+    @MainActor
+    private func panel(_ snapshot: HealthSnapshot) -> MenuBarPanelView {
+        MenuBarPanelView(
+            snapshot: snapshot,
+            history: [],
+            presentationDate: Date(timeIntervalSince1970: 0),
+            feedback: nil,
+            setFeedback: { _ in },
+            actionSink: SpyHealthActionSink(logURL: nil, uiURL: nil),
+            isManualRefreshing: false,
+            refresh: {}
+        )
+    }
+
+    /// Session attention outranks system facts in the reducer, so the health
+    /// line must read the facts itself: a session waiting on the user cannot
+    /// turn an offline transport into "Connected".
+    @Test
+    @MainActor
+    func healthLineReportsOfflineTransportWhileASessionNeedsTheUser() throws {
+        let snapshot = presentationSnapshot(
+            reasons: ["reported_offline"],
+            sessions: [presentationSession(phase: "needs permission")],
+            isOffline: true
+        )
+        #expect(snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).promotion == .needsUser)
+
+        let view = panel(snapshot)
+        #expect(view.displayedFacts.first { $0.id == "transport" }?.value == "Offline")
+        let summary = view.healthSummary
+        #expect(summary.flagged != nil)
+        #expect(!summary.text.hasPrefix("Connected"))
+    }
+
+    /// Unknown storage proof is only an inspect promotion; its scoped action
+    /// lives on the trouble card, so the card has to show.
+    @Test
+    @MainActor
+    func storageProofUnknownKeepsItsInspectAction() {
+        let snapshot = presentationSnapshot(
+            reasons: ["storage_v2_sources_proof_unknown"],
+            sessions: [],
+            suggestedActionIds: ["inspect_storage_source"]
+        )
+        #expect(snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).promotion == .inspect)
+        #expect(panel(snapshot).showsTroubleCard)
+    }
+
     @Test
     @MainActor
     func producerSuccessThenFailureDegradesToLastKnown() async throws {
