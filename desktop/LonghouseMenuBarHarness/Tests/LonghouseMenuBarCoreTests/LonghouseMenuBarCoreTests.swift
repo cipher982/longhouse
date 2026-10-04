@@ -2163,6 +2163,12 @@ struct LonghouseMenuBarCoreTests {
         let connected = snapshot("healthy", "Longhouse native health is healthy", statusPath: statusPath)
         let source = CountingHealthSnapshotSource(snapshots: [setup, setup, connected])
         let store = SnapshotStore(source: source, cacheURL: nil, setupRefreshInterval: 0.02)
+        store.setFeedback(HealthActionFeedback(
+            action: .repairInstall,
+            style: .info,
+            title: "Sign-in opened in Terminal",
+            detail: "Enter your Longhouse address there and approve this Mac in the browser, then click Refresh."
+        ))
 
         store.refresh(reason: .manual)
         for _ in 0..<100 {
@@ -2170,6 +2176,7 @@ struct LonghouseMenuBarCoreTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(store.snapshot?.headline == connected.headline)
+        #expect(store.feedback == nil, "the sign-in instruction goes away once the Mac is connected")
         #expect(!store.isWatchingLocalStatus, "the engine has not created its status directory yet")
         let loadsBeforeDirectory = source.loadCount
         try? await Task.sleep(for: .milliseconds(100))

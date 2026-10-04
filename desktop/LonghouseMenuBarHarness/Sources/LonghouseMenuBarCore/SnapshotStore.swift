@@ -317,6 +317,11 @@ public final class SnapshotStore: ObservableObject {
                 if case .lastKnown = self.projectionTrust() {
                     snapshot = snapshot.markingRuntimeHostProjectionUnavailable()
                 }
+                if self.snapshot?.isSetupRequired == true, !snapshot.isSetupRequired {
+                    // "Sign-in opened in Terminal ... then click Refresh" is
+                    // done; leaving it up told a connected user to act.
+                    self.feedback = nil
+                }
                 self.snapshot = snapshot
                 self.connectRealtimeIfNeeded(
                     snapshot.realtime,
