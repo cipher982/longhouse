@@ -1022,19 +1022,21 @@ public struct MenuBarPanelView: View {
     /// review) still surfaces as the reducer's headline, never as green.
     var healthSummary: (text: String, promotion: MenuBarPromotion?) {
         let considered = displayedFacts.filter { $0.id != "cleanup-scan" }
-        // Order: a fact that is wrong, then the reducer's own warning, then a
-        // fact that is merely unknown.
+        let presentation = self.presentation
+        let system = presentation.systemPromotion
+        // Order: a fact that is wrong, then the machine's own warning (never
+        // the session-aware promotion), then a fact that is merely unknown.
         if let wrong = considered.first(where: { $0.promotion == .repair || $0.promotion == .inspect }) {
             return ("\(wrong.label): \(wrong.value)", wrong.promotion)
         }
-        if presentation.promotion == .repair || presentation.promotion == .inspect {
-            return (presentation.headline, presentation.promotion)
+        if system == .repair || system == .inspect {
+            return (presentation.systemHeadline, system)
         }
         if let unknown = considered.first(where: { $0.promotion == .unavailable }) {
             return ("\(unknown.label): \(unknown.value)", .unavailable)
         }
-        if presentation.promotion == .unavailable {
-            return (presentation.headline, .unavailable)
+        if system == .unavailable {
+            return (presentation.systemHeadline, .unavailable)
         }
         if snapshot.hostValueLabel != "-" {
             return ("Connected to \(snapshot.hostValueLabel)", nil)

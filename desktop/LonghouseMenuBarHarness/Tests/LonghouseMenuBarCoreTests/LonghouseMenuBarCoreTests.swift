@@ -3553,17 +3553,21 @@ struct LonghouseMenuBarCoreTests {
         #expect(!summary.text.hasPrefix("Connected"))
     }
 
-    /// A system warning with no matching fact still owns the health line.
+    /// A system warning with no matching fact still owns the health line,
+    /// including while a session waiting on the user owns the header.
     @Test
     @MainActor
     func healthLineCarriesWarningsThatHaveNoFact() {
-        let snapshot = presentationSnapshot(reasons: ["managed_launch_recovery_exhausted"], sessions: [])
-        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
-        #expect(presentation.promotion == .inspect)
+        for sessions in [[], [presentationSession(phase: "needs permission")]] {
+            let snapshot = presentationSnapshot(reasons: ["managed_launch_recovery_exhausted"], sessions: sessions)
+            let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+            #expect(presentation.promotion == (sessions.isEmpty ? .inspect : .needsUser))
+            #expect(presentation.systemPromotion == .inspect)
 
-        let summary = panel(snapshot).healthSummary
-        #expect(summary.promotion == .inspect)
-        #expect(summary.text == presentation.headline)
+            let summary = panel(snapshot).healthSummary
+            #expect(summary.promotion == .inspect)
+            #expect(summary.text == "Managed session recovery needs attention")
+        }
     }
 
     /// Unknown storage proof is only an inspect promotion; its scoped action

@@ -66,6 +66,11 @@ public struct MenuBarSystemFact: Identifiable, Equatable, Sendable {
 public struct MenuBarPresentation: Equatable, Sendable {
     public let promotion: MenuBarPromotion
     public let headline: String
+    /// The machine's own promotion and headline, ignoring sessions that need
+    /// the user. The health line reads these so a waiting session cannot hide
+    /// a system warning.
+    public let systemPromotion: MenuBarPromotion
+    public let systemHeadline: String
     public let subheadline: String
     public let facts: [MenuBarSystemFact]
     public let backgroundActivity: String?
@@ -147,29 +152,30 @@ extension HealthSnapshot {
             && rowLevelRedReasons.isDisjoint(with: reasons)
             && !reasons.contains("engine_status_stale")
             && !reasons.contains("engine_projection_stale")
-        let promotion: MenuBarPromotion
+        // The machine's own state, before session attention is considered.
+        // A session waiting on the user outranks inspect/unknown for the
+        // header and badge, but must not erase them from the health line.
+        let systemPromotion: MenuBarPromotion
         if nativeRedRequiresRepair
             || storageBlockRequiresRepair
             || !repairReasons.isDisjoint(with: reasons)
             || isSetupRequired
             || isInstallLocationBlocked {
-            promotion = .repair
-        } else if needsUser > 0 {
-            promotion = .needsUser
+            systemPromotion = .repair
         } else if localEvidenceUnavailable {
             // The producer itself is not current. Do not reuse the
             // Runtime Host projection warning for this case: all local
             // facts are now explicitly last-known.
-            promotion = .unavailable
+            systemPromotion = .unavailable
         } else if !menuBarUnavailableReasons.isDisjoint(with: reasons)
             || engineStatus?.error != nil
             || engineStatus?.fresh == false {
-            promotion = .unavailable
+            systemPromotion = .unavailable
         } else if projectionUnavailable {
             // Runtime Host session projection is a separate evidence lane.
             // Losing it must not make a healthy local Machine Agent look
             // unavailable or offer a local-agent repair.
-            promotion = .inspect
+            systemPromotion = .inspect
         } else if storageBlockIsRecovering
                     || storageBlockProofUnknown
                     || degraded > 0
@@ -179,62 +185,67 @@ extension HealthSnapshot {
                     || heartbeatPostFailed
                     || heartbeatEvidenceRejected
                     || !inspectReasons.isDisjoint(with: reasons) {
-            promotion = .inspect
+            systemPromotion = .inspect
         } else {
-            promotion = .normal
+            systemPromotion = .normal
         }
+        let promotion: MenuBarPromotion = systemPromotion == .repair
+            ? .repair
+            : needsUser > 0 ? .needsUser : systemPromotion
 
-        let headline: String
-        switch promotion {
-        case .repair where storageBlockRequiresRepair:
-            let count = storageUnresolvedBlockCount > 0 ? storageUnresolvedBlockCount : storageBlockedCount
-            headline = "Durable upload needs inspection for \(count) source\(count == 1 ? "" : "s")"
-        case .repair where isSetupRequired:
-            headline = "Finish setup on this Mac"
-        case .repair where isInstallLocationBlocked:
-            headline = "Move Longhouse.app to Applications"
-        case .repair:
-            headline = "Local shipping needs repair"
-        case .needsUser:
-            headline = "\(needsUser) session\(needsUser == 1 ? "" : "s") need\(needsUser == 1 ? "s" : "") you"
-        case .inspect where projectionUnavailable:
-            headline = "Remote session view unavailable"
-        case .inspect where storageBlockIsRecovering:
-            headline = "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
-        case .inspect where storageBlockProofUnknown:
-            headline = "Durable upload proof unavailable for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
-        case .inspect where hasDeadLetters:
-            headline = "Durable upload needs inspection for \(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s")"
-        case .inspect where reasons.contains("managed_launch_recovery_exhausted"):
-            headline = "Managed session recovery needs attention"
-        case .inspect where heartbeatPostFailed:
-            headline = "Machine heartbeat failed"
-        case .inspect where heartbeatEvidenceRejected:
-            headline = "Machine evidence rejected"
-        case .inspect where transportAttentionReason != nil:
-            headline = "Local upload needs attention"
-        case .inspect where sessionDiscoveryAttention:
-            headline = "Session discovery needs attention"
-        case .inspect where degraded > 0:
-            headline = "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
-        case .inspect where orphanBridgeCount > 0:
-            headline = "\(orphanBridgeCount) background process\(orphanBridgeCount == 1 ? "" : "es") need cleanup"
-        case .inspect:
-            headline = "Historical archive needs review"
-        case .unavailable where localStatusStale && !localEvidenceUnavailable:
-            headline = "Local status is stale"
-        case .unavailable:
-            headline = "Current local status unavailable"
-        case .normal where working > 0:
-            headline = "\(working) agent\(working == 1 ? "" : "s") working"
-        case .normal where !sessions.isEmpty:
-            // "Idle" only when every session is observed idle; missing phase
-            // evidence is not idleness.
-            let state = idle == sessions.count ? "idle" : "open"
-            headline = "\(sessions.count) session\(sessions.count == 1 ? "" : "s") \(state)"
-        case .normal:
-            headline = "No sessions running"
+        func headlineText(for promotion: MenuBarPromotion) -> String {
+            switch promotion {
+            case .repair where storageBlockRequiresRepair:
+                let count = storageUnresolvedBlockCount > 0 ? storageUnresolvedBlockCount : storageBlockedCount
+                return "Durable upload needs inspection for \(count) source\(count == 1 ? "" : "s")"
+            case .repair where isSetupRequired:
+                return "Finish setup on this Mac"
+            case .repair where isInstallLocationBlocked:
+                return "Move Longhouse.app to Applications"
+            case .repair:
+                return "Local shipping needs repair"
+            case .needsUser:
+                return "\(needsUser) session\(needsUser == 1 ? "" : "s") need\(needsUser == 1 ? "s" : "") you"
+            case .inspect where projectionUnavailable:
+                return "Remote session view unavailable"
+            case .inspect where storageBlockIsRecovering:
+                return "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+            case .inspect where storageBlockProofUnknown:
+                return "Durable upload proof unavailable for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+            case .inspect where hasDeadLetters:
+                return "Durable upload needs inspection for \(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s")"
+            case .inspect where reasons.contains("managed_launch_recovery_exhausted"):
+                return "Managed session recovery needs attention"
+            case .inspect where heartbeatPostFailed:
+                return "Machine heartbeat failed"
+            case .inspect where heartbeatEvidenceRejected:
+                return "Machine evidence rejected"
+            case .inspect where transportAttentionReason != nil:
+                return "Local upload needs attention"
+            case .inspect where sessionDiscoveryAttention:
+                return "Session discovery needs attention"
+            case .inspect where degraded > 0:
+                return "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
+            case .inspect where orphanBridgeCount > 0:
+                return "\(orphanBridgeCount) background process\(orphanBridgeCount == 1 ? "" : "es") need cleanup"
+            case .inspect:
+                return "Historical archive needs review"
+            case .unavailable where localStatusStale && !localEvidenceUnavailable:
+                return "Local status is stale"
+            case .unavailable:
+                return "Current local status unavailable"
+            case .normal where working > 0:
+                return "\(working) agent\(working == 1 ? "" : "s") working"
+            case .normal where !sessions.isEmpty:
+                // "Idle" only when every session is observed idle; missing
+                // phase evidence is not idleness.
+                let state = idle == sessions.count ? "idle" : "open"
+                return "\(sessions.count) session\(sessions.count == 1 ? "" : "s") \(state)"
+            case .normal:
+                return "No sessions running"
+            }
         }
+        let headline = headlineText(for: promotion)
 
 
         var counts: [String] = []
@@ -253,6 +264,8 @@ extension HealthSnapshot {
         return MenuBarPresentation(
             promotion: promotion,
             headline: headline,
+            systemPromotion: systemPromotion,
+            systemHeadline: systemPromotion == promotion ? headline : headlineText(for: systemPromotion),
             subheadline: counts.joined(separator: " · "),
             facts: menuBarSystemFacts(
                 relativeTo: referenceDate,
