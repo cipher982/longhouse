@@ -378,6 +378,19 @@ capture_window_render_args() (
     fi
   fi
 
+  if [[ $capture_status -ne 0 ]] && ! kill -0 "$pid" 2>/dev/null; then
+    # A window that vanished is usually a crashed app; say so with its report
+    # instead of leaving only screencapture's "could not create image".
+    echo "window host exited before capture: $(basename "$output_png" .png)" >&2
+    cat "$output_png.log" >&2
+    local report
+    report="$(ls -t "$HOME/Library/Logs/DiagnosticReports/"*"$(basename "$app_bin")"* 2>/dev/null | head -1 || true)"
+    if [[ -n "$report" ]]; then
+      echo "crash report: $report" >&2
+      head -c 12000 "$report" >&2
+    fi
+  fi
+
   cleanup_capture
   trap - EXIT INT TERM
   if [[ $capture_status -ne 0 ]]; then
