@@ -950,8 +950,11 @@ public struct MenuBarPanelView: View {
 
     private var shouldRetryLocalStatus: Bool {
         guard !snapshot.isSetupRequired else { return false }
-        return !dataTrust.isCurrent
-            || snapshot.engineStatus?.fresh == false
+        if !dataTrust.isCurrent { return true }
+        // A stopped service explains its own stale engine evidence: retrying
+        // the status read cannot help, repairing the service can.
+        if snapshot.service != nil && snapshot.serviceStatusLabel != "running" { return false }
+        return snapshot.engineStatus?.fresh == false
             || snapshot.reasons.contains("engine_status_stale")
             || snapshot.reasons.contains("engine_projection_stale")
     }
@@ -1113,6 +1116,9 @@ public struct MenuBarPanelView: View {
         }
         if shouldRetryLocalStatus {
             return "The local agent is running, but its status evidence is stale. Refresh to retry; repair is not indicated."
+        }
+        if snapshot.service != nil && snapshot.serviceStatusLabel != "running" {
+            return "The local Longhouse engine is \(snapshot.serviceStatusLabel), so this Mac is not shipping. Repair restarts it."
         }
         if snapshot.storageBlockRequiresRepair {
             return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
