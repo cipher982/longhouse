@@ -616,6 +616,33 @@ pub async fn prewarm_codex_console_workers() {
     spawn_finished.notify_waiters();
 }
 
+/// Lease the warm worker, waiting until `deadline` for one the prewarm is
+/// still starting rather than missing it and cold-starting a second.
+async fn lease_warm_worker_by(deadline: tokio::time::Instant) -> Option<InitializedCodexWorker> {
+    loop {
+        if let Some(worker) = lease_warm_worker().await {
+            return Some(worker);
+        }
+        let wait = {
+            let pool = console_worker_pool().lock().await;
+            if !pool.workers.is_empty() {
+                // The prewarm finished between the lease and this lock.
+                continue;
+            }
+            if pool.shutting_down || pool.spawning == 0 {
+                return None;
+            }
+            let mut wait = Box::pin(pool.spawn_finished.clone().notified_owned());
+            wait.as_mut().enable();
+            wait
+        };
+        if tokio::time::timeout_at(deadline, wait).await.is_err() {
+            eprintln!("[codex-exec] latency stage=warm_worker_miss reason=prewarm_still_starting");
+            return None;
+        }
+    }
+}
+
 async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
     let mut pool = console_worker_pool().lock().await;
     if pool.shutting_down {
@@ -819,8 +846,13 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     // while the worker is leased or `turn/start` is in flight waits for the turn.
     let starting = ConsoleStartingGuard::new(&config.run_id);
     let warm_compatible = warm_pool_compatible(&config);
+    // One budget for the whole start: waiting on an in-flight prewarm and any
+    // cold spawn after it share it, so the reply stays inside the Runtime
+    // Host's 10 s turn-start wait. A second cold `codex` started beside a slow
+    // prewarm only competes with it for the same disk.
+    let turn_deadline = tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET;
     let warm_worker = if warm_compatible {
-        lease_warm_worker().await
+        lease_warm_worker_by(turn_deadline).await
     } else {
         None
     };
@@ -836,7 +868,9 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 Some(&config.session_id),
                 normalized_optional(&config.launch_actor).as_deref(),
                 normalized_optional(&config.launch_surface).as_deref(),
-                TURN_INITIALIZE_BUDGET,
+                turn_deadline
+                    .saturating_duration_since(tokio::time::Instant::now())
+                    .max(Duration::from_secs(1)),
             )
             .await?
         }
@@ -2677,6 +2711,75 @@ for line in sys.stdin:
             tokio::task::yield_now().await;
         }
         assert_ne!(unsafe { libc::kill(child_pid, 0) }, 0);
+    }
+
+    #[tokio::test]
+    async fn a_turn_takes_the_worker_a_slow_prewarm_is_still_starting() {
+        // Stranger run 10041621cd97: the first turn missed a prewarm that was
+        // still starting and cold-started a second `codex` beside it.
+        let temp = tempfile::tempdir().unwrap();
+        let fake_codex = temp.path().join("codex");
+        fs::write(
+            &fake_codex,
+            r#"#!/usr/bin/env python3
+import json, sys, time
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        time.sleep(0.4)
+        print(json.dumps({"id": msg["id"], "result": {"userAgent": "fake/1"}}), flush=True)
+    elif msg.get("method") == "initialized":
+        time.sleep(60)
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let nothing_starting =
+            lease_warm_worker_by(tokio::time::Instant::now() + Duration::from_secs(5)).await;
+        assert!(
+            nothing_starting.is_none(),
+            "no prewarm in flight: lease answers at once"
+        );
+
+        console_worker_pool().lock().await.spawning += 1;
+        let fake = fake_codex.to_str().unwrap().to_string();
+        let cwd = temp.path().to_path_buf();
+        let prewarm = tokio::spawn(async move {
+            let worker = spawn_initialized_codex_worker(
+                &fake,
+                Some("never"),
+                Some("workspace-write"),
+                &cwd,
+                None,
+                None,
+                None,
+                PREWARM_INITIALIZE_BUDGET,
+            )
+            .await
+            .unwrap();
+            let mut pool = console_worker_pool().lock().await;
+            pool.spawning -= 1;
+            pool.workers.push(worker);
+            let finished = pool.spawn_finished.clone();
+            drop(pool);
+            finished.notify_waiters();
+        });
+
+        let leased =
+            lease_warm_worker_by(tokio::time::Instant::now() + Duration::from_secs(5)).await;
+        prewarm.await.unwrap();
+        let mut worker = leased.expect("the turn waits for the prewarm instead of missing it");
+        console_worker_pool()
+            .lock()
+            .await
+            .active_process_groups
+            .clear();
+        shutdown_worker_process_group(&mut worker.child, worker.pgid)
+            .await
+            .unwrap();
     }
 
     fn runtime_sink(transcript_wake_socket: Option<PathBuf>) -> CodexExecRuntimeSink {

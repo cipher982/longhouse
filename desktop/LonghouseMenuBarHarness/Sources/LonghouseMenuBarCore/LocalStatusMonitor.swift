@@ -64,7 +64,9 @@ final class LocalStatusMonitor: @unchecked Sendable {
             )
             newSource.setEventHandler { [weak self, weak newSource] in
                 guard let self else { return }
-                if newSource?.data.contains(.delete) == true {
+                // On a directory fd these mean the directory itself moved or
+                // went away; files written inside it arrive as `.write`.
+                if let events = newSource?.data, !events.isDisjoint(with: [.delete, .rename]) {
                     self.setWatching(false)
                     newSource?.cancel()
                     self.source = nil
