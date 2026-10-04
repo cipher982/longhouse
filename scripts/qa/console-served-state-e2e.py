@@ -107,7 +107,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--provider",
         default="codex",
-        help="a provider name, or 'all' to derive the set from schemas/managed_providers.yml",
+        help=(
+            "a provider name, comma-separated provider names, or 'all' to derive the "
+            "set from schemas/managed_providers.yml"
+        ),
     )
     parser.add_argument(
         "--device-id",
@@ -146,18 +149,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    providers = (
+        console_providers()
+        if args.provider == "all"
+        else [provider for provider in args.provider.split(",") if provider]
+    )
+    if not providers or ("all" in providers and args.provider != "all"):
+        raise ValueError("--provider requires provider names, or exactly 'all'")
+
     if args.device_id == "all":
         # Ask each machine only about what it offers, so a box missing a CLI is
         # not reported as a failure for missing it.
         targets = connected_machine_targets()
         if args.provider != "all":
             targets = [
-                (device, [args.provider])
+                (device, [provider for provider in providers if provider in offered])
                 for device, offered in targets
-                if args.provider in offered
             ]
     else:
-        providers = console_providers() if args.provider == "all" else [args.provider]
         targets = [(args.device_id, providers)]
 
     cwd_by_device: dict[str, str] = {}

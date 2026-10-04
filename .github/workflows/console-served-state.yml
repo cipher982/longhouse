@@ -1,4 +1,4 @@
-# ROLE: product acceptance on the browser-served surface, all providers, Console turns, runs
+# ROLE: product acceptance on the browser-served surface, supported mock-mode providers
 # on the Linux pool against the canary ring. Assertions here are served-state, not per-cell receipts.
 name: Console Served State
 
@@ -15,13 +15,44 @@ name: Console Served State
 #
 # Every other Console check asserts machine-side. All of them stayed green
 # through that wedge, because none of them looked at what the browser is handed.
-# This one drives a real turn and asserts on the served surface.
+# This runs real stock CLI turns through a local fake model and asserts the result
+# on the served surface. Schedule runs use mock mode; workflow dispatch can use
+# live mode for real provider/model coverage.
+
+# Mock-mode custom-endpoint support and protocol sources:
+# - Codex: CODEX_HOME/config.toml [model_providers.*] base_url + wire_api=responses
+#   https://developers.openai.com/codex/config-reference
+# - Claude Code: ANTHROPIC_BASE_URL; the endpoint also handles Messages/count_tokens
+#   https://code.claude.com/docs/en/llm-gateway-protocol
+# - OpenCode: provider.*.options.baseURL in ~/.config/opencode/opencode.json
+#   https://opencode.ai/docs/providers/
+# - Pi: ~/.pi/agent/models.json baseUrl + api=openai-completions
+#   https://pi.dev/docs/latest/models
+# - OMP: ~/.omp/agent/models.yml baseUrl + api=openai-completions
+#   https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md
+# - Antigravity: GOOGLE_GEMINI_BASE_URL; the fake serves Gemini generateContent SSE
+#   https://www.antigravity.google/docs/cli/install
+# Gemini wire protocol: https://ai.google.dev/api/generate-content
+# Cursor is excluded: cursor-agent has no supported custom model base-URL setting.
+# Mock mode exposes no provider secrets; live mode retains all seven providers.
+# Claude Code's unauthenticated startup checks are public health probes, not
+# model requests (https://github.com/anthropics/claude-code/issues/81611).
+# Its Messages/count_tokens model API requests use the loopback base URL.
+
 
 on:
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "mock (local fake LLM) or live (real provider calls)"
+        required: false
+        default: "mock"
+        type: choice
+        options:
+          - mock
+          - live
       provider:
         description: "Provider to prove, or 'all'"
         required: false
@@ -46,12 +77,13 @@ jobs:
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
       LONGHOUSE_QA_HOSTED_TARGET: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
+      CONSOLE_QA_MODE: ${{ inputs.mode || 'mock' }}
       CONSOLE_QA_PROVIDER: ${{ inputs.provider || 'all' }}
-      CODEX_API_KEY: ${{ secrets.LONGHOUSE_CI_OPENAI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
-      CURSOR_API_KEY: ${{ secrets.LONGHOUSE_CI_CURSOR_API_KEY }}
-      GEMINI_API_KEY: ${{ secrets.LONGHOUSE_CI_GEMINI_API_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.LONGHOUSE_CI_OPENCODE_OPENROUTER_API_KEY }}
+      CODEX_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_OPENAI_API_KEY || '' }}
+      ANTHROPIC_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY || '' }}
+      CURSOR_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_CURSOR_API_KEY || '' }}
+      GEMINI_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_GEMINI_API_KEY || '' }}
+      OPENROUTER_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_OPENCODE_OPENROUTER_API_KEY || '' }}
       CODEX_MODEL: ${{ vars.CONSOLE_QA_CODEX_MODEL }}
       ANTHROPIC_MODEL: ${{ vars.CONSOLE_QA_ANTHROPIC_MODEL }}
       CURSOR_MODEL: ${{ vars.CONSOLE_QA_CURSOR_MODEL }}
@@ -75,24 +107,42 @@ jobs:
             echo "::error::Missing HOSTED_CANARY_RUNTIME_TOKEN; refusing unauthenticated Console coverage." >&2
             exit 1
           fi
-          for required_credential in CODEX_API_KEY ANTHROPIC_API_KEY CURSOR_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY; do
-            if [[ -z "${!required_credential:-}" ]]; then
-              echo "::error::Missing scoped CI provider credential: $required_credential" >&2
-              exit 1
-            fi
-          done
-          if [[ ! "$CONSOLE_QA_PROVIDER" =~ ^[A-Za-z0-9_-]+$ ]]; then
+          case "$CONSOLE_QA_MODE" in
+            mock|live) ;;
+            *) echo "::error::Unsupported Console mode: $CONSOLE_QA_MODE" >&2; exit 1 ;;
+          esac
+          if [[ "$CONSOLE_QA_MODE" == live ]]; then
+            for required_credential in CODEX_API_KEY ANTHROPIC_API_KEY CURSOR_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY; do
+              if [[ -z "${!required_credential:-}" ]]; then
+                echo "::error::Missing scoped CI provider credential: $required_credential" >&2
+                exit 1
+              fi
+            done
+          fi
+          if [[ ! "$CONSOLE_QA_PROVIDER" =~ ^[A-Za-z0-9,_-]+$ ]]; then
             echo "::error::Console provider input contains unsafe characters." >&2
             exit 1
           fi
-          for required_model in CODEX_MODEL ANTHROPIC_MODEL CURSOR_MODEL \
-            LONGHOUSE_OPENCODE_QUALIFICATION_MODEL LONGHOUSE_PI_QUALIFICATION_MODEL \
-            LONGHOUSE_OMP_QUALIFICATION_MODEL; do
-            if [[ -z "${!required_model:-}" ]]; then
-              echo "::error::Missing canonical provider model binding: $required_model" >&2
-              exit 1
-            fi
-          done
+          if [[ "$CONSOLE_QA_MODE" == mock && "$CONSOLE_QA_PROVIDER" != all ]]; then
+            mock_providers=",codex,claude,opencode,pi,omp,antigravity,"
+            IFS=',' read -r -a requested_providers <<< "$CONSOLE_QA_PROVIDER"
+            for provider in "${requested_providers[@]}"; do
+              if [[ -z "$provider" || "$mock_providers" != *",$provider,"* ]]; then
+                echo "::error::Mock mode supports only codex, claude, opencode, pi, omp, and antigravity; cursor requires live mode." >&2
+                exit 1
+              fi
+            done
+          fi
+          if [[ "$CONSOLE_QA_MODE" == live ]]; then
+            for required_model in CODEX_MODEL ANTHROPIC_MODEL CURSOR_MODEL \
+              LONGHOUSE_OPENCODE_QUALIFICATION_MODEL LONGHOUSE_PI_QUALIFICATION_MODEL \
+              LONGHOUSE_OMP_QUALIFICATION_MODEL; do
+              if [[ -z "${!required_model:-}" ]]; then
+                echo "::error::Missing canonical provider model binding: $required_model" >&2
+                exit 1
+              fi
+            done
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -151,6 +201,8 @@ jobs:
           test -x "$engine"
           test -x "$cli"
           export HOME="$home"
+          export XDG_CONFIG_HOME="$home/.config"
+          export XDG_DATA_HOME="$home/.local/share"
           export PATH="$fixture_root/bin:$home/.local/bin:$PATH"
           export LONGHOUSE_ENGINE_BIN="$engine"
           install -m 755 "$cli" "$fixture_root/bin/longhouse"
@@ -162,9 +214,10 @@ jobs:
           # Installation scripts are untrusted network inputs; never expose
           # provider credentials while they run. The next step receives the
           # job-scoped secrets again from the workflow environment.
-          unset CODEX_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
-            CURSOR_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY PI_OPENROUTER_API_KEY \
-            OMP_OPENROUTER_API_KEY LONGHOUSE_MACHINE_TOKEN
+          unset CODEX_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN \
+            CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY CURSOR_ACCESS_TOKEN GEMINI_API_KEY \
+            GOOGLE_API_KEY OPENROUTER_API_KEY PI_OPENROUTER_API_KEY OMP_OPENROUTER_API_KEY \
+            LONGHOUSE_MACHINE_TOKEN
           # These are upstream package/install surfaces, staged below the
           # disposable fixture root. Nothing is written to the runner's user
           # profile or PATH.
@@ -178,11 +231,12 @@ jobs:
           bash "$fixture_root/cursor-install.sh"
           curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
           bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
-          # Keep the disposable home explicit across steps. Codex's supported
-          # non-interactive auth is a provider-native login, not an ambient
-          # CODEX_API_KEY fallback; the proof step performs that login after
-          # the job-scoped secret is restored.
+          # Keep the disposable home explicit across steps. Live mode performs
+          # Codex's provider-native stdin login in the proof step; mock mode uses
+          # a named custom endpoint and never logs in to a provider.
           echo "HOME=$home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$home/.local/share" >> "$GITHUB_ENV"
           echo "PATH=$fixture_root/bin:$home/.local/bin:$PATH" >> "$GITHUB_ENV"
           echo "CODEX_HOME=$home/.codex" >> "$GITHUB_ENV"
           echo "LONGHOUSE_CLI_BIN=$fixture_root/bin/longhouse" >> "$GITHUB_ENV"
@@ -206,25 +260,187 @@ jobs:
           done
           staging_ok=1
 
+
+      - name: Start loopback fake LLM and configure disposable profiles
+        if: env.CONSOLE_QA_MODE == 'mock'
+        run: |
+          set -euo pipefail
+          port_file="$CONSOLE_FIXTURE_ROOT/mock-llm.port"
+          owner_file="$CONSOLE_FIXTURE_ROOT/mock-llm.owner"
+          log_file="$CONSOLE_FIXTURE_ROOT/mock-llm.log"
+          setsid python3 "$GITHUB_WORKSPACE/scripts/qa/console-served-state-mock-llm.py" \
+            --port-file "$port_file" > "$log_file" 2>&1 < /dev/null &
+          endpoint_pid=$!
+          # setsid gives the server its own process group; retain exact ownership
+          # in the fixture root so the always-run cleanup can stop it.
+          printf '%s %s\n' "$endpoint_pid" "$endpoint_pid" > "$owner_file"
+          endpoint_pgid="$(ps -o pgid= -p "$endpoint_pid" | tr -d '[:space:]')"
+          if [[ ! "$endpoint_pgid" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not record the loopback fake LLM process group." >&2
+            exit 1
+          fi
+          printf '%s %s\n' "$endpoint_pid" "$endpoint_pgid" > "$owner_file"
+          for attempt in {1..40}; do
+            if [[ -s "$port_file" ]]; then
+              break
+            fi
+            if ! kill -0 "$endpoint_pid" 2>/dev/null; then
+              cat "$log_file" >&2
+              echo "::error::Loopback fake LLM exited before binding." >&2
+              exit 1
+            fi
+            sleep 0.25
+          done
+          if [[ ! -s "$port_file" ]]; then
+            cat "$log_file" >&2
+            echo "::error::Loopback fake LLM did not bind in time." >&2
+            exit 1
+          fi
+          mock_port="$(cat "$port_file")"
+          if [[ ! "$mock_port" =~ ^[0-9]+$ ]]; then
+            echo "::error::Loopback fake LLM returned an invalid port." >&2
+            exit 1
+          fi
+          mock_url="http://127.0.0.1:$mock_port"
+          export MOCK_LLM_BASE_URL="$mock_url"
+          curl --retry 20 --retry-connrefused --retry-delay 0 --max-time 2 -fsS \
+            "$mock_url/healthz" >/dev/null
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          home = Path(os.environ["HOME"])
+          base = os.environ["MOCK_LLM_BASE_URL"]
+          openai_base = f"{base}/v1"
+
+          codex = home / ".codex" / "config.toml"
+          codex.parent.mkdir(parents=True, exist_ok=True)
+          codex.write_text(
+              'model_provider = "longhouse-mock"\n'
+              'model = "mock-model"\n'
+              '[model_providers.longhouse-mock]\n'
+              'name = "Longhouse mock"\n'
+              f'base_url = "{openai_base}"\n'
+              'wire_api = "responses"\n'
+              'env_key = "OPENAI_API_KEY"\n'
+              'requires_openai_auth = false\n',
+              encoding="utf-8",
+          )
+          codex.chmod(0o600)
+
+          opencode = home / ".config" / "opencode" / "opencode.json"
+          opencode.parent.mkdir(parents=True, exist_ok=True)
+          opencode.write_text(
+              json.dumps(
+                  {
+                      "$schema": "https://opencode.ai/config.json",
+                      "provider": {
+                          "longhouse-mock": {
+                              "npm": "@ai-sdk/openai-compatible",
+                              "name": "Longhouse mock",
+                              "options": {"baseURL": openai_base, "apiKey": "longhouse-mock-key"},
+                              "models": {"mock-model": {"name": "Longhouse mock"}},
+                          }
+                      },
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          opencode.chmod(0o600)
+
+          pi = home / ".pi" / "agent" / "models.json"
+          pi.parent.mkdir(parents=True, exist_ok=True)
+          custom_model = {
+              "id": "mock-model",
+              "name": "Longhouse mock",
+              "contextWindow": 200000,
+              "maxTokens": 8192,
+          }
+          pi.write_text(
+              json.dumps(
+                  {
+                      "providers": {
+                          "longhouse-mock": {
+                              "baseUrl": openai_base,
+                              "api": "openai-completions",
+                              "apiKey": "longhouse-mock-key",
+                              "models": [custom_model],
+                          }
+                      }
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          pi.chmod(0o600)
+
+          omp = home / ".omp" / "agent" / "models.yml"
+          omp.parent.mkdir(parents=True, exist_ok=True)
+          omp.write_text(
+              "providers:\n"
+              "  longhouse-mock:\n"
+              f'    baseUrl: "{openai_base}"\n'
+              "    api: openai-completions\n"
+              "    apiKey: longhouse-mock-key\n"
+              "    models:\n"
+              "      - id: mock-model\n"
+              "        name: Longhouse mock\n"
+              "        contextWindow: 200000\n"
+              "        maxTokens: 8192\n",
+              encoding="utf-8",
+          )
+          omp.chmod(0o600)
+          PY
+          {
+            echo "MOCK_LLM_BASE_URL=$mock_url"
+            echo "OPENAI_API_KEY=longhouse-mock-key"
+            echo "ANTHROPIC_API_KEY=longhouse-mock-key"
+            echo "ANTHROPIC_BASE_URL=$mock_url"
+            echo "OPENROUTER_API_KEY=longhouse-mock-key"
+            echo "GEMINI_API_KEY=longhouse-mock-key"
+            echo "GOOGLE_GEMINI_BASE_URL=$mock_url"
+            echo "DISABLE_AUTOUPDATER=1"
+            echo "CODEX_MODEL=mock-model"
+            echo "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL=longhouse-mock/mock-model"
+            echo "LONGHOUSE_PI_QUALIFICATION_MODEL=longhouse-mock/mock-model"
+            echo "LONGHOUSE_OMP_QUALIFICATION_MODEL=longhouse-mock/mock-model"
+          } >> "$GITHUB_ENV"
+
       - name: Prove Console on the browser-served surface
         id: served_state
         run: |
           set -euo pipefail
-          # Authenticate stock Codex in the disposable profile through its
-          # supported stdin login path. The helper removes both internal and
-          # ambient OpenAI credential variables from the child process.
-          PYTHONPATH="$GITHUB_WORKSPACE/server" python3 -c \
-            'import os,sys; from pathlib import Path; from zerg.qa.codex_auth import login_with_api_key; print(login_with_api_key(Path(sys.argv[1]), api_key=os.environ["CODEX_API_KEY"], environment=os.environ, cwd=Path(sys.argv[2])))' \
-            "$LONGHOUSE_CODEX_BIN" "$CONSOLE_QA_CWD" > "$CONSOLE_FIXTURE_ROOT/codex-auth-receipt.txt"
-          # After login, do not let the Longhouse-only binding become an
-          # accidental provider credential for the Console child process.
-          unset CODEX_API_KEY OPENAI_API_KEY
+          if [[ "$CONSOLE_QA_MODE" == live ]]; then
+            # Authenticate stock Codex in the disposable profile through its
+            # supported stdin login path. The helper removes both internal and
+            # ambient OpenAI credential variables from the child process.
+            PYTHONPATH="$GITHUB_WORKSPACE/server" python3 -c \
+              'import os,sys; from pathlib import Path; from zerg.qa.codex_auth import login_with_api_key; print(login_with_api_key(Path(sys.argv[1]), api_key=os.environ["CODEX_API_KEY"], environment=os.environ, cwd=Path(sys.argv[2])))' \
+              "$LONGHOUSE_CODEX_BIN" "$CONSOLE_QA_CWD" > "$CONSOLE_FIXTURE_ROOT/codex-auth-receipt.txt"
+            # After login, do not let the Longhouse-only binding become an
+            # accidental provider credential for the Console child process.
+            unset CODEX_API_KEY OPENAI_API_KEY
+          else
+            # The custom Codex provider consumes only the dummy key routed to
+            # the loopback endpoint; never perform a provider login in mock mode.
+            unset CODEX_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_OAUTH_TOKEN \
+              CLAUDE_CODE_OAUTH_TOKEN CURSOR_ACCESS_TOKEN GOOGLE_API_KEY \
+              OPENAI_CODEX_OAUTH_TOKEN PI_OPENROUTER_API_KEY OMP_OPENROUTER_API_KEY
+          fi
+          provider_arg="$CONSOLE_QA_PROVIDER"
+          if [[ "$CONSOLE_QA_MODE" == mock && "$provider_arg" == all ]]; then
+            provider_arg="codex,claude,opencode,pi,omp,antigravity"
+          fi
           mkdir -p artifacts
           result="artifacts/console-served-state.json"
           uv run --project server python scripts/qa/console-served-state-e2e.py \
             --owned-machine-agent \
             --engine "$CONSOLE_FIXTURE_ENGINE" \
-            --provider "$CONSOLE_QA_PROVIDER" \
+            --provider "$provider_arg" \
             --cwd "$CONSOLE_QA_CWD" \
             --api-url "$LONGHOUSE_API_URL" \
             --json-out "$result"
@@ -274,6 +490,41 @@ jobs:
             artifacts/console-fixture
           if-no-files-found: ignore
 
+
+      - name: Stop loopback fake LLM
+        if: always()
+        run: |
+          set -euo pipefail
+          fixture_root="${CONSOLE_FIXTURE_ROOT:-}"
+          if [[ -n "$fixture_root" ]]; then
+            owner_file="$fixture_root/mock-llm.owner"
+            if [[ -f "$owner_file" ]]; then
+              read -r endpoint_pid endpoint_pgid < "$owner_file"
+              if [[ "$endpoint_pid" =~ ^[0-9]+$ && "$endpoint_pgid" =~ ^[0-9]+$ ]] &&
+                kill -0 "$endpoint_pid" 2>/dev/null; then
+                kill -TERM -- "-$endpoint_pgid" 2>/dev/null || true
+                for attempt in {1..20}; do
+                  if ! kill -0 "$endpoint_pid" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 0.1
+                done
+                if kill -0 "$endpoint_pid" 2>/dev/null; then
+                  kill -KILL -- "-$endpoint_pgid" 2>/dev/null || true
+                  for attempt in {1..20}; do
+                    if ! kill -0 "$endpoint_pid" 2>/dev/null; then
+                      break
+                    fi
+                    sleep 0.1
+                  done
+                fi
+                if kill -0 "$endpoint_pid" 2>/dev/null; then
+                  echo "::error::Loopback fake LLM process survived cleanup." >&2
+                  exit 1
+                fi
+              fi
+            fi
+          fi
       - name: Remove owned fixture state
         if: always()
         run: |
