@@ -21,6 +21,9 @@ public struct HarnessRootView: View {
     @ObservedObject private var store: SnapshotStore
     @ObservedObject private var visibility: PanelVisibility
     @State private var appeared = false
+    /// Held, not observed: only the flames observe its ticks. Observing it
+    /// here would re-evaluate the whole panel every frame.
+    @State private var hearthClock = HearthClock()
     private let actionSink: any HealthActionSink
     private let refreshIntervalSeconds: TimeInterval?
     private let managePresentationUpdates: Bool
@@ -79,7 +82,10 @@ public struct HarnessRootView: View {
             }
         }
         // Flames animate only while this host is on screen.
-        .environment(\.hearthAnimating, managePresentationUpdates ? appeared : visibility.isOnScreen)
+        .environment(\.hearthClock, isOnScreen ? hearthClock : nil)
+        .onChange(of: isOnScreen, initial: true) { _, onScreen in
+            hearthClock.isRunning = onScreen
+        }
         .onAppear {
             guard managePresentationUpdates else {
                 return
@@ -103,5 +109,9 @@ public struct HarnessRootView: View {
                 store.refresh(reason: .background)
             }
         }
+    }
+
+    private var isOnScreen: Bool {
+        managePresentationUpdates ? appeared : visibility.isOnScreen
     }
 }

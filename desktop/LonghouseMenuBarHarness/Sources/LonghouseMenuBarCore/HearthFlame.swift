@@ -59,51 +59,107 @@ enum HearthPalette {
     }
 }
 
-private struct HearthAnimatingKey: EnvironmentKey {
-    static let defaultValue = false
+/// One frame clock for every flame in a panel. Per-flame TimelineViews each
+/// schedule their own update, and the per-update cost (SwiftUI update, layout,
+/// CA commit) dwarfs drawing. Measured 2026-10-04, release build, four lit
+/// flames: a flame draw is ~0.03 ms; four independent timelines cost ~6% of a
+/// core, this shared clock ~4.3%, the same panel with no lit flame 0.4%.
+@MainActor
+public final class HearthClock: ObservableObject {
+    /// 24 fps: the flicker is smooth noise, so film rate reads as fire.
+    static let frameInterval: TimeInterval = 1.0 / 24.0
+
+    @Published private(set) var time: Double = 0
+    private var timer: Timer?
+
+    public init() {}
+
+    /// Ticks only while running; the owner runs it only while on screen.
+    public var isRunning: Bool {
+        get { timer != nil }
+        set {
+            guard newValue != isRunning else { return }
+            if newValue {
+                let timer = Timer(timeInterval: Self.frameInterval, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.time = Date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600)
+                    }
+                }
+                timer.tolerance = Self.frameInterval * 0.2
+                RunLoop.main.add(timer, forMode: .common)
+                self.timer = timer
+            } else {
+                timer?.invalidate()
+                timer = nil
+            }
+        }
+    }
+}
+
+private struct HearthClockKey: EnvironmentKey {
+    static let defaultValue: HearthClock? = nil
 }
 
 extension EnvironmentValues {
-    /// True only while the panel is on screen. Flames are a single still frame
-    /// otherwise, so a hidden panel and fixture renders draw nothing per frame.
-    var hearthAnimating: Bool {
-        get { self[HearthAnimatingKey.self] }
-        set { self[HearthAnimatingKey.self] = newValue }
+    /// Present only while the panel is on screen. Without it flames are one
+    /// still frame, so a hidden panel and fixture renders draw nothing per frame.
+    var hearthClock: HearthClock? {
+        get { self[HearthClockKey.self] }
+        set { self[HearthClockKey.self] = newValue }
     }
 }
 
 /// A small fire whose height and temperature follow `heat` (0...1), drawn in
 /// the web timeline hearth's colours. Below ~0.12 it is an unlit coal bed and
-/// never animates. Every frame is a pure function of time, so a paused flame
+/// never animates. Every frame is a pure function of time, so a still flame
 /// and a fixture render are the same deterministic picture.
 struct HearthFlame: View {
     let heat: Double
     let seed: Int
     var embers = true
 
-    @Environment(\.hearthAnimating) private var animating
-    @Environment(\.colorScheme) private var colorScheme
-
-    static let frameInterval: TimeInterval = 1.0 / 30.0
-
-    private var lit: Bool { heat > 0.12 }
+    @Environment(\.hearthClock) private var clock
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !(animating && lit))) { context in
-            let time = animating
-                ? context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600)
-                : 1.3 + Double(seed % 17) * 0.37
-            Canvas { graphics, size in
-                HearthFlameRenderer(
-                    heat: max(0, min(1, heat)),
-                    seed: seed,
-                    time: time,
-                    embers: embers,
-                    additive: colorScheme == .dark
-                ).draw(in: &graphics, size: size)
+        Group {
+            if let clock, heat > 0.12 {
+                LiveHearthFlame(clock: clock, heat: heat, seed: seed, embers: embers)
+            } else {
+                HearthFlameCanvas(heat: heat, seed: seed, embers: embers, time: 1.3 + Double(seed % 17) * 0.37)
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+private struct LiveHearthFlame: View {
+    @ObservedObject var clock: HearthClock
+    let heat: Double
+    let seed: Int
+    let embers: Bool
+
+    var body: some View {
+        HearthFlameCanvas(heat: heat, seed: seed, embers: embers, time: clock.time)
+    }
+}
+
+private struct HearthFlameCanvas: View {
+    let heat: Double
+    let seed: Int
+    let embers: Bool
+    let time: Double
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Canvas { graphics, size in
+            HearthFlameRenderer(
+                heat: max(0, min(1, heat)),
+                seed: seed,
+                time: time,
+                embers: embers,
+                additive: colorScheme == .dark
+            ).draw(in: &graphics, size: size)
+        }
     }
 }
 
@@ -153,7 +209,6 @@ private struct HearthFlameRenderer {
     func draw(in graphics: inout GraphicsContext, size: CGSize) {
         let w = size.width, h = size.height
         let baseY = h * 0.84
-        let scale = max(1, w / 30)
 
         if heat > 0.05 {
             // Warm light on the hearth floor: a gradient, not a blur pass.
@@ -171,36 +226,55 @@ private struct HearthFlameRenderer {
 
         if heat > 0.12 {
             let tongues = heat > 0.75 ? 3 : (heat > 0.4 ? 2 : 1)
-            // Two blur passes per flame: soft outer layers, crisp inner ones.
-            for (layers, blur) in [([0, 1], 1.9 * scale), ([2, 3], 0.9 * scale)] {
-                graphics.drawLayer { layer in
-                    layer.addFilter(.blur(radius: blur))
-                    if additive { layer.blendMode = .plusLighter }
-                    for k in 0..<tongues {
-                        let side = k == 0 ? 0.0 : (k == 1 ? -0.17 : 0.17)
-                        let size = k == 0 ? 1.0 : 0.62
-                        let height = h * (0.22 + 0.58 * heat) * size * (0.86 + 0.14 * flicker(Double(k), seed &+ k))
-                        let width = w * (0.34 + 0.16 * heat) * size
-                        let bend = w * 0.09 * flicker(Double(k) + 3, seed &+ 40 &+ k)
-                        for index in layers {
-                            let (color, inset): (Color, Double) = [
-                                (HearthPalette.ash, 1.0), (HearthPalette.ember, 0.78),
-                                (HearthPalette.flame, 0.55), (HearthPalette.flameCore, 0.3),
-                            ][index]
-                            layer.fill(
-                                tongue(
-                                    cx: w * (0.5 + side),
-                                    base: baseY - Double(index) * 0.5,
-                                    width: width * inset,
-                                    height: height * (0.45 + 0.55 * inset),
-                                    bend: bend * inset
-                                ),
-                                with: .color(color.opacity(index == 0 ? 0.75 : 0.85))
-                            )
-                        }
+            // No blur filters: a Canvas blur layer made the window
+            // uncapturable on macOS 15 and costs a GPU pass per flame. Edges
+            // are feathered instead with a faint oversized halo per layer,
+            // and every layer fades from its base toward its tip.
+            var fire = graphics
+            if additive { fire.blendMode = .plusLighter }
+            let layers: [(color: Color, inset: Double, alpha: Double)] = [
+                // On light glass the dark-red outer layer reads as an outline.
+                (HearthPalette.ash, 1.0, additive ? 0.7 : 0.3), (HearthPalette.ember, 0.78, 0.8),
+                (HearthPalette.flame, 0.55, 0.85), (HearthPalette.flameCore, 0.3, 0.9),
+            ]
+            for k in 0..<tongues {
+                let side = k == 0 ? 0.0 : (k == 1 ? -0.17 : 0.17)
+                let size = k == 0 ? 1.0 : 0.62
+                let height = h * (0.22 + 0.58 * heat) * size * (0.86 + 0.14 * flicker(Double(k), seed &+ k))
+                let width = w * (0.34 + 0.16 * heat) * size
+                let bend = w * 0.09 * flicker(Double(k) + 3, seed &+ 40 &+ k)
+                let cx = w * (0.5 + side)
+                for (index, layer) in layers.enumerated() {
+                    let layerHeight = height * (0.45 + 0.55 * layer.inset)
+                    let base = baseY - Double(index) * 0.5
+                    let shading = GraphicsContext.Shading.linearGradient(
+                        Gradient(stops: [
+                            .init(color: layer.color.opacity(layer.alpha), location: 0),
+                            .init(color: layer.color.opacity(layer.alpha * 0.85), location: 0.55),
+                            .init(color: layer.color.opacity(0), location: 1),
+                        ]),
+                        startPoint: CGPoint(x: cx, y: base),
+                        endPoint: CGPoint(x: cx + bend * layer.inset, y: base - layerHeight)
+                    )
+                    // Inner layers sit inside the outer ones, so only the
+                    // outer two need a halo to soften the silhouette.
+                    let passes: [(grow: Double, fade: Double)] = index < 2 ? [(1.24, 0.3), (1.0, 1.0)] : [(1.0, 1.0)]
+                    for (grow, fade) in passes {
+                        fire.opacity = fade
+                        fire.fill(
+                            tongue(
+                                cx: cx,
+                                base: base + width * layer.inset * (grow - 1) * 0.3,
+                                width: width * layer.inset * grow,
+                                height: layerHeight * (1 + (grow - 1) * 0.6),
+                                bend: bend * layer.inset
+                            ),
+                            with: shading
+                        )
                     }
                 }
             }
+            fire.opacity = 1
 
             if embers {
                 var sparks = graphics

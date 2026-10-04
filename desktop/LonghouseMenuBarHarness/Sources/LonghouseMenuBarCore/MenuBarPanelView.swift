@@ -9,6 +9,10 @@ public enum MenuBarPanelLayout {
     public static let rootSpacing: CGFloat = 10
     /// Session rows scroll inside this height so actions below stay on screen.
     public static let sessionAreaMaximumHeight: CGFloat = 300
+    /// The whole body below the header scrolls past this, so the panel never
+    /// exceeds `maximumWindowHeight` (760 = 12+12 padding, ~56 header, 10 gap,
+    /// ~30 feedback headroom, 640 body).
+    public static let bodyMaximumHeight: CGFloat = 640
 }
 
 /// One shape for every panel state that is not a snapshot: loading, booting,
@@ -190,49 +194,59 @@ public struct MenuBarPanelView: View {
             VStack(alignment: .leading, spacing: MenuBarPanelLayout.rootSpacing) {
                 header(presentation)
 
-                // Above everything it qualifies: below it is last-known.
-                if !dataTrust.isCurrent {
-                    staleBanner
-                }
+                // Everything between the header and the feedback banner scrolls
+                // as one body once it outgrows the window, so a long trouble
+                // card or expanded facts can never push actions off screen.
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: MenuBarPanelLayout.rootSpacing) {
+                        // Above everything it qualifies: below it is last-known.
+                        if !dataTrust.isCurrent {
+                            staleBanner
+                        }
 
-                if repairFirst {
-                    troubleCard(presentation)
-                }
+                        if repairFirst {
+                            troubleCard(presentation)
+                        }
 
-                if let focus {
-                    HearthFocusCard(entry: focus)
-                }
+                        if let focus {
+                            HearthFocusCard(entry: focus)
+                        }
 
-                if snapshot.sessionDiscoveryAttention && !snapshot.isSetupRequired {
-                    notice(
-                        snapshot.sessionDiscoveryWarningDetail
-                            ?? "Session discovery is incomplete; active sessions may be missing from this list.",
-                        identifier: "longhouse.session-discovery-warning"
-                    )
-                }
+                        if snapshot.sessionDiscoveryAttention && !snapshot.isSetupRequired {
+                            notice(
+                                snapshot.sessionDiscoveryWarningDetail
+                                    ?? "Session discovery is incomplete; active sessions may be missing from this list.",
+                                identifier: "longhouse.session-discovery-warning"
+                            )
+                        }
 
-                // A never-connected Mac has no agent to describe. Any session
-                // evidence it does have still shows.
-                if showsRuntimeSurface {
-                    sessionArea(rows: rows, quiet: quiet, hasFocus: focus != nil)
-                }
+                        // A never-connected Mac has no agent to describe. Any
+                        // session evidence it does have still shows.
+                        if showsRuntimeSurface {
+                            sessionArea(rows: rows, quiet: quiet, hasFocus: focus != nil)
+                        }
 
-                if showsTroubleCard && !repairFirst {
-                    troubleCard(presentation)
-                } else if !showsTroubleCard && !snapshot.isSetupRequired {
-                    healthLine(presentation)
-                }
+                        if showsTroubleCard && !repairFirst {
+                            troubleCard(presentation)
+                        } else if !showsTroubleCard && !snapshot.isSetupRequired {
+                            healthLine(presentation)
+                        }
 
-                if let backgroundActivity = presentation.backgroundActivity {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: "clock.arrow.circlepath")
-                        Text("\(backgroundActivity) · current sessions have priority")
-                            .fixedSize(horizontal: false, vertical: true)
+                        if let backgroundActivity = presentation.backgroundActivity {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                Text("\(backgroundActivity) · current sessions have priority")
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.secondary)
+                            .padding(.horizontal, 4)
+                        }
                     }
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: MenuBarPanelLayout.bodyMaximumHeight)
 
                 if let feedback {
                     feedbackBanner(feedback)
@@ -948,12 +962,21 @@ public struct MenuBarPanelView: View {
             && presentation.promotion == .repair
     }
 
+    /// Current local evidence says the engine service is not running. That is
+    /// its own repair, whatever the Runtime Host view or engine staleness say.
+    private var serviceStopped: Bool {
+        !snapshot.isSetupRequired
+            && dataTrust.isCurrent
+            && snapshot.service != nil
+            && snapshot.serviceStatusLabel != "running"
+    }
+
     private var shouldRetryLocalStatus: Bool {
         guard !snapshot.isSetupRequired else { return false }
         if !dataTrust.isCurrent { return true }
         // A stopped service explains its own stale engine evidence: retrying
         // the status read cannot help, repairing the service can.
-        if snapshot.service != nil && snapshot.serviceStatusLabel != "running" { return false }
+        if serviceStopped { return false }
         return snapshot.engineStatus?.fresh == false
             || snapshot.reasons.contains("engine_status_stale")
             || snapshot.reasons.contains("engine_projection_stale")
@@ -1111,14 +1134,14 @@ public struct MenuBarPanelView: View {
         if !dataTrust.isCurrent {
             return "The local status check is unavailable. Refresh to retry; stale evidence does not indicate a repair."
         }
+        if serviceStopped {
+            return "The local Longhouse engine is \(snapshot.serviceStatusLabel), so this Mac is not shipping. Repair restarts it."
+        }
         if !projectionTrust.isCurrent {
             return "The Runtime Host session view is unavailable. The local agent and durable upload facts remain separate; refresh to retry the remote view."
         }
         if shouldRetryLocalStatus {
             return "The local agent is running, but its status evidence is stale. Refresh to retry; repair is not indicated."
-        }
-        if snapshot.service != nil && snapshot.serviceStatusLabel != "running" {
-            return "The local Longhouse engine is \(snapshot.serviceStatusLabel), so this Mac is not shipping. Repair restarts it."
         }
         if snapshot.storageBlockRequiresRepair {
             return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
@@ -1149,6 +1172,8 @@ public struct MenuBarPanelView: View {
             (title, systemImage, action) = ("Sign in to connect this Mac", "person.crop.circle.badge.checkmark", { perform(.repairInstall) })
         } else if !dataTrust.isCurrent || shouldRetryLocalStatus {
             (title, systemImage, action) = ("Retry local status", "arrow.clockwise", { perform(.refresh) })
+        } else if serviceStopped {
+            (title, systemImage, action) = ("Repair local agent", "wrench.and.screwdriver", { perform(.repairInstall) })
         } else if !projectionTrust.isCurrent {
             (title, systemImage, action) = ("Retry session view", "arrow.clockwise", { perform(.refresh) })
         } else if snapshot.storageBlockRequiresRepair
