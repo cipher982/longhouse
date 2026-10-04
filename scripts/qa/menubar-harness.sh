@@ -12,8 +12,7 @@ XCODE_HARNESS_PATH="$PKG_PATH/XcodeHarness"
 RUN_ID="${LONGHOUSE_MENUBAR_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 ARTIFACT_DIR="${LONGHOUSE_MENUBAR_ARTIFACT_DIR:-$ROOT/artifacts/menubar-harness/$RUN_ID}"
 BUILD_DIR="$ARTIFACT_DIR/swift-build"
-XCODE_PROJECT_DIR="$ARTIFACT_DIR/xcode-project"
-mkdir -p "$ARTIFACT_DIR" "$BUILD_DIR" "$XCODE_PROJECT_DIR"
+mkdir -p "$ARTIFACT_DIR" "$BUILD_DIR"
 export LONGHOUSE_MENUBAR_ARTIFACT_DIR="$ARTIFACT_DIR"
 export LONGHOUSE_MENUBAR_RUN_ID="$RUN_ID"
 
@@ -389,7 +388,10 @@ capture_window_render_args() (
 )
 
 xcode_ui_exec() (
-  local project_path="$XCODE_PROJECT_DIR/LonghouseMenuBarHarnessXcode.xcodeproj"
+  # Generated beside project.yml (the gitignored home for it): XcodeGen writes
+  # the local package path (`..`) relative to the project file, so a project
+  # generated under the artifact directory points at no Package.swift.
+  local project_path="$XCODE_HARNESS_PATH/LonghouseMenuBarHarnessXcode.xcodeproj"
   local result_bundle="$ARTIFACT_DIR/LonghouseMenuBarWindowHost.xcresult"
   local log_path="$ARTIFACT_DIR/xcuitest.log"
   local pid=""
@@ -401,7 +403,7 @@ xcode_ui_exec() (
   xcodegen \
     --spec "$XCODE_HARNESS_PATH/project.yml" \
     --project-root "$XCODE_HARNESS_PATH" \
-    --project "$XCODE_PROJECT_DIR" \
+    --project "$XCODE_HARNESS_PATH" \
     >/dev/null
 
   cleanup_xcode() {
