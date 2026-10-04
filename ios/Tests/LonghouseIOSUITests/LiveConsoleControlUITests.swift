@@ -103,8 +103,12 @@ final class LiveConsoleControlUITests: XCTestCase {
         )
         attachScreenshot(app, name: "live-omp-idle-send")
 
+        // A request to "think for N seconds" is answered in about two seconds
+        // by a fast model, and a long enumeration is refused just as fast; both
+        // end the turn before the queue and STEER steps. A long piece of writing
+        // keeps the turn honestly busy without a tool.
         let thinkPrompt = configuration.thinkPrompt
-            ?? "Think carefully for at least 20 seconds without running tools or commands, then reply with exactly \(markers.think) and nothing else."
+            ?? "Without running any tools or commands, write an original short story of about 3000 words about a lighthouse keeper who restores an old clock, then end with exactly \(markers.think)."
         try await sendFromIOS(
             app: app,
             composer: composer,
@@ -353,7 +357,8 @@ final class LiveConsoleControlUITests: XCTestCase {
         XCTAssertTrue(send.isEnabled, "iOS send control was disabled after entering text")
         send.tap()
         try await Task.sleep(nanoseconds: 250_000_000)
-        guard app.staticTexts[text].waitForExistence(timeout: 5) else {
+        let optimisticRow = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
+        guard optimisticRow.waitForExistence(timeout: 5) else {
             throw ProofFailure(description: "iOS optimistic input row did not render")
         }
     }
