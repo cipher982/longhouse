@@ -63,7 +63,6 @@ public final class SnapshotStore: ObservableObject {
     private var pendingRealtimeRemovals: Set<String> = []
     private var localStatusMonitor: LocalStatusMonitor?
     private var localStatusPath: String?
-    private var localStatusWatchArmed = false
     private var activeRefreshReason: SnapshotRefreshReason?
     private var queuedManualRefresh = false
     private var presentationTimer: Timer?
@@ -349,14 +348,14 @@ public final class SnapshotStore: ObservableObject {
         }
     }
 
-    /// Event-driven refresh needs a live engine status file to watch. Until
-    /// there is one (not signed in yet, or the engine just started and has not
-    /// written fresh status), poll instead; otherwise the window kept "Finish
+    /// Event-driven refresh needs a live watch on the engine's status file.
+    /// Until there is one (not signed in yet, or the engine has not created its
+    /// status directory), poll instead; otherwise the window kept "Finish
     /// setup" and then "Local status is stale" after sign-in had succeeded.
     private func scheduleSetupFollowUpIfNeeded(for snapshot: HealthSnapshot) {
         setupFollowUpTask?.cancel()
         setupFollowUpTask = nil
-        guard snapshot.isSetupRequired || snapshot.engineStatus?.fresh != true else { return }
+        guard snapshot.isSetupRequired || !isWatchingLocalStatus else { return }
         setupFollowUpTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: .seconds(self.setupRefreshInterval))
@@ -384,14 +383,12 @@ public final class SnapshotStore: ObservableObject {
             localStatusPath = nil
             return
         }
-        // A watch armed before the engine created its status directory never
-        // fires (open(O_EVTONLY) fails silently), so re-arm once it exists.
-        let directoryExists = path.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).deletingLastPathComponent().path) } ?? false
-        guard path != localStatusPath || (!localStatusWatchArmed && directoryExists) else { return }
+        // A watch that could not open the status directory (the engine had not
+        // created it yet) or whose directory was deleted never fires, so re-arm.
+        guard path != localStatusPath || !isWatchingLocalStatus else { return }
         localStatusMonitor?.stop()
         localStatusMonitor = nil
         localStatusPath = path
-        localStatusWatchArmed = directoryExists
         guard let path, !path.isEmpty else { return }
         let monitor = LocalStatusMonitor(statusPath: path) { [weak self] projection in
             Task { @MainActor [weak self] in
@@ -410,6 +407,10 @@ public final class SnapshotStore: ObservableObject {
         }
         localStatusMonitor = monitor
         monitor.start()
+    }
+
+    var isWatchingLocalStatus: Bool {
+        localStatusMonitor?.isWatching == true
     }
 
     static func classificationChanged(

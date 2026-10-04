@@ -19,24 +19,55 @@ final class LocalStatusMonitor: @unchecked Sendable {
     private var directoryHandle: CInt = -1
     private var fingerprint: Data?
     private var debounce: DispatchWorkItem?
+    private let watchingLock = NSLock()
+    private var watching = false
 
     init(statusPath: String, onChange: @escaping @Sendable (Projection) -> Void) {
         statusURL = URL(fileURLWithPath: statusPath)
         self.onChange = onChange
     }
 
-    func start() {
+    /// Whether a directory watch is live. False until `start()` opened the
+    /// status directory, and again once that directory is deleted: either way
+    /// no event will ever arrive, so the owner must re-arm.
+    var isWatching: Bool {
+        watchingLock.withLock { watching }
+    }
+
+    private func setWatching(_ value: Bool) {
+        watchingLock.withLock { watching = value }
+    }
+
+    /// Returns whether the watch was armed. Opening happens here, not on the
+    /// queue, so the caller learns synchronously that a missing directory
+    /// means nothing is being watched.
+    @discardableResult
+    func start() -> Bool {
+        let handle = open(statusURL.deletingLastPathComponent().path, O_EVTONLY)
+        guard handle >= 0 else { return false }
+        setWatching(true)
         queue.async { [self] in
-            guard source == nil else { return }
+            guard source == nil else {
+                close(handle)
+                return
+            }
             fingerprint = semanticFingerprint()
-            directoryHandle = open(statusURL.deletingLastPathComponent().path, O_EVTONLY)
-            guard directoryHandle >= 0 else { return }
+            directoryHandle = handle
             let newSource = DispatchSource.makeFileSystemObjectSource(
                 fileDescriptor: directoryHandle,
-                eventMask: [.write, .rename, .extend],
+                eventMask: [.write, .rename, .extend, .delete],
                 queue: queue
             )
-            newSource.setEventHandler { [weak self] in self?.scheduleRead() }
+            newSource.setEventHandler { [weak self, weak newSource] in
+                guard let self else { return }
+                if newSource?.data.contains(.delete) == true {
+                    self.setWatching(false)
+                    newSource?.cancel()
+                    self.source = nil
+                    return
+                }
+                self.scheduleRead()
+            }
             newSource.setCancelHandler { [weak self] in
                 guard let self, self.directoryHandle >= 0 else { return }
                 close(self.directoryHandle)
@@ -45,9 +76,11 @@ final class LocalStatusMonitor: @unchecked Sendable {
             source = newSource
             newSource.resume()
         }
+        return true
     }
 
     func stop() {
+        setWatching(false)
         queue.async { [self] in
             debounce?.cancel()
             source?.cancel()

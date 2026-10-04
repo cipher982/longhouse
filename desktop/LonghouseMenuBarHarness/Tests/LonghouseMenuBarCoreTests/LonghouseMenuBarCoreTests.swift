@@ -2131,12 +2131,17 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
-    func setupRequiredKeepsRefreshingUntilFreshLocalStatusThenStops() async throws {
-        // Sign-in completes in Terminal and the browser; no engine status file
-        // exists yet to wake the store. The window kept "Finish setup", and once
-        // that was fixed, "Local status is stale" from the first post-sign-in
-        // snapshot (stranger runs 100402498d26, 10041609a760).
-        func snapshot(_ state: String, _ headline: String, engineFresh: Bool?) -> HealthSnapshot {
+    func signInPollsUntilTheEngineStatusWatchIsArmedThenStops() async throws {
+        // Sign-in completes in Terminal and the browser, and the new engine
+        // creates its status directory a moment later. The window kept "Finish
+        // setup", then "Local status is stale" (stranger runs 100402498d26,
+        // 10041609a760), because nothing re-read local health once the watch
+        // had failed to open a directory that did not exist yet.
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-signin-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let statusPath = tempDir.appendingPathComponent("agent/engine-status.json").path
+        func snapshot(_ state: String, _ headline: String, statusPath: String?) -> HealthSnapshot {
             HealthSnapshot(
                 schemaVersion: 1,
                 collectedAt: "2026-10-04T02:53:00Z",
@@ -2146,30 +2151,43 @@ struct LonghouseMenuBarCoreTests {
                 reasons: state == "healthy" ? [] : ["machine_setup_required"],
                 suggestedActions: [],
                 service: nil,
-                engineStatus: engineFresh.map {
-                    EngineStatusSnapshot(path: nil, exists: $0, fresh: $0, ageSeconds: nil, payload: nil, error: nil)
+                engineStatus: statusPath.map {
+                    EngineStatusSnapshot(path: $0, exists: false, fresh: false, ageSeconds: nil, payload: nil, error: nil)
                 },
                 outbox: nil,
                 activitySummary: nil,
                 launchReadiness: nil
             )
         }
-        let setup = snapshot("setup_required", "Sign in to connect this machine to Longhouse", engineFresh: nil)
-        let starting = snapshot("healthy", "Engine starting", engineFresh: false)
-        let healthy = snapshot("healthy", "Longhouse native health is healthy", engineFresh: true)
-        let source = CountingHealthSnapshotSource(snapshots: [setup, setup, starting, healthy])
+        let setup = snapshot("setup_required", "Sign in to connect this machine to Longhouse", statusPath: nil)
+        let connected = snapshot("healthy", "Longhouse native health is healthy", statusPath: statusPath)
+        let source = CountingHealthSnapshotSource(snapshots: [setup, setup, connected])
         let store = SnapshotStore(source: source, cacheURL: nil, setupRefreshInterval: 0.02)
 
         store.refresh(reason: .manual)
         for _ in 0..<100 {
-            if store.snapshot?.headline == healthy.headline { break }
+            if store.snapshot?.headline == connected.headline { break }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        #expect(store.snapshot?.headline == healthy.headline)
+        #expect(store.snapshot?.headline == connected.headline)
+        #expect(!store.isWatchingLocalStatus, "the engine has not created its status directory yet")
+        let loadsBeforeDirectory = source.loadCount
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(source.loadCount > loadsBeforeDirectory, "with nothing to watch, local health is re-read")
 
-        let loadsWhenHealthy = source.loadCount
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: statusPath).deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        for _ in 0..<100 {
+            if store.isWatchingLocalStatus { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.isWatchingLocalStatus)
+        try? await Task.sleep(for: .milliseconds(60))
+        let loadsWhenWatching = source.loadCount
         try? await Task.sleep(for: .milliseconds(150))
-        #expect(source.loadCount == loadsWhenHealthy, "a connected Mac goes back to event-driven refresh")
+        #expect(source.loadCount == loadsWhenWatching, "an armed watch takes over from polling")
     }
 
 
