@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -73,17 +74,54 @@ def _reply_text(payload: dict) -> str:
 TOOL_COMMAND = "sleep 6"
 SHELL_TOOL_NAMES = ("bash", "shell", "exec_command", "shell_command", "run_shell_command", "run_command")
 TOOL_RESULT_TYPES = {"tool_result", "function_call_output", "custom_tool_call_output", "local_shell_call_output"}
+# A result for the issued call arriving sooner than the command can run means it
+# failed, was refused, or was backgrounded; the marker then never goes out.
+TOOL_MIN_SECONDS = 6.0
+_issued: dict[str, float] = {}
+_issued_lock = threading.Lock()
 
 
-def _has_tool_result(value: object) -> bool:
+def _issue(key: str) -> None:
+    with _issued_lock:
+        _issued[key] = time.monotonic()
+
+
+def _tool_results(value: object) -> list[tuple[str, bool]]:
+    """(call key, reported error) for every tool result in a conversation."""
+    found: list[tuple[str, bool]] = []
     if isinstance(value, dict):
         kind = value.get("type")
-        if (isinstance(kind, str) and kind in TOOL_RESULT_TYPES) or value.get("role") == "tool" or "functionResponse" in value:
-            return True
-        return any(_has_tool_result(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_has_tool_result(item) for item in value)
-    return False
+        if kind == "tool_result":  # Anthropic Messages
+            found.append((f"id:{value.get('tool_use_id')}", value.get("is_error") is True))
+        elif isinstance(kind, str) and kind in TOOL_RESULT_TYPES:  # Responses
+            found.append((f"id:{value.get('call_id')}", False))
+        elif value.get("role") == "tool":  # Chat Completions
+            found.append((f"id:{value.get('tool_call_id')}", False))
+        response = value.get("functionResponse")
+        if isinstance(response, dict):  # Gemini: correlated by function name
+            body = response.get("response")
+            found.append((f"name:{response.get('name')}", isinstance(body, dict) and "error" in body))
+        for item in value.values():
+            found.extend(_tool_results(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_tool_results(item))
+    return found
+
+
+def _round_trip_failure(results: list[tuple[str, bool]]) -> str | None:
+    """Why the issued shell call did not complete, or None when it did."""
+    now = time.monotonic()
+    with _issued_lock:
+        matched = [(_issued[key], error) for key, error in results if key in _issued]
+    if not matched:
+        return "no result for the shell call this endpoint issued"
+    if any(error for _, error in matched):
+        return "the shell call reported an error"
+    elapsed = max(now - issued for issued, _ in matched)
+    if elapsed < TOOL_MIN_SECONDS:
+        return f"the shell call returned after {elapsed:.1f} s, before '{TOOL_COMMAND}' could finish"
+    return None
 
 
 def _declared_tools(payload: dict) -> list[tuple[str, dict]]:
@@ -141,12 +179,22 @@ def _shell_call(payload: dict) -> tuple[str, dict]:
 def _plan(payload: dict) -> tuple[str, str | tuple[str, dict]]:
     """("text", reply) or ("tool", (name, arguments)) for one generation request.
 
-    A request offering no tools at all (a title or summary side call) gets text.
+    The marker goes out only after a successful, full-length result for the
+    shell call this endpoint issued. A request offering no tools (a title or
+    summary side call) gets neutral text, never the marker.
     """
     text = _reply_text(payload)
-    conversation = {key: value for key, value in payload.items() if key != "tools"}
-    if text.startswith("LH_SERVED_") and payload.get("tools") and not _has_tool_result(conversation):
+    if not text.startswith("LH_SERVED_"):
+        return "text", text
+    if not payload.get("tools"):
+        return "text", "Console served-state check"
+    results = _tool_results({key: value for key, value in payload.items() if key != "tools"})
+    if not results:
         return "tool", _shell_call(payload)
+    failure = _round_trip_failure(results)
+    if failure:
+        print(f"round trip failed: {failure}", flush=True)
+        return "text", f"LH_TOOL_ROUND_TRIP_FAILED: {failure}"
     return "text", text
 
 
@@ -582,6 +630,7 @@ class MockHandler(BaseHTTPRequestHandler):
             "arguments": arguments,
             "status": "completed",
         }
+        _issue(f"id:{call['call_id']}")
         final = _response_object(response_id, model, "", status="completed")
         final["output"] = [call]
         if not payload.get("stream", True):
@@ -617,6 +666,7 @@ class MockHandler(BaseHTTPRequestHandler):
     def _anthropic_tool(self, payload: dict, name: str, args: dict) -> None:
         model = str(payload.get("model") or "mock-model")
         block = {"type": "tool_use", "id": f"toolu_{uuid4().hex}", "name": name, "input": args}
+        _issue(f"id:{block['id']}")
         message = {
             "id": f"msg_{uuid4().hex}",
             "type": "message",
@@ -669,6 +719,7 @@ class MockHandler(BaseHTTPRequestHandler):
         completion_id = f"chatcmpl_{uuid4().hex}"
         created = int(time.time())
         call = {"id": f"call_{uuid4().hex}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+        _issue(f"id:{call['id']}")
         if not payload.get("stream", False):
             self._send_json(
                 200,
@@ -730,7 +781,11 @@ class MockHandler(BaseHTTPRequestHandler):
     def _gemini(self, payload: dict, model: str, *, stream: bool) -> None:
         kind, plan = _plan(payload)
         print(f"POST gemini -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
-        result = self._gemini_payload("", model, call=plan) if kind == "tool" else self._gemini_payload(plan, model)
+        if kind == "tool":
+            _issue(f"name:{plan[0]}")
+            result = self._gemini_payload("", model, call=plan)
+        else:
+            result = self._gemini_payload(plan, model)
         if stream:
             self._send_sse([(None, result)])
         else:

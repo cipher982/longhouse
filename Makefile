@@ -882,6 +882,7 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@python3 scripts/tests/release.test.py
 	@python3 scripts/tests/test-isolation-image-key.test.py
 	@python3 scripts/tests/summarise-console-served-state.test.py
+	@python3 scripts/tests/console-served-state-mock-llm.test.py >/dev/null
 	@python3 scripts/tests/hosted-qa-verdict.test.py
 	@python3 scripts/tests/hosted-live-qa-isolation.test.py
 	@python3 scripts/tests/engine-compat-receipt.test.py
