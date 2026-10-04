@@ -194,6 +194,7 @@ public final class SnapshotStore: ObservableObject {
         realtimeTask?.cancel()
         realtimeFlushTask?.cancel()
         transientRetryTask?.cancel()
+        setupFollowUpTask?.cancel()
         localStatusMonitor?.stop()
     }
 

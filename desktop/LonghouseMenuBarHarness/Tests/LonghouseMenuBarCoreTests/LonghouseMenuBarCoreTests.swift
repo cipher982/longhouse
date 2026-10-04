@@ -2157,7 +2157,8 @@ struct LonghouseMenuBarCoreTests {
         let store = SnapshotStore(source: source, cacheURL: nil, setupRefreshInterval: 0.02)
 
         store.refresh(reason: .manual)
-        for _ in 0..<100 where store.snapshot?.headline != healthy.headline {
+        for _ in 0..<100 {
+            if store.snapshot?.headline == healthy.headline { break }
             try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(store.snapshot?.headline == healthy.headline)
