@@ -2192,6 +2192,11 @@ async def _park_catalog_session_input(
     # that acquires it next must be able to see this message already waiting.
     if send_lock is not None:
         await session_lock_manager.release(send_lock[0], send_lock[1])
+    # Only the receipt changed: without a wake, a viewer on a healthy stream
+    # never sees another sender's parked message until the turn ends.
+    from zerg.services.session_pubsub import publish_session_input_queued
+
+    publish_session_input_queued(session_id=str(source_session.id))
     return SessionInputResponse(
         outcome="queued",
         input_id=None,

@@ -1234,6 +1234,10 @@ def test_codex_inflight_disconnect_fails_cleanly(live_catalog, live_catalog_clie
 
 
 def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, live_catalog_client):  # noqa: F811
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
     email = "live-queue@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
@@ -1241,6 +1245,15 @@ def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, li
     # A control channel that would happily accept a send, so "nothing was
     # dispatched" below is a fact about queue intent, not about the machine.
     websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+    reset_pubsub_for_test()
+
+    async def session_wakes() -> list[dict]:
+        # Replay from the start: the wake was published before this attached.
+        with get_pubsub().subscribe(topic_session(str(session_id)), since_seq=0) as subscription:
+            wakes = []
+            while (message := await subscription.next_message(timeout=0.1)) is not None:
+                wakes.append(message.payload)
+            return wakes
 
     try:
         resp = live_catalog_client.post(
@@ -1257,6 +1270,9 @@ def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, li
             (body["live_input_id"], "live-queue-1", "queued hot", "queued")
         ]
         assert websocket.sent == []
+        # Only the receipt changed, so the wake is what tells an open phone or
+        # browser that a message is now waiting behind the running turn.
+        assert [wake["kind"] for wake in asyncio.run(session_wakes())] == ["input_queued"]
 
         receipt = _live_catalog_receipt(
             live_catalog,
