@@ -20,8 +20,10 @@ name: Console Served State
 # live mode for real provider/model coverage.
 
 # Mock-mode custom-endpoint support and protocol sources:
-# - Codex: CODEX_HOME/config.toml [model_providers.*] base_url + wire_api=responses
-#   https://developers.openai.com/codex/config-reference
+# - Codex: CODEX_HOME/config.toml openai_base_url routes the built-in OpenAI
+#   provider through Responses; mock mode signs in only a disposable dummy key.
+#   https://developers.openai.com/codex/config-advanced
+#   https://developers.openai.com/codex/auth
 # - Claude Code: ANTHROPIC_BASE_URL; the endpoint also handles Messages/count_tokens
 #   https://code.claude.com/docs/en/llm-gateway-protocol
 # - OpenCode: provider.*.options.baseURL in ~/.config/opencode/opencode.json
@@ -231,9 +233,8 @@ jobs:
           bash "$fixture_root/cursor-install.sh"
           curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
           bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
-          # Keep the disposable home explicit across steps. Live mode performs
-          # Codex's provider-native stdin login in the proof step; mock mode uses
-          # a named custom endpoint and never logs in to a provider.
+          # Keep the disposable home explicit across steps. Live mode logs in
+          # with its scoped key; mock mode uses only a non-secret dummy key.
           echo "HOME=$home" >> "$GITHUB_ENV"
           echo "XDG_CONFIG_HOME=$home/.config" >> "$GITHUB_ENV"
           echo "XDG_DATA_HOME=$home/.local/share" >> "$GITHUB_ENV"
@@ -317,14 +318,9 @@ jobs:
           codex = home / ".codex" / "config.toml"
           codex.parent.mkdir(parents=True, exist_ok=True)
           codex.write_text(
-              'model_provider = "longhouse-mock"\n'
+              'model_provider = "openai"\n'
               'model = "mock-model"\n'
-              '[model_providers.longhouse-mock]\n'
-              'name = "Longhouse mock"\n'
-              f'base_url = "{openai_base}"\n'
-              'wire_api = "responses"\n'
-              'env_key = "OPENAI_API_KEY"\n'
-              'requires_openai_auth = false\n',
+              f'openai_base_url = "{openai_base}"\n',
               encoding="utf-8",
           )
           codex.chmod(0o600)
@@ -397,7 +393,6 @@ jobs:
           PY
           {
             echo "MOCK_LLM_BASE_URL=$mock_url"
-            echo "OPENAI_API_KEY=longhouse-mock-key"
             echo "ANTHROPIC_API_KEY=longhouse-mock-key"
             echo "ANTHROPIC_BASE_URL=$mock_url"
             echo "OPENROUTER_API_KEY=longhouse-mock-key"
@@ -421,15 +416,20 @@ jobs:
             PYTHONPATH="$GITHUB_WORKSPACE/server" python3 -c \
               'import os,sys; from pathlib import Path; from zerg.qa.codex_auth import login_with_api_key; print(login_with_api_key(Path(sys.argv[1]), api_key=os.environ["CODEX_API_KEY"], environment=os.environ, cwd=Path(sys.argv[2])))' \
               "$LONGHOUSE_CODEX_BIN" "$CONSOLE_QA_CWD" > "$CONSOLE_FIXTURE_ROOT/codex-auth-receipt.txt"
-            # After login, do not let the Longhouse-only binding become an
-            # accidental provider credential for the Console child process.
-            unset CODEX_API_KEY OPENAI_API_KEY
           else
-            # The custom Codex provider consumes only the dummy key routed to
-            # the loopback endpoint; never perform a provider login in mock mode.
-            unset CODEX_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_OAUTH_TOKEN \
-              CLAUDE_CODE_OAUTH_TOKEN CURSOR_ACCESS_TOKEN GOOGLE_API_KEY \
-              OPENAI_CODEX_OAUTH_TOKEN PI_OPENROUTER_API_KEY OMP_OPENROUTER_API_KEY
+            # Satisfy the Machine Agent's native Codex readiness probe with a
+            # dummy key stored only in this disposable profile.
+            PYTHONPATH="$GITHUB_WORKSPACE/server" python3 -c \
+              'import os,sys; from pathlib import Path; from zerg.qa.codex_auth import login_with_api_key; print(login_with_api_key(Path(sys.argv[1]), api_key="mock-not-a-key", environment=os.environ, cwd=Path(sys.argv[2])))' \
+              "$LONGHOUSE_CODEX_BIN" "$CONSOLE_QA_CWD" > "$CONSOLE_FIXTURE_ROOT/codex-auth-receipt.txt"
+          fi
+          # The child now uses only the isolated Codex auth.json; never pass
+          # the Longhouse binding or an ambient OpenAI key to Console.
+          unset CODEX_API_KEY OPENAI_API_KEY
+          if [[ "$CONSOLE_QA_MODE" == mock ]]; then
+            unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
+              CURSOR_ACCESS_TOKEN GOOGLE_API_KEY OPENAI_CODEX_OAUTH_TOKEN \
+              PI_OPENROUTER_API_KEY OMP_OPENROUTER_API_KEY
           fi
           provider_arg="$CONSOLE_QA_PROVIDER"
           if [[ "$CONSOLE_QA_MODE" == mock && "$provider_arg" == all ]]; then
