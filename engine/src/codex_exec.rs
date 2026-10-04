@@ -616,12 +616,20 @@ pub async fn prewarm_codex_console_workers() {
     spawn_finished.notify_waiters();
 }
 
+enum WarmLease {
+    Worker(InitializedCodexWorker),
+    /// Nothing warm and nothing starting: a cold start is the only way.
+    Cold,
+    /// The prewarm is still starting past the turn's budget.
+    StillStarting,
+}
+
 /// Lease the warm worker, waiting until `deadline` for one the prewarm is
 /// still starting rather than missing it and cold-starting a second.
-async fn lease_warm_worker_by(deadline: tokio::time::Instant) -> Option<InitializedCodexWorker> {
+async fn lease_warm_worker_by(deadline: tokio::time::Instant) -> WarmLease {
     loop {
         if let Some(worker) = lease_warm_worker().await {
-            return Some(worker);
+            return WarmLease::Worker(worker);
         }
         let wait = {
             let pool = console_worker_pool().lock().await;
@@ -630,7 +638,7 @@ async fn lease_warm_worker_by(deadline: tokio::time::Instant) -> Option<Initiali
                 continue;
             }
             if pool.shutting_down || pool.spawning == 0 {
-                return None;
+                return WarmLease::Cold;
             }
             let mut wait = Box::pin(pool.spawn_finished.clone().notified_owned());
             wait.as_mut().enable();
@@ -638,7 +646,7 @@ async fn lease_warm_worker_by(deadline: tokio::time::Instant) -> Option<Initiali
         };
         if tokio::time::timeout_at(deadline, wait).await.is_err() {
             eprintln!("[codex-exec] latency stage=warm_worker_miss reason=prewarm_still_starting");
-            return None;
+            return WarmLease::StillStarting;
         }
     }
 }
@@ -846,20 +854,22 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     // while the worker is leased or `turn/start` is in flight waits for the turn.
     let starting = ConsoleStartingGuard::new(&config.run_id);
     let warm_compatible = warm_pool_compatible(&config);
-    // One budget for the whole start: waiting on an in-flight prewarm and any
-    // cold spawn after it share it, so the reply stays inside the Runtime
-    // Host's 10 s turn-start wait. A second cold `codex` started beside a slow
-    // prewarm only competes with it for the same disk.
-    let turn_deadline = tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET;
-    let warm_worker = if warm_compatible {
-        lease_warm_worker_by(turn_deadline).await
+    // A user is waiting: an in-flight prewarm gets the whole turn budget, and a
+    // cold start happens only when nothing is starting. A second `codex`
+    // started beside a slow prewarm competes with it for the same disk and
+    // fails the same way, so say what is happening instead.
+    let lease = if warm_compatible {
+        lease_warm_worker_by(tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET).await
     } else {
-        None
+        WarmLease::Cold
     };
-    let warm_hit = warm_worker.is_some();
-    let mut worker = match warm_worker {
-        Some(worker) => worker,
-        None => {
+    let warm_hit = matches!(lease, WarmLease::Worker(_));
+    let mut worker = match lease {
+        WarmLease::Worker(worker) => worker,
+        WarmLease::StillStarting => anyhow::bail!(
+            "Codex is still starting on this machine (its first start can take tens of seconds while the machine is busy); send again in a moment"
+        ),
+        WarmLease::Cold => {
             spawn_initialized_codex_worker(
                 &config.codex_bin,
                 normalized_optional(&config.approval_policy).as_deref(),
@@ -868,9 +878,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 Some(&config.session_id),
                 normalized_optional(&config.launch_actor).as_deref(),
                 normalized_optional(&config.launch_surface).as_deref(),
-                turn_deadline
-                    .saturating_duration_since(tokio::time::Instant::now())
-                    .max(Duration::from_secs(1)),
+                TURN_INITIALIZE_BUDGET,
             )
             .await?
         }
@@ -2619,6 +2627,9 @@ mod tests {
         }
     }
 
+    /// Serializes the tests that seed the process-global warm pool.
+    static WARM_POOL_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// The daemon awaits this on its SIGTERM path, so it must return even when
     /// the pool never reports the outstanding work settled. Before the budget,
     /// a spawn that never notified left the engine running forever after
@@ -2631,6 +2642,7 @@ mod tests {
     /// signal that group for real, and this pool is a process-wide global.
     #[tokio::test]
     async fn console_shutdown_returns_when_outstanding_work_never_reports() {
+        let _serial = WARM_POOL_TEST_LOCK.lock().await;
         {
             let mut pool = console_worker_pool().lock().await;
             pool.spawning = 1;
@@ -2717,6 +2729,7 @@ for line in sys.stdin:
     async fn a_turn_takes_the_worker_a_slow_prewarm_is_still_starting() {
         // Stranger run 10041621cd97: the first turn missed a prewarm that was
         // still starting and cold-started a second `codex` beside it.
+        let _serial = WARM_POOL_TEST_LOCK.lock().await;
         let temp = tempfile::tempdir().unwrap();
         let fake_codex = temp.path().join("codex");
         fs::write(
@@ -2740,11 +2753,17 @@ for line in sys.stdin:
         let nothing_starting =
             lease_warm_worker_by(tokio::time::Instant::now() + Duration::from_secs(5)).await;
         assert!(
-            nothing_starting.is_none(),
+            matches!(nothing_starting, WarmLease::Cold),
             "no prewarm in flight: lease answers at once"
         );
 
+        // A prewarm that outlives the turn budget is reported, not raced.
         console_worker_pool().lock().await.spawning += 1;
+        let late =
+            lease_warm_worker_by(tokio::time::Instant::now() + Duration::from_millis(50)).await;
+        assert!(matches!(late, WarmLease::StillStarting));
+
+        // `spawning` stays reserved for the real prewarm below.
         let fake = fake_codex.to_str().unwrap().to_string();
         let cwd = temp.path().to_path_buf();
         let prewarm = tokio::spawn(async move {
@@ -2771,7 +2790,9 @@ for line in sys.stdin:
         let leased =
             lease_warm_worker_by(tokio::time::Instant::now() + Duration::from_secs(5)).await;
         prewarm.await.unwrap();
-        let mut worker = leased.expect("the turn waits for the prewarm instead of missing it");
+        let WarmLease::Worker(mut worker) = leased else {
+            panic!("the turn waits for the prewarm instead of missing it");
+        };
         console_worker_pool()
             .lock()
             .await
