@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import plistlib
+import stat
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -16,6 +19,38 @@ from zerg.services import runtime_artifacts
 
 def test_desktop_app_canonical_bundle_path_is_system_applications():
     assert runtime_artifacts.desktop_app_canonical_bundle_path() == Path("/Applications/Longhouse.app")
+
+
+def test_extract_app_bundle_archive_preserves_member_modes_under_restrictive_umask(tmp_path: Path):
+    source_app = tmp_path / "Longhouse.app"
+    executable = source_app / "Contents" / "MacOS" / "Longhouse"
+    info_plist = source_app / "Contents" / "Info.plist"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("app")
+    executable.chmod(0o755)
+    info_plist.write_bytes(plistlib.dumps({"CFBundleExecutable": "Longhouse"}))
+    info_plist.chmod(0o644)
+
+    archive_path = tmp_path / "Longhouse.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for source_path in (executable, info_plist):
+            member = zipfile.ZipInfo(source_path.relative_to(tmp_path).as_posix())
+            member.create_system = 3
+            member.external_attr = stat.S_IMODE(source_path.stat().st_mode) << 16
+            archive.writestr(member, source_path.read_bytes())
+
+    destination = tmp_path / "installed" / "Longhouse.app"
+    previous_umask = os.umask(0o077)
+    try:
+        runtime_artifacts._extract_app_bundle_archive(archive_path, destination)
+    finally:
+        os.umask(previous_umask)
+
+    extracted_executable = destination / "Contents" / "MacOS" / "Longhouse"
+    extracted_info_plist = destination / "Contents" / "Info.plist"
+    assert os.access(extracted_executable, os.X_OK)
+    assert stat.S_IMODE(extracted_executable.stat().st_mode) == 0o755
+    assert os.access(extracted_info_plist, os.R_OK)
 
 
 def test_ensure_runtime_binary_uses_existing_engine_on_path(monkeypatch, tmp_path: Path):

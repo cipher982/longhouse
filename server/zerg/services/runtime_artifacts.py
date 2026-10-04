@@ -26,6 +26,7 @@ from enum import Enum
 from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 import httpx
@@ -354,6 +355,33 @@ def _copy_local_binary(source_path: Path, destination_path: Path) -> None:
                 pass
 
 
+def _app_bundle_executable_path(bundle_path: Path) -> Path:
+    executable_name = "Longhouse"
+    info_plist = bundle_path / "Contents" / "Info.plist"
+    if info_plist.is_file():
+        try:
+            payload = plistlib.loads(info_plist.read_bytes())
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            raw_executable_name = payload.get("CFBundleExecutable")
+            if isinstance(raw_executable_name, str) and raw_executable_name.strip():
+                executable_name = raw_executable_name.strip()
+                if executable_name in {".", ".."} or "/" in executable_name or "\\" in executable_name:
+                    raise RuntimeError(f"Invalid CFBundleExecutable in runtime app bundle: {info_plist}")
+    return bundle_path / "Contents" / "MacOS" / executable_name
+
+
+def _validate_app_bundle_executable(bundle_path: Path) -> None:
+    executable_path = _app_bundle_executable_path(bundle_path)
+    try:
+        executable_mode = executable_path.stat().st_mode
+    except OSError as exc:
+        raise RuntimeError(f"Runtime app bundle executable is missing or not executable: {executable_path}") from exc
+    if not stat.S_ISREG(executable_mode) or not (stat.S_IMODE(executable_mode) & 0o111):
+        raise RuntimeError(f"Runtime app bundle executable is missing or not executable: {executable_path}")
+
+
 def _copy_local_app_bundle(source_path: Path, destination_path: Path) -> None:
     if not source_path.exists():
         raise RuntimeError(f"Runtime app bundle source does not exist: {source_path}")
@@ -364,6 +392,7 @@ def _copy_local_app_bundle(source_path: Path, destination_path: Path) -> None:
     try:
         shutil.rmtree(temp_path, ignore_errors=True)
         shutil.copytree(source_path, temp_path)
+        _validate_app_bundle_executable(temp_path)
         shutil.rmtree(destination_path, ignore_errors=True)
         temp_path.replace(destination_path)
     finally:
@@ -379,7 +408,34 @@ def _extract_app_bundle_archive(source_path: Path, destination_path: Path) -> No
         shutil.rmtree(extract_root, ignore_errors=True)
         extract_root.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(source_path) as archive:
-            archive.extractall(extract_root)
+            for member in archive.infolist():
+                if not member.filename or "\x00" in member.filename:
+                    raise RuntimeError(f"Invalid runtime archive member path: {member.filename!r}")
+                member_path = PurePosixPath(member.filename)
+                if member_path.is_absolute() or "\\" in member.filename or ".." in member_path.parts or not member_path.parts:
+                    raise RuntimeError(f"Unsafe runtime archive member path: {member.filename!r}")
+                target_path = extract_root.joinpath(*member_path.parts)
+                parent_path = extract_root
+                for part in member_path.parts[:-1]:
+                    parent_path /= part
+                    if parent_path.is_symlink():
+                        raise RuntimeError(f"Runtime archive member traverses a symbolic link: {member.filename!r}")
+                if target_path.is_symlink():
+                    raise RuntimeError(f"Runtime archive contains a symbolic link: {member.filename!r}")
+                member_mode = member.external_attr >> 16
+                if stat.S_ISLNK(member_mode):
+                    raise RuntimeError(f"Runtime archive contains a symbolic link: {member.filename!r}")
+
+                if member.is_dir() or member.filename.endswith("/"):
+                    target_path.mkdir(parents=True, exist_ok=True)
+                else:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(member) as source_handle, target_path.open("wb") as target_handle:
+                        shutil.copyfileobj(source_handle, target_handle)
+                mode = stat.S_IMODE(member_mode)
+                if mode:
+                    target_path.chmod(mode)
+
         app_candidates = [path for path in extract_root.rglob("*.app") if path.is_dir()]
         if len(app_candidates) != 1:
             raise RuntimeError(f"Expected exactly one .app bundle in runtime archive {source_path}, found {len(app_candidates)}")
