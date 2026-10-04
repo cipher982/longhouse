@@ -23,6 +23,12 @@ public final class SnapshotStore: ObservableObject {
     /// How long Runtime Host presentation and control stay authoritative after
     /// the projection stream last succeeded.
     public static let defaultProjectionDeadlineSeconds: TimeInterval = 300
+    /// Refresh is event driven from the engine's status file, and a Mac that
+    /// is not signed in yet has no engine writing one. Sign-in finishes in
+    /// Terminal and the browser, so without this the window kept "Finish
+    /// setup on this Mac" after the machine was connected and healthy, until
+    /// a manual Refresh. `longhouse local-health --json` costs ~30 ms.
+    public static let defaultSetupRefreshIntervalSeconds: TimeInterval = 5
 
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
@@ -50,6 +56,7 @@ public final class SnapshotStore: ObservableObject {
     private var realtimeTask: Task<Void, Never>?
     private var realtimeFlushTask: Task<Void, Never>?
     private var transientRetryTask: Task<Void, Never>?
+    private var setupFollowUpTask: Task<Void, Never>?
     private var realtimeConnection: RealtimeConnectionSnapshot?
     private var realtimeSessionIds: [String] = []
     private var pendingRealtimeProjections: [String: SessionProjection] = [:]
@@ -62,6 +69,7 @@ public final class SnapshotStore: ObservableObject {
     private var presentationConsumerCount = 0
     private let cacheURL: URL?
     private let transientRetryDelay: TimeInterval
+    private let setupRefreshInterval: TimeInterval
     private let refreshDeadline: TimeInterval
     /// The stream is long-lived and mostly idle, so its authority lease is more
     /// generous than the producer's polling deadline.
@@ -74,11 +82,13 @@ public final class SnapshotStore: ObservableObject {
         cacheURL: URL? = nil,
         transientRetryDelay: TimeInterval = 2,
         refreshDeadline: TimeInterval = SnapshotStore.defaultRefreshDeadlineSeconds,
-        projectionDeadline: TimeInterval = SnapshotStore.defaultProjectionDeadlineSeconds
+        projectionDeadline: TimeInterval = SnapshotStore.defaultProjectionDeadlineSeconds,
+        setupRefreshInterval: TimeInterval = SnapshotStore.defaultSetupRefreshIntervalSeconds
     ) {
         self.source = source
         self.cacheURL = cacheURL ?? Self.defaultCacheURL(for: source)
         self.transientRetryDelay = transientRetryDelay
+        self.setupRefreshInterval = setupRefreshInterval
         self.refreshDeadline = refreshDeadline
         self.projectionDeadline = projectionDeadline
         self.refreshState = .neverAttempted
@@ -317,6 +327,7 @@ public final class SnapshotStore: ObservableObject {
                 self.loadError = nil
                 self.refreshState = self.refreshState.recordingSuccess(at: Date())
                 self.exitBootingIfReady(for: snapshot)
+                self.scheduleSetupFollowUpIfNeeded(for: snapshot)
             case let .failure(message, transient):
                 self.isRecovering = transient
                 self.loadError = message
@@ -333,6 +344,19 @@ public final class SnapshotStore: ObservableObject {
             }
 
             self.completeRefresh(reason: reason)
+        }
+    }
+
+    private func scheduleSetupFollowUpIfNeeded(for snapshot: HealthSnapshot) {
+        setupFollowUpTask?.cancel()
+        setupFollowUpTask = nil
+        guard snapshot.isSetupRequired else { return }
+        setupFollowUpTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .seconds(self.setupRefreshInterval))
+            guard !Task.isCancelled else { return }
+            self.setupFollowUpTask = nil
+            self.refresh(reason: .background)
         }
     }
 

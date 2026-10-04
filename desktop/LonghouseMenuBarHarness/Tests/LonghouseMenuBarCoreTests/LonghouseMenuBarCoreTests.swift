@@ -2129,6 +2129,44 @@ struct LonghouseMenuBarCoreTests {
         #expect(store.snapshot?.headline == "Refreshed Longhouse status")
     }
 
+    @Test
+    @MainActor
+    func setupRequiredKeepsRefreshingUntilSignInFinishesThenStops() async throws {
+        // Sign-in completes in Terminal and the browser; no engine status file
+        // exists yet to wake the store, so "Finish setup" stayed up after the
+        // Mac was connected until a manual Refresh.
+        func snapshot(_ state: String, _ headline: String) -> HealthSnapshot {
+            HealthSnapshot(
+                schemaVersion: 1,
+                collectedAt: "2026-10-04T02:53:00Z",
+                healthState: state,
+                severity: state == "healthy" ? "green" : "yellow",
+                headline: headline,
+                reasons: state == "healthy" ? [] : ["machine_setup_required"],
+                suggestedActions: [],
+                service: nil,
+                engineStatus: nil,
+                outbox: nil,
+                activitySummary: nil,
+                launchReadiness: nil
+            )
+        }
+        let setup = snapshot("setup_required", "Sign in to connect this machine to Longhouse")
+        let healthy = snapshot("healthy", "Longhouse native health is healthy")
+        let source = CountingHealthSnapshotSource(snapshots: [setup, setup, healthy])
+        let store = SnapshotStore(source: source, cacheURL: nil, setupRefreshInterval: 0.02)
+
+        store.refresh(reason: .manual)
+        for _ in 0..<100 where store.snapshot?.headline != healthy.headline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.snapshot?.headline == healthy.headline)
+
+        let loadsWhenHealthy = source.loadCount
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(source.loadCount == loadsWhenHealthy, "a connected Mac goes back to event-driven refresh")
+    }
+
 
     @Test
     func legacyYellowAndRedSnapshotsRequestMenuBarAttentionWhenAttentionIsAbsent() {
