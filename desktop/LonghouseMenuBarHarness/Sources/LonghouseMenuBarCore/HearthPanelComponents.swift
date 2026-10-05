@@ -57,6 +57,13 @@ struct HearthSessionEntry: Identifiable {
     let seed: Int
     let openAction: (() -> Void)?
     let stopAction: (() -> Void)?
+
+    /// What a row says to VoiceOver: the title plus the subtitle, which is
+    /// where state that is not drawn (waiting, no live status, lost control)
+    /// lives.
+    var accessibilityOpenLabel: String {
+        subtitle.isEmpty ? "Open \(title) in Longhouse" : "Open \(title) in Longhouse, \(subtitle)"
+    }
 }
 
 // MARK: - Focus card
@@ -181,7 +188,7 @@ struct HearthSessionRow: View {
             }
             .buttonStyle(.plain)
             .disabled(entry.openAction == nil)
-            .accessibilityLabel(Text("Open \(entry.title) in Longhouse"))
+            .accessibilityLabel(Text(entry.accessibilityOpenLabel))
 
             HearthRowTrailing(entry: entry, hovered: hovered)
         }
@@ -230,7 +237,7 @@ struct HearthQuietRow: View {
             }
             .buttonStyle(.plain)
             .disabled(entry.openAction == nil)
-            .accessibilityLabel(Text("Open \(entry.title) in Longhouse"))
+            .accessibilityLabel(Text(entry.accessibilityOpenLabel))
 
             HearthRowTrailing(entry: entry, hovered: hovered)
         }
