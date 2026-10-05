@@ -37,6 +37,11 @@ const GLOW_MAX = 0.085;
 /** Reduced motion: steps to settle a still frame, and at most this many per frame. */
 const RM_SETTLE_STEPS = 90;
 const RM_STEPS_PER_FRAME = 15;
+/** A fire that comes on screen is simulated this far ahead before it is
+ * first drawn, so a glance at the timeline finds it already burning. */
+const WARM_STEPS = 180;
+/** Warm-up steps per frame, about a quarter second in all. Even: see warmUp. */
+const WARM_STEPS_PER_FRAME = 24;
 
 // spark character per tool kind: count, T0 (K), radius (cells), launch speed (cells/s), spread (rad), life (s)
 const SPARK: Record<ToolKind, { n: number; T: number; r: number; v: [number, number]; spread: number; life: number }> = {
@@ -76,6 +81,8 @@ interface Vis {
   frozen: boolean;
   seed: number;
   slot: number;
+  /** Solver steps left to run ahead before this tile is first drawn. */
+  warm: number;
 }
 
 interface Cell {
@@ -111,7 +118,7 @@ export interface HearthStats {
 }
 
 function freshVis(i: number): Vis {
-  return { puff: new Float32Array(SLOT_X.length), gust: 0, hcmd: 0, gain: 0, hm: 0, budget: 3, coldT: 0, frozen: true, seed: (i * 0.37 + 0.11) % 1, slot: 0 };
+  return { puff: new Float32Array(SLOT_X.length), gust: 0, hcmd: 0, gain: 0, hm: 0, budget: 3, coldT: 0, frozen: true, seed: (i * 0.37 + 0.11) % 1, slot: 0, warm: 0 };
 }
 
 function scrollParent(el: HTMLElement): HTMLElement | null {
@@ -394,8 +401,10 @@ export class HearthRenderer {
       this.clearTile(t);
       const v = (this.vis[t] = freshVis(t));
       const heat = this.heats.get(cell.key)?.heat;
-      // A row arriving on screen already burning starts part-grown, not from a spark.
-      if (heat) v.hcmd = this.reducedMotion ? 0 : 0.5 * heat.target(now / 1000);
+      // A row arriving on screen already burning is warmed up to its height
+      // before it is drawn, not relit from bare coals.
+      if (heat) v.hcmd = this.reducedMotion ? 0 : heat.target(now / 1000);
+      if (heat && !this.reducedMotion && (v.hcmd > 0 || heat.snap?.mode === "waiting")) v.warm = WARM_STEPS;
       v.frozen = false;
       this.settleT = now;
       this.rmSettle = RM_SETTLE_STEPS;
@@ -486,15 +495,16 @@ export class HearthRenderer {
     this.stats.burning = burning;
     this.stats.tiles = this.tileCell.filter(Boolean).length;
     this.setRuns();
+    this.packUniforms(wall);
+    const warming = this.warmUp();
 
     const visibleTiles = this.layout();
     if (!visibleTiles) {
       // Nothing on screen: no GPU work at all. A scroll or visibility change wakes us.
       this.stats.running = false;
-      if (pendingEvents && !this.reducedMotion) this.raf = requestAnimationFrame(this.frame);
+      if ((pendingEvents || warming) && !this.reducedMotion) this.raf = requestAnimationFrame(this.frame);
       return;
     }
-    this.packUniforms(wall);
 
     if (this.reducedMotion) {
       // A still frame: settle each lit tile from its current state a few
@@ -587,7 +597,7 @@ export class HearthRenderer {
       rects[i] = null;
       glows[i] = null;
       clips[i] = null;
-      if (!host || !cell || !cell.visible || !cell.el.isConnected) continue;
+      if (!host || !cell || !cell.visible || !cell.el.isConnected || this.vis[i].warm > 0) continue;
       const r = cell.el.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) continue;
       if (!slice) {
@@ -831,7 +841,36 @@ export class HearthRenderer {
     } else gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  private simStep() {
+  /** Run new fires ahead, a frame's share at a time, before they are drawn.
+   * Each run of consecutive warming tiles is stepped alone and an even number
+   * of times: a step swaps the velocity target an odd number of times, so an
+   * even count leaves every other tile's state current. Warm steps use their
+   * own clock and no sparks, so burning fires keep their flicker. Returns
+   * whether any tile is still warming. */
+  private warmUp(): boolean {
+    const runs: [number, number][] = [];
+    for (let i = 0; i < this.nt; i++) {
+      const v = this.vis[i];
+      if (!this.tileCell[i] || v.warm <= 0) continue;
+      const last = runs[runs.length - 1];
+      if (last && last[0] + last[1] === i && this.vis[last[0]].warm === v.warm) last[1]++;
+      else runs.push([i, 1]);
+    }
+    if (!runs.length) return false;
+    const spans = this.simRuns;
+    const time = this.simTime;
+    for (const run of runs) {
+      const n = Math.max(2, Math.min(WARM_STEPS_PER_FRAME, this.vis[run[0]].warm) & ~1);
+      this.simRuns = [run];
+      for (let k = 0; k < n; k++) this.simStep(false);
+      for (let i = run[0]; i < run[0] + run[1]; i++) this.vis[i].warm = Math.max(0, this.vis[i].warm - n);
+    }
+    this.simRuns = spans;
+    this.simTime = time;
+    return this.vis.some((v, i) => this.tileCell[i] && v.warm > 0);
+  }
+
+  private simStep(sparks = true) {
     if (!this.simRuns.length) return;
     const F = this.F;
     const P = this.P;
@@ -855,7 +894,7 @@ export class HearthRenderer {
     }
     this.run(P.proj, F.vel.w, { u_p: F.p.r.tex, u_vel: F.vel.r.tex });
     F.vel.swap();
-    if (!this.reducedMotion) {
+    if (sparks && !this.reducedMotion) {
       this.run(P.pup, F.part.w, { u_pa: F.part.r.texs[0], u_pb: F.part.r.texs[1], u_vel: F.vel.r.tex, u_dt: H });
       F.part.swap();
     }
