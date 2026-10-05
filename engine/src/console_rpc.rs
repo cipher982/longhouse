@@ -258,6 +258,47 @@ pub fn find_response(stdout_path: &Path, start: u64, id: &str) -> Option<Value> 
         })
 }
 
+/// A Pi-family stream event, reduced to what the Runtime Host reads.
+///
+/// Pi and OMP restate the whole assistant message on every streamed token:
+/// `message_update` carries it twice (`message` and
+/// `assistantMessageEvent.partial`, encrypted reasoning included), and
+/// `agent_end` repeats every message of the turn. Forwarded verbatim that is
+/// quadratic in the length of the message: on 2026-10-05 one OMP turn queued
+/// 916 MB of runtime events for a 6.6 MB transcript.
+///
+/// The Runtime Host takes an assistant message's text from the payload's
+/// `live_text` and only its identity and stop reason from `message`
+/// (server/zerg/services/session_live_previews.py). It never reads
+/// `assistantMessageEvent`, `agent_end`'s `messages`, or `turn_end`'s
+/// `toolResults`. Everything else passes through unchanged, including tool
+/// events, whose arguments and results Pi's tool previews read.
+pub fn runtime_stream_event(event: &Value) -> Value {
+    let Some(object) = event.as_object() else {
+        return event.clone();
+    };
+    let event_type = object.get("type").and_then(Value::as_str);
+    let mut reduced = serde_json::Map::with_capacity(object.len());
+    for (key, value) in object {
+        match key.as_str() {
+            "assistantMessageEvent" => {}
+            "messages" if event_type == Some("agent_end") => {}
+            "toolResults" if event_type == Some("turn_end") => {}
+            "message" if value.get("role").and_then(Value::as_str) == Some("assistant") => {
+                let identity = ["id", "role", "stopReason", "errorMessage"]
+                    .into_iter()
+                    .filter_map(|field| Some((field.to_owned(), value.get(field)?.clone())))
+                    .collect();
+                reduced.insert(key.clone(), Value::Object(identity));
+            }
+            _ => {
+                reduced.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Value::Object(reduced)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,5 +409,56 @@ mod tests {
         let age = age_since_rfc3339(&an_hour_ago).unwrap();
         assert!(age >= Duration::from_secs(3590) && age <= Duration::from_secs(3700));
         assert!(age_since_rfc3339("yesterday").is_none());
+    }
+
+    /// A streamed token must cost about a token, not the whole message again,
+    /// while every field the Runtime Host reads survives.
+    #[test]
+    fn runtime_stream_event_keeps_what_the_runtime_host_reads_and_no_repeated_message() {
+        let reasoning = "r".repeat(50_000);
+        let message = json!({
+            "id": "msg-1",
+            "role": "assistant",
+            "stopReason": null,
+            "content": [
+                {"type": "thinking", "thinking": "", "thinkingSignature": reasoning},
+                {"type": "text", "text": "Hello"}
+            ],
+            "usage": {"input": 1, "output": 2}
+        });
+        let update = json!({
+            "type": "message_update",
+            "message": message,
+            "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "o", "partial": message}
+        });
+
+        let reduced = runtime_stream_event(&update);
+
+        assert_eq!(
+            reduced,
+            json!({
+                "type": "message_update",
+                "message": {"id": "msg-1", "role": "assistant", "stopReason": null}
+            })
+        );
+        assert!(serde_json::to_vec(&reduced).unwrap().len() < 200);
+
+        let agent_end = json!({"type": "agent_end", "willContinue": false, "messages": [message]});
+        assert_eq!(
+            runtime_stream_event(&agent_end),
+            json!({"type": "agent_end", "willContinue": false})
+        );
+
+        // Not the streamed assistant message: kept whole.
+        let user = json!({"type": "message_end", "message": {"role": "user", "content": "do it"}});
+        assert_eq!(runtime_stream_event(&user), user);
+        let tool = json!({
+            "type": "tool_execution_end",
+            "toolCallId": "call-1",
+            "toolName": "bash",
+            "result": {"content": [{"type": "text", "text": "ok"}]},
+            "isError": false
+        });
+        assert_eq!(runtime_stream_event(&tool), tool);
     }
 }

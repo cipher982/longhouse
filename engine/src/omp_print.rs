@@ -1409,7 +1409,7 @@ impl OmpPrintSink {
                 "client_request_id": self.client_request_id,
                 "provider_thread_id": self.provider_thread_id,
                 "assistant_message_index": projection.assistant_message_index,
-                "event": event,
+                "event": crate::console_rpc::runtime_stream_event(event),
                 "live_text": projection.live_text(),
                 "managed_transport": OMP_PRINT_ADAPTER,
                 "execution_lifetime": "one_shot",

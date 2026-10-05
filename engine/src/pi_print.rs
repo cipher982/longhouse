@@ -1111,7 +1111,7 @@ impl PiPrintSink {
             "turn_id": self.turn_id,
             "client_request_id": self.client_request_id,
             "provider_thread_id": self.provider_thread_id,
-            "event": event,
+            "event": crate::console_rpc::runtime_stream_event(event),
             "managed_transport": PI_PRINT_ADAPTER,
             "execution_lifetime": "one_shot"
         });

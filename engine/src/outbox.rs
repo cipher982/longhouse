@@ -53,6 +53,21 @@ const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Fewer round trips stopped being the lever once replaceable status is
 /// coalesced at collection: a healthy pass carries a handful of events.
 const RUNTIME_EVENT_BATCH_LIMIT: usize = 128;
+/// Bytes one runtime POST may carry, unless it carries a single event.
+///
+/// One POST is one catalogd apply, and a catalogd frame holds 8 MiB
+/// (`MAX_PAYLOAD_BYTES` in server/zerg/catalogd/protocol.py). Counting events
+/// alone let 128 OMP progress events of ~68 KB each reach 8.3 MiB on
+/// 2026-10-05; the Runtime Host could never forward that batch, and everything
+/// queued behind it waited ten hours. The server's re-encoding adds at most
+/// ~87 bytes per event (measured on 3,000 queued events that day; 1.005x
+/// overall), so 8 MiB less 128 x 100 bytes would still fit. 1 MiB keeps 8x
+/// headroom and keeps one request's parse, validation and apply well inside
+/// the server's 2 s catalog budget. An event over this budget travels alone;
+/// it is already capped at `RUNTIME_EVENT_MAX_FILE_BYTES`, which fits a frame.
+const RUNTIME_EVENT_BATCH_BYTES: usize = 1024 * 1024;
+const RUNTIME_EVENT_BATCH_PREFIX: &[u8] = br#"{"events":["#;
+const RUNTIME_EVENT_BATCH_SUFFIX: &[u8] = b"]}";
 const RUNTIME_EVENT_DEAD_LETTER_DIR: &str = "dead-letter";
 /// Upper bound on directory entries inspected in one collection pass.
 /// Collection holds every inspected event in memory, so an unbounded directory
@@ -857,10 +872,24 @@ fn occurred_at_utc(event: &Value) -> Option<DateTime<Utc>> {
         .and_then(parse_rfc3339_utc)
 }
 
-/// One collection pass: what to post now, and whether the directory held more
-/// than one pass could inspect.
+/// One collection pass: the posts to send and the queue age/count observed
+/// from the same file reads used to build those posts.
 pub struct RuntimeEventCollection {
     pub posts: Vec<PendingRuntimeEventPost>,
+    /// Number of valid event objects read during this pass.
+    pub inspected_count: usize,
+    /// Files that remain represented after in-pass duplicate reduction.
+    pub pending_count: usize,
+    /// True when the pass hit a cap or skipped a file it could not measure.
+    pub pending_count_is_lower_bound: bool,
+    /// When the oldest file this pass saw was enqueued (its mtime). In health
+    /// nothing waits longer than a POST; in a stall the same files are read
+    /// pass after pass and this only gets older. Enqueue time, not
+    /// `occurred_at`: an event observed long ago and queued just now has not
+    /// waited.
+    pub oldest_pending_at: Option<DateTime<Utc>>,
+    /// None means the directory could not be opened for this pass.
+    pub observed_at: Option<DateTime<Utc>>,
     pub saturated: bool,
 }
 
@@ -870,6 +899,9 @@ struct ReducedRuntimeEvents {
     repeated: HashMap<String, (Option<DateTime<Utc>>, PendingRuntimeEventPost)>,
     inspected: usize,
     discarded: usize,
+    measurement_is_lower_bound: bool,
+    measurement_available: bool,
+    oldest_enqueued_at: Option<SystemTime>,
     saturated: bool,
 }
 
@@ -892,17 +924,28 @@ fn reduce_ready_runtime_events(
         inspected: 0,
         discarded: 0,
         saturated: false,
+        measurement_is_lower_bound: false,
+        measurement_available: false,
+        oldest_enqueued_at: None,
     };
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(_) => return reduced,
+        Err(_) => {
+            reduced.measurement_is_lower_bound = true;
+            return reduced;
+        }
     };
+    reduced.measurement_available = true;
 
     let now = SystemTime::now();
     let mut entries_seen = 0usize;
     let mut bytes_held = 0usize;
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            reduced.measurement_is_lower_bound = true;
+            continue;
+        };
         // The cap counts directory entries, not matches: a directory full of
         // skipped names is exactly as expensive to walk as a directory full of
         // ready ones.
@@ -935,10 +978,24 @@ fn reduce_ready_runtime_events(
         // Treating that as an oversized payload sent real status events to
         // dead-letter on `cinder` within a minute of deploying it.
         let file_bytes = match entry.metadata() {
-            Ok(meta) => meta.len() as usize,
-            Err(_) => continue,
+            Ok(meta) => {
+                if let Ok(enqueued_at) = meta.modified() {
+                    if reduced
+                        .oldest_enqueued_at
+                        .is_none_or(|oldest| enqueued_at < oldest)
+                    {
+                        reduced.oldest_enqueued_at = Some(enqueued_at);
+                    }
+                }
+                meta.len() as usize
+            }
+            Err(_) => {
+                reduced.measurement_is_lower_bound = true;
+                continue;
+            }
         };
         if file_bytes > RUNTIME_EVENT_MAX_FILE_BYTES {
+            reduced.measurement_is_lower_bound = true;
             handle_oversized_runtime_event(&path, file_bytes);
             continue;
         }
@@ -947,8 +1004,11 @@ fn reduce_ready_runtime_events(
             break;
         }
         let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(_) => continue,
+            Ok(bytes) => bytes,
+            Err(_) => {
+                reduced.measurement_is_lower_bound = true;
+                continue;
+            }
         };
         let event: Value = match serde_json::from_slice::<Value>(&bytes) {
             Ok(value) if value.is_object() => value,
@@ -1020,6 +1080,11 @@ fn collect_runtime_event_outbox_bounded(
     post_limit: usize,
 ) -> RuntimeEventCollection {
     let reduced = reduce_ready_runtime_events(dir, entry_limit, byte_limit);
+    let inspected_count = reduced.inspected;
+    let pending_count = reduced.inspected.saturating_sub(reduced.discarded);
+    let pending_count_is_lower_bound = reduced.saturated || reduced.measurement_is_lower_bound;
+    let observed_at = reduced.measurement_available.then(Utc::now);
+    let oldest_pending_at = reduced.oldest_enqueued_at.map(DateTime::<Utc>::from);
     let saturated = reduced.saturated;
     let mut critical = reduced.critical;
     let mut durable = reduced.durable;
@@ -1056,7 +1121,15 @@ fn collect_runtime_event_outbox_bounded(
             .cmp(&is_critical_runtime_event(&left.event))
             .then_with(|| observation_order(left).cmp(&observation_order(right)))
     });
-    RuntimeEventCollection { posts, saturated }
+    RuntimeEventCollection {
+        posts,
+        inspected_count,
+        pending_count,
+        pending_count_is_lower_bound,
+        oldest_pending_at,
+        observed_at,
+        saturated,
+    }
 }
 
 /// A session's own order must hold across the batch boundary, and file
@@ -1261,26 +1334,11 @@ pub(crate) async fn post_pending_runtime_event_files_with_outcome(
 ) -> RuntimeEventPostOutcome {
     let sessions = group_posts_by_session(posts);
 
-    let outcomes = stream::iter(sessions.into_iter().map(|events| async move {
-        let mut outcome = RuntimeEventPostOutcome::default();
-        for (chunk_index, chunk) in events.chunks(RUNTIME_EVENT_BATCH_LIMIT).enumerate() {
-            let chunk_outcome = post_one_runtime_event_request(client, chunk.to_vec()).await;
-            outcome.sent += chunk_outcome.sent;
-            outcome.kept += chunk_outcome.kept;
-            outcome
-                .permanent_rejections
-                .extend(chunk_outcome.permanent_rejections);
-            if chunk_outcome.kept > 0 {
-                // Everything after this in the same session stays queued: it
-                // must not arrive before the events it follows.
-                let processed_chunks = (chunk_index + 1) * RUNTIME_EVENT_BATCH_LIMIT;
-                let remaining = events.len().saturating_sub(processed_chunks);
-                outcome.kept += remaining;
-                break;
-            }
-        }
-        outcome
-    }))
+    let outcomes = stream::iter(
+        sessions
+            .into_iter()
+            .map(|events| async move { post_session_runtime_events(client, &events).await }),
+    )
     .buffer_unordered(RUNTIME_EVENT_POST_CONCURRENCY)
     .collect::<Vec<_>>()
     .await;
@@ -1319,46 +1377,120 @@ fn group_posts_by_session(
         .collect()
 }
 
-async fn post_one_runtime_event_request(
+/// One session's events, in order, in as few requests as the batch limits
+/// allow. Each event is serialized once, straight into the request body.
+///
+/// A request that is kept stops the session there: nothing may overtake an
+/// event that is still waiting.
+async fn post_session_runtime_events(
     client: &ShipperClient,
-    posts: Vec<PendingRuntimeEventPost>,
+    events: &[PendingRuntimeEventPost],
 ) -> RuntimeEventPostOutcome {
     let mut outcome = RuntimeEventPostOutcome::default();
-    for chunk in posts.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
-        let events: Vec<Value> = chunk.iter().map(|post| post.event.clone()).collect();
-        let body = match serde_json::to_vec(&serde_json::json!({ "events": events })) {
-            Ok(value) => value,
-            Err(_) => {
-                outcome.kept += chunk.len();
-                continue;
-            }
-        };
-        match client
-            .post_json_with_timeout_classified(
-                "/api/agents/runtime/events/batch",
-                body,
-                Some(RUNTIME_EVENT_POST_TIMEOUT),
-            )
-            .await
-        {
-            Ok(_) => {
-                for post in chunk {
-                    remove_post_file(post);
-                }
-                outcome.sent += chunk.len();
-            }
-            Err(error) if error.permanent_status_code().is_some() => {
-                let chunk_outcome = isolate_permanent_runtime_event_rejection(client, chunk).await;
-                outcome.sent += chunk_outcome.sent;
-                outcome.kept += chunk_outcome.kept;
-                outcome
-                    .permanent_rejections
-                    .extend(chunk_outcome.permanent_rejections);
-            }
+    let mut encoded = Vec::with_capacity(events.len());
+    for post in events {
+        match serde_json::to_vec(&post.event) {
+            Ok(bytes) => encoded.push(bytes),
             Err(error) => {
-                tracing::warn!(error = %error, event_count = chunk.len(), "Runtime event batch kept for retry");
-                outcome.kept += chunk.len();
+                tracing::warn!(
+                    source = %post_path_display(post),
+                    error = %error,
+                    "Runtime event could not be serialized; keeping it and what follows"
+                );
+                break;
             }
+        }
+    }
+    // An unserializable event and everything after it stay queued.
+    outcome.kept += events.len() - encoded.len();
+
+    let mut start = 0;
+    while start < encoded.len() {
+        let end = runtime_event_batch_end(&encoded, start);
+        let batch = post_runtime_event_batch(
+            client,
+            &events[start..end],
+            runtime_event_batch_body(&encoded[start..end]),
+        )
+        .await;
+        outcome.sent += batch.sent;
+        outcome.kept += batch.kept;
+        outcome
+            .permanent_rejections
+            .extend(batch.permanent_rejections);
+        if batch.kept > 0 {
+            outcome.kept += encoded.len() - end;
+            break;
+        }
+        start = end;
+    }
+    outcome
+}
+
+/// End of the request that starts at `start`: at most
+/// `RUNTIME_EVENT_BATCH_LIMIT` events and `RUNTIME_EVENT_BATCH_BYTES` bytes,
+/// and always at least one event.
+fn runtime_event_batch_end(encoded: &[Vec<u8>], start: usize) -> usize {
+    let mut end = start;
+    let mut bytes = RUNTIME_EVENT_BATCH_PREFIX.len() + RUNTIME_EVENT_BATCH_SUFFIX.len();
+    while end < encoded.len() && end - start < RUNTIME_EVENT_BATCH_LIMIT {
+        let next = encoded[end].len() + usize::from(end > start);
+        if end > start && bytes + next > RUNTIME_EVENT_BATCH_BYTES {
+            break;
+        }
+        bytes += next;
+        end += 1;
+    }
+    end
+}
+
+fn runtime_event_batch_body(encoded: &[Vec<u8>]) -> Vec<u8> {
+    let event_bytes: usize = encoded.iter().map(Vec::len).sum();
+    let mut body = Vec::with_capacity(
+        RUNTIME_EVENT_BATCH_PREFIX.len()
+            + event_bytes
+            + encoded.len()
+            + RUNTIME_EVENT_BATCH_SUFFIX.len(),
+    );
+    body.extend_from_slice(RUNTIME_EVENT_BATCH_PREFIX);
+    for (index, event) in encoded.iter().enumerate() {
+        if index > 0 {
+            body.push(b',');
+        }
+        body.extend_from_slice(event);
+    }
+    body.extend_from_slice(RUNTIME_EVENT_BATCH_SUFFIX);
+    body
+}
+
+async fn post_runtime_event_batch(
+    client: &ShipperClient,
+    batch: &[PendingRuntimeEventPost],
+    body: Vec<u8>,
+) -> RuntimeEventPostOutcome {
+    let mut outcome = RuntimeEventPostOutcome::default();
+    match client
+        .post_json_with_timeout_classified(
+            "/api/agents/runtime/events/batch",
+            body,
+            Some(RUNTIME_EVENT_POST_TIMEOUT),
+        )
+        .await
+    {
+        Ok(_) => {
+            for post in batch {
+                remove_post_file(post);
+            }
+            outcome.sent += batch.len();
+        }
+        // A 413 lands here too: the request was too large, not its events,
+        // so isolation resends them one per request.
+        Err(error) if error.permanent_status_code().is_some() => {
+            outcome = isolate_permanent_runtime_event_rejection(client, batch).await;
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, event_count = batch.len(), "Runtime event batch kept for retry");
+            outcome.kept += batch.len();
         }
     }
     outcome
@@ -2379,6 +2511,201 @@ mod tests {
         });
 
         (addr, requests, handle)
+    }
+
+    /// A Runtime Host that, like the real one, cannot forward a request larger
+    /// than one catalog frame: a multi-event body over `frame_limit` gets 413.
+    /// Reports each request's status, body size and event dedupe keys on the
+    /// returned channel, before answering it.
+    async fn spawn_frame_limited_runtime_server(
+        frame_limit: usize,
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::mpsc::Receiver<(u16, usize, Vec<String>)>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (record, requests) = std::sync::mpsc::channel();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = Vec::with_capacity(64 * 1024);
+                let mut buf = vec![0u8; 64 * 1024];
+                let header_end = loop {
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(position) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(position + 4);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let content_len = String::from_utf8_lossy(&request[..header_end])
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+                    .and_then(|line| line.split(':').nth(1))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while request.len().saturating_sub(header_end) < content_len {
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                let body_end = header_end.saturating_add(content_len).min(request.len());
+                let body = serde_json::from_slice::<Value>(&request[header_end..body_end])
+                    .unwrap_or_else(|_| json!({}));
+                let keys: Vec<String> = body["events"]
+                    .as_array()
+                    .map(|events| {
+                        events
+                            .iter()
+                            .map(|event| text_field(event.get("dedupe_key")))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let status = if keys.len() > 1 && content_len > frame_limit {
+                    413
+                } else {
+                    204
+                };
+                let _ = record.send((status, content_len, keys));
+                let response =
+                    format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (addr, requests, handle)
+    }
+
+    fn padded_progress_posts(
+        dir: &Path,
+        count: u64,
+        pad_bytes: usize,
+    ) -> Vec<PendingRuntimeEventPost> {
+        let pad = "x".repeat(pad_bytes);
+        (0..count)
+            .map(|seq| {
+                let event = json!({
+                    "runtime_key": "omp:s1",
+                    "session_id": "s1",
+                    "provider": "omp",
+                    "run_id": "r1",
+                    "source": "omp_print",
+                    "kind": "progress_signal",
+                    "occurred_at": format!("2026-10-05T04:30:{seq:02}Z"),
+                    "dedupe_key": format!("omp-print:s1:r1:stdout:{seq}"),
+                    "payload": {"progress_kind": "omp_print_stream", "seq": seq, "live_text": pad},
+                });
+                let path = dir.join(format!("{seq}.json"));
+                fs::write(&path, serde_json::to_vec(&event).unwrap()).unwrap();
+                PendingRuntimeEventPost {
+                    path: Some(path),
+                    event,
+                }
+            })
+            .collect()
+    }
+
+    fn runtime_test_client(addr: std::net::SocketAddr) -> crate::shipping::client::ShipperClient {
+        let url = format!("http://{addr}");
+        let cfg = crate::config::ShipperConfig::default().with_overrides(
+            Some(&url),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        crate::shipping::client::ShipperClient::with_compression(
+            &cfg,
+            crate::pipeline::compressor::CompressionAlgo::Gzip,
+        )
+        .unwrap()
+    }
+
+    /// A session whose events outweigh one request goes out in requests no
+    /// larger than the byte budget, each event once and in order. Counting
+    /// events alone put 8.3 MiB in one request on 2026-10-05.
+    #[tokio::test(flavor = "current_thread")]
+    async fn runtime_events_are_sent_in_requests_bounded_by_bytes() {
+        let (addr, requests, server) = spawn_frame_limited_runtime_server(usize::MAX).await;
+        let dir = tempfile::tempdir().unwrap();
+        let posts = padded_progress_posts(dir.path(), 30, 100 * 1024);
+
+        let outcome =
+            post_pending_runtime_event_files_with_outcome(&runtime_test_client(addr), posts).await;
+        server.abort();
+
+        assert_eq!((outcome.sent, outcome.kept), (30, 0));
+        let requests: Vec<_> = requests.try_iter().collect();
+        let sizes: Vec<usize> = requests.iter().map(|request| request.1).collect();
+        assert!(
+            sizes.len() >= 3,
+            "3 MB of events cannot ride one request: {sizes:?}"
+        );
+        assert!(
+            sizes.iter().all(|size| *size <= RUNTIME_EVENT_BATCH_BYTES),
+            "every request fits the byte budget: {sizes:?}"
+        );
+        let delivered: Vec<String> = requests.into_iter().flat_map(|request| request.2).collect();
+        let expected: Vec<String> = (0..30)
+            .map(|seq| format!("omp-print:s1:r1:stdout:{seq}"))
+            .collect();
+        assert_eq!(delivered, expected, "each event once, in order");
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "every file removed"
+        );
+    }
+
+    /// A 413 rejects the request, not its events: they are resent one per
+    /// request, none is dead-lettered, and nothing is left queued. The Runtime
+    /// Host used to answer this case with a retryable 503, forever.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_request_too_large_for_the_runtime_host_is_resent_one_event_at_a_time() {
+        let (addr, requests, server) = spawn_frame_limited_runtime_server(256 * 1024).await;
+        let dir = tempfile::tempdir().unwrap();
+        let posts = padded_progress_posts(dir.path(), 8, 100 * 1024);
+
+        let outcome =
+            post_pending_runtime_event_files_with_outcome(&runtime_test_client(addr), posts).await;
+        server.abort();
+
+        assert_eq!((outcome.sent, outcome.kept), (8, 0));
+        assert!(outcome.permanent_rejections.is_empty());
+        let requests: Vec<_> = requests.try_iter().collect();
+        assert_eq!(requests[0].0, 413, "the 800 KB request is refused whole");
+        assert!(requests[1..]
+            .iter()
+            .all(|request| request.0 == 204 && request.2.len() == 1));
+        let delivered: Vec<String> = requests[1..]
+            .iter()
+            .flat_map(|request| request.2.clone())
+            .collect();
+        let expected: Vec<String> = (0..8)
+            .map(|seq| format!("omp-print:s1:r1:stdout:{seq}"))
+            .collect();
+        assert_eq!(delivered, expected, "each event once, in order");
+        assert!(!dir.path().join(RUNTIME_EVENT_DEAD_LETTER_DIR).exists());
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "every file removed"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3485,10 +3812,18 @@ mod runtime_status_collection_tests {
             &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:10Z"),
         );
 
-        let posts = collect_runtime_event_outbox(dir);
+        let pass = collect_runtime_event_outbox_pass(dir);
 
-        assert_eq!(posts.len(), 1);
-        assert_eq!(posts[0].event["occurred_at"], "2026-09-17T15:00:30Z");
+        assert_eq!(pass.posts.len(), 1);
+        assert_eq!(pass.posts[0].event["occurred_at"], "2026-09-17T15:00:30Z");
+        assert_eq!(pass.inspected_count, 2);
+        assert_eq!(pass.pending_count, 1);
+        assert!(!pass.pending_count_is_lower_bound);
+        // These events were observed in September but queued just now: what
+        // the pass reports is how long they have waited, which is moments.
+        let waited = Utc::now() - pass.oldest_pending_at.expect("measured");
+        assert!(waited < chrono::Duration::seconds(60), "waited {waited}");
+        assert!(pass.observed_at.is_some());
     }
 
     #[test]
@@ -3599,6 +3934,11 @@ mod runtime_status_collection_tests {
         let pass = collect_runtime_event_outbox_bounded(dir, 10, usize::MAX, 256);
         assert!(pass.saturated, "a full pass reports more work waiting");
         assert_eq!(pass.posts.len(), 10, "inspection stops at the entry cap");
+        assert_eq!(pass.inspected_count, 10);
+        assert_eq!(pass.pending_count, 10);
+        assert!(pass.pending_count_is_lower_bound);
+        assert!(pass.oldest_pending_at.is_some());
+        assert!(pass.observed_at.is_some());
 
         let batched = collect_runtime_event_outbox_bounded(dir, 40, usize::MAX, 4);
         assert_eq!(
