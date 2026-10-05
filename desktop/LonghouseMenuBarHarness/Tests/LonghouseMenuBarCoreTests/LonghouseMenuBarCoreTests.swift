@@ -214,7 +214,8 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .normal)
-        #expect(presentation.subheadline.contains("1 without live status"))
+        #expect(snapshot.currentManagedSessions.first?.menuBarAttentionKind == .phaseUnavailable)
+        #expect(presentation.headline == "1 session open")
         #expect(!presentation.headline.contains("needs you"))
     }
 
@@ -225,7 +226,7 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .normal)
-        #expect(presentation.subheadline.contains("1 without live status"))
+        #expect(snapshot.currentManagedSessions.first?.menuBarAttentionKind == .phaseUnavailable)
         #expect(!presentation.needsStatusItemBadge)
     }
 
@@ -2991,7 +2992,6 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.managedSummaryLabel == "2 sessions")
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_715_648_400))
         #expect(presentation.headline == "2 sessions open")
-        #expect(presentation.subheadline.contains("1 background"))
         #expect(terminal.launchMode == "tui")
         #expect(terminal.uiAttached == true)
         #expect(terminal.normalizedUIPresence == "foreground_tui")

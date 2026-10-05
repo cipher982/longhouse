@@ -268,40 +268,23 @@ public struct MenuBarPanelView: View {
 
     // MARK: Header
 
-    /// Counts only. Freshness lives on the health line, and never claims a
-    /// fresh update while trust is not current.
-    private func headerSubline(_ presentation: MenuBarPresentation) -> String {
-        presentation.subheadline
-            .components(separatedBy: " · ")
-            .filter { !$0.hasPrefix("updated ") }
-            .joined(separator: " · ")
-    }
-
     private func header(_ presentation: MenuBarPresentation) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 10) {
                 longhouseBrandEmblem(severity: staleSeverity ?? presentation.promotion.iconSeverity)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(presentation.headline)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .harnessAccessibility(
-                            identifier: LonghouseMenuBarAccessibilityID.Header.headline,
-                            label: presentation.headline
-                        )
-                    let subline = headerSubline(presentation)
-                    if !subline.isEmpty {
-                        Text(subline)
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.secondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                // Headline only: the rows below are the breakdown, and a count
+                // line repeated them in a second, wrapping voice.
+                Text(presentation.headline)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .harnessAccessibility(
+                        identifier: LonghouseMenuBarAccessibilityID.Header.headline,
+                        label: presentation.headline
+                    )
 
                 Spacer(minLength: 4)
 
@@ -602,11 +585,11 @@ public struct MenuBarPanelView: View {
     }
 
     private func quietTitle(_ quiet: [HearthSessionEntry]) -> String {
-        let noStatus = snapshot.currentManagedSessions.filter { $0.menuBarAttentionKind == .phaseUnavailable }.count
-        if noStatus == quiet.count, !projectionTrust.isCurrent || noStatus > 0 {
-            return "\(quiet.count) without live status"
-        }
-        return "\(quiet.count) quiet"
+        let quietIDs = Set(quiet.map(\.id))
+        let noStatus = snapshot.currentManagedSessions
+            .filter { quietIDs.contains($0.id) && $0.menuBarAttentionKind == .phaseUnavailable }
+            .count
+        return noStatus == quiet.count ? "\(quiet.count) without live status" : "\(quiet.count) quiet"
     }
 
     private func unmanagedRow(_ entry: UnmanagedActivityEntry) -> some View {

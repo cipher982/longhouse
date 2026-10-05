@@ -113,6 +113,22 @@ struct ProviderGlyph: View {
                     .renderingMode(.original)
                     .aspectRatio(contentMode: .fit)
             }
+        } else if key == "omp" {
+            // Official mark (omp.sh/favicon.svg), same paths as the web glyph.
+            OMPMarkShape()
+                .fill(LinearGradient(
+                    colors: [
+                        Color(red: 0xED / 255, green: 0x4A / 255, blue: 0xBF / 255),
+                        Color(red: 0x9B / 255, green: 0x4D / 255, blue: 0xFF / 255),
+                        Color(red: 0x5A / 255, green: 0xD8 / 255, blue: 0xE6 / 255),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ))
+                .aspectRatio(1, contentMode: .fit)
+        } else if key == "pi" {
+            PiMark()
+                .aspectRatio(1, contentMode: .fit)
         } else {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: size * 0.58, weight: .semibold))
@@ -140,6 +156,42 @@ struct ProviderGlyph: View {
                         .strokeBorder(chipStroke, lineWidth: 0.5)
                 )
                 .accessibilityLabel(Text(HealthSnapshot.providerDisplayName(key)))
+        }
+    }
+}
+
+/// OMP's π mark: `M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z` in a 64 box.
+private struct OMPMarkShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height) / 64
+        let points: [(CGFloat, CGFloat)] = [
+            (14, 16), (50, 16), (50, 24), (40, 24), (40, 56), (32, 56),
+            (32, 24), (26, 24), (26, 46), (18, 46), (18, 24), (14, 24),
+        ]
+        var path = Path()
+        path.addLines(points.map { CGPoint(x: rect.minX + $0.0 * s, y: rect.minY + $0.1 * s) })
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Pi's three-block mark (pi.dev), from the web glyph's 469.43-unit box.
+private struct PiMark: View {
+    var body: some View {
+        Canvas { context, size in
+            let s = min(size.width, size.height) / 469.43
+            func block(_ points: [(CGFloat, CGFloat)], _ color: Color) {
+                var path = Path()
+                path.addLines(points.map { CGPoint(x: ($0.0 - 165.29) * s, y: ($0.1 - 165.29) * s) })
+                path.closeSubpath()
+                context.fill(path, with: .color(color))
+            }
+            block([(165.29, 165.29), (517.36, 165.29), (517.36, 400), (400, 400), (400, 282.65), (165.29, 282.65)],
+                  Color(red: 0xF0 / 255, green: 0x90 / 255, blue: 0x82 / 255))
+            block([(165.29, 282.65), (282.65, 282.65), (282.65, 400), (400, 400), (400, 517.36), (282.65, 517.36), (282.65, 634.72), (165.29, 634.72)],
+                  Color(red: 0x4D / 255, green: 0x9A / 255, blue: 0xBF / 255))
+            block([(517.36, 400), (634.72, 400), (634.72, 634.72), (517.36, 634.72)],
+                  Color(red: 0xF1 / 255, green: 0xBE / 255, blue: 0x58 / 255))
         }
     }
 }

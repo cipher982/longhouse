@@ -71,7 +71,6 @@ public struct MenuBarPresentation: Equatable, Sendable {
     /// a system warning.
     public let systemPromotion: MenuBarPromotion
     public let systemHeadline: String
-    public let subheadline: String
     public let facts: [MenuBarSystemFact]
     public let backgroundActivity: String?
 
@@ -246,27 +245,11 @@ extension HealthSnapshot {
             }
         }
         let headline = headlineText(for: promotion)
-
-
-        var counts: [String] = []
-        if working > 0 { counts.append("\(working) working") }
-        if needsUser > 0 { counts.append("\(needsUser) waiting") }
-        if idle > 0 { counts.append("\(idle) idle") }
-        if blocked > 0 { counts.append("\(blocked) blocked") }
-        if degraded > 0 { counts.append("\(degraded) limited") }
-        if unavailable > 0 {
-            counts.append("\(unavailable) without live status")
-        }
-        if unknown > 0 { counts.append("\(unknown) unknown") }
-        if backgroundManagedCount > 0 { counts.append("\(backgroundManagedCount) background") }
-        counts.append("updated \(snapshotAgeCompactLabel(relativeTo: referenceDate))")
-
         return MenuBarPresentation(
             promotion: promotion,
             headline: headline,
             systemPromotion: systemPromotion,
             systemHeadline: systemPromotion == promotion ? headline : headlineText(for: systemPromotion),
-            subheadline: counts.joined(separator: " · "),
             facts: menuBarSystemFacts(
                 relativeTo: referenceDate,
                 localEvidenceTrust: localEvidenceTrust,
