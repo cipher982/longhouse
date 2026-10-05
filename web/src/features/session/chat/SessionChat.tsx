@@ -880,6 +880,7 @@ export function SessionChat({
     refetchInterval: (query) => {
       const rows = query.state.data ?? [];
       return rows.some((row) => {
+        if (inTranscript(row)) return false;
         const turnState = row.turn?.state;
         if (turnState && NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)) {
           return row.turn?.is_fresh === true;
@@ -1125,6 +1126,7 @@ export function SessionChat({
       !(row.client_request_id && pendingInputIds.has(row.client_request_id)) &&
       !(row.client_request_id && dismissedInputIds.has(row.client_request_id)) &&
       !(row.intent === "steer" && row.last_error === "turn_ended") &&
+      !inTranscript(row) &&
       (row.status === "queued" ||
         row.status === "delivering" ||
         hasUnknownDeliveryError(row.last_error)),
@@ -1136,7 +1138,8 @@ export function SessionChat({
       !(row.client_request_id && pendingInputIds.has(row.client_request_id)) &&
       !(row.client_request_id && dismissedInputIds.has(row.client_request_id)) &&
       (row.status === "failed" || row.status === "cancelled") &&
-      !hasUnknownDeliveryError(row.last_error),
+      !hasUnknownDeliveryError(row.last_error) &&
+      !inTranscript(row),
   );
   // Offer an explicit "Queue instead" fallback instead of silently remapping
   // the user's original steer intent.

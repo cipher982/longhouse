@@ -3083,6 +3083,65 @@ describe("SessionChat", () => {
       ).toBeNull();
     });
 
+    it("shows no delivery banner for transcript-linked receipts when the outbox is not in the transcript", async () => {
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([
+            {
+              id: 73,
+              client_request_id: "linked-delivering",
+              text: "linked while delivering",
+              intent: "auto",
+              status: "delivering",
+              last_error: "provider_delivery_unknown: lost the ack",
+              durable_event_id: "a1",
+              turn: { turn_id: "t1", run_id: "r1", state: "active", is_fresh: false },
+              created_at: null,
+              attachments: [],
+            },
+            {
+              id: 74,
+              client_request_id: "linked-failed",
+              text: "linked then failed",
+              intent: "auto",
+              status: "failed",
+              last_error: "provider exited",
+              durable_event_id: "a2",
+              turn: { turn_id: "t2", run_id: "r2", state: "failed", is_fresh: false },
+              created_at: null,
+              attachments: [],
+            },
+          ]);
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const view = renderSessionChat(
+        {
+          chatMode: "managed_local",
+          timelineItems: [],
+          session: makeSession({ provider: "codex" }),
+        },
+        { queryClient },
+      );
+      try {
+        await waitFor(() =>
+          expect(requestMock.mock.calls.some(([p]) => String(p).endsWith("/inputs"))).toBe(true),
+        );
+        await waitForDuration(300);
+        expect(screen.queryByTestId("session-chat-queued")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("session-chat-queued-failed")).not.toBeInTheDocument();
+      } finally {
+        view.unmount();
+        queryClient.clear();
+      }
+    });
+
     it("keeps a delivered Helm summary until transcript echo across reload", async () => {
       const user = userEvent.setup();
       const onOutboxChange = vi.fn();
