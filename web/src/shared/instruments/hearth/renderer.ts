@@ -40,7 +40,8 @@ const RM_STEPS_PER_FRAME = 15;
 /** A fire that comes on screen is simulated this far ahead before it is
  * first drawn, so a glance at the timeline finds it already burning. */
 const WARM_STEPS = 180;
-/** Warm-up steps per frame, about a quarter second in all. Even: see warmUp. */
+/** Warm-up steps per run per frame (about 8 frames, an eighth of a second at
+ * 60 fps), and at most twice that per frame in all. Even: see warmUp. */
 const WARM_STEPS_PER_FRAME = 24;
 
 // spark character per tool kind: count, T0 (K), radius (cells), launch speed (cells/s), spread (rad), life (s)
@@ -549,7 +550,7 @@ export class HearthRenderer {
       this.q = null;
     }
     this.stats.frames++;
-    const keepGoing = burning > 0 || pendingEvents || t < this.sparkUntil || nowMs < this.stillUntil;
+    const keepGoing = burning > 0 || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
     this.stats.running = keepGoing;
     if (keepGoing) this.raf = requestAnimationFrame(this.frame);
     else if (this.q) {
@@ -845,8 +846,11 @@ export class HearthRenderer {
    * Each run of consecutive warming tiles is stepped alone and an even number
    * of times: a step swaps the velocity target an odd number of times, so an
    * even count leaves every other tile's state current. Warm steps use their
-   * own clock and no sparks, so burning fires keep their flicker. Returns
-   * whether any tile is still warming. */
+   * own clock and no sparks, so burning fires keep their flicker. A warming
+   * tile also stays in the main span (setRuns): the main solver takes one
+   * step a frame, an odd number of swaps, so a tile left out of it would be
+   * read from the stale buffer next frame. Returns whether any tile is still
+   * warming. */
   private warmUp(): boolean {
     const runs: [number, number][] = [];
     for (let i = 0; i < this.nt; i++) {
@@ -859,8 +863,11 @@ export class HearthRenderer {
     if (!runs.length) return false;
     const spans = this.simRuns;
     const time = this.simTime;
+    let budget = 2 * WARM_STEPS_PER_FRAME;
     for (const run of runs) {
       const n = Math.max(2, Math.min(WARM_STEPS_PER_FRAME, this.vis[run[0]].warm) & ~1);
+      if (n > budget) break;
+      budget -= n;
       this.simRuns = [run];
       for (let k = 0; k < n; k++) this.simStep(false);
       for (let i = run[0]; i < run[0] + run[1]; i++) this.vis[i].warm = Math.max(0, this.vis[i].warm - n);
