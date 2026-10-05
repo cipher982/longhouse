@@ -158,6 +158,14 @@ const STATUS_POST_CONCURRENCY: usize = 8;
 
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
+/// How long a runtime-outbox sweep that removed nothing keeps the next one
+/// from starting. The sweep collapses byte-identical status repeats (the
+/// 2026-09-17 flood was 9,382 of 9,394); a flood of distinct events gives it
+/// nothing to remove, yet each pass re-read the whole directory, ~900 MB on
+/// cinder every ~15 s on 2026-10-05, alongside delivery. Collection still
+/// collapses repeats inside its own window meanwhile, so five minutes bounds
+/// the waste without letting a real repeat flood grow unattended for long.
+const RUNTIME_SWEEP_QUIET_AFTER_NOTHING: Duration = Duration::from_secs(300);
 /// How long to coalesce a burst of phase-ledger writes before rebuilding the
 /// local projection.
 ///
@@ -1436,6 +1444,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
     let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
+    // A sweep that removed nothing found a flood of distinct events, which it
+    // cannot reduce; re-reading the whole directory again in seconds only
+    // competes with delivery for the disk. See RUNTIME_SWEEP_QUIET_AFTER_NOTHING.
+    let mut runtime_sweep_quiet_until: Option<Instant> = None;
     let mut status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
     let mut status_post_tasks: JoinSet<StatusPostResult> = JoinSet::new();
     let mut status_ledger = StatusLedger::default();
@@ -1953,7 +1965,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // not reliably in it. Reduce it to current status in a
                         // task of its own: the live lane must keep collecting
                         // and posting while that runs.
-                        if result.saturated && runtime_sweep_tasks.is_empty() {
+                        if result.saturated
+                            && runtime_sweep_tasks.is_empty()
+                            && runtime_sweep_quiet_until.is_none_or(|until| Instant::now() >= until)
+                        {
                             let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                             runtime_sweep_tasks.spawn_blocking(move || {
                                 outbox::sweep_runtime_event_outbox(
@@ -2040,6 +2055,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // next saturated collection arms the next sweep on the
                         // ordinary tick; chaining blocking passes back to back
                         // would starve every other lane on this loop.
+                        runtime_sweep_quiet_until = (sweep.discarded == 0)
+                            .then(|| Instant::now() + RUNTIME_SWEEP_QUIET_AFTER_NOTHING);
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Runtime-event outbox sweep task failed: {}", err);
@@ -2114,6 +2131,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         } else {
                             runtime_outbox_consecutive_failures = 0;
                             runtime_outbox_retry_after = None;
+                            // Delivery made progress, so more may be waiting:
+                            // collect again now rather than on the next tick.
+                            // An empty outbox ends this, because a pass that
+                            // finds nothing starts no POST.
+                            if sent > 0 {
+                                outbox_timer.reset_immediately();
+                            }
                             if kept > 0 {
                                 tracing::warn!(
                                     sent,

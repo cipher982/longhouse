@@ -41,31 +41,36 @@ const STALE_SECS: u64 = 600; // 10 minutes
 const PRESENCE_POST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRESENCE_POST_CONCURRENCY: usize = 8;
 const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(20);
-/// Matches RuntimeEventBatchIngest in server/zerg/services/session_runtime.py.
-/// The route applies a 1024-event request in ordered 128-event catalogd
-/// chunks, each with a two-second queue budget. Three seconds allowed the
-/// server to commit successfully after the client had already retried the
-/// same durable files, so keep the HTTP deadline above the worst-case
-/// eight-apply path.
-/// One POST is one catalogd apply. A larger request was split server-side into
-/// up to eight serial applies, so the client could time out after the server
-/// had already committed and then re-send the same durable files forever.
-/// Fewer round trips stopped being the lever once replaceable status is
-/// coalesced at collection: a healthy pass carries a handful of events.
-const RUNTIME_EVENT_BATCH_LIMIT: usize = 128;
-/// Bytes one runtime POST may carry, unless it carries a single event.
+/// Events one runtime POST may carry: `RuntimeEventBatchIngest`'s own limit in
+/// server/zerg/services/session_runtime.py. One POST is one catalogd apply:
+/// against a local catalogd a whole request of 128 slim progress events took
+/// 9 ms and of 128 delegation snapshots 23 ms (2026-10-05), so 1,024 is
+/// ~70-180 ms, well inside the server's 2 s apply budget.
 ///
-/// One POST is one catalogd apply, and a catalogd frame holds 8 MiB
-/// (`MAX_PAYLOAD_BYTES` in server/zerg/catalogd/protocol.py). Counting events
-/// alone let 128 OMP progress events of ~68 KB each reach 8.3 MiB on
-/// 2026-10-05; the Runtime Host could never forward that batch, and everything
-/// queued behind it waited ten hours. The server's re-encoding adds at most
-/// ~87 bytes per event (measured on 3,000 queued events that day; 1.005x
-/// overall), so 8 MiB less 128 x 100 bytes would still fit. 1 MiB keeps 8x
-/// headroom and keeps one request's parse, validation and apply well inside
-/// the server's 2 s catalog budget. An event over this budget travels alone;
-/// it is already capped at `RUNTIME_EVENT_MAX_FILE_BYTES`, which fits a frame.
-const RUNTIME_EVENT_BATCH_BYTES: usize = 1024 * 1024;
+/// A session's requests go one at a time, so a session drains at most one
+/// request per round trip. At 128 events, 1 KB each, and a 140 ms round trip to
+/// HEL1 that is ~0.9 MB/s however fast the link is.
+const RUNTIME_EVENT_BATCH_LIMIT: usize = 1024;
+/// Bytes one plain runtime POST may carry, unless it carries a single event.
+///
+/// The ceiling is the catalogd frame, 8 MiB (`MAX_PAYLOAD_BYTES` in
+/// server/zerg/catalogd/protocol.py): on 2026-10-05 a count-only limit let 128
+/// OMP progress events reach 8.3 MiB and that batch was refused for ten hours.
+/// The server's re-encoding adds at most ~87 bytes per event (1.005x overall,
+/// measured on 3,000 queued events), 89 KB at 1,024 events.
+///
+/// A session's requests go one at a time, so its drain is bytes per round
+/// trip. A plain body is also bounded by the Runtime Host's 15 s request
+/// timeout, which upload counts against: 2 MiB fits it on any uplink over
+/// 0.14 MB/s (4 MiB would need 0.28 MB/s). A request that cannot finish in
+/// time is retried forever, which is the stall these limits exist to prevent.
+const RUNTIME_EVENT_BATCH_BYTES: usize = 2 * 1024 * 1024;
+/// Bytes one zstd runtime POST may carry before encoding. It crosses the wire
+/// at a fraction of that (runtime events restate keys, ids and preview text:
+/// 5x and more), so the frame, not upload time, is the bound: 6 MiB plus the
+/// 89 KB re-encoding leaves ~1.9 MiB under 8 MiB. One request per 140 ms round
+/// trip to HEL1 then moves ~45 MB/s of events for one session.
+const RUNTIME_EVENT_ENCODED_BATCH_BYTES: usize = 6 * 1024 * 1024;
 const RUNTIME_EVENT_BATCH_PREFIX: &[u8] = br#"{"events":["#;
 const RUNTIME_EVENT_BATCH_SUFFIX: &[u8] = b"]}";
 const RUNTIME_EVENT_DEAD_LETTER_DIR: &str = "dead-letter";
@@ -77,9 +82,11 @@ const RUNTIME_EVENT_COLLECT_LIMIT: usize = 8_192;
 /// Memory a single collection pass may hold in event payloads. Live preview
 /// text is bounded per event but not per directory.
 const RUNTIME_EVENT_COLLECT_BYTES: usize = 32 * 1024 * 1024;
-/// Events handed to one POST worker. The runtime lane holds its collection
-/// latch for the whole POST, so a large batch is a stale-status window.
-const RUNTIME_EVENT_POST_LIMIT: usize = 256;
+/// Events handed to one POST worker: everything the pass read. A smaller hand
+/// over left the rest of the pass's reads to be repeated by the next pass: on
+/// cinder 256 of up to 8,192 inspected files went out per pass, and collection
+/// took as long as delivery.
+const RUNTIME_EVENT_POST_LIMIT: usize = RUNTIME_EVENT_COLLECT_LIMIT;
 /// Entries one background sweep pass may inspect while reducing a flooded
 /// outbox in place. Large, because the sweep runs off the live lane.
 pub const RUNTIME_EVENT_SWEEP_LIMIT: usize = 50_000;
@@ -1429,7 +1436,14 @@ async fn post_session_runtime_events(
 
     let mut start = 0;
     while start < encoded.len() {
-        let end = runtime_event_batch_end(&encoded, start);
+        // A zstd body crosses the wire at a fraction of its size, so the
+        // upload-time bound on plain bodies does not apply to it.
+        let byte_budget = if client.encodes_runtime_batches() {
+            RUNTIME_EVENT_ENCODED_BATCH_BYTES
+        } else {
+            RUNTIME_EVENT_BATCH_BYTES
+        };
+        let end = runtime_event_batch_end(&encoded, start, byte_budget);
         let batch = post_runtime_event_batch(
             client,
             &events[start..end],
@@ -1451,14 +1465,14 @@ async fn post_session_runtime_events(
 }
 
 /// End of the request that starts at `start`: at most
-/// `RUNTIME_EVENT_BATCH_LIMIT` events and `RUNTIME_EVENT_BATCH_BYTES` bytes,
-/// and always at least one event.
-fn runtime_event_batch_end(encoded: &[Vec<u8>], start: usize) -> usize {
+/// `RUNTIME_EVENT_BATCH_LIMIT` events and `byte_budget` bytes, and always at
+/// least one event.
+fn runtime_event_batch_end(encoded: &[Vec<u8>], start: usize, byte_budget: usize) -> usize {
     let mut end = start;
     let mut bytes = RUNTIME_EVENT_BATCH_PREFIX.len() + RUNTIME_EVENT_BATCH_SUFFIX.len();
     while end < encoded.len() && end - start < RUNTIME_EVENT_BATCH_LIMIT {
         let next = encoded[end].len() + usize::from(end > start);
-        if end > start && bytes + next > RUNTIME_EVENT_BATCH_BYTES {
+        if end > start && bytes + next > byte_budget {
             break;
         }
         bytes += next;
@@ -1493,7 +1507,7 @@ async fn post_runtime_event_batch(
 ) -> RuntimeEventPostOutcome {
     let mut outcome = RuntimeEventPostOutcome::default();
     match client
-        .post_json_with_timeout_classified(
+        .post_runtime_event_batch(
             "/api/agents/runtime/events/batch",
             body,
             Some(RUNTIME_EVENT_POST_TIMEOUT),
@@ -2643,6 +2657,13 @@ mod tests {
     }
 
     fn runtime_test_client(addr: std::net::SocketAddr) -> crate::shipping::client::ShipperClient {
+        runtime_test_client_with(addr, crate::pipeline::compressor::CompressionAlgo::Gzip)
+    }
+
+    fn runtime_test_client_with(
+        addr: std::net::SocketAddr,
+        algo: crate::pipeline::compressor::CompressionAlgo,
+    ) -> crate::shipping::client::ShipperClient {
         let url = format!("http://{addr}");
         let cfg = crate::config::ShipperConfig::default().with_overrides(
             Some(&url),
@@ -2652,11 +2673,140 @@ mod tests {
             None,
             None,
         );
-        crate::shipping::client::ShipperClient::with_compression(
-            &cfg,
-            crate::pipeline::compressor::CompressionAlgo::Gzip,
-        )
-        .unwrap()
+        crate::shipping::client::ShipperClient::with_compression(&cfg, algo).unwrap()
+    }
+
+    /// A Runtime Host that reads zstd runtime batches, or (like a host older
+    /// than the encoding) refuses them with 422. Reports each request's
+    /// content encoding, wire size and event dedupe keys.
+    async fn spawn_encoding_runtime_server(
+        accept_zstd: bool,
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::mpsc::Receiver<(String, usize, Vec<String>)>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (record, requests) = std::sync::mpsc::channel();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = Vec::new();
+                let mut buf = vec![0u8; 64 * 1024];
+                let header_end = loop {
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(position) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(position + 4);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+                let header = |name: &str| {
+                    head.lines()
+                        .find_map(|line| line.strip_prefix(name))
+                        .map(|value| value.trim().to_string())
+                };
+                let content_len = header("content-length:")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let encoding = header("content-encoding:").unwrap_or_else(|| "identity".into());
+                while request.len().saturating_sub(header_end) < content_len {
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                let wire = &request[header_end..(header_end + content_len).min(request.len())];
+                let body = match encoding.as_str() {
+                    "zstd" if accept_zstd => zstd::stream::decode_all(wire).unwrap_or_default(),
+                    "zstd" => Vec::new(),
+                    _ => wire.to_vec(),
+                };
+                let keys: Vec<String> = serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|body| {
+                        body["events"].as_array().map(|events| {
+                            events
+                                .iter()
+                                .map(|event| text_field(event.get("dedupe_key")))
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default();
+                let status = if keys.is_empty() { 422 } else { 204 };
+                let _ = record.send((encoding, content_len, keys));
+                let response =
+                    format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (addr, requests, handle)
+    }
+
+    /// A zstd client sends runtime batches encoded: the uplink, not the
+    /// Runtime Host, bounds a backlog's drain, and the events compress.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_zstd_client_sends_runtime_batches_encoded() {
+        let (addr, requests, server) = spawn_encoding_runtime_server(true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let posts = padded_progress_posts(dir.path(), 20, 10 * 1024);
+        let client =
+            runtime_test_client_with(addr, crate::pipeline::compressor::CompressionAlgo::Zstd);
+
+        let outcome = post_pending_runtime_event_files_with_outcome(&client, posts).await;
+        server.abort();
+
+        assert_eq!((outcome.sent, outcome.kept), (20, 0));
+        let requests: Vec<_> = requests.try_iter().collect();
+        assert_eq!(requests.len(), 1);
+        let (encoding, wire_bytes, keys) = &requests[0];
+        assert_eq!(encoding, "zstd");
+        assert!(
+            *wire_bytes < 20 * 1024,
+            "200 KB of events took {wire_bytes} bytes"
+        );
+        assert_eq!(keys.len(), 20);
+    }
+
+    /// A Runtime Host older than the encoding refuses a zstd batch. That is no
+    /// verdict on the events: the batch goes again plain, nothing is
+    /// dead-lettered, and later batches skip the doomed encoded attempt.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_host_that_refuses_zstd_gets_the_same_batch_plain() {
+        let (addr, requests, server) = spawn_encoding_runtime_server(false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let client =
+            runtime_test_client_with(addr, crate::pipeline::compressor::CompressionAlgo::Zstd);
+
+        let first = padded_progress_posts(dir.path(), 4, 1024);
+        let outcome = post_pending_runtime_event_files_with_outcome(&client, first).await;
+        assert_eq!((outcome.sent, outcome.kept), (4, 0));
+        let later = padded_progress_posts(dir.path(), 4, 1024);
+        let outcome = post_pending_runtime_event_files_with_outcome(&client, later).await;
+        server.abort();
+
+        assert_eq!((outcome.sent, outcome.kept), (4, 0));
+        let encodings: Vec<String> = requests.try_iter().map(|request| request.0).collect();
+        assert_eq!(encodings, ["zstd", "identity", "identity"]);
+        assert!(!dir.path().join(RUNTIME_EVENT_DEAD_LETTER_DIR).exists());
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "every file removed"
+        );
     }
 
     /// A session whose events outweigh one request goes out in requests no
@@ -2666,25 +2816,25 @@ mod tests {
     async fn runtime_events_are_sent_in_requests_bounded_by_bytes() {
         let (addr, requests, server) = spawn_frame_limited_runtime_server(usize::MAX).await;
         let dir = tempfile::tempdir().unwrap();
-        let posts = padded_progress_posts(dir.path(), 30, 100 * 1024);
+        let posts = padded_progress_posts(dir.path(), 60, 100 * 1024);
 
         let outcome =
             post_pending_runtime_event_files_with_outcome(&runtime_test_client(addr), posts).await;
         server.abort();
 
-        assert_eq!((outcome.sent, outcome.kept), (30, 0));
+        assert_eq!((outcome.sent, outcome.kept), (60, 0));
         let requests: Vec<_> = requests.try_iter().collect();
         let sizes: Vec<usize> = requests.iter().map(|request| request.1).collect();
         assert!(
             sizes.len() >= 3,
-            "3 MB of events cannot ride one request: {sizes:?}"
+            "6 MB of events cannot ride one request: {sizes:?}"
         );
         assert!(
             sizes.iter().all(|size| *size <= RUNTIME_EVENT_BATCH_BYTES),
             "every request fits the byte budget: {sizes:?}"
         );
         let delivered: Vec<String> = requests.into_iter().flat_map(|request| request.2).collect();
-        let expected: Vec<String> = (0..30)
+        let expected: Vec<String> = (0..60)
             .map(|seq| format!("omp-print:s1:r1:stdout:{seq}"))
             .collect();
         assert_eq!(delivered, expected, "each event once, in order");
@@ -4369,7 +4519,7 @@ mod runtime_status_collection_tests {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
         let mut posts = Vec::new();
-        for index in 0..300 {
+        for index in 0..2 * (RUNTIME_EVENT_BATCH_LIMIT + 50) {
             let session = if index % 2 == 0 { "s1" } else { "s2" };
             let event = phase_event(
                 session,

@@ -5,6 +5,8 @@
 //! `/api/agents/ingest` suffix as the string every other path is derived from;
 //! the route itself no longer exists on either side.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -39,6 +41,9 @@ use crate::shipping::storage_v2::{
     STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
 };
 
+/// zstd level for runtime-event batches. Level 3 encodes a 2 MiB batch in a
+/// few milliseconds, against round trips of 140 ms and more.
+const RUNTIME_BATCH_ZSTD_LEVEL: i32 = 3;
 const WRITE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Write-Backpressure";
 const WRITE_ERROR_KIND_HEADER: &str = "X-Longhouse-Write-Error-Kind";
 const WRITE_LANE_HEADER: &str = "X-Longhouse-Write-Lane";
@@ -207,6 +212,10 @@ pub struct ShipperClient {
     /// Base URL every request path is derived from. Historical name: the
     /// `/api/agents/ingest` suffix is a string template, not a live route.
     ingest_url: String,
+    /// Runtime-event batches go out zstd-encoded while this holds: set for a
+    /// zstd client, cleared for good once the Runtime Host refuses an encoded
+    /// batch it then accepts plain (a host older than the encoding).
+    runtime_batch_zstd: Arc<AtomicBool>,
 }
 
 impl ShipperClient {
@@ -248,7 +257,14 @@ impl ShipperClient {
 
         let ingest_url = format!("{}/api/agents/ingest", config.api_url.trim_end_matches('/'));
 
-        Ok(Self { client, ingest_url })
+        Ok(Self {
+            client,
+            ingest_url,
+            runtime_batch_zstd: Arc::new(AtomicBool::new(matches!(
+                compression,
+                CompressionAlgo::Zstd
+            ))),
+        })
     }
 
     /// POST a small JSON payload with an optional request-level timeout.
@@ -314,12 +330,74 @@ impl ShipperClient {
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> std::result::Result<(), JsonPostError> {
+        self.post_json_classified(path_suffix, body, "identity", request_timeout)
+            .await
+    }
+
+    /// Whether the next runtime-event batch goes out zstd-encoded.
+    pub fn encodes_runtime_batches(&self) -> bool {
+        self.runtime_batch_zstd.load(Ordering::Relaxed)
+    }
+
+    /// POST a runtime-event batch, zstd-encoded when this client encodes them.
+    ///
+    /// The wire, not the Runtime Host, bounds a flooded outbox's drain: on
+    /// 2026-10-05 cinder's uplink to HEL1 carried ~3 MB/s while a local
+    /// Runtime Host ingested 60+ MB/s, and runtime events are JSON that
+    /// restates its keys, ids and growing preview text event after event.
+    ///
+    /// A host older than the encoding cannot read the body and refuses it with
+    /// a 4xx. That refusal is the client's, not the events': the same body goes
+    /// again unencoded, and once that is accepted no later batch is encoded.
+    /// Only a refusal of the plain body is returned, so an encoding mismatch
+    /// never reaches rejection isolation or dead-letter.
+    pub async fn post_runtime_event_batch(
+        &self,
+        path_suffix: &str,
+        body: Vec<u8>,
+        request_timeout: Option<Duration>,
+    ) -> std::result::Result<(), JsonPostError> {
+        if !self.runtime_batch_zstd.load(Ordering::Relaxed) {
+            return self
+                .post_json_classified(path_suffix, body, "identity", request_timeout)
+                .await;
+        }
+        let encoded = zstd::stream::encode_all(body.as_slice(), RUNTIME_BATCH_ZSTD_LEVEL)
+            .map_err(|error| JsonPostError::Transport(format!("zstd encoding failed: {error}")))?;
+        match self
+            .post_json_classified(path_suffix, encoded, "zstd", request_timeout)
+            .await
+        {
+            Err(refusal) if refusal.permanent_status_code().is_some() => {
+                let plain = self
+                    .post_json_classified(path_suffix, body, "identity", request_timeout)
+                    .await;
+                if plain.is_ok() {
+                    self.runtime_batch_zstd.store(false, Ordering::Relaxed);
+                    tracing::warn!(
+                        refusal = %refusal,
+                        "Runtime Host refused a zstd runtime batch and accepted it plain; sending plain from now on"
+                    );
+                }
+                plain
+            }
+            result => result,
+        }
+    }
+
+    async fn post_json_classified(
+        &self,
+        path_suffix: &str,
+        body: Vec<u8>,
+        content_encoding: &'static str,
+        request_timeout: Option<Duration>,
+    ) -> std::result::Result<(), JsonPostError> {
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let mut request = self
             .client
             .post(&url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .header(reqwest::header::CONTENT_ENCODING, content_encoding)
             .body(body);
         if let Some(request_timeout) = request_timeout {
             request = request.timeout(request_timeout);
