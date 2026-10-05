@@ -111,8 +111,13 @@ fn push_title_chars(output: &mut String, text: &str, char_count: &mut usize) {
 
 // Keep this ordered cleanup in sync with server/zerg/services/session_title.py.
 fn sanitize_title_text(text: &str) -> String {
-    let bytes = text.as_bytes();
     let mut cleaned = String::with_capacity(text.len().min(512));
+    append_sanitized_title_text(text, &mut cleaned);
+    cleaned
+}
+
+fn append_sanitized_title_text(text: &str, cleaned: &mut String) {
+    let bytes = text.as_bytes();
     let mut index = 0;
 
     while index < bytes.len() {
@@ -174,7 +179,7 @@ fn sanitize_title_text(text: &str) -> String {
                     .is_some_and(|after_label| after_label.starts_with('('))
                 {
                     if let Some(target_end) = remaining[target_start + 1..].find(')') {
-                        cleaned.push_str(&remaining[1..label_end + 1]);
+                        append_sanitized_title_text(&remaining[1..label_end + 1], cleaned);
                         index += target_start + target_end + 2;
                         continue;
                     }
@@ -186,7 +191,9 @@ fn sanitize_title_text(text: &str) -> String {
             || remaining.starts_with("https://")
             || remaining.starts_with("www.")
         {
-            index += remaining.find(char::is_whitespace).unwrap_or(remaining.len());
+            index += remaining
+                .find(char::is_whitespace)
+                .unwrap_or(remaining.len());
             cleaned.push(' ');
             continue;
         }
@@ -209,7 +216,7 @@ fn sanitize_title_text(text: &str) -> String {
 
         if remaining.starts_with("<|") {
             if let Some(end) = remaining[2..].find("|>") {
-                let token = &remaining[2..end + 4];
+                let token = &remaining[2..end + 2];
                 if !token.contains('<') && !token.contains('>') {
                     index += end + 4;
                     cleaned.push(' ');
@@ -241,10 +248,7 @@ fn sanitize_title_text(text: &str) -> String {
             {
                 end += 1;
             }
-            if end - index >= 3
-                && bytes[index + 1] == quote
-                && bytes[index + 2] == quote
-            {
+            if end - index >= 3 && bytes[index + 1] == quote && bytes[index + 2] == quote {
                 index += 3;
                 cleaned.push(' ');
                 continue;
@@ -261,12 +265,13 @@ fn sanitize_title_text(text: &str) -> String {
             }
         }
 
-        let character = remaining.chars().next().expect("index is on a character boundary");
+        let character = remaining
+            .chars()
+            .next()
+            .expect("index is on a character boundary");
         cleaned.push(character);
         index += character.len_utf8();
     }
-
-    cleaned
 }
 
 fn strip_heading_prefix(line: &str) -> &str {
@@ -382,6 +387,7 @@ mod tests {
     #[test]
     fn sanitizes_real_world_first_messages_for_timeline_titles() {
         let conn = crate::state::db::open_db(Some(std::path::Path::new(":memory:"))).unwrap();
+
         let samples = [
             (
                 "\"\"\"<attachment>\n Handoff — recovered first-tester reliability batch",
@@ -407,5 +413,17 @@ mod tests {
             let row = get(&conn, &session_id).unwrap().unwrap();
             assert_eq!(row.title, *expected_title);
         }
+    }
+
+    #[test]
+    fn sanitizes_provider_tokens_and_markdown_link_labels() {
+        assert_eq!(
+            prompt_title("<|tool_calls|> fix the retry loop").as_deref(),
+            Some("fix the retry loop")
+        );
+        assert_eq!(
+            prompt_title("[`cargo test`](https://example.com)\nfix failing tests").as_deref(),
+            Some("fix failing tests")
+        );
     }
 }

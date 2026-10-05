@@ -51,6 +51,12 @@ class TestSanitizeTitle:
 
         assert sanitize_title(f"{path}\n\nreview and help me pick this task up before Friday") == "review and help me pick this task up…"
 
+    def test_preserves_bare_path_as_model_input(self):
+        path = "/Users/davidrose/git/obsidian_vault/AI-Sessions/2026-10-04-athena-image-tool-fla"
+
+        assert sanitize_title(path) == path
+        assert sanitize_timeline_title(path) is None
+
     def test_sanitizes_attachment_and_doubled_quote_headers(self):
         assert (
             sanitize_title('"""<attachment>\n Handoff — recovered first-tester reliability batch')

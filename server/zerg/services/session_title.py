@@ -95,14 +95,21 @@ def sanitize_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> st
     cleaned = _TRIPLE_QUOTE_RE.sub(" ", cleaned)
     cleaned = _LEADING_QUOTE_RUN_RE.sub(" ", cleaned)
 
-    # First line with real (alphanumeric) content, heading marker stripped.
-    # Skips lines that are only punctuation/quotes left over from stripping.
+    # Prefer a human line, but preserve path-only text for model-input callers.
     line = ""
+    path_line: str | None = None
     for raw_line in cleaned.splitlines():
         candidate = _HEADING_PREFIX_RE.sub("", raw_line).strip()
-        if candidate and any(ch.isalnum() for ch in candidate) and not is_path_like_title(candidate):
-            line = candidate
-            break
+        if not candidate or not any(ch.isalnum() for ch in candidate):
+            continue
+        if is_path_like_title(candidate):
+            if path_line is None:
+                path_line = candidate
+            continue
+        line = candidate
+        break
+    if not line:
+        line = path_line or ""
     if not line:
         return None
 
