@@ -48,6 +48,10 @@ final class HearthSimulation {
     static let step: Double = 1.0 / 60
     static let reducedStep: Double = 1.0 / 30
     static let settleSteps = 90
+    /// A fire that comes on screen is simulated this far ahead before it is
+    /// first drawn, so a glance at the timeline finds it already burning.
+    static let warmupSteps = 180
+    private static let warmupStepsPerFrame = 24
 
     private static let jacobiIterations = 20
     private static let eps0: Float = 4.0
@@ -85,6 +89,9 @@ final class HearthSimulation {
         var seed: Float = 0
         var nextRoot = 0
         var litAt: Double = 0
+        var warmSteps = 0
+        /// Off screen: the fluid keeps its last state and nothing advances it.
+        var parked = false
     }
 
     private struct Pass {
@@ -247,9 +254,13 @@ final class HearthSimulation {
         var tile = Tile()
         tile.heat = heat
         tile.seed = seed
-        tile.height = reducedMotion ? 0 : 0.5 * heat.target(time: time)
+        let target = heat.target(time: time)
+        tile.height = reducedMotion ? 0 : target
         tile.frozen = false
         tile.litAt = time
+        if !reducedMotion && (target > 0 || heat.snapshot?.mode == .waiting) {
+            tile.warmSteps = Self.warmupSteps
+        }
         tiles[index] = tile
         clearing.insert(index)
         return index
@@ -258,6 +269,18 @@ final class HearthSimulation {
     func detach(_ index: Int) {
         tiles[index] = Tile()
         clearing.insert(index)
+    }
+
+    /// Park a tile whose row left the screen: its fluid state is kept as is
+    /// and it stops counting as burning, so coming back shows the fire as it
+    /// was instead of relighting it from bare coals.
+    func setParked(_ index: Int, _ parked: Bool) {
+        tiles[index].parked = parked
+    }
+
+    /// Still being simulated ahead before its first draw.
+    func isWarming(_ index: Int) -> Bool {
+        tiles[index].warmSteps > 0
     }
 
     // MARK: - Frame (CPU)
@@ -272,6 +295,11 @@ final class HearthSimulation {
         let slew = Float(delta * 1.2)
         for index in tiles.indices {
             guard let heat = tiles[index].heat else { continue }
+            if tiles[index].parked {
+                // Advance the session (beds cool, events retire), not the fire.
+                heat.step(time: time, delta: delta, wall: wall) { _ in }
+                continue
+            }
             if reducedMotion {
                 heat.step(time: time + 3, delta: 3, wall: wall) { _ in }
             } else {
@@ -373,7 +401,7 @@ final class HearthSimulation {
     /// The awake span of the atlas: one dispatch range from the first to the
     /// last awake tile, as on the web.
     private var span: (lo: Int, count: Int)? {
-        let awake = tiles.indices.filter { tiles[$0].heat != nil && !tiles[$0].frozen }
+        let awake = tiles.indices.filter { tiles[$0].heat != nil && !tiles[$0].frozen && !tiles[$0].parked }
         guard let lo = awake.first, let hi = awake.last else { return nil }
         return (lo, hi - lo + 1)
     }
@@ -390,7 +418,8 @@ final class HearthSimulation {
         let pendingSpawns = spawns
         spawns.removeAll()
         let span = span
-        guard !cleared.isEmpty || !pendingSpawns.isEmpty || (span != nil && steps > 0),
+        let warming = warmingRuns()
+        guard !cleared.isEmpty || !pendingSpawns.isEmpty || !warming.isEmpty || (span != nil && steps > 0),
               let encoder = command.makeComputeCommandEncoder() else {
             clearing.removeAll()
             return nil
@@ -419,6 +448,18 @@ final class HearthSimulation {
             dispatch(encoder, width: pendingSpawns.count, height: 1)
             flags.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
         }
+        // Warm new fires on their own: a run of consecutive warming tiles is
+        // stepped alone, an even number of steps at a time, which leaves the
+        // ping-pong textures pointing where they did, so every other tile's
+        // state is untouched.
+        for run in warming {
+            let count = min(Self.warmupStepsPerFrame, tiles[run.lo].warmSteps)
+            for _ in 0..<count {
+                simulationTime += Float(Self.step)
+                simulate(encoder, span: run, step: Float(Self.step), withSparks: false)
+            }
+            for index in run.lo..<(run.lo + run.count) { tiles[index].warmSteps -= count }
+        }
         var slot: Int?
         if let span, steps > 0 {
             for _ in 0..<steps {
@@ -431,7 +472,21 @@ final class HearthSimulation {
         return slot
     }
 
-    private func simulate(_ e: MTLComputeCommandEncoder, span: (lo: Int, count: Int), step: Float) {
+    /// Consecutive tiles that are warming, grouped so a launch warms the whole
+    /// screen in one dispatch range.
+    private func warmingRuns() -> [(lo: Int, count: Int)] {
+        var runs: [(lo: Int, count: Int)] = []
+        for index in tiles.indices where tiles[index].warmSteps > 0 && tiles[index].heat != nil && !tiles[index].parked {
+            if let last = runs.last, last.lo + last.count == index, tiles[last.lo].warmSteps == tiles[index].warmSteps {
+                runs[runs.count - 1].count += 1
+            } else {
+                runs.append((index, 1))
+            }
+        }
+        return runs
+    }
+
+    private func simulate(_ e: MTLComputeCommandEncoder, span: (lo: Int, count: Int), step: Float, withSparks: Bool = true) {
         let width = span.count * Self.tileWidth
         let height = Self.tileHeight
         func pass(_ dt: Float, open: Float = 0) {
@@ -468,6 +523,7 @@ final class HearthSimulation {
         pressure.swapAt(0, 1)
         run("hearthProject", [pressure[0], velocity[0], velocity[1]])
         velocity.swapAt(0, 1)
+        guard withSparks else { return }
         e.setComputePipelineState(compute["hearthSparkUpdate"]!)
         e.setBuffer(sparks, offset: 0, index: 2)
         e.setTexture(velocity[0], index: 0)

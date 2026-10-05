@@ -226,7 +226,7 @@ for frame in 0..<totalFrames {
     pass.colorAttachments[0].clearColor = MTLClearColorMake(background.0, background.1, background.2, 1)
     let encoder = command.makeRenderCommandEncoder(descriptor: pass)!
     for index in scenarios.indices {
-        guard let tile = simulation.tileIndex(of: heats[index]) else { continue }
+        guard let tile = simulation.tileIndex(of: heats[index]), !simulation.isWarming(tile) else { continue }
         simulation.encodeDraw(encoder, tile: tile, cell: cellRect(index), scale: options.scale,
                               viewport: CGSize(width: pixelWidth, height: pixelHeight),
                               sparks: !options.reducedMotion, lightBackground: options.light)

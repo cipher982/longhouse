@@ -23,7 +23,6 @@ private let hearthLogger = Logger(subsystem: "ai.longhouse.ios", category: "Hear
 final class HearthEngine {
     static let shared = HearthEngine()
 
-    private static let tileLinger: Double = 4
     private static let heatTimeToLive: Double = 120
     private static let coolRedraw: TimeInterval = 30
     private static let maxInFlight = 2
@@ -274,27 +273,29 @@ final class HearthEngine {
 
     private(set) var gpuTime: Double = 0
 
-    /// Rows on screen get a tile; a row that scrolled away keeps its tile for
-    /// a few seconds so a quick scroll back doesn't relight it, and gives it
-    /// up first when the atlas is full.
+    /// Rows on screen get a tile. A row that leaves the screen (scrolled
+    /// away, timeline covered) parks its tile: the fire's state is kept and
+    /// nothing advances it, so coming back shows it burning as it was. Parked
+    /// tiles are given up only when the atlas needs room, oldest first.
     private func assignTiles(_ simulation: HearthSimulation, onScreen: [HearthLayerView], now: Double, still: Bool) {
         let visibleKeys = Set(onScreen.map(\.key))
         for index in tileKeys.indices {
             guard let key = tileKeys[index] else { continue }
-            if visibleKeys.contains(key) {
+            if entries[key] == nil {
+                release(index, simulation)
+            } else if visibleKeys.contains(key) {
                 tileHiddenSince[index] = nil
-            } else if let since = tileHiddenSince[index] {
-                if now - since > Self.tileLinger || entries[key] == nil { release(index, simulation) }
-            } else {
+                simulation.setParked(index, false)
+            } else if tileHiddenSince[index] == nil {
                 tileHiddenSince[index] = now
+                simulation.setParked(index, true)
             }
         }
         for key in visibleKeys where !tileKeys.contains(key) {
             guard let heat = entries[key]?.heat, heat.snapshot != nil else { continue }
             if simulation.freeTile == nil {
-                // Steal the tile of a row that has scrolled away.
-                guard let victim = tileKeys.indices.first(where: { tileKeys[$0] != nil && tileHiddenSince[$0] != nil })
-                else { break }
+                let parked = tileKeys.indices.filter { tileKeys[$0] != nil && tileHiddenSince[$0] != nil }
+                guard let victim = parked.min(by: { tileHiddenSince[$0]! < tileHiddenSince[$1]! }) else { break }
                 release(victim, simulation)
             }
             guard let index = simulation.attach(heat, seed: Self.seed(key), time: now, reducedMotion: still) else { break }
@@ -312,7 +313,7 @@ final class HearthEngine {
 
     private func retireHeats(now: Double) {
         for (key, entry) in entries {
-            if let since = entry.orphanSince, now - since > Self.heatTimeToLive, !tileKeys.contains(key) {
+            if let since = entry.orphanSince, now - since > Self.heatTimeToLive {
                 entries[key] = nil
             }
         }
@@ -320,7 +321,10 @@ final class HearthEngine {
 
     private func draw(_ view: HearthLayerView, simulation: HearthSimulation, command: MTLCommandBuffer, sparks: Bool) {
         let layer = view.metalLayer
+        // A fire still being simulated ahead keeps the layer as it is (empty
+        // for a new row) for the few frames that takes.
         let tile = tileKeys.firstIndex(of: view.key)
+        if let tile, simulation.isWarming(tile) { return }
         // A row without a tile (atlas full) clears once rather than keep a frame.
         guard tile != nil || view.drawnTile != nil else { return }
         guard layer.drawableSize.width > 0, let drawable = layer.nextDrawable() else { return }
