@@ -6823,6 +6823,17 @@ mod tests {
         let waited =
             observed_at - chrono::Duration::seconds(RUNTIME_EVENT_OUTBOX_STALE_SECONDS as i64 + 1);
         assert_eq!(status(true, Some(waited)), "backlogged");
+        let saturated_zero = native_runtime_event_outbox_status(Some(&json!({
+            "pending_count": 0,
+            "pending_count_is_lower_bound": false,
+            "saturated": true,
+            "observed_at": observed_at.to_rfc3339()
+        })));
+        assert_eq!(saturated_zero.status, "unknown");
+        let no_count = native_runtime_event_outbox_status(Some(&json!({
+            "observed_at": observed_at.to_rfc3339()
+        })));
+        assert_eq!(no_count.status, "unknown");
     }
 
     #[test]
