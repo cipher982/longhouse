@@ -44,6 +44,7 @@ _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _URL_RE = re.compile(r"https?://\S+|www\.\S+")
 _ABSOLUTE_PATH_TITLE_RE = re.compile(r"^(?:/(?:Users|home|private|tmp|var)/[^\s]+|[A-Za-z]:[\\/][^\s]+)$")
 _TRIPLE_QUOTE_RE = re.compile(r'"""|\'\'\'')
+_LEADING_QUOTE_RUN_RE = re.compile(r"""(?m)^[ \t]*["']{2,}""")
 _HEADING_PREFIX_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -92,13 +93,14 @@ def sanitize_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> st
     cleaned = _FULLWIDTH_TOKEN_RE.sub(" ", cleaned)  # <｜DSML｜tool_calls>
     cleaned = _PIPE_TOKEN_RE.sub(" ", cleaned)  # <|im_start|>, <|tool_calls|>
     cleaned = _TRIPLE_QUOTE_RE.sub(" ", cleaned)
+    cleaned = _LEADING_QUOTE_RUN_RE.sub(" ", cleaned)
 
     # First line with real (alphanumeric) content, heading marker stripped.
     # Skips lines that are only punctuation/quotes left over from stripping.
     line = ""
     for raw_line in cleaned.splitlines():
         candidate = _HEADING_PREFIX_RE.sub("", raw_line).strip()
-        if candidate and any(ch.isalnum() for ch in candidate):
+        if candidate and any(ch.isalnum() for ch in candidate) and not is_path_like_title(candidate):
             line = candidate
             break
     if not line:

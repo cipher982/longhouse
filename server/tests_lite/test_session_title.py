@@ -46,6 +46,26 @@ class TestSanitizeTitle:
         # The exact garbage-preview bug: a pasted prompt starting with fences.
         assert sanitize_title('"""\n\nplease fix the bug') == "please fix the bug"
 
+    def test_skips_path_only_first_line_before_request(self):
+        path = "/Users/davidrose/git/obsidian_vault/AI-Sessions/2026-10-04-athena-image-tool-fla"
+
+        assert (
+            sanitize_title(f"{path}\n\nreview and help me pick this task up before Friday")
+            == "review and help me pick this task up…"
+        )
+
+    def test_sanitizes_attachment_and_doubled_quote_headers(self):
+        assert (
+            sanitize_title(
+                '"""<attachment>\n Handoff — recovered first-tester reliability batch'
+            )
+            == "Handoff — recovered first-tester reliability batch"
+        )
+        assert (
+            sanitize_title('""Saurabh Chakravarty [4:53 PM]')
+            == "Saurabh Chakravarty [4:53 PM]"
+        )
+
     def test_strips_image_tags(self):
         assert sanitize_title("[Image #1] look at this screenshot") == "look at this screenshot"
 
