@@ -4729,6 +4729,10 @@ export interface components {
             storage_v2_outbox?: {
                 [key: string]: unknown;
             };
+            /** Runtime Event Outbox */
+            runtime_event_outbox?: {
+                [key: string]: unknown;
+            };
             /** Managed Launch Recovery */
             managed_launch_recovery?: {
                 [key: string]: unknown;
@@ -5258,6 +5262,10 @@ export interface components {
             archive_repair?: {
                 [key: string]: unknown;
             };
+            /** Runtime Event Outbox */
+            runtime_event_outbox?: {
+                [key: string]: unknown;
+            } | null;
             history_import?: components["schemas"]["HistoryImportSnapshot-Output"];
             /** Parse Errors 1H */
             parse_errors_1h: number;
