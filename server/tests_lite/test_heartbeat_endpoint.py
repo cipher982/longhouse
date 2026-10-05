@@ -543,16 +543,14 @@ def test_heartbeat_raw_health_allowlist_preserves_storage_and_recovery(live_cata
     assert response.status_code == 204, response.text
 
     health = live_catalog_client.get(
-        "/agents/machines/health",
-        params={"device_id": device_id, "stale_after_seconds": 3600},
-        headers=headers,
+        f"/observability/machines/health?device_id={device_id}&stale_after_seconds=3600",
     )
     assert health.status_code == 200, health.text
     machine = health.json()["machines"][0]
     assert machine["status"] == "broken"
     assert "storage_v2_sources_unresolved" in machine["reasons"]
     assert "managed_launch_recovery_exhausted" in machine["reasons"]
-    assert machine["runtime_event_outbox"] == {
+    reported = {
         "pending_count": 4,
         "pending_count_is_lower_bound": True,
         "inspected_count": 4,
@@ -560,6 +558,16 @@ def test_heartbeat_raw_health_allowlist_preserves_storage_and_recovery(live_cata
         "oldest_pending_at": "2026-06-20T00:00:00Z",
         "observed_at": "2026-06-20T01:00:00Z",
     }
+    assert machine["runtime_event_outbox"] == reported
+
+    # The Machine Agent surface Sauron's outbox watchdog polls serves the same.
+    agents_health = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": device_id, "stale_after_seconds": 3600},
+        headers=headers,
+    )
+    assert agents_health.status_code == 200, agents_health.text
+    assert agents_health.json()["machines"][0]["runtime_event_outbox"] == reported
 
 
 def test_heartbeat_auth_disabled_honors_explicit_machine_identity(live_catalog):

@@ -1830,25 +1830,30 @@ fn native_runtime_event_outbox_status(value: Option<&Value>) -> NativeRuntimeEve
         .map(|(oldest, observed)| {
             observed.signed_duration_since(oldest).num_seconds().max(0) as u64
         });
-    let status = match pending_count {
-        Some(0) if observation_is_valid => "clear",
-        Some(0) => "unknown",
-        Some(_) if !observation_is_valid => "unknown",
-        Some(_) => match oldest_age {
-            Some(age) if age >= RUNTIME_EVENT_OUTBOX_STALE_SECONDS => "backlogged",
-            Some(_) => "pending",
-            None => "unknown",
-        },
-        None => "unknown",
+    let lower_bound = object
+        .get("pending_count_is_lower_bound")
+        .and_then(Value::as_bool)
+        == Some(true)
+        || object.get("saturated").and_then(Value::as_bool) == Some(true);
+    // The oldest file's wait decides a backlog whatever the count says: an
+    // oversized record the pass could not count still waited. Only a count of
+    // zero from a pass that saw everything is clear.
+    let status = if !observation_is_valid {
+        "unknown"
+    } else if oldest_age.is_some_and(|age| age >= RUNTIME_EVENT_OUTBOX_STALE_SECONDS) {
+        "backlogged"
+    } else {
+        match pending_count {
+            Some(0) if !lower_bound => "clear",
+            Some(count) if count > 0 && oldest_age.is_some() => "pending",
+            _ => "unknown",
+        }
     };
     NativeRuntimeEventOutboxStatus {
         status,
         pending_count,
         oldest_pending_at,
-        age_seconds: match pending_count {
-            Some(count) if count > 0 => oldest_age,
-            _ => None,
-        },
+        age_seconds: oldest_age,
         observed_at,
         pending_count_is_lower_bound: object
             .get("pending_count_is_lower_bound")
@@ -6795,6 +6800,29 @@ mod tests {
         assert!(!health
             .reasons
             .contains(&"runtime_events_backlogged".to_string()));
+    }
+
+    /// Zero is clear only from a pass that saw everything; a file the pass
+    /// could not count still decides a backlog by how long it has waited.
+    #[test]
+    fn runtime_event_outbox_zero_is_clear_only_when_complete() {
+        let observed_at = chrono::Utc::now();
+        let status = |lower_bound: bool, oldest: Option<chrono::DateTime<chrono::Utc>>| {
+            native_runtime_event_outbox_status(Some(&json!({
+                "pending_count": 0,
+                "pending_count_is_lower_bound": lower_bound,
+                "saturated": false,
+                "oldest_pending_at": oldest.map(|at| at.to_rfc3339()),
+                "observed_at": observed_at.to_rfc3339()
+            })))
+            .status
+        };
+
+        assert_eq!(status(false, None), "clear");
+        assert_eq!(status(true, None), "unknown");
+        let waited =
+            observed_at - chrono::Duration::seconds(RUNTIME_EVENT_OUTBOX_STALE_SECONDS as i64 + 1);
+        assert_eq!(status(true, Some(waited)), "backlogged");
     }
 
     #[test]
