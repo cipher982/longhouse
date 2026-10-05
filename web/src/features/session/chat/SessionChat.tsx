@@ -557,6 +557,15 @@ function stoppedAfterDelivery(row: {
   return row?.status === "delivered" && row?.turn?.state === "cancelled";
 }
 
+// A receipt linked to its durable transcript event is in the transcript, so
+// it was delivered whatever its Console turn says: a turn left nonterminal
+// because its run-end never arrived says nothing about the message. The
+// transcript row already shows it, so it is never an outbox row and never
+// "Not confirmed". One rule for every path that reads a receipt.
+function inTranscript(row: { durable_event_id?: string | null } | null | undefined): boolean {
+  return Boolean(row?.durable_event_id);
+}
+
 const NONTERMINAL_CONSOLE_TURN_STATES = new Set([
   "queued",
   "starting",
@@ -961,7 +970,7 @@ export function SessionChat({
           queuedInputsQuery.data?.find(
             (row) => row.client_request_id === pending.clientRequestId,
           );
-        return Boolean(receipt?.durable_event_id);
+        return inTranscript(receipt);
       })
       .map((pending) => pending.clientRequestId);
     if (linkedIds.length === 0) return;
@@ -991,7 +1000,8 @@ export function SessionChat({
         const turnState = receipt.turn?.state;
         const completed =
           turnState === "completed" ||
-          (!turnState && receipt.status === "delivered");
+          (!turnState && receipt.status === "delivered") ||
+          inTranscript(receipt);
         if (completed) {
           retainDeliveredInputOutbox(session.id, pending.clientRequestId);
           return {
@@ -1030,25 +1040,6 @@ export function SessionChat({
             phase: "unknown",
             deliveryStatus: receipt.status,
             detail: receipt.last_error,
-          };
-        }
-        // A receipt linked to a durable transcript event is confirmed
-        // delivered: a Console turn stuck nonterminal (no run-end evidence)
-        // says nothing about whether the message landed.
-        if (
-          receipt.durable_event_id &&
-          receipt.status === "delivered" &&
-          turnState &&
-          NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
-          receipt.turn?.is_fresh !== true
-        ) {
-          return {
-            ...pending,
-            phase: "delivered",
-            serverInputId: receipt.id ?? pending.serverInputId,
-            serverLiveInputId:
-              receipt.live_input_id ?? pending.serverLiveInputId,
-            deliveryStatus: receipt.status,
           };
         }
         if (
@@ -1231,7 +1222,8 @@ export function SessionChat({
         const turnState = receipt.turn?.state;
         const terminalSuccess =
           turnState === "completed" ||
-          (!turnState && receipt.status === "delivered");
+          (!turnState && receipt.status === "delivered") ||
+          inTranscript(receipt);
         if (terminalSuccess) {
           markInputDelivered(
             clientRequestId,
@@ -2011,8 +2003,9 @@ export function SessionChat({
     for (const row of rows) {
       const clientRequestId = row.client_request_id;
       if (
-        clientRequestId &&
-        (pendingIds.has(clientRequestId) || dismissedReceipts.has(clientRequestId))
+        inTranscript(row) ||
+        (clientRequestId &&
+          (pendingIds.has(clientRequestId) || dismissedReceipts.has(clientRequestId)))
       ) {
         continue;
       }
@@ -2036,8 +2029,7 @@ export function SessionChat({
       } else if (
         turnState &&
         NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
-        row.turn?.is_fresh !== true &&
-        !row.durable_event_id
+        row.turn?.is_fresh !== true
       ) {
         inFlight.push({
           key,
@@ -2058,9 +2050,7 @@ export function SessionChat({
         turnState &&
         NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)
       ) {
-        if (!row.durable_event_id) {
-          inFlight.push({ key, text: row.text, attachments, state: "sent" });
-        }
+        inFlight.push({ key, text: row.text, attachments, state: "sent" });
       } else if (row.status === "delivering") {
         inFlight.push({ key, text: row.text, attachments, state: "sending" });
       } else if (row.status === "queued") {

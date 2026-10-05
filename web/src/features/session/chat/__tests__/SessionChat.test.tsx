@@ -2958,30 +2958,30 @@ describe("SessionChat", () => {
       }
     });
 
-    it("does not flag a transcript-linked receipt as unconfirmed when its turn never settled", async () => {
+    it("never shows a transcript-linked receipt in the outbox, whatever its turn says", async () => {
       const onOutboxChange = vi.fn();
+      // A run-end that never arrived leaves turns active or queued and stale;
+      // the server links the transcript event for delivering receipts too.
+      const linked = (id: number, status: string, state: string) => ({
+        id,
+        client_request_id: `linked-${id}`,
+        text: `answered input ${id}`,
+        intent: "auto",
+        status,
+        durable_event_id: `event-${id}`,
+        turn: { turn_id: `turn-${id}`, run_id: `run-${id}`, state, is_fresh: false },
+        created_at: null,
+        attachments: [],
+      });
       requestMock.mockImplementation((path: string, init?: RequestInit) => {
         if (String(path).endsWith("/lock")) {
           return Promise.resolve({ locked: false, fork_available: false });
         }
         if (String(path).endsWith("/inputs") && !init) {
           return Promise.resolve([
-            {
-              id: 72,
-              client_request_id: "linked-stale-turn",
-              text: "answered input",
-              intent: "auto",
-              status: "delivered",
-              durable_event_id: "50be1eb7",
-              turn: {
-                turn_id: "stale-turn-2",
-                run_id: "stale-run-2",
-                state: "active",
-                is_fresh: false,
-              },
-              created_at: null,
-              attachments: [],
-            },
+            linked(72, "delivered", "active"),
+            linked(73, "delivered", "queued"),
+            linked(74, "delivering", "active"),
           ]);
         }
         return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -3008,6 +3008,79 @@ describe("SessionChat", () => {
         view.unmount();
         queryClient.clear();
       }
+    });
+
+    it("settles this browser's send once its receipt is in the transcript, even if the turn never ends", async () => {
+      const onOutboxChange = vi.fn();
+      let linked = false;
+      let clientRequestId = "";
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).includes("/inputs?client_request_id=")) {
+          return Promise.resolve([
+            {
+              id: 81,
+              client_request_id: clientRequestId,
+              text: "start the turn",
+              intent: "auto",
+              status: "delivered",
+              ...(linked ? { durable_event_id: "event-81" } : {}),
+              turn: {
+                turn_id: "turn-81",
+                run_id: "run-81",
+                state: "active",
+                is_fresh: !linked,
+              },
+              created_at: null,
+            },
+          ]);
+        }
+        if (String(path).endsWith("/inputs") && !init) return Promise.resolve([]);
+        if (String(path).endsWith("/input") && init?.method === "POST") {
+          clientRequestId = JSON.parse(String(init.body ?? "{}")).client_request_id;
+          return Promise.resolve({
+            disposition: "accepted",
+            outcome: "sent",
+            input_id: 81,
+            intent: "auto",
+            client_request_id: clientRequestId,
+            turn: { turn_id: "turn-81", run_id: "run-81", state: "active", is_fresh: true },
+            queued: [],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      const view = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+      fireEvent.change(screen.getByRole("textbox"), {
+        target: { value: "start the turn" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() => {
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { state: "sent", text: "start the turn" },
+        ]);
+      });
+
+      // The transcript has the message; the run-end never arrived, so the
+      // turn reads active and stale. That is not "Not confirmed".
+      linked = true;
+      await act(async () => {
+        await view.queryClient.invalidateQueries({
+          queryKey: ["session-input", "sess-1", clientRequestId],
+        });
+      });
+      await waitFor(() => {
+        expect(lastOutbox(onOutboxChange)).toEqual([]);
+      });
+      expect(
+        window.localStorage.getItem(`longhouse:session-input:sess-1:${clientRequestId}`),
+      ).toBeNull();
     });
 
     it("keeps a delivered Helm summary until transcript echo across reload", async () => {
