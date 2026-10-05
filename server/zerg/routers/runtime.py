@@ -15,6 +15,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogRequestInvalid
 from zerg.catalogd.client import CatalogRequestTooLarge
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
@@ -131,6 +132,15 @@ async def ingest_runtime_observation_batch(
                     "code": "runtime_batch_too_large",
                     "message": "Runtime batch exceeds one catalog apply; send fewer bytes per request.",
                 },
+            ) from exc
+        except CatalogRequestInvalid as exc:
+            # Any other request catalogd could not be sent is just as
+            # deterministic: the same answer catalogd's own invalid_request gets
+            # below, so the Machine Agent isolates the event that causes it
+            # instead of resending the batch forever.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "invalid_runtime_batch", "message": str(exc)},
             ) from exc
         except CatalogUnavailable as exc:
             raise HTTPException(

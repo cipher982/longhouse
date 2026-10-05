@@ -11,6 +11,7 @@ import pytest
 from zerg.catalogd.client import DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogRequestInvalid
 from zerg.catalogd.client import CatalogRequestTooLarge
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.client import call_catalogd_sync
@@ -217,6 +218,10 @@ async def test_request_larger_than_a_frame_is_too_large_not_unavailable(socket_p
         await client.call("session.runtime.apply.v2", oversized)
     with pytest.raises(CatalogRequestTooLarge):
         call_catalogd_sync(socket_path, "session.runtime.apply.v2", params=oversized)
+    # A value no frame can carry is just as permanent, and not a size problem.
+    with pytest.raises(CatalogRequestInvalid) as unframeable:
+        await client.call("session.runtime.apply.v2", {"events": [{"ratio": float("nan")}]})
+    assert not isinstance(unframeable.value, CatalogRequestTooLarge)
     # The same call small enough to frame meets the dead socket: unavailable.
     with pytest.raises(CatalogUnavailable):
         await client.call("session.runtime.apply.v2", {"events": []})

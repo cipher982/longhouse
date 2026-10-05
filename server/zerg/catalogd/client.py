@@ -212,7 +212,8 @@ def _encode_request(request: CatalogRpcRequest) -> bytes:
         return encode_frame(request)
     except FrameTooLarge as exc:
         raise CatalogRequestTooLarge(f"{request.method} request exceeds the catalogd frame limit") from exc
-    except ProtocolError as exc:
+    except ValueError as exc:
+        # ProtocolError, or json.dumps refusing a value such as NaN.
         raise CatalogRequestInvalid(f"{request.method} request cannot be framed: {exc}") from exc
 
 
