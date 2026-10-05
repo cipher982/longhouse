@@ -192,6 +192,33 @@ async def test_recall_context_opens_one_ref_and_renders_turns():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("send", {"session_id": "22222222-2222-4222-8222-222222222222", "text": "hello", "client_request_id": "send-no-authority"}),
+        ("inbox", {}),
+        ("reply", {"input_id": 42, "text": "done", "client_request_id": "reply-no-authority"}),
+    ],
+)
+async def test_unscoped_python_coordination_tools_route_claude_to_native_server(monkeypatch, tool_name, arguments):
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-4111-8111-111111111111")
+    monkeypatch.delenv("LONGHOUSE_COORDINATION_TOKEN", raising=False)
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools[tool_name]
+
+    with (
+        patch("zerg.mcp_server.server.LonghouseAPIClient.get", new=AsyncMock()) as mock_get,
+        patch("zerg.mcp_server.server.LonghouseAPIClient.post", new=AsyncMock()) as mock_post,
+    ):
+        payload = json.loads(await tool.run(arguments))
+
+    assert payload["error"] == f"{tool_name} requires session-scoped coordination authority"
+    assert payload["hint"] == f"In managed Claude sessions, use mcp__longhouse-coordination__{tool_name} instead."
+    mock_get.assert_not_awaited()
+    mock_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_send_uses_session_scoped_authority(monkeypatch):
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["send"]

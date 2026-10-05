@@ -861,7 +861,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "8adfc169d561b86219a558c2981e87f68232209d1dbc3c17030b308dd083531b"
+      "adapter_digest": "70c28eecd931fec88c92514fa96bd3086b76f28803ab330e6bd6152330e15985"
     },
     {
       "provider": "claude",
@@ -2625,7 +2625,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "a274c14b830153bf803ec44f15bacde9aed153d8276930ac694eea7d44ae5e3b"
+      "adapter_digest": "f00f012448de10ecf02ab2c6283582b1685c476e9aaadb6b9334bf38eb6f05fa"
     },
     {
       "provider": "antigravity",

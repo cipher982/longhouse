@@ -617,7 +617,12 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": "send requires a current managed session context"})
         coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
         if not coordination_token:
-            return json.dumps({"error": "send requires session-scoped coordination authority"})
+            return json.dumps(
+                {
+                    "error": "send requires session-scoped coordination authority",
+                    "hint": "In managed Claude sessions, use mcp__longhouse-coordination__send instead.",
+                }
+            )
 
         body = {
             "target_session_id": session_id,
@@ -665,7 +670,12 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": "inbox requires a current managed session context"})
         coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
         if not coordination_token:
-            return json.dumps({"error": "inbox requires session-scoped coordination authority"})
+            return json.dumps(
+                {
+                    "error": "inbox requires session-scoped coordination authority",
+                    "hint": "In managed Claude sessions, use mcp__longhouse-coordination__inbox instead.",
+                }
+            )
 
         try:
             resp = await client.get(
@@ -708,7 +718,12 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": "reply requires a current managed session context"})
         coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
         if not coordination_token:
-            return json.dumps({"error": "reply requires session-scoped coordination authority"})
+            return json.dumps(
+                {
+                    "error": "reply requires session-scoped coordination authority",
+                    "hint": "In managed Claude sessions, use mcp__longhouse-coordination__reply instead.",
+                }
+            )
 
         body: dict[str, str] = {
             "text": text[:4000],
