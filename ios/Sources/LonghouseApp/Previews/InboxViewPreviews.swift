@@ -828,13 +828,91 @@ enum InboxGalleryFixture {
     }
 }
 
+/// A ten-second scripted timeline for a Hearth demo clip
+/// (`LONGHOUSE_UI_TEST_HEARTH_PITCH=1` with the gallery fixture): sessions at
+/// every activity level, one that a prompt relights at 2 s and one that
+/// finishes at 4.5 s. Rows keep their order; only their activity changes.
+enum HearthPitchFixture {
+    static let tickSeconds = 0.4
+
+    static func sessions(tick: Int) -> [SessionSummary] {
+        let t = Double(tick) * tickSeconds
+        let busyTools = ["Bash", "Edit", "Bash", "Read", "Task", "Edit"]
+        let relit = t >= 2
+        let relitTicks = relit ? Int((t - 2) / tickSeconds) : 0
+        let finished = t >= 4.5
+        return [
+            mockSession(
+                id: "pitch-approve", project: "payments", title: "Approve production deploy",
+                summary: "Waiting for approval to run the migration in production.",
+                provider: "codex", machine: "build-01",
+                statusLabel: "Permission required", statusTone: "blocked", activityRecency: "live",
+                anchorSecondsAgo: 40, seenAtSecondsAgo: 40
+            ),
+            mockSession(
+                id: "pitch-busy", project: "api", title: "Refactor auth middleware",
+                summary: "Running the test suite after splitting the session middleware.",
+                machine: "studio",
+                statusLabel: "Using bash", statusTone: "running", activityRecency: "live",
+                anchorSecondsAgo: 2, seenAtSecondsAgo: 2, workingSet: "open",
+                tools: 120 + tick * 3, replies: 40 + tick, activityTool: busyTools[tick % busyTools.count]
+            ),
+            mockSession(
+                id: "pitch-steady", project: "billing", title: "Migrate billing webhooks",
+                summary: "Porting the webhook handlers to the new event schema.",
+                provider: "codex", machine: "cube",
+                statusLabel: "Editing files", statusTone: "running", activityRecency: "live",
+                anchorSecondsAgo: 6, seenAtSecondsAgo: 6, workingSet: "open",
+                tools: 30 + tick / 4, replies: 12 + tick / 6, activityTool: tick % 8 < 4 ? "Edit" : "Read"
+            ),
+            mockSession(
+                id: "pitch-finish", project: "site", title: "Write launch blog post",
+                summary: finished ? "Draft finished and saved." : "Drafting the launch announcement.",
+                machine: "laptop",
+                statusLabel: finished ? "Idle" : "Thinking", statusTone: finished ? "idle" : "thinking",
+                activityRecency: "live",
+                anchorSecondsAgo: finished ? 1 : 9, seenAtSecondsAgo: finished ? 1 : 9, workingSet: "open",
+                tools: 14, replies: 8
+            ),
+            mockSession(
+                id: "pitch-relight", project: "web", title: "Fix flaky checkout test",
+                summary: relit ? "Reproducing the race under load." : "Paused after the first repro.",
+                provider: "opencode", machine: "studio",
+                statusLabel: relit ? "Using bash" : "Idle", statusTone: relit ? "running" : "idle",
+                activityRecency: "live",
+                anchorSecondsAgo: relit ? 1 : 180, seenAtSecondsAgo: relit ? 1 : 180, workingSet: "open",
+                turns: relit ? 3 : 2, tools: 20 + relitTicks * 2, replies: 6 + relitTicks / 2,
+                activityTool: relit ? (relitTicks % 2 == 0 ? "Bash" : "Read") : nil
+            ),
+            mockSession(
+                id: "pitch-warm", project: "infra", title: "Upgrade Postgres to 18",
+                summary: "Upgrade plan ready for review.",
+                provider: "antigravity", machine: "cube",
+                statusLabel: "Idle", statusTone: "idle", activityRecency: "live",
+                anchorSecondsAgo: 12 * 60, seenAtSecondsAgo: 12 * 60, workingSet: "open"
+            ),
+            mockSession(
+                id: "pitch-cold", project: "data", title: "Nightly backfill checks",
+                summary: "Verified last night's backfill.",
+                provider: "codex", machine: "build-01",
+                statusLabel: "Idle", statusTone: "idle", activityRecency: "live",
+                anchorSecondsAgo: 50 * 60, seenAtSecondsAgo: 50 * 60, workingSet: "open"
+            ),
+        ]
+    }
+}
+
 struct InboxGalleryUITestFixtureView: View {
     @State private var searchText = ""
     @State private var tick = 0
 
     var body: some View {
         NavigationStack {
-            TimelineSessionList(sessions: InboxGalleryFixture.sessions(tick: tick), connectivityBanner: .none)
+            TimelineSessionList(
+                sessions: UITestHooks.shouldRunHearthPitch
+                    ? HearthPitchFixture.sessions(tick: tick) : InboxGalleryFixture.sessions(tick: tick),
+                connectivityBanner: .none
+            )
                 .background { EmberHearthBackground() }
                 .navigationTitle("Timeline")
                 .searchable(text: $searchText, prompt: "Filter sessions")
@@ -858,9 +936,11 @@ struct InboxGalleryUITestFixtureView: View {
                 }
         }
         .task {
-            guard UITestHooks.shouldRunHearthLive else { return }
+            let pitch = UITestHooks.shouldRunHearthPitch
+            guard pitch || UITestHooks.shouldRunHearthLive else { return }
+            let interval = pitch ? HearthPitchFixture.tickSeconds : 1.2
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 tick += 1
             }
         }

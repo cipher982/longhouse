@@ -482,7 +482,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "opencode"
       ]
     },
     {
