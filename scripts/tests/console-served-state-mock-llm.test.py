@@ -121,7 +121,7 @@ def main() -> None:
         call = chat(base)["tool_calls"][0]
         time.sleep(wait)
         unrelated = {"role": "tool", "tool_call_id": "call_someone_else", "content": ""}
-        assert failed(chat(base, unrelated)["content"], "does not answer"), (
+        assert failed(chat(base, unrelated)["content"], "no tool result answers"), (
             "unrelated result accepted"
         )
         exit_1 = {
@@ -129,8 +129,9 @@ def main() -> None:
             "tool_call_id": call["id"],
             "content": "Process exited with code 1",
         }
-        assert failed(chat(base, exit_1)["content"], "nonzero exit"), (
-            "delayed exit 1 accepted (chat)"
+        ok = {**exit_1, "content": ""}
+        assert failed(chat(base, exit_1, ok)["content"], "nonzero exit"), (
+            "delayed exit 1 hidden by a duplicate success (chat)"
         )
 
         # Another fresh call succeeds, with the earlier rejected result still in the history.

@@ -197,9 +197,12 @@ def _round_trip_failure(marker: str, results: list[tuple[str, bool]]) -> str | N
         if latest is None:
             return "no shell call was issued for this prompt"
         call_key, issued_at = latest
-        result_key, failed = results[-1]
-        if not _answers(call_key, result_key):
-            return "the latest tool result does not answer the shell call issued for this prompt"
+        answering = [
+            failed for result_key, failed in results if _answers(call_key, result_key)
+        ]
+        if not answering:
+            return "no tool result answers the shell call issued for this prompt"
+        failed = any(answering)
         if call_key not in _outcomes:
             elapsed = now - issued_at
             if failed:
