@@ -126,4 +126,47 @@ struct HearthSimulationTests {
         }
         #expect(simulation.tiles[tile].measured > 0.2)
     }
+
+    /// A parked fire between two burning ones keeps its state exactly while
+    /// they burn on: only awake tiles are stepped, and in pairs, so the
+    /// ping-pong textures come back to the parked tile's current state.
+    @Test
+    func aParkedFireBetweenBurningOnesIsUntouched() throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let simulation = try HearthSimulation(device: device, library: HearthSimulation.makeLibrary(device: device))
+        let wall = Date(timeIntervalSince1970: 1_790_000_000)
+        let heats = (0..<3).map { _ in HearthHeat() }
+        for heat in heats {
+            heat.update(snapshot: HearthSnapshot(mode: .working, toolCalls: 300, lastActivity: wall,
+                                                 started: wall.addingTimeInterval(-3600)), time: 0, wall: wall)
+            _ = try #require(simulation.attach(heat, seed: 0.3, time: 0, reducedMotion: false))
+        }
+        var time = 0.0
+        func frames(_ count: Int) throws {
+            for _ in 0..<count {
+                time += 1.0 / 30
+                _ = simulation.advance(time: time, delta: 1.0 / 30, wall: wall, reducedMotion: false)
+                let command = try #require(simulation.queue.makeCommandBuffer())
+                simulation.encodeSimulation(command, steps: 2, step: HearthSimulation.step, time: time)
+                command.commit()
+                command.waitUntilCompleted()
+            }
+        }
+        func state(_ tile: Int) throws -> [UInt8] {
+            let command = try #require(simulation.queue.makeCommandBuffer())
+            let buffer = try #require(simulation.copyState(tile: tile, into: command))
+            command.commit()
+            command.waitUntilCompleted()
+            return Array(UnsafeRawBufferPointer(start: buffer.contents(), count: buffer.length))
+        }
+        try frames(30)
+        simulation.setParked(1, true)
+        try frames(1)
+        let parked = try state(1)
+        let burning = try state(0)
+        try frames(20)
+        #expect(try state(1) == parked)
+        #expect(try state(0) != burning)
+        #expect(parked.contains { $0 != 0 })
+    }
 }

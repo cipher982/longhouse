@@ -236,7 +236,7 @@ final class HearthEngine {
             steps = min(14, settle)
             settle -= steps
         } else {
-            steps = burning > 0 ? simulation.steps(for: delta, step: step, maximum: 4) : 0
+            steps = burning > 0 ? simulation.steps(for: delta, step: step, maximum: lowPower ? 4 : 2) : 0
         }
 
         guard let command = simulation.queue.makeCommandBuffer() else { return }
@@ -446,11 +446,12 @@ final class HearthLayerView: UIView {
         }
         self.key = key
         self.snapshot = snapshot
-        if rekeyed { drawnTile = drawnTile.map { _ in -1 } }
         if self.lightBackground != lightBackground {
             self.lightBackground = lightBackground
             drawnTile = nil
         }
+        // A layer that may still hold another session's fire clears first.
+        if rekeyed { drawnTile = -1 }
         if window != nil && !registered {
             registered = true
             HearthEngine.shared.register(self)

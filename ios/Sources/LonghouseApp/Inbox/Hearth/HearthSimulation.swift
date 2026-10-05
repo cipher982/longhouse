@@ -557,7 +557,7 @@ final class HearthSimulation {
         let dtm = Float(min(0.25, max(0, time - lastMeasureTime)))
         lastMeasureTime = time
         let values = measurements[slot].contents().bindMemory(to: SIMD4<Float>.self, capacity: Self.capacity)
-        for tile in tiles.indices where tiles[tile].heat != nil && !tiles[tile].frozen {
+        for tile in tiles.indices where tiles[tile].heat != nil && !tiles[tile].frozen && !tiles[tile].parked {
             guard time - tiles[tile].litAt > 1.5 else { continue }
             tiles[tile].measured += (values[tile].x - tiles[tile].measured) * (1 - exp(-dtm / 0.35))
             if tiles[tile].height > 0.05 {
@@ -655,6 +655,21 @@ final class HearthSimulation {
             encoder.setRenderPipelineState(lightBackground ? sparkPointOverPipeline : sparkPointPipeline)
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: Self.sparkCount)
         }
+    }
+
+    /// Test hook: a copy of one tile's combustion state (heat, fuel, soot),
+    /// written by `command` into a shared buffer of half floats.
+    func copyState(tile index: Int, into command: MTLCommandBuffer) -> MTLBuffer? {
+        let bytesPerRow = Self.tileWidth * MemoryLayout<SIMD4<Float16>>.stride
+        guard let buffer = device.makeBuffer(length: bytesPerRow * Self.tileHeight, options: .storageModeShared),
+              let blit = command.makeBlitCommandEncoder() else { return nil }
+        blit.copy(from: scalar[0], sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: index * Self.tileWidth, y: 0, z: 0),
+                  sourceSize: MTLSize(width: Self.tileWidth, height: Self.tileHeight, depth: 1),
+                  to: buffer, destinationOffset: 0, destinationBytesPerRow: bytesPerRow,
+                  destinationBytesPerImage: bytesPerRow * Self.tileHeight)
+        blit.endEncoding()
+        return buffer
     }
 
     func recordGPUTime(_ buffer: MTLCommandBuffer) {
