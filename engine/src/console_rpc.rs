@@ -432,8 +432,9 @@ mod tests {
         assert!(age_since_rfc3339("yesterday").is_none());
     }
 
-    /// A streamed token must cost about a token, not the whole message again,
-    /// while every field the Runtime Host reads survives.
+    /// A streamed token must not restate the message's reasoning, which was
+    /// nearly all of its bytes, while every field the Runtime Host reads
+    /// survives. The visible text is still restated, as `live_text` already is.
     #[test]
     fn runtime_stream_event_keeps_what_the_runtime_host_reads_and_no_repeated_message() {
         let reasoning = "r".repeat(50_000);

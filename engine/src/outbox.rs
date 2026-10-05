@@ -882,9 +882,10 @@ pub struct RuntimeEventCollection {
     pub pending_count: usize,
     /// True when the pass hit a cap or skipped a file it could not measure.
     pub pending_count_is_lower_bound: bool,
-    /// When the oldest file this pass saw was enqueued (its mtime). In health
-    /// nothing waits longer than a POST; in a stall the same files are read
-    /// pass after pass and this only gets older. Enqueue time, not
+    /// When the oldest file still waiting after this pass was enqueued (its
+    /// mtime); a copy the pass superseded and removed does not count. In
+    /// health nothing waits longer than a POST; in a stall the same files are
+    /// read pass after pass and this only gets older. Enqueue time, not
     /// `occurred_at`: an event observed long ago and queued just now has not
     /// waited.
     pub oldest_pending_at: Option<DateTime<Utc>>,
@@ -896,11 +897,20 @@ pub struct RuntimeEventCollection {
 struct ReducedRuntimeEvents {
     critical: Vec<PendingRuntimeEventPost>,
     durable: Vec<PendingRuntimeEventPost>,
-    repeated: HashMap<String, (Option<DateTime<Utc>>, PendingRuntimeEventPost)>,
+    repeated: HashMap<
+        String,
+        (
+            Option<DateTime<Utc>>,
+            PendingRuntimeEventPost,
+            Option<SystemTime>,
+        ),
+    >,
     inspected: usize,
     discarded: usize,
     measurement_is_lower_bound: bool,
     measurement_available: bool,
+    /// Enqueue time of the oldest file still waiting when the pass ends; a
+    /// copy this pass superseded and removed no longer counts.
     oldest_enqueued_at: Option<SystemTime>,
     saturated: bool,
 }
@@ -977,18 +987,8 @@ fn reduce_ready_runtime_events(
         // same time by design, so losing a race with a removal is ordinary.
         // Treating that as an oversized payload sent real status events to
         // dead-letter on `cinder` within a minute of deploying it.
-        let file_bytes = match entry.metadata() {
-            Ok(meta) => {
-                if let Ok(enqueued_at) = meta.modified() {
-                    if reduced
-                        .oldest_enqueued_at
-                        .is_none_or(|oldest| enqueued_at < oldest)
-                    {
-                        reduced.oldest_enqueued_at = Some(enqueued_at);
-                    }
-                }
-                meta.len() as usize
-            }
+        let (file_bytes, enqueued_at) = match entry.metadata() {
+            Ok(meta) => (meta.len() as usize, meta.modified().ok()),
             Err(_) => {
                 reduced.measurement_is_lower_bound = true;
                 continue;
@@ -996,6 +996,8 @@ fn reduce_ready_runtime_events(
         };
         if file_bytes > RUNTIME_EVENT_MAX_FILE_BYTES {
             reduced.measurement_is_lower_bound = true;
+            // A critical record stays where it is, still waiting.
+            note_waiting_since(&mut reduced.oldest_enqueued_at, enqueued_at);
             handle_oversized_runtime_event(&path, file_bytes);
             continue;
         }
@@ -1025,6 +1027,7 @@ fn reduce_ready_runtime_events(
                 path: Some(path),
                 event,
             };
+            note_waiting_since(&mut reduced.oldest_enqueued_at, enqueued_at);
             if is_critical_runtime_event(&post.event) {
                 reduced.critical.push(post);
             } else {
@@ -1038,26 +1041,46 @@ fn reduce_ready_runtime_events(
             event,
         };
         match reduced.repeated.get(&key) {
-            Some((existing_at, _)) if *existing_at >= occurred_at => {
+            Some((existing_at, _, _)) if *existing_at >= occurred_at => {
                 // Count removals, not attempts: "this pass made progress" is
                 // what stops the sweep rescheduling itself forever, so a
                 // failed removal must not look like progress.
                 if remove_post_file(&candidate) {
                     reduced.discarded += 1;
+                } else {
+                    note_waiting_since(&mut reduced.oldest_enqueued_at, enqueued_at);
                 }
             }
-            Some((_, existing)) => {
+            Some((_, existing, existing_enqueued_at)) => {
                 if remove_post_file(existing) {
                     reduced.discarded += 1;
+                } else {
+                    let still_waiting = *existing_enqueued_at;
+                    note_waiting_since(&mut reduced.oldest_enqueued_at, still_waiting);
                 }
-                reduced.repeated.insert(key, (occurred_at, candidate));
+                reduced
+                    .repeated
+                    .insert(key, (occurred_at, candidate, enqueued_at));
             }
             None => {
-                reduced.repeated.insert(key, (occurred_at, candidate));
+                reduced
+                    .repeated
+                    .insert(key, (occurred_at, candidate, enqueued_at));
             }
         }
     }
+    for (_, _, enqueued_at) in reduced.repeated.values() {
+        note_waiting_since(&mut reduced.oldest_enqueued_at, *enqueued_at);
+    }
     reduced
+}
+
+fn note_waiting_since(oldest: &mut Option<SystemTime>, enqueued_at: Option<SystemTime>) {
+    if let Some(enqueued_at) = enqueued_at {
+        if oldest.is_none_or(|current| enqueued_at < current) {
+            *oldest = Some(enqueued_at);
+        }
+    }
 }
 
 pub fn collect_runtime_event_outbox(dir: &Path) -> Vec<PendingRuntimeEventPost> {
@@ -1091,7 +1114,7 @@ fn collect_runtime_event_outbox_bounded(
     let mut repeated: Vec<PendingRuntimeEventPost> = reduced
         .repeated
         .into_values()
-        .map(|(_, post)| post)
+        .map(|(_, post, _)| post)
         .collect();
     sort_by_observation(&mut critical);
     sort_by_observation(&mut durable);
@@ -3824,6 +3847,48 @@ mod runtime_status_collection_tests {
         let waited = Utc::now() - pass.oldest_pending_at.expect("measured");
         assert!(waited < chrono::Duration::seconds(60), "waited {waited}");
         assert!(pass.observed_at.is_some());
+    }
+
+    /// Queue age is how long the oldest file still waiting has waited: a file
+    /// enqueued two hours ago reads as two hours, and a stale copy the pass
+    /// supersedes and removes does not count.
+    #[test]
+    fn queue_age_is_the_oldest_file_still_waiting() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3600);
+        let age_files = |dir: &Path| {
+            for entry in std::fs::read_dir(dir).expect("dir").flatten() {
+                std::fs::File::options()
+                    .write(true)
+                    .open(entry.path())
+                    .and_then(|file| file.set_modified(two_hours_ago))
+                    .expect("age file");
+            }
+        };
+
+        write(dir, &terminal_event("s1", "r1", "2026-10-05T04:30:00Z"));
+        age_files(dir);
+        let waited = Utc::now()
+            - collect_runtime_event_outbox_pass(dir)
+                .oldest_pending_at
+                .expect("measured");
+        assert!(waited > chrono::Duration::minutes(119), "waited {waited}");
+
+        let stale = TempDir::new().expect("tempdir");
+        write(
+            stale.path(),
+            &phase_event("s1", "r1", "thinking", "2026-10-05T04:30:00Z"),
+        );
+        age_files(stale.path());
+        write(
+            stale.path(),
+            &phase_event("s1", "r1", "thinking", "2026-10-05T04:30:01Z"),
+        );
+        let pass = collect_runtime_event_outbox_pass(stale.path());
+        assert_eq!(pass.pending_count, 1, "the stale copy was superseded");
+        let waited = Utc::now() - pass.oldest_pending_at.expect("measured");
+        assert!(waited < chrono::Duration::seconds(60), "waited {waited}");
     }
 
     #[test]
