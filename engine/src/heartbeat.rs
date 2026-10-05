@@ -1147,6 +1147,14 @@ pub(crate) fn leases_from_observations(
         if codex_bridge_observation_is_stopped(obs) {
             continue;
         }
+        // Retained crash state is evidence for closing its run, not a session:
+        // with no bridge, app server or terminal alive there is nothing to
+        // control, and a "detached" lease would show it forever (three dead
+        // 2026-07-31 launches still listed on 2026-10-04). Same rule as
+        // `leases_from_claude_channel_observations`.
+        if !obs.bridge_alive && !obs.app_server_alive && !obs.has_tui_attachment {
+            continue;
+        }
         let thread_failed = matches!(
             obs.thread_subscription_status.as_deref(),
             Some("failed") | Some("provider_thread_switched")
@@ -4675,6 +4683,31 @@ mod tests {
             has_tui_attachment: true,
             app_server_alive: true,
         }
+    }
+
+    #[test]
+    fn leases_from_observations_skip_retained_state_with_no_live_owner() {
+        let now = Utc::now();
+        // A launch that died while starting: run named, nothing alive.
+        let mut dead = test_observation("dead-codex", "ws://127.0.0.1:45690/session");
+        dead.status = "starting".to_string();
+        dead.thread_id = None;
+        dead.app_server_pid = None;
+        dead.bridge_alive = false;
+        dead.app_server_alive = false;
+        dead.has_tui_attachment = false;
+        // The bridge died but its app server lives on: control is lost, and
+        // that is still worth reporting.
+        let mut orphaned = test_observation("orphaned-codex", "ws://127.0.0.1:45691/session");
+        orphaned.bridge_alive = false;
+        orphaned.has_tui_attachment = false;
+        orphaned.app_server_alive = true;
+
+        let leases = leases_from_observations("cinder", &[dead, orphaned], now);
+
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].session_id, "orphaned-codex");
+        assert_eq!(leases[0].state, "detached");
     }
 
     #[test]
