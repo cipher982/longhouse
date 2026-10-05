@@ -694,13 +694,17 @@ enum HearthBlackbody {
             var sum = SIMD3<Double>.zero
             for wavelength in stride(from: 380.0, through: 780.0, by: 5) {
                 let meters = wavelength * 1e-9
-                let radiance = 1 / (pow(meters, 5) * (exp(1.4388e-2 / (meters * temperature)) - 1))
-                sum += SIMD3(
-                    1.056 * lobe(wavelength, 599.8, 37.9, 31.0) + 0.362 * lobe(wavelength, 442.0, 16.0, 26.7)
-                        - 0.065 * lobe(wavelength, 501.1, 20.4, 26.2),
-                    0.821 * lobe(wavelength, 568.8, 46.9, 40.5) + 0.286 * lobe(wavelength, 530.9, 16.3, 31.1),
-                    1.217 * lobe(wavelength, 437.0, 11.8, 36.0) + 0.681 * lobe(wavelength, 459.0, 26.0, 13.8)
-                ) * radiance
+                let radiance: Double = 1 / (pow(meters, 5) * (exp(1.4388e-2 / (meters * temperature)) - 1))
+                // Typed one lobe at a time: as one expression this timed out
+                // the type checker on CI's Xcode.
+                var x: Double = 1.056 * lobe(wavelength, 599.8, 37.9, 31.0)
+                x += 0.362 * lobe(wavelength, 442.0, 16.0, 26.7)
+                x -= 0.065 * lobe(wavelength, 501.1, 20.4, 26.2)
+                var y: Double = 0.821 * lobe(wavelength, 568.8, 46.9, 40.5)
+                y += 0.286 * lobe(wavelength, 530.9, 16.3, 31.1)
+                var z: Double = 1.217 * lobe(wavelength, 437.0, 11.8, 36.0)
+                z += 0.681 * lobe(wavelength, 459.0, 26.0, 13.8)
+                sum += SIMD3<Double>(x, y, z) * radiance
             }
             return sum
         }
@@ -708,9 +712,9 @@ enum HearthBlackbody {
         let highest = log(xyz(2400).y)
         return (0..<count).map { index in
             let c = xyz(400 + 3000 * Double(index) / Double(count - 1))
-            let r = max(0, 3.2406 * c.x - 1.5372 * c.y - 0.4986 * c.z)
-            let g = max(0, -0.9689 * c.x + 1.8758 * c.y + 0.0415 * c.z)
-            let b = max(0, 0.0557 * c.x - 0.204 * c.y + 1.057 * c.z)
+            let r: Double = max(0, 3.2406 * c.x - 1.5372 * c.y - 0.4986 * c.z)
+            let g: Double = max(0, -0.9689 * c.x + 1.8758 * c.y + 0.0415 * c.z)
+            let b: Double = max(0, 0.0557 * c.x - 0.204 * c.y + 1.057 * c.z)
             let m = max(r, g, b) > 0 ? max(r, g, b) : 1
             let brightness = min(1, max(0, (log(c.y) - lowest) / (highest - lowest)))
             return SIMD4(Float(r / m), Float(g / m), Float(b / m), Float(brightness))
