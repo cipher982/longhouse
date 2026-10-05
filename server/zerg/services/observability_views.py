@@ -47,6 +47,7 @@ def build_machine_health_item_response(item: MachineTransportHealthSummary) -> M
         spool_pending=item.spool_pending,
         spool_dead=item.spool_dead,
         archive_repair=item.archive_repair,
+        runtime_event_outbox=item.runtime_event_outbox,
         history_import=item.history_import,
         parse_errors_1h=item.parse_errors_1h,
         disk_free_bytes=item.disk_free_bytes,

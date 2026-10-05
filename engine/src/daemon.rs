@@ -469,6 +469,7 @@ impl StatusLedger {
 /// collection outright: one flooded producer starved every other provider.
 struct RuntimeCollectResult {
     posts: Vec<outbox::PendingRuntimeEventPost>,
+    measurement: heartbeat::RuntimeEventOutboxSnapshot,
     elapsed_ms: u64,
     saturated: bool,
 }
@@ -1431,6 +1432,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut unmanaged_binding_refresh_failed = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
+    let mut latest_runtime_event_outbox = heartbeat::RuntimeEventOutboxSnapshot::default();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
     let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
@@ -1941,6 +1943,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             runtime_collect_result = runtime_collect_tasks.join_next(), if !runtime_collect_tasks.is_empty() => {
                 match runtime_collect_result {
                     Some(Ok(result)) => {
+                        latest_runtime_event_outbox = result.measurement;
+                        if let Some(projection) = last_status_projection.as_mut() {
+                            projection
+                                .set_runtime_event_outbox(latest_runtime_event_outbox.clone());
+                        }
                         // A saturated pass means the directory holds more than
                         // one pass can inspect, so the newest observation is
                         // not reliably in it. Reduce it to current status in a
@@ -2887,6 +2894,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 Instant::now(),
                             );
                             projection.set_heartbeat_transport(heartbeat_transport.clone());
+                            projection
+                                .set_runtime_event_outbox(latest_runtime_event_outbox.clone());
                             heartbeat::write_status_file(
                                 &mut projection,
                                 serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -3319,8 +3328,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let started = Instant::now();
                         let pass =
                             outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
+                        let measurement = heartbeat::RuntimeEventOutboxSnapshot {
+                            pending_count: pass.pending_count,
+                            pending_count_is_lower_bound: pass.pending_count_is_lower_bound,
+                            inspected_count: pass.inspected_count,
+                            saturated: pass.saturated,
+                            oldest_pending_at: pass.oldest_pending_at.map(|at| at.to_rfc3339()),
+                            observed_at: pass.observed_at.map(|at| at.to_rfc3339()),
+                        };
                         RuntimeCollectResult {
                             posts: pass.posts,
+                            measurement,
                             elapsed_ms: started.elapsed().as_millis() as u64,
                             saturated: pass.saturated,
                         }
@@ -7500,6 +7518,7 @@ mod tests {
             archive_backlog: crate::state::spool::ArchiveBacklogSnapshot::default(),
             storage_v2_outbox:
                 crate::state::pending_source_envelope::StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: heartbeat::RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,

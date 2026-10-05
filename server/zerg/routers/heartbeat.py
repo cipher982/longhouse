@@ -112,6 +112,7 @@ _HEARTBEAT_READER_FIELDS = (
     "history_import",
     "shipping_progress",
     "storage_v2_outbox",
+    "runtime_event_outbox",
     "managed_launch_recovery",
     "last_ship_at",
     "last_ship_result",
@@ -485,6 +486,7 @@ class HeartbeatIn(BaseModel):
     spool_dead_count: int = 0
     archive_backlog: dict[str, object] = Field(default_factory=dict)
     storage_v2_outbox: dict[str, object] = Field(default_factory=dict)
+    runtime_event_outbox: dict[str, object] = Field(default_factory=dict)
     managed_launch_recovery: dict[str, object] = Field(default_factory=dict)
     adaptive_backlog_limiter: dict[str, object] | None = None
     ship_scheduler: dict[str, object] | None = None
@@ -1039,7 +1041,11 @@ async def ingest_heartbeat(
             payload_for_retention.pop("history_import", None)
         if "shipping_progress" not in payload.model_fields_set:
             payload_for_retention.pop("shipping_progress", None)
-        for field_name in ("storage_v2_outbox", "managed_launch_recovery"):
+        for field_name in (
+            "storage_v2_outbox",
+            "managed_launch_recovery",
+            "runtime_event_outbox",
+        ):
             if field_name not in payload.model_fields_set:
                 payload_for_retention.pop(field_name, None)
         payload_for_retention.pop("machine_evidence", None)

@@ -53,6 +53,22 @@ const MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY: usize = 2_048;
 const MAX_REDUCER_EVIDENCE_FACTS: usize = 256;
 const ANTIGRAVITY_READINESS_TTL_SECS: i64 = 120;
 
+/// Latest measurement of pending runtime-event files from one collection pass.
+///
+/// An absent `observed_at` means the daemon has not completed a pass yet; it is
+/// intentionally not encoded as an empty, healthy queue.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct RuntimeEventOutboxSnapshot {
+    pub pending_count: usize,
+    /// True when the pass hit a cap or skipped files it could not measure, so
+    /// this count is only a lower bound on pending work.
+    pub pending_count_is_lower_bound: bool,
+    pub inspected_count: usize,
+    pub saturated: bool,
+    pub oldest_pending_at: Option<String>,
+    pub observed_at: Option<String>,
+}
+
 /// Heartbeat payload sent to the server and written locally.
 #[derive(Debug, Serialize, Clone)]
 pub struct HeartbeatPayload {
@@ -81,6 +97,8 @@ pub struct HeartbeatPayload {
     pub archive_backlog: ArchiveBacklogSnapshot,
     #[serde(default)]
     pub storage_v2_outbox: StorageV2OutboxSnapshot,
+    #[serde(default)]
+    pub runtime_event_outbox: RuntimeEventOutboxSnapshot,
     pub parse_error_count_1h: u32,
     pub ship_attempts_1h: u32,
     pub ship_successes_1h: u32,
@@ -920,6 +938,7 @@ impl HeartbeatPayload {
             spool_dead_count,
             archive_backlog,
             storage_v2_outbox,
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h,
             ship_attempts_1h: ship_stats.ship_attempts_1h,
             ship_successes_1h: ship_stats.ship_successes_1h,
@@ -3962,6 +3981,9 @@ impl StatusFileProjection {
     pub fn set_heartbeat_transport(&mut self, value: HeartbeatTransportStatus) {
         self.heartbeat_transport = value;
     }
+    pub fn set_runtime_event_outbox(&mut self, value: RuntimeEventOutboxSnapshot) {
+        self.payload.runtime_event_outbox = value;
+    }
 
     pub fn set_last_reconciled_at(&mut self, value: Option<String>) {
         if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
@@ -4354,6 +4376,14 @@ mod tests {
             spool_dead_count: 1,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot {
+                pending_count: 3,
+                pending_count_is_lower_bound: true,
+                inspected_count: 4,
+                saturated: true,
+                oldest_pending_at: Some("2026-10-05T12:00:00Z".to_string()),
+                observed_at: Some("2026-10-05T12:00:01Z".to_string()),
+            },
             parse_error_count_1h: 0,
             ship_attempts_1h: 7,
             ship_successes_1h: 5,
@@ -4408,6 +4438,15 @@ mod tests {
         assert!(parsed["last_ship_at"].is_string());
         assert!(parsed["last_ship_attempt_at"].is_string());
         assert_eq!(parsed["last_ship_result"], "ok");
+        assert_eq!(parsed["runtime_event_outbox"]["pending_count"], 3);
+        assert_eq!(
+            parsed["runtime_event_outbox"]["pending_count_is_lower_bound"],
+            true
+        );
+        assert_eq!(
+            parsed["runtime_event_outbox"]["oldest_pending_at"],
+            "2026-10-05T12:00:00Z"
+        );
     }
 
     #[test]
@@ -4595,6 +4634,7 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
@@ -5857,6 +5897,7 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
@@ -5922,6 +5963,7 @@ mod tests {
             spool_dead_count: 3,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
@@ -5979,6 +6021,14 @@ mod tests {
         let status_path = dir.path().join("agent").join("engine-status.json");
         let mut projection =
             build_status_file_projection(payload, &stats, Vec::new(), PhaseLedgerStatus::Ok);
+        projection.set_runtime_event_outbox(RuntimeEventOutboxSnapshot {
+            pending_count: 7,
+            pending_count_is_lower_bound: true,
+            inspected_count: 7,
+            saturated: true,
+            oldest_pending_at: Some("2026-10-05T12:00:00Z".to_string()),
+            observed_at: Some("2026-10-05T12:00:01Z".to_string()),
+        });
         let mut progress_observation = ShippingProgressObservation::new(Instant::now());
         write_status_file(
             &mut projection,
@@ -5996,6 +6046,15 @@ mod tests {
         let json = std::fs::read_to_string(&status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["spool_dead_count"], 3);
+        assert_eq!(parsed["runtime_event_outbox"]["pending_count"], 7);
+        assert_eq!(
+            parsed["runtime_event_outbox"]["pending_count_is_lower_bound"],
+            true
+        );
+        assert_eq!(
+            parsed["runtime_event_outbox"]["oldest_pending_at"],
+            "2026-10-05T12:00:00Z"
+        );
         assert_eq!(parsed["heartbeat_transport"]["state"], "unknown");
         assert_eq!(parsed["recent_dead_letters"][0]["provider"], "codex");
         assert_eq!(
@@ -6106,6 +6165,7 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
@@ -6198,6 +6258,7 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
@@ -7403,6 +7464,7 @@ mod tests {
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            runtime_event_outbox: RuntimeEventOutboxSnapshot::default(),
             parse_error_count_1h: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,

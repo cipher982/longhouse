@@ -22,6 +22,14 @@ system: the Code map in [`ARCHITECTURE.md`](../ARCHITECTURE.md#code-map).
 - `src/managed_phase_contract.rs` and `src/managed_identity_contract.rs` are
   generated; never edit them.
 
+The runtime-event outbox measurement is collected from the same reads used to
+build each delivery pass and is published as `runtime_event_outbox` in the
+heartbeat and `engine-status.json`. A saturated pass marks its pending count as
+a lower bound; an absent observation is unknown. `longhouse local-health`
+degrades with `runtime_events_backlogged` when an observed event is at least
+60s old. Sauron polls `GET /api/agents/machines/health` once per minute and
+alerts at that same reported-age threshold.
+
 Background evidence stays separate from parent activity. Claude registry
 snapshots and exact child lifecycle callbacks retain independent clocks; a
 completion callback can retire its matching task without renewing other work.

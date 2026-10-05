@@ -626,6 +626,7 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
         "ship_connect_errors_10m",
         "shipping_progress",
         "storage_v2_outbox",
+        "runtime_event_outbox",
         "managed_launch_recovery",
     }
 )

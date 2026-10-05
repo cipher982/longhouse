@@ -139,6 +139,7 @@ class MachineTransportHealthSummary:
     spool_pending: int
     spool_dead: int
     archive_repair: dict[str, Any]
+    runtime_event_outbox: dict[str, Any] | None
     history_import: HistoryImportSnapshot
     parse_errors_1h: int
     disk_free_bytes: int
@@ -300,6 +301,8 @@ def build_machine_transport_health_summary(
     spool_pending = sample.spool_pending
     spool_dead = sample.spool_dead
     archive_repair = _archive_repair_from_heartbeat(row, spool_pending=spool_pending)
+    runtime_event_outbox_value = _heartbeat_payload(row).get("runtime_event_outbox")
+    runtime_event_outbox = runtime_event_outbox_value if isinstance(runtime_event_outbox_value, dict) else None
     local_facts = _local_health_facts_from_heartbeat(row)
     history_import = _history_import_from_heartbeat(row)
     parse_errors_1h = sample.parse_errors_1h
@@ -386,6 +389,7 @@ def build_machine_transport_health_summary(
         archive_repair=archive_repair,
         history_import=history_import,
         parse_errors_1h=parse_errors_1h,
+        runtime_event_outbox=runtime_event_outbox,
         disk_free_bytes=disk_free_bytes,
         is_offline=is_offline,
     )

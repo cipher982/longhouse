@@ -18,6 +18,11 @@ const NATIVE_DEVICE_ENTRYPOINTS_JSON: &str =
 const ENGINE_FRESH_SECONDS: u64 = 30;
 const ENGINE_STALE_SECONDS: u64 = 60;
 const PROJECTION_STALE_SECONDS: u64 = 60;
+// Healthy work is collected on a 100ms tick and should leave within one
+// 20s POST timeout; observed live-lane POST p95 is about 4.5s. At 60s the
+// alarm is 3x the timeout and 13.3x p95, leaving 39.9s beyond one timeout
+// (399 extra collection ticks) for ordinary scheduling variance.
+const RUNTIME_EVENT_OUTBOX_STALE_SECONDS: u64 = 60;
 // Allow the next scheduled pass to finish; a refresh in flight is not failure.
 const RECONCILIATION_STALE_SECONDS: u64 =
     2 * crate::daemon::MANAGED_FULL_RECONCILIATION_INTERVAL_SECS;
@@ -111,6 +116,7 @@ struct NativeLocalHealth {
     spool: NativeSpoolStatus,
     managed_sessions: NativeManagedSessionsStatus,
     managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
+    runtime_event_outbox: NativeRuntimeEventOutboxStatus,
     /// Whether this machine was ever authorized to a Runtime Host. Absent only
     /// where the producer did not look (the repair plan reports its own
     /// `machine_state`); present on every `local-health` run.
@@ -186,6 +192,23 @@ struct NativeSpoolStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct NativeRuntimeEventOutboxStatus {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    oldest_pending_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    age_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_count_is_lower_bound: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    saturated: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct NativeManagedSessionsStatus {
     count: usize,
 }
@@ -223,6 +246,7 @@ struct NativeDesktopHealth {
     transport: NativeTransportStatus,
     heartbeat_transport: NativeHeartbeatTransportStatus,
     spool: NativeSpoolStatus,
+    runtime_event_outbox: NativeRuntimeEventOutboxStatus,
     /// Absent when session evidence could not be read at all. An empty array
     /// here is a positive claim that the engine reported no sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1101,6 +1125,7 @@ const RETAINED_DATA_FAULT_REASONS: &[&str] = &[
     "engine_status_unreadable",
     "spool_dead_letters",
     "archive_dead_lettered",
+    "runtime_events_backlogged",
     "archive_repair_paused",
     "storage_v2_outbox_unreadable",
     "storage_v2_sources_blocked",
@@ -1765,6 +1790,73 @@ fn collect_managed_launch_recovery(
     }
 }
 
+fn native_runtime_event_outbox_status(value: Option<&Value>) -> NativeRuntimeEventOutboxStatus {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return NativeRuntimeEventOutboxStatus {
+            status: "unknown",
+            pending_count: None,
+            oldest_pending_at: None,
+            age_seconds: None,
+            observed_at: None,
+            pending_count_is_lower_bound: None,
+            saturated: None,
+        };
+    };
+    let pending_count = object.get("pending_count").and_then(Value::as_u64);
+    let oldest_pending_at = object
+        .get("oldest_pending_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    let observed_at = object
+        .get("observed_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    // Age as of the pass that measured it, the same reading Sauron takes from
+    // the heartbeat. A status file that stopped updating is the engine-status
+    // freshness check's finding, not a growing queue.
+    let parse = |value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|at| at.with_timezone(&chrono::Utc))
+    };
+    let observed = observed_at.as_deref().and_then(parse);
+    let observation_is_valid = observed.is_some();
+    let oldest_age = oldest_pending_at
+        .as_deref()
+        .and_then(parse)
+        .zip(observed)
+        .map(|(oldest, observed)| {
+            observed.signed_duration_since(oldest).num_seconds().max(0) as u64
+        });
+    let status = match pending_count {
+        Some(0) if observation_is_valid => "clear",
+        Some(0) => "unknown",
+        Some(_) if !observation_is_valid => "unknown",
+        Some(_) => match oldest_age {
+            Some(age) if age >= RUNTIME_EVENT_OUTBOX_STALE_SECONDS => "backlogged",
+            Some(_) => "pending",
+            None => "unknown",
+        },
+        None => "unknown",
+    };
+    NativeRuntimeEventOutboxStatus {
+        status,
+        pending_count,
+        oldest_pending_at,
+        age_seconds: match pending_count {
+            Some(count) if count > 0 => oldest_age,
+            _ => None,
+        },
+        observed_at,
+        pending_count_is_lower_bound: object
+            .get("pending_count_is_lower_bound")
+            .and_then(Value::as_bool),
+        saturated: object.get("saturated").and_then(Value::as_bool),
+    }
+}
+
 fn native_health_from_parts(
     status_path: &Path,
     exists: bool,
@@ -1799,6 +1891,8 @@ fn native_health_from_parts(
         .and_then(Value::as_u64);
     let storage_outbox_value = object.and_then(|value| value.get("storage_v2_outbox"));
     let storage_outbox = storage_outbox_value.and_then(Value::as_object);
+    let runtime_event_outbox_value = object.and_then(|value| value.get("runtime_event_outbox"));
+    let runtime_event_outbox = native_runtime_event_outbox_status(runtime_event_outbox_value);
     let storage_counter_is_invalid = |key: &str| {
         storage_outbox
             .and_then(|value| value.get(key))
@@ -2013,6 +2107,9 @@ fn native_health_from_parts(
     if storage_outbox_unreadable {
         reasons.push("storage_v2_outbox_unreadable".to_string());
     }
+    if runtime_event_outbox.status == "backlogged" {
+        reasons.push("runtime_events_backlogged".to_string());
+    }
     if managed_launch_recovery.exhausted_count > 0 {
         reasons.push("managed_launch_recovery_exhausted".to_string());
     }
@@ -2062,6 +2159,11 @@ fn native_health_from_parts(
         .any(|reason| reason == "storage_v2_sources_unresolved")
     {
         "Longhouse has unresolved durable source evidence"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "runtime_events_backlogged")
+    {
+        "Runtime events are waiting to reach the Runtime Host"
     } else if reasons
         .iter()
         .any(|reason| reason == "managed_launch_recovery_unreadable")
@@ -2153,6 +2255,7 @@ fn native_health_from_parts(
             count: managed_session_count,
         },
         managed_launch_recovery,
+        runtime_event_outbox,
         machine_setup: None,
         control_channel: object
             .and_then(|value| value.get("control_channel"))
@@ -2242,6 +2345,7 @@ fn native_desktop_health_from_parts(
         },
         transport: health.transport,
         spool: health.spool,
+        runtime_event_outbox: health.runtime_event_outbox,
         managed_summary: NativeDesktopManagedSummary {
             attached_count,
             detached_count,
@@ -2272,6 +2376,7 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
         "spool_pending_count",
         "spool_dead_count",
         "storage_v2_outbox",
+        "runtime_event_outbox",
         "archive_backlog",
         "parse_error_count_1h",
         "disk_free_bytes",
@@ -2310,6 +2415,9 @@ fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
         }
         "inspect_storage_outbox" => {
             "Inspect the storage-v2 outbox with: longhouse local-health --json".to_string()
+        }
+        "inspect_runtime_event_outbox" => {
+            "Inspect runtime_event_outbox in engine-status.json and read Machine Agent logs; do not remove queued event files.".to_string()
         }
         "inspect_shipping" => {
             "Inspect shipping evidence with: longhouse shipping inspect --json".to_string()
@@ -2474,6 +2582,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "storage_v2_sources_unresolved"
             | "storage_v2_sources_proof_unknown" => "inspect_storage_source",
             "storage_v2_outbox_unreadable" => "inspect_storage_outbox",
+            "runtime_events_backlogged" => "inspect_runtime_event_outbox",
             "reported_offline"
             | "heartbeat_post_failed"
             | "heartbeat_evidence_rejected"
@@ -5551,6 +5660,44 @@ fn print_native_local_health(health: &NativeLocalHealth) {
             .map(|count| count.to_string())
             .unwrap_or_else(|| "unknown".to_string())
     );
+    println!("Runtime Event Outbox");
+    println!("  state: {}", health.runtime_event_outbox.status);
+    println!(
+        "  oldest age: {}",
+        health
+            .runtime_event_outbox
+            .age_seconds
+            .map(|age| format!("{age}s"))
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    let pending_count = health
+        .runtime_event_outbox
+        .pending_count
+        .map(|count| {
+            if health.runtime_event_outbox.pending_count_is_lower_bound == Some(true) {
+                format!("at least {count}")
+            } else {
+                count.to_string()
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("  pending: {pending_count}");
+    println!(
+        "  oldest: {}",
+        health
+            .runtime_event_outbox
+            .oldest_pending_at
+            .as_deref()
+            .unwrap_or("unknown")
+    );
+    println!(
+        "  observed: {}",
+        health
+            .runtime_event_outbox
+            .observed_at
+            .as_deref()
+            .unwrap_or("unknown")
+    );
     println!("Transport");
     println!("  status: {}", health.transport.status);
     println!("  summary: {}", health.transport.status_summary);
@@ -6552,6 +6699,102 @@ mod tests {
         .to_string();
 
         assert!(err.contains("schema_version must be 2"));
+    }
+
+    fn local_health_with_runtime_event_outbox(
+        runtime_event_outbox: Option<Value>,
+    ) -> NativeLocalHealth {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut payload = json!({
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "ship_attempts_10m": 0,
+            "is_offline": false,
+            "local_projection": {
+                "generated_at": now.clone(),
+                "engine_pulse_at": now.clone(),
+                "last_reconciled_at": now,
+                "reconciliation": {"state": "idle"}
+            }
+        });
+        if let Some(runtime_event_outbox) = runtime_event_outbox {
+            payload["runtime_event_outbox"] = runtime_event_outbox;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        native_health_from_parts(&path, true, Some(1), Some(payload), None)
+    }
+
+    #[test]
+    fn local_health_warns_on_stale_runtime_event_outbox_age() {
+        let observed_at = chrono::Utc::now();
+        let oldest_pending_at =
+            observed_at - chrono::Duration::seconds(RUNTIME_EVENT_OUTBOX_STALE_SECONDS as i64 + 1);
+        let health = local_health_with_runtime_event_outbox(Some(json!({
+            "pending_count": 4,
+            "pending_count_is_lower_bound": true,
+            "inspected_count": 4,
+            "saturated": true,
+            "oldest_pending_at": oldest_pending_at.to_rfc3339(),
+            "observed_at": observed_at.to_rfc3339()
+        })));
+
+        assert_eq!(health.health_state, "degraded");
+        assert_eq!(health.runtime_event_outbox.status, "backlogged");
+        assert!(health
+            .runtime_event_outbox
+            .age_seconds
+            .is_some_and(|age| age >= RUNTIME_EVENT_OUTBOX_STALE_SECONDS));
+        assert!(health
+            .reasons
+            .contains(&"runtime_events_backlogged".to_string()));
+        assert_eq!(
+            health.headline,
+            "Runtime events are waiting to reach the Runtime Host"
+        );
+        assert!(native_desktop_suggested_action_ids(&health.reasons)
+            .contains(&"inspect_runtime_event_outbox".to_string()));
+        assert!(
+            native_desktop_action_text("inspect_runtime_event_outbox", &health.reasons)
+                .contains("do not remove queued event files")
+        );
+    }
+
+    #[test]
+    fn local_health_keeps_fresh_runtime_event_outbox_pending_but_not_backlogged() {
+        let observed_at = chrono::Utc::now();
+        let oldest_pending_at = observed_at - chrono::Duration::seconds(10);
+        let health = local_health_with_runtime_event_outbox(Some(json!({
+            "pending_count": 1,
+            "pending_count_is_lower_bound": false,
+            "inspected_count": 1,
+            "saturated": false,
+            "oldest_pending_at": oldest_pending_at.to_rfc3339(),
+            "observed_at": observed_at.to_rfc3339()
+        })));
+
+        assert_eq!(health.health_state, "healthy");
+        assert_eq!(health.runtime_event_outbox.status, "pending");
+        assert!(health
+            .runtime_event_outbox
+            .age_seconds
+            .is_some_and(|age| age < RUNTIME_EVENT_OUTBOX_STALE_SECONDS));
+        assert!(!health
+            .reasons
+            .contains(&"runtime_events_backlogged".to_string()));
+    }
+
+    #[test]
+    fn local_health_reads_missing_runtime_event_outbox_as_unknown() {
+        let health = local_health_with_runtime_event_outbox(None);
+
+        assert_eq!(health.health_state, "healthy");
+        assert_eq!(health.runtime_event_outbox.status, "unknown");
+        assert_eq!(health.runtime_event_outbox.pending_count, None);
+        assert_eq!(health.runtime_event_outbox.age_seconds, None);
+        assert!(!health
+            .reasons
+            .contains(&"runtime_events_backlogged".to_string()));
     }
 
     #[test]

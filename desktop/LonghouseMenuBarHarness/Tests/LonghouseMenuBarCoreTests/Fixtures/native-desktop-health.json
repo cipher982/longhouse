@@ -81,6 +81,9 @@
   "reasons": [
     "engine_reconciliation_stale"
   ],
+  "runtime_event_outbox": {
+    "status": "unknown"
+  },
   "schema_version": 1,
   "severity": "green",
   "spool": {

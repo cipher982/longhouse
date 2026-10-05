@@ -55,6 +55,7 @@ class MachineHealthItemResponse(UTCBaseModel):
     spool_pending: int
     spool_dead: int
     archive_repair: dict[str, Any] = Field(default_factory=dict)
+    runtime_event_outbox: dict[str, Any] | None = None
     history_import: HistoryImportSnapshot = Field(default_factory=HistoryImportSnapshot.unavailable)
     parse_errors_1h: int
     disk_free_bytes: int
