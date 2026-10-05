@@ -11,8 +11,10 @@ import pytest
 from zerg.catalogd.client import DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogRequestTooLarge
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.client import call_catalogd_sync
+from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
 from zerg.catalogd.protocol import CatalogRpcError
 from zerg.catalogd.protocol import CatalogRpcRequest
 from zerg.catalogd.protocol import CatalogRpcResponse
@@ -201,6 +203,23 @@ async def test_client_maps_missing_socket_to_catalog_unavailable(socket_path):
     client = CatalogClient(socket_path, default_timeout_seconds=0.05)
     with pytest.raises(CatalogUnavailable):
         await client.call("ping.v2")
+
+
+@pytest.mark.asyncio
+async def test_request_larger_than_a_frame_is_too_large_not_unavailable(socket_path):
+    # Nothing listens on socket_path, so a client that tried to send would say
+    # CatalogUnavailable. An unframeable request is refused before any I/O and
+    # never retried: resending it cannot change the outcome.
+    client = CatalogClient(socket_path, default_timeout_seconds=0.5)
+    oversized = {"events": [{"payload": "x" * MAX_PAYLOAD_BYTES}]}
+
+    with pytest.raises(CatalogRequestTooLarge):
+        await client.call("session.runtime.apply.v2", oversized)
+    with pytest.raises(CatalogRequestTooLarge):
+        call_catalogd_sync(socket_path, "session.runtime.apply.v2", params=oversized)
+    # The same call small enough to frame meets the dead socket: unavailable.
+    with pytest.raises(CatalogUnavailable):
+        await client.call("session.runtime.apply.v2", {"events": []})
 
 
 @pytest.mark.asyncio

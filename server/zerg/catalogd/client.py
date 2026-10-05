@@ -14,11 +14,11 @@ from zerg.catalogd.protocol import HEADER_BYTES
 from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
 from zerg.catalogd.protocol import CatalogRpcRequest
 from zerg.catalogd.protocol import CatalogRpcResponse
+from zerg.catalogd.protocol import FrameTooLarge
 from zerg.catalogd.protocol import ProtocolError
 from zerg.catalogd.protocol import decode_frame
 from zerg.catalogd.protocol import encode_frame
 from zerg.catalogd.protocol import read_frame
-from zerg.catalogd.protocol import write_frame
 
 _SAFE_RETRY_METHODS = {
     # create is an idempotent mutation keyed by caller-supplied token_id. It is
@@ -193,6 +193,29 @@ class CatalogUnavailable(RuntimeError):
         self.outcome_unknown = outcome_unknown
 
 
+class CatalogRequestInvalid(ValueError):
+    """The request itself cannot be sent to catalogd; resending it unchanged cannot succeed.
+
+    Not a :class:`CatalogUnavailable`: nothing about catalogd's health is in
+    question. Reporting an unframeable request as "temporarily unavailable"
+    made the Machine Agent resend one oversized runtime batch for ten hours on
+    2026-10-05 while every event queued behind it waited.
+    """
+
+
+class CatalogRequestTooLarge(CatalogRequestInvalid):
+    """The request exceeds the catalogd frame limit; a smaller request can succeed."""
+
+
+def _encode_request(request: CatalogRpcRequest) -> bytes:
+    try:
+        return encode_frame(request)
+    except FrameTooLarge as exc:
+        raise CatalogRequestTooLarge(f"{request.method} request exceeds the catalogd frame limit") from exc
+    except ProtocolError as exc:
+        raise CatalogRequestInvalid(f"{request.method} request cannot be framed: {exc}") from exc
+
+
 class CatalogRemoteError(RuntimeError):
     def __init__(self, response_error) -> None:
         super().__init__(response_error.message)
@@ -279,10 +302,12 @@ class CatalogClient:
             deadline_mono_ns=str(monotonic_deadline),
             params=params,
         )
+        frame = _encode_request(request)
         writer: asyncio.StreamWriter | None = None
         try:
             reader, writer = await asyncio.open_unix_connection(self.socket_path)
-            await write_frame(writer, request)
+            writer.write(frame)
+            await writer.drain()
             response = await read_frame(reader)
         finally:
             if writer is not None:
@@ -315,11 +340,12 @@ def call_catalogd_sync(
         deadline_mono_ns=str(time.monotonic_ns() + int(timeout_seconds * 1_000_000_000)),
         params=params or {},
     )
+    frame = _encode_request(request)
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout_seconds)
             connection.connect(str(socket_path))
-            connection.sendall(encode_frame(request))
+            connection.sendall(frame)
             header = _recv_exact(connection, HEADER_BYTES)
             payload_length = struct.unpack(">I", header[4:])[0]
             if payload_length > MAX_PAYLOAD_BYTES:

@@ -62,6 +62,13 @@ class ProtocolError(ValueError):
         self.code = code
 
 
+class FrameTooLarge(ProtocolError):
+    """A message larger than one frame. Sending it again unchanged cannot succeed."""
+
+    def __init__(self) -> None:
+        super().__init__("invalid_request", f"payload exceeds the {MAX_PAYLOAD_BYTES // (1024 * 1024)} MiB frame limit")
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogRpcRequest:
     id: str
@@ -252,7 +259,7 @@ def encode_frame(message: CatalogRpcMessage) -> bytes:
     parse_message(wire)
     payload = json.dumps(wire, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
     if len(payload) > MAX_PAYLOAD_BYTES:
-        raise ProtocolError("invalid_request", "payload exceeds the 8 MiB frame limit")
+        raise FrameTooLarge()
     return MAGIC + struct.pack(">I", len(payload)) + payload
 
 
@@ -265,7 +272,7 @@ def decode_frame(frame: bytes) -> CatalogRpcMessage:
         raise ProtocolError("invalid_request", "invalid frame magic")
     payload_length = struct.unpack(">I", frame[len(MAGIC) : HEADER_BYTES])[0]
     if payload_length > MAX_PAYLOAD_BYTES:
-        raise ProtocolError("invalid_request", "payload exceeds the 8 MiB frame limit")
+        raise FrameTooLarge()
     if len(frame) != HEADER_BYTES + payload_length:
         description = "truncated frame payload" if len(frame) < HEADER_BYTES + payload_length else "frame has trailing bytes"
         raise ProtocolError("invalid_request", description)
@@ -283,7 +290,7 @@ async def read_frame(reader: StreamReader) -> CatalogRpcMessage:
         raise ProtocolError("invalid_request", "invalid frame magic")
     payload_length = struct.unpack(">I", header[len(MAGIC) :])[0]
     if payload_length > MAX_PAYLOAD_BYTES:
-        raise ProtocolError("invalid_request", "payload exceeds the 8 MiB frame limit")
+        raise FrameTooLarge()
     try:
         payload = await reader.readexactly(payload_length)
     except IncompleteReadError as exc:

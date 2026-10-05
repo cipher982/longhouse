@@ -15,6 +15,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogRequestTooLarge
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
@@ -120,6 +121,17 @@ async def ingest_runtime_observation_batch(
                 {"events": [event.model_dump(mode="json") for event in catalog_events]},
                 timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
             )
+        except CatalogRequestTooLarge as exc:
+            # Permanent for this request, not for its events: the Machine Agent
+            # resends them in smaller requests. A 503 here made it resend the
+            # same oversized batch forever.
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={
+                    "code": "runtime_batch_too_large",
+                    "message": "Runtime batch exceeds one catalog apply; send fewer bytes per request.",
+                },
+            ) from exc
         except CatalogUnavailable as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
