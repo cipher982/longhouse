@@ -2958,6 +2958,58 @@ describe("SessionChat", () => {
       }
     });
 
+    it("does not flag a transcript-linked receipt as unconfirmed when its turn never settled", async () => {
+      const onOutboxChange = vi.fn();
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([
+            {
+              id: 72,
+              client_request_id: "linked-stale-turn",
+              text: "answered input",
+              intent: "auto",
+              status: "delivered",
+              durable_event_id: "50be1eb7",
+              turn: {
+                turn_id: "stale-turn-2",
+                run_id: "stale-run-2",
+                state: "active",
+                is_fresh: false,
+              },
+              created_at: null,
+              attachments: [],
+            },
+          ]);
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const view = renderSessionChat(
+        {
+          chatMode: "managed_local",
+          timelineItems: [],
+          onOutboxChange,
+          session: makeSession({ provider: "codex" }),
+        },
+        { queryClient },
+      );
+      try {
+        await waitFor(() =>
+          expect(requestMock.mock.calls.some(([p]) => String(p).endsWith("/inputs"))).toBe(true),
+        );
+        await waitForDuration(300);
+        expect(lastOutbox(onOutboxChange)).toEqual([]);
+      } finally {
+        view.unmount();
+        queryClient.clear();
+      }
+    });
+
     it("keeps a delivered Helm summary until transcript echo across reload", async () => {
       const user = userEvent.setup();
       const onOutboxChange = vi.fn();

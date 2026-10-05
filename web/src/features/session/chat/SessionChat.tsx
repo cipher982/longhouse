@@ -1032,6 +1032,25 @@ export function SessionChat({
             detail: receipt.last_error,
           };
         }
+        // A receipt linked to a durable transcript event is confirmed
+        // delivered: a Console turn stuck nonterminal (no run-end evidence)
+        // says nothing about whether the message landed.
+        if (
+          receipt.durable_event_id &&
+          receipt.status === "delivered" &&
+          turnState &&
+          NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
+          receipt.turn?.is_fresh !== true
+        ) {
+          return {
+            ...pending,
+            phase: "delivered",
+            serverInputId: receipt.id ?? pending.serverInputId,
+            serverLiveInputId:
+              receipt.live_input_id ?? pending.serverLiveInputId,
+            deliveryStatus: receipt.status,
+          };
+        }
         if (
           turnState &&
           NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
@@ -2017,7 +2036,8 @@ export function SessionChat({
       } else if (
         turnState &&
         NONTERMINAL_CONSOLE_TURN_STATES.has(turnState) &&
-        row.turn?.is_fresh !== true
+        row.turn?.is_fresh !== true &&
+        !row.durable_event_id
       ) {
         inFlight.push({
           key,
