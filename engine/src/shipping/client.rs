@@ -381,6 +381,13 @@ impl ShipperClient {
         request_timeout: Option<Duration>,
     ) -> std::result::Result<(), JsonPostError> {
         if !self.encodes_runtime_batches() {
+            // Built while encoding was on, and another session's refusal has
+            // switched it off since: too big to send plain as is.
+            if body.len() > plain_limit {
+                return Err(JsonPostError::Transport(
+                    "batch sized for zstd; its events go again in plain requests".into(),
+                ));
+            }
             return self
                 .post_json_classified(path_suffix, body, "identity", request_timeout)
                 .await;

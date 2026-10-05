@@ -1510,7 +1510,12 @@ async fn post_runtime_event_batch(
         .post_runtime_event_batch(
             "/api/agents/runtime/events/batch",
             body,
-            RUNTIME_EVENT_BATCH_BYTES,
+            // One event goes however large it is: no smaller request exists.
+            if batch.len() == 1 {
+                usize::MAX
+            } else {
+                RUNTIME_EVENT_BATCH_BYTES
+            },
             Some(RUNTIME_EVENT_POST_TIMEOUT),
         )
         .await
