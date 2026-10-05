@@ -888,7 +888,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.phase == "Using shell")
         #expect(session.presentation?.primary?.key == "executing")
         #expect(session.control?.connection == "connected")
-        #expect(session.canStopFromMenuBar)
+        #expect(session.authority == "runtime_host" && session.control?.actions.terminate?.state == "available")
         #expect(session.menuBarAttentionKind == .working)
     }
 
@@ -998,7 +998,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(updated.titleSource == "prompt")
         #expect(updated.titleProvenance == "runtime_host")
         #expect(updated.phaseProvenance == "runtime_host")
-        #expect(updated.canStopFromMenuBar)
+        #expect(updated.authority == "runtime_host" && updated.control?.actions.terminate?.state == "available")
 
         let titleOnlyUpdate = updated.applying(
             SessionProjection(
@@ -1019,7 +1019,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(titleOnlyUpdate.presentation == updated.presentation)
         #expect(titleOnlyUpdate.activity == updated.activity)
         #expect(titleOnlyUpdate.control == updated.control)
-        #expect(titleOnlyUpdate.canStopFromMenuBar)
+        #expect(titleOnlyUpdate.authority == "runtime_host" && titleOnlyUpdate.control?.actions.terminate?.state == "available")
     }
 
     @Test
@@ -2998,14 +2998,14 @@ struct LonghouseMenuBarCoreTests {
         #expect(terminal.isConsoleManagedSession == false)
         #expect(terminal.needsManagedSessionAttention == false)
         #expect(terminal.isBackgroundManagedSession == false)
-        #expect(terminal.canStopFromMenuBar == false)
+        #expect(!(terminal.authority == "runtime_host" && terminal.control?.actions.terminate?.state == "available"))
         #expect(background.launchMode == "detached_ui")
         #expect(background.uiAttached == false)
         #expect(background.normalizedUIPresence == "background")
         #expect(background.isConsoleManagedSession == true)
         #expect(background.needsManagedSessionAttention == false)
         #expect(background.isBackgroundManagedSession == true)
-        #expect(background.canStopFromMenuBar == false)
+        #expect(!(background.authority == "runtime_host" && background.control?.actions.terminate?.state == "available"))
     }
 
     @Test
@@ -3230,7 +3230,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.normalizedUIPresence == nil)
         #expect(session.isConsoleManagedSession == false)
         #expect(session.needsManagedSessionAttention == false)
-        #expect(session.canStopFromMenuBar == false)
+        #expect(!(session.authority == "runtime_host" && session.control?.actions.terminate?.state == "available"))
     }
 
     @Test
@@ -3308,7 +3308,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.needsManagedSessionAttention == true)
         #expect(session.isBackgroundManagedSession == true)
         #expect(session.menuBarAttentionKind == .phaseUnavailable)
-        #expect(session.canStopFromMenuBar == false)
+        #expect(!(session.authority == "runtime_host" && session.control?.actions.terminate?.state == "available"))
     }
 
     @Test

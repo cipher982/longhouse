@@ -9,6 +9,8 @@ public enum MenuBarPanelLayout {
     public static let rootSpacing: CGFloat = 10
     /// Session rows scroll inside this height so actions below stay on screen.
     public static let sessionAreaMaximumHeight: CGFloat = 300
+    /// Up to this many idle sessions show as rows; more fold into one line.
+    public static let inlineQuietLimit = 5
     /// The whole body below the header scrolls past this, so the panel never
     /// exceeds `maximumWindowHeight` (760 = 12+12 padding, ~56 header, 10 gap,
     /// ~30 feedback headroom, 640 body).
@@ -153,8 +155,7 @@ public struct MenuBarPanelView: View {
     private let dataTrust: DataTrust
     private let projectionTrust: DataTrust
 
-    /// nil follows the default for the current contents.
-    @State private var quietExpanded: Bool?
+    @State private var quietExpanded = false
     @State private var unmanagedExpanded = false
     @State private var factsExpanded = false
 
@@ -517,15 +518,16 @@ public struct MenuBarPanelView: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(rows) { HearthSessionRow(entry: $0) }
 
-                if !quiet.isEmpty {
+                // Idle sessions are finished work waiting for your next prompt,
+                // so a handful show as rows; only a long tail folds away.
+                if quiet.count <= MenuBarPanelLayout.inlineQuietLimit {
+                    ForEach(quiet) { HearthQuietRow(entry: $0) }
+                } else {
                     HearthFoldLine(
                         providers: quiet.map(\.provider),
                         title: quietTitle(quiet),
                         detail: quiet.map(\.title).joined(separator: ", "),
-                        expanded: Binding(
-                            get: { quietExpanded ?? (rows.isEmpty && !hasFocus && quiet.count <= 4) },
-                            set: { quietExpanded = $0 }
-                        ),
+                        expanded: $quietExpanded,
                         identifier: LonghouseMenuBarAccessibilityID.Hearth.quietSessions
                     ) {
                         VStack(spacing: 0) {
@@ -634,8 +636,7 @@ public struct MenuBarPanelView: View {
             subtitle: hearthSubtitle(session, kind: kind),
             ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
             seed: Self.stableSeed(session.id),
-            openAction: managedOpenAction(for: session),
-            stopAction: managedStopAction(for: session)
+            openAction: managedOpenAction(for: session)
         )
     }
 
@@ -723,28 +724,6 @@ public struct MenuBarPanelView: View {
                 return nil
             }
             return ManagedStopTarget(sessionID: sessionID, provider: entry.provider)
-        }
-    }
-
-    private func managedStopAction(for session: ManagedSessionSnapshot) -> (() -> Void)? {
-        guard session.canStopFromMenuBar,
-              let sessionID = session.sessionId,
-              !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return nil
-        }
-
-        let workspace = session.workspaceLabel
-        let provider = session.provider
-        return {
-            setFeedback(
-                actionSink.handleStopManagedBridge(
-                    sessionID: sessionID,
-                    provider: provider,
-                    workspaceLabel: workspace,
-                    snapshot: snapshot
-                )
-            )
         }
     }
 
@@ -1044,7 +1023,7 @@ public struct MenuBarPanelView: View {
         return VStack(alignment: .leading, spacing: 8) {
             Divider().opacity(0.6)
             Button {
-                withAnimation(.snappy(duration: 0.22)) { factsExpanded.toggle() }
+                factsExpanded.toggle()
             } label: {
                 HStack(spacing: 6) {
                     Circle().fill(dot).frame(width: 6, height: 6)
@@ -1064,7 +1043,9 @@ public struct MenuBarPanelView: View {
                         .rotationEffect(.degrees(factsExpanded ? 90 : 0))
                 }
                 .font(.system(size: 11))
-                .contentShape(Rectangle())
+                .padding(.vertical, 3)
+                .padding(.horizontal, 2)
+                .hearthHoverRow()
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Hearth.healthLine)
@@ -1072,7 +1053,6 @@ public struct MenuBarPanelView: View {
             if factsExpanded {
                 HearthFactsList(facts: facts)
                     .padding(.leading, 12)
-                    .transition(.opacity)
             }
         }
         .padding(.horizontal, 4)

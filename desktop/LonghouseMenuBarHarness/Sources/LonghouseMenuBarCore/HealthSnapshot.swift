@@ -2426,10 +2426,6 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         isConsoleManagedSession || needsManagedSessionAttention
     }
 
-    public var canStopFromMenuBar: Bool {
-        authority == "runtime_host" && control?.actions.terminate?.state == "available"
-    }
-
     var menuBarAttentionKind: ManagedAttentionKind {
         if let key = presentation?.primary?.key {
             switch key {
