@@ -18,7 +18,8 @@ private func previewStateFacts(
     resultSecondsAgo: TimeInterval?,
     lastResultOutcome: String?,
     workingSet overrideWorkingSet: String?,
-    pendingInteractionKind explicitPendingInteraction: String?
+    pendingInteractionKind explicitPendingInteraction: String?,
+    activityTool: String? = nil
 ) -> SessionStateFacts {
     let available = SessionStateAction(state: "available", reason: nil)
     let unavailable = SessionStateAction(state: "unavailable", reason: "preview_not_granted")
@@ -48,7 +49,7 @@ private func previewStateFacts(
         runLifecycle: closed ? "ended" : "running",
         activityState: activity,
         activityRawKind: nil,
-        activityTool: nil,
+        activityTool: activityTool,
         activitySource: "preview",
         activityObservedAt: nil,
         activityValidUntil: nil,
@@ -104,7 +105,9 @@ private func mockSession(
     workingSet: String? = nil,
     pendingInteractionKind: String? = nil,
     turns: Int = 4,
-    tools: Int = 12
+    tools: Int = 12,
+    replies: Int? = nil,
+    activityTool: String? = nil
 ) -> SessionSummary {
     let cardStatus = TimelineStatusPresentation(
         label: statusLabel,
@@ -120,7 +123,8 @@ private func mockSession(
         resultSecondsAgo: resultSecondsAgo,
         lastResultOutcome: lastResultOutcome,
         workingSet: workingSet,
-        pendingInteractionKind: pendingInteractionKind
+        pendingInteractionKind: pendingInteractionKind,
+        activityTool: activityTool
     )
     let card = TimelineCardPresentation(
         ownership: TimelineBadgePresentation(label: isManaged ? "Managed" : "Unmanaged", tone: "neutral"),
@@ -172,6 +176,7 @@ private func mockSession(
         timelineAnchorAt: iso(anchorSecondsAgo),
         userMessages: turns,
         toolCalls: tools,
+        assistantMessages: replies,
         runtimeDisplay: display,
         timelineCard: card,
         stateFacts: stateFacts
@@ -746,8 +751,13 @@ private func searchPreviewSessions() -> [SessionSummary] {
 /// Every timeline row shape at once — waiting on you, new results, open work
 /// running and idle, recent history — for fixture launches and previews.
 enum InboxGalleryFixture {
-    static var sessions: [SessionSummary] {
-        [
+    static var sessions: [SessionSummary] { sessions(tick: 0) }
+
+    /// `tick` advances the open sessions' archive counters, the way a live
+    /// card does, so the timeline fires flare and spark (Hearth live mode).
+    static func sessions(tick: Int) -> [SessionSummary] {
+        let tools = ["Bash", "Edit", "Read", "Task"]
+        return [
             mockSession(
                 id: "needs-1", project: "longhouse", title: "Approve hosted smoke test",
                 summary: "Waiting for permission before running the hosted smoke test.",
@@ -775,14 +785,16 @@ enum InboxGalleryFixture {
                 summaryTitle: "Now wiring the web interceptor retries",
                 machine: "cube",
                 statusLabel: "Using bash", statusTone: "running", activityRecency: "live",
-                anchorSecondsAgo: 38, seenAtSecondsAgo: 38
+                anchorSecondsAgo: 38, seenAtSecondsAgo: 38,
+                tools: 12 + tick * 2 + tick / 3, replies: 6 + tick, activityTool: tools[tick % tools.count]
             ),
             mockSession(
                 id: "open-thinking", project: "chaos", title: "BranchTrace blog post refinement",
                 summary: "Critiquing and removing the branch cards section.",
                 machine: "cinder",
                 statusLabel: "Thinking", statusTone: "thinking", activityRecency: "live",
-                anchorSecondsAgo: 5, seenAtSecondsAgo: 5
+                anchorSecondsAgo: 5, seenAtSecondsAgo: 5,
+                tools: 12 + tick / 3, replies: 4 + tick / 2
             ),
             mockSession(
                 id: "open-ready", project: "agent-home", title: "Provider registry cleanup",
@@ -818,10 +830,11 @@ enum InboxGalleryFixture {
 
 struct InboxGalleryUITestFixtureView: View {
     @State private var searchText = ""
+    @State private var tick = 0
 
     var body: some View {
         NavigationStack {
-            TimelineSessionList(sessions: InboxGalleryFixture.sessions, connectivityBanner: .none)
+            TimelineSessionList(sessions: InboxGalleryFixture.sessions(tick: tick), connectivityBanner: .none)
                 .background { EmberHearthBackground() }
                 .navigationTitle("Timeline")
                 .searchable(text: $searchText, prompt: "Filter sessions")
@@ -843,6 +856,13 @@ struct InboxGalleryUITestFixtureView: View {
                             .foregroundStyle(Color.primary)
                     }
                 }
+        }
+        .task {
+            guard UITestHooks.shouldRunHearthLive else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                tick += 1
+            }
         }
     }
 }

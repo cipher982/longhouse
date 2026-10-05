@@ -94,6 +94,8 @@ struct TimelineSessionCardRow: View {
                         .lineLimit(1)
                 }
             }
+            TimelineHearthLamp(session: session, suppressed: connectivityBanner != .none)
+                .frame(maxHeight: .infinity, alignment: .center)
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)

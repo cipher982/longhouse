@@ -11,6 +11,7 @@ enum UITestHooks {
     static let chatFixtureReplayPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
     static let inboxGalleryFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_INBOX_GALLERY_FIXTURE"
+    static let hearthLiveEnvironmentKey = "LONGHOUSE_UI_TEST_HEARTH_LIVE"
     static let launchSessionFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE"
     static let machinesFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_MACHINES_FIXTURE"
     static let machineFixtureScreenEnvironmentKey = "LONGHOUSE_UI_TEST_MACHINE_SCREEN"
@@ -82,6 +83,12 @@ enum UITestHooks {
 
     static var shouldUseInboxGalleryFixture: Bool {
         ProcessInfo.processInfo.environment[inboxGalleryFixtureEnvironmentKey] == "1"
+    }
+
+    /// The inbox gallery fixture advances its open sessions' counters every
+    /// 1.2 s, so the timeline fires flare and spark as on a live card.
+    static var shouldRunHearthLive: Bool {
+        ProcessInfo.processInfo.environment[hearthLiveEnvironmentKey] == "1"
     }
 
     static var shouldUseLaunchSessionFixture: Bool {

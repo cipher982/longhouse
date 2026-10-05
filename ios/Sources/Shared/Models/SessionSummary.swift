@@ -44,6 +44,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let timelineAnchorAt: String?
     let userMessages: Int?
     let toolCalls: Int?
+    let assistantMessages: Int?
     let runtimeDisplay: SessionRuntimeDisplay
     let timelineCard: TimelineCardPresentation?
     @DefaultUnknownSessionStateFacts var stateFacts: SessionStateFacts
@@ -74,6 +75,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         timelineAnchorAt: String? = nil,
         userMessages: Int? = nil,
         toolCalls: Int? = nil,
+        assistantMessages: Int? = nil,
         runtimeDisplay: SessionRuntimeDisplay,
         timelineCard: TimelineCardPresentation? = nil,
         stateFacts: SessionStateFacts = .unknown
@@ -103,6 +105,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.timelineAnchorAt = timelineAnchorAt
         self.userMessages = userMessages
         self.toolCalls = toolCalls
+        self.assistantMessages = assistantMessages
         self.runtimeDisplay = runtimeDisplay
         self.timelineCard = timelineCard
         self.stateFacts = stateFacts
