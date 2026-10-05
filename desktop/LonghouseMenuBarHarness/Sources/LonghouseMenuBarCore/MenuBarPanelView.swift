@@ -584,12 +584,16 @@ public struct MenuBarPanelView: View {
         .frame(maxHeight: MenuBarPanelLayout.sessionAreaMaximumHeight)
     }
 
+    /// Missing phase evidence is never folded in as "quiet": the line names
+    /// how many rows have no live status, and those rows say so themselves.
     private func quietTitle(_ quiet: [HearthSessionEntry]) -> String {
         let quietIDs = Set(quiet.map(\.id))
         let noStatus = snapshot.currentManagedSessions
             .filter { quietIDs.contains($0.id) && $0.menuBarAttentionKind == .phaseUnavailable }
             .count
-        return noStatus == quiet.count ? "\(quiet.count) without live status" : "\(quiet.count) quiet"
+        if noStatus == 0 { return "\(quiet.count) quiet" }
+        if noStatus == quiet.count { return "\(quiet.count) without live status" }
+        return "\(quiet.count - noStatus) quiet, \(noStatus) without live status"
     }
 
     private func unmanagedRow(_ entry: UnmanagedActivityEntry) -> some View {
@@ -664,10 +668,14 @@ public struct MenuBarPanelView: View {
         case .lostControl:
             return managedSessionDetail(session)
         case .quiet:
-            if case .unknown = session.menuBarAttentionKind {
+            switch session.menuBarAttentionKind {
+            case .unknown:
                 return managedSessionDetail(session)
+            case .phaseUnavailable:
+                return compactDetailParts([workspace, "no live status"])
+            default:
+                return workspace
             }
-            return workspace
         }
     }
 
