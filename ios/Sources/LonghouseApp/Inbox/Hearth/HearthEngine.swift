@@ -448,7 +448,8 @@ final class HearthLayerView: UIView {
         self.snapshot = snapshot
         if self.lightBackground != lightBackground {
             self.lightBackground = lightBackground
-            drawnTile = nil
+            // Redraw for the new appearance; a layer with content clears if it has no tile.
+            if drawnTile != nil { drawnTile = -1 }
         }
         // A layer that may still hold another session's fire clears first.
         if rekeyed { drawnTile = -1 }
