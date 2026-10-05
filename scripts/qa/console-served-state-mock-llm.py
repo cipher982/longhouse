@@ -90,93 +90,129 @@ TOOL_RESULT_TYPES = {
     "custom_tool_call_output",
     "local_shell_call_output",
 }
-# A result for the issued call arriving sooner than the command can run means it
-# failed, was refused, or was backgrounded; the marker then never goes out for
-# that call, even if the same result is sent again later.
+# Each prompt (keyed by its marker) is judged on the latest shell call issued
+# for it. That call's first result decides its outcome for good: a result
+# arriving sooner than the command can run, or reporting a failure, means the
+# call failed, was refused, or was backgrounded, and replaying it later never
+# turns it into a success. A fresh call starts a fresh outcome, so older
+# rejected calls left in the history do not block it.
 TOOL_MIN_SECONDS = 6.0
 # `sleep 6` prints nothing; a shell result naming a nonzero exit is a failure.
 NONZERO_EXIT = re.compile(
     r"\bexit(?:ed)?(?:\s+with)?(?:\s+(?:code|status))?\s*[:=]?\s*(-?[1-9]\d*)\b",
     re.IGNORECASE,
 )
-_issued: dict[str, float] = {}
-_rejected: set[str] = set()
-_issued_lock = threading.Lock()
+EXIT_FIELDS = {
+    "exit_code",
+    "exitcode",
+    "exit_status",
+    "exitstatus",
+    "returncode",
+    "return_code",
+}
+FAILED_STATUSES = {"error", "failed", "failure"}
+_latest: dict[str, tuple[str, float]] = {}  # marker -> (call key, issued at)
+_outcomes: dict[
+    str, str | None
+] = {}  # call key -> failure reason, None when it succeeded
+_lock = threading.Lock()
 
 
-def _issue(key: str) -> None:
-    with _issued_lock:
-        _issued[key] = time.monotonic()
+def _issue(marker: str, key: str) -> None:
+    with _lock:
+        _latest[marker] = (key, time.monotonic())
 
 
-def _gemini_key(name: object, marker: str) -> str:
-    # Gemini function calls carry no id the CLI must echo, so a call is the
-    # function name within this prompt's marker, not the name alone.
-    return f"name:{name}|{marker}"
+def _structured_failure(value: object) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            lowered = key.lower()
+            if (
+                lowered in EXIT_FIELDS
+                and isinstance(item, (int, float))
+                and not isinstance(item, bool)
+                and item != 0
+            ):
+                return True
+            if lowered in ("is_error", "iserror") and item is True:
+                return True
+            if lowered == "error" and item:
+                return True
+            if (
+                lowered == "status"
+                and isinstance(item, str)
+                and item.lower() in FAILED_STATUSES
+            ):
+                return True
+            if _structured_failure(item):
+                return True
+    elif isinstance(value, list):
+        return any(_structured_failure(item) for item in value)
+    return False
 
 
-def _result_failed(result: dict, flagged: bool) -> bool:
-    return flagged or any(NONZERO_EXIT.search(text) for text in _string_leaves(result))
+def _result_failed(result: dict) -> bool:
+    return _structured_failure(result) or any(
+        NONZERO_EXIT.search(text) for text in _string_leaves(result)
+    )
 
 
-def _tool_results(value: object, marker: str) -> list[tuple[str, bool]]:
-    """(call key, failed) for every tool result in a conversation."""
+def _tool_results(value: object) -> list[tuple[str, bool]]:
+    """(what the result answers, failed) for every tool result, in conversation order.
+
+    The first element is "id:<call id>", or "name:<function>" for Gemini, whose
+    function calls carry no id the CLI must echo.
+    """
     found: list[tuple[str, bool]] = []
     if isinstance(value, dict):
         kind = value.get("type")
         if kind == "tool_result":  # Anthropic Messages
-            found.append(
-                (
-                    f"id:{value.get('tool_use_id')}",
-                    _result_failed(value, value.get("is_error") is True),
-                )
-            )
+            found.append((f"id:{value.get('tool_use_id')}", _result_failed(value)))
         elif isinstance(kind, str) and kind in TOOL_RESULT_TYPES:  # Responses
-            found.append((f"id:{value.get('call_id')}", _result_failed(value, False)))
+            found.append((f"id:{value.get('call_id')}", _result_failed(value)))
         elif value.get("role") == "tool":  # Chat Completions
-            found.append(
-                (f"id:{value.get('tool_call_id')}", _result_failed(value, False))
-            )
+            found.append((f"id:{value.get('tool_call_id')}", _result_failed(value)))
         response = value.get("functionResponse")
         if isinstance(response, dict):  # Gemini
-            body = response.get("response")
-            flagged = isinstance(body, dict) and "error" in body
-            found.append(
-                (
-                    _gemini_key(response.get("name"), marker),
-                    _result_failed(response, flagged),
-                )
-            )
+            found.append((f"name:{response.get('name')}", _result_failed(response)))
         for item in value.values():
-            found.extend(_tool_results(item, marker))
+            found.extend(_tool_results(item))
     elif isinstance(value, list):
         for item in value:
-            found.extend(_tool_results(item, marker))
+            found.extend(_tool_results(item))
     return found
 
 
-def _round_trip_failure(results: list[tuple[str, bool]]) -> str | None:
-    """Why the issued shell call did not complete, or None when it did."""
+def _answers(call_key: str, result_key: str) -> bool:
+    if call_key.startswith("gemini:"):
+        return result_key == "name:" + call_key.split(":", 2)[1]
+    return call_key == result_key
+
+
+def _round_trip_failure(marker: str, results: list[tuple[str, bool]]) -> str | None:
+    """Why this prompt's latest shell call did not complete, or None when it did."""
     now = time.monotonic()
-    with _issued_lock:
-        matched = [
-            (key, _issued[key], failed) for key, failed in results if key in _issued
-        ]
-        if not matched:
-            return "no result for the shell call this endpoint issued"
-        keys = {key for key, _, _ in matched}
-        if keys & _rejected:
-            return "the shell call's result was already rejected"
-        failure = None
-        if any(failed for _, _, failed in matched):
-            failure = "the shell call reported an error or a nonzero exit"
-        else:
-            elapsed = max(now - issued for _, issued, _ in matched)
-            if elapsed < TOOL_MIN_SECONDS:
-                failure = f"the shell call returned after {elapsed:.1f} s, before '{TOOL_COMMAND}' could finish"
-        if failure:
-            _rejected.update(keys)
-        return failure
+    with _lock:
+        latest = _latest.get(marker)
+        if latest is None:
+            return "no shell call was issued for this prompt"
+        call_key, issued_at = latest
+        result_key, failed = results[-1]
+        if not _answers(call_key, result_key):
+            return "the latest tool result does not answer the shell call issued for this prompt"
+        if call_key not in _outcomes:
+            elapsed = now - issued_at
+            if failed:
+                _outcomes[call_key] = (
+                    "the shell call reported an error or a nonzero exit"
+                )
+            elif elapsed < TOOL_MIN_SECONDS:
+                _outcomes[call_key] = (
+                    f"the shell call returned after {elapsed:.1f} s, before '{TOOL_COMMAND}' could finish"
+                )
+            else:
+                _outcomes[call_key] = None
+        return _outcomes[call_key]
 
 
 def _declared_tools(payload: dict) -> list[tuple[str, dict]]:
@@ -259,11 +295,11 @@ def _plan(payload: dict) -> tuple[str, str | tuple[str, dict]]:
     if not payload.get("tools"):
         return "text", "Console served-state check"
     results = _tool_results(
-        {key: value for key, value in payload.items() if key != "tools"}, text
+        {key: value for key, value in payload.items() if key != "tools"}
     )
     if not results:
         return "tool", _shell_call(payload)
-    failure = _round_trip_failure(results)
+    failure = _round_trip_failure(text, results)
     if failure:
         print(f"round trip failed: {failure}", flush=True)
         return "text", f"LH_TOOL_ROUND_TRIP_FAILED: {failure}"
@@ -773,7 +809,7 @@ class MockHandler(BaseHTTPRequestHandler):
             "arguments": arguments,
             "status": "completed",
         }
-        _issue(f"id:{call['call_id']}")
+        _issue(_reply_text(payload), f"id:{call['call_id']}")
         final = _response_object(response_id, model, "", status="completed")
         final["output"] = [call]
         if not payload.get("stream", True):
@@ -835,7 +871,7 @@ class MockHandler(BaseHTTPRequestHandler):
             "name": name,
             "input": args,
         }
-        _issue(f"id:{block['id']}")
+        _issue(_reply_text(payload), f"id:{block['id']}")
         message = {
             "id": f"msg_{uuid4().hex}",
             "type": "message",
@@ -899,7 +935,7 @@ class MockHandler(BaseHTTPRequestHandler):
             "type": "function",
             "function": {"name": name, "arguments": json.dumps(args)},
         }
-        _issue(f"id:{call['id']}")
+        _issue(_reply_text(payload), f"id:{call['id']}")
         if not payload.get("stream", False):
             self._send_json(
                 200,
@@ -1001,7 +1037,7 @@ class MockHandler(BaseHTTPRequestHandler):
         kind, plan = _plan(payload)
         print(f"POST gemini -> {kind} {plan[0] if kind == 'tool' else ''}", flush=True)
         if kind == "tool":
-            _issue(_gemini_key(plan[0], _reply_text(payload)))
+            _issue(_reply_text(payload), f"gemini:{plan[0]}:{uuid4().hex}")
             result = self._gemini_payload("", model, call=plan)
         else:
             result = self._gemini_payload(plan, model)

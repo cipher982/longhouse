@@ -113,15 +113,15 @@ def main() -> None:
         early = {"role": "tool", "tool_call_id": call["id"], "content": ""}
         assert failed(chat(base, early)["content"], "before"), "early result accepted"
         time.sleep(wait)
-        assert failed(chat(base, early)["content"], "already rejected"), (
+        assert failed(chat(base, early)["content"], "before"), (
             "replayed early result accepted"
         )
 
-        # Unrelated, then a nonzero exit, then success, each on its own call.
+        # A fresh call: an unrelated result, then a delayed nonzero exit, fail it.
         call = chat(base)["tool_calls"][0]
         time.sleep(wait)
         unrelated = {"role": "tool", "tool_call_id": "call_someone_else", "content": ""}
-        assert failed(chat(base, unrelated)["content"], "no result"), (
+        assert failed(chat(base, unrelated)["content"], "does not answer"), (
             "unrelated result accepted"
         )
         exit_1 = {
@@ -132,6 +132,8 @@ def main() -> None:
         assert failed(chat(base, exit_1)["content"], "nonzero exit"), (
             "delayed exit 1 accepted (chat)"
         )
+
+        # Another fresh call succeeds, with the earlier rejected result still in the history.
         call = chat(base)["tool_calls"][0]
         time.sleep(wait)
         done = {
@@ -139,7 +141,8 @@ def main() -> None:
             "tool_call_id": call["id"],
             "content": "Process exited with code 0",
         }
-        assert chat(base, done)["content"] == "LH_SERVED_ABC_D"
+        retry = {"role": "assistant", "content": None, "tool_calls": [call]}
+        assert chat(base, early, retry, done)["content"] == "LH_SERVED_ABC_D"
 
         item = responses(base)[0]
         time.sleep(wait)
@@ -163,25 +166,30 @@ def main() -> None:
             anthropic(base, {"role": "user", "content": [error]})[0]["text"], "error"
         )
 
-        # Gemini has no call id: one conversation's call never answers another's.
-        gemini(base, prompt("LH_SERVED_ONE"))
+        # Gemini has no call id: calls are scoped to their prompt, a structured
+        # exit status fails one, and a fresh call for the same prompt recovers.
+        def gemini_result(response: dict) -> dict:
+            return {
+                "role": "user",
+                "parts": [
+                    {"functionResponse": {"name": "run_command", "response": response}}
+                ],
+            }
+
+        one, two = prompt("LH_SERVED_ONE"), prompt("LH_SERVED_TWO")
+        gemini(base, one)
         time.sleep(wait)
-        response = {
-            "role": "user",
-            "parts": [
-                {
-                    "functionResponse": {
-                        "name": "run_command",
-                        "response": {"output": ""},
-                    }
-                }
-            ],
-        }
-        assert failed(
-            gemini(base, prompt("LH_SERVED_TWO"), response)["text"], "no result"
-        ), "cross-conversation match"
+        exit_status = gemini_result({"output": "", "exit_code": 1})
+        assert failed(gemini(base, two, exit_status)["text"], "no shell call"), (
+            "cross-conversation match"
+        )
+        assert failed(gemini(base, one, exit_status)["text"], "nonzero exit"), (
+            "structured exit 1 accepted"
+        )
+        gemini(base, one)
+        time.sleep(wait)
         assert (
-            gemini(base, prompt("LH_SERVED_ONE"), response)["text"]
+            gemini(base, one, gemini_result({"output": ""}))["text"]
             == "LH_SERVED_ONEC_D"
         )
 
