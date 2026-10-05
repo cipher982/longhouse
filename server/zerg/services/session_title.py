@@ -1,12 +1,13 @@
 """Pure helpers for the timeline headline (the frozen per-session title).
 
 The timeline card wants one stable, human-readable headline per session — the
-"what is this about" anchor the user builds muscle memory on. Two concerns live
-here, both pure (no DB, no IO) so iOS/web/widget can rely on identical output:
+"what is this about" anchor the user builds muscle memory on. Three concerns live
+here, all pure (no DB, no IO) so all clients can rely on identical output:
 
-- ``sanitize_title``: turn arbitrary first-message / summary text into a short,
-  clean phrase. Pasted prompts arrive as ``\"\"\"`` fences, ``[Image #1]``, URLs,
-  and markdown noise; rendering them raw is the timeline's garbage-preview bug.
+- ``sanitize_title``: clean first-message or summary text into a short
+  candidate. A path-only candidate is retained as model input, not display text.
+- ``sanitize_timeline_title``: clean a display candidate and reject a bare
+  absolute path before it reaches a timeline.
 - ``resolve_timeline_title``: the fallback ladder that always yields a non-empty
   headline, preferring the frozen ``anchor_title`` so the row stays stable as the
   live ``summary_title`` keeps drifting underneath.
@@ -72,11 +73,12 @@ def is_resume_seed_marker(text: str | None) -> bool:
 
 
 def sanitize_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> str | None:
-    """Reduce arbitrary text to a short clean headline phrase, or None.
+    """Return a short sanitized title candidate from arbitrary text, or None.
 
+    A path-only candidate is preserved for title-model input eligibility;
+    display callers must use ``sanitize_timeline_title`` to reject bare paths.
     Strips code fences, image tags, markdown links, and URLs, collapses
-    whitespace, then keeps the first ``max_words`` words. Returns None when
-    nothing meaningful survives so callers can fall through the ladder.
+    whitespace, then keeps the first ``max_words`` words.
     """
     if not text:
         return None
