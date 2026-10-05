@@ -704,7 +704,6 @@ public struct MenuBarPanelView: View {
 
             return BackgroundBridgeEntry(
                 id: bridge.id,
-                sessionID: bridge.sessionId,
                 provider: provider.isEmpty ? "unknown" : provider,
                 workspace: workspace.isEmpty ? "Detached workspace" : workspace,
                 statusLabel: status.isEmpty ? "orphan" : status,
@@ -714,14 +713,17 @@ public struct MenuBarPanelView: View {
         }
     }
 
+    /// Built from the bridges, not the display rows: the rows substitute
+    /// "unknown" for a missing provider, and the stop path needs the raw value
+    /// (nil lets it resolve the bridge itself).
     private var backgroundBridgeBulkStopTargets: [ManagedStopTarget] {
-        backgroundBridgeEntries.compactMap { entry -> ManagedStopTarget? in
-            guard let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+        snapshot.currentOrphanBridges.compactMap { bridge -> ManagedStopTarget? in
+            guard let sessionID = bridge.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !sessionID.isEmpty
             else {
                 return nil
             }
-            return ManagedStopTarget(sessionID: sessionID, provider: entry.provider)
+            return ManagedStopTarget(sessionID: sessionID, provider: bridge.provider)
         }
     }
 

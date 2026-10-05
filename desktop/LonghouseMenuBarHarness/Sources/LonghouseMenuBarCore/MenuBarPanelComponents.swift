@@ -80,7 +80,6 @@ public enum ManagedAttentionKind: Equatable, Sendable {
 
 struct BackgroundBridgeEntry: Identifiable {
     let id: String
-    let sessionID: String?
     let provider: String
     let workspace: String
     let statusLabel: String
