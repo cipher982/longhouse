@@ -86,7 +86,6 @@ struct BackgroundBridgeEntry: Identifiable {
     let statusLabel: String
     let ageLabel: String
     let detail: String
-    let stopAction: (() -> Void)?
 }
 
 struct BackgroundBridgeList: View {
@@ -140,18 +139,6 @@ private struct BackgroundBridgeRow: View {
             Text(entry.ageLabel)
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(Color.secondary)
-            if let stopAction = entry.stopAction {
-                Button(action: stopAction) {
-                    Image(systemName: "stop.circle")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(HearthPalette.fault)
-                        .frame(width: 20, height: 20)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Stop this background bridge")
-                .accessibilityLabel(Text("Stop background bridge"))
-            }
         }
     }
 }

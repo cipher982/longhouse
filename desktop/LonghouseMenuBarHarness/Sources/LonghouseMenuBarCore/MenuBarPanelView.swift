@@ -709,16 +709,14 @@ public struct MenuBarPanelView: View {
                 workspace: workspace.isEmpty ? "Detached workspace" : workspace,
                 statusLabel: status.isEmpty ? "orphan" : status,
                 ageLabel: snapshot.compactTimestampLabel(bridge.heartbeatAt ?? bridge.startedAt, relativeTo: presentationDate),
-                detail: orphanBridgeDetail(bridge),
-                stopAction: orphanBridgeStopAction(for: bridge)
+                detail: orphanBridgeDetail(bridge)
             )
         }
     }
 
     private var backgroundBridgeBulkStopTargets: [ManagedStopTarget] {
         backgroundBridgeEntries.compactMap { entry -> ManagedStopTarget? in
-            guard entry.stopAction != nil,
-                  let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+            guard let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !sessionID.isEmpty
             else {
                 return nil
@@ -740,27 +738,6 @@ public struct MenuBarPanelView: View {
                 actionSink.handleOpenManagedSession(
                     sessionID: sessionID,
                     title: title,
-                    snapshot: snapshot
-                )
-            )
-        }
-    }
-
-    private func orphanBridgeStopAction(for bridge: OrphanBridgeSnapshot) -> (() -> Void)? {
-        guard let sessionID = bridge.sessionId,
-              !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return nil
-        }
-
-        let workspace = bridge.workspaceLabel
-        let provider = bridge.provider
-        return {
-            setFeedback(
-                actionSink.handleStopManagedBridge(
-                    sessionID: sessionID,
-                    provider: provider,
-                    workspaceLabel: workspace,
                     snapshot: snapshot
                 )
             )
