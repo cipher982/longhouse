@@ -212,10 +212,10 @@ for frame in 0..<totalFrames {
     let burning = simulation.advance(time: time, delta: frameDelta, wall: now, reducedMotion: options.reducedMotion)
     let steps: Int
     if options.reducedMotion {
-        steps = min(15, settle)
+        steps = min(14, settle)
         settle -= steps
     } else {
-        steps = burning > 0 ? simulation.steps(for: frameDelta, step: step, maximum: options.lowPower ? 4 : 3) : 0
+        steps = burning > 0 ? simulation.steps(for: frameDelta, step: step, maximum: 4) : 0
     }
     let command = simulation.queue.makeCommandBuffer()!
     let slot = simulation.encodeSimulation(command, steps: steps, step: step, time: time)

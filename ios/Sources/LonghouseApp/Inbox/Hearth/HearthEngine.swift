@@ -233,10 +233,10 @@ final class HearthEngine {
         let steps: Int
         if still {
             // Settle a still frame a few steps per frame, then draw it once.
-            steps = min(15, settle)
+            steps = min(14, settle)
             settle -= steps
         } else {
-            steps = burning > 0 ? simulation.steps(for: delta, step: step, maximum: lowPower ? 4 : 3) : 0
+            steps = burning > 0 ? simulation.steps(for: delta, step: step, maximum: 4) : 0
         }
 
         guard let command = simulation.queue.makeCommandBuffer() else { return }
@@ -323,8 +323,12 @@ final class HearthEngine {
         let layer = view.metalLayer
         // A fire still being simulated ahead keeps the layer as it is (empty
         // for a new row) for the few frames that takes.
-        let tile = tileKeys.firstIndex(of: view.key)
-        if let tile, simulation.isWarming(tile) { return }
+        var tile = tileKeys.firstIndex(of: view.key)
+        if let warming = tile, simulation.isWarming(warming) {
+            // Nothing to show yet; a layer still holding another fire clears.
+            guard view.drawnTile != nil else { return }
+            tile = nil
+        }
         // A row without a tile (atlas full) clears once rather than keep a frame.
         guard tile != nil || view.drawnTile != nil else { return }
         guard layer.drawableSize.width > 0, let drawable = layer.nextDrawable() else { return }
@@ -442,6 +446,7 @@ final class HearthLayerView: UIView {
         }
         self.key = key
         self.snapshot = snapshot
+        if rekeyed { drawnTile = drawnTile.map { _ in -1 } }
         if self.lightBackground != lightBackground {
             self.lightBackground = lightBackground
             drawnTile = nil

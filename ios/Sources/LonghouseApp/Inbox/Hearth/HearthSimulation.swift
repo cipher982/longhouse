@@ -51,7 +51,7 @@ final class HearthSimulation {
     /// A fire that comes on screen is simulated this far ahead before it is
     /// first drawn, so a glance at the timeline finds it already burning.
     static let warmupSteps = 180
-    private static let warmupStepsPerFrame = 24
+    private static let warmupStepsPerFrame = 24 // even: see encodeSimulation
 
     private static let jacobiIterations = 20
     private static let eps0: Float = 4.0
@@ -384,26 +384,34 @@ final class HearthSimulation {
         sparkUntil = max(sparkUntil, time + Double(style.life) * 1.35)
     }
 
-    /// Solver steps owed for `delta` seconds of wall time at the given step.
+    /// Solver steps owed for `delta` seconds of wall time at the given step,
+    /// in pairs (see `encodeSimulation`); an odd step waits for the next frame.
     func steps(for delta: Double, step: Double, maximum: Int) -> Int {
         accumulator += delta
         var count = 0
-        while accumulator >= step && count < maximum {
-            accumulator -= step
-            count += 1
+        while accumulator >= 2 * step && count + 2 <= maximum {
+            accumulator -= 2 * step
+            count += 2
         }
-        if count == maximum { accumulator = 0 }
+        if count + 2 > maximum { accumulator = min(accumulator, 2 * step) }
         return count
     }
 
     // MARK: - Frame (GPU)
 
-    /// The awake span of the atlas: one dispatch range from the first to the
-    /// last awake tile, as on the web.
-    private var span: (lo: Int, count: Int)? {
-        let awake = tiles.indices.filter { tiles[$0].heat != nil && !tiles[$0].frozen && !tiles[$0].parked }
-        guard let lo = awake.first, let hi = awake.last else { return nil }
-        return (lo, hi - lo + 1)
+    typealias Run = (lo: Int, count: Int)
+
+    /// Consecutive tiles matching `include`, as dispatch ranges.
+    private func runs(where include: (Tile) -> Bool) -> [Run] {
+        var runs: [Run] = []
+        for index in tiles.indices where tiles[index].heat != nil && include(tiles[index]) {
+            if let last = runs.last, last.lo + last.count == index {
+                runs[runs.count - 1].count += 1
+            } else {
+                runs.append((index, 1))
+            }
+        }
+        return runs
     }
 
     /// Encode this frame's tile clears, spark spawns, `steps` solver steps and
@@ -411,15 +419,22 @@ final class HearthSimulation {
     /// dispatches in one encoder are ordered and see each other's writes.
     /// Returns the probe slot written this frame; pass it to `absorbMeasurement`
     /// once the command buffer completes.
+    ///
+    /// Only awake tiles are stepped, so a parked or frozen tile's fluid stays
+    /// exactly as it was. That holds because every frame steps an even number
+    /// of times: a step swaps the velocity and pressure ping-pong textures an
+    /// odd number of times, so after an even count they point where they did
+    /// and the untouched tiles' state is the current state again.
     @discardableResult
     func encodeSimulation(_ command: MTLCommandBuffer, steps: Int, step: Double, time: Double) -> Int? {
+        precondition(steps % 2 == 0, "Hearth steps come in pairs; see steps(for:step:maximum:)")
         packUniforms(time: time)
         let cleared = clearing
         let pendingSpawns = spawns
         spawns.removeAll()
-        let span = span
-        let warming = warmingRuns()
-        guard !cleared.isEmpty || !pendingSpawns.isEmpty || !warming.isEmpty || (span != nil && steps > 0),
+        let awake = runs { !$0.frozen && !$0.parked && $0.warmSteps == 0 }
+        let warming = runs { !$0.parked && $0.warmSteps > 0 }
+        guard !cleared.isEmpty || !pendingSpawns.isEmpty || !warming.isEmpty || (!awake.isEmpty && steps > 0),
               let encoder = command.makeComputeCommandEncoder() else {
             clearing.removeAll()
             return nil
@@ -448,62 +463,42 @@ final class HearthSimulation {
             dispatch(encoder, width: pendingSpawns.count, height: 1)
             flags.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
         }
-        // Warm new fires on their own: a run of consecutive warming tiles is
-        // stepped alone, an even number of steps at a time, which leaves the
-        // ping-pong textures pointing where they did, so every other tile's
-        // state is untouched.
+        // Warm new fires ahead on their own clock, a frame's share at a time,
+        // without sparks: burning fires keep their state and their flicker.
+        var warmTime = simulationTime
         for run in warming {
-            let count = min(Self.warmupStepsPerFrame, tiles[run.lo].warmSteps)
+            let count = min(Self.warmupStepsPerFrame, tiles[run.lo].warmSteps) / 2 * 2
             for _ in 0..<count {
-                simulationTime += Float(Self.step)
-                simulate(encoder, span: run, step: Float(Self.step), withSparks: false)
+                warmTime += Float(Self.step)
+                simulate(encoder, runs: [run], step: Float(Self.step), time: warmTime, withSparks: false)
             }
-            for index in run.lo..<(run.lo + run.count) { tiles[index].warmSteps -= count }
+            for index in run.lo..<(run.lo + run.count) { tiles[index].warmSteps = max(0, tiles[index].warmSteps - max(2, count)) }
         }
         var slot: Int?
-        if let span, steps > 0 {
+        if !awake.isEmpty, steps > 0 {
             for _ in 0..<steps {
                 simulationTime += Float(step)
-                simulate(encoder, span: span, step: Float(step))
+                simulate(encoder, runs: awake, step: Float(step), time: simulationTime)
             }
-            slot = measure(encoder, span: span)
+            slot = measure(encoder, runs: awake)
         }
         encoder.endEncoding()
         return slot
     }
 
-    /// Consecutive tiles that are warming, grouped so a launch warms the whole
-    /// screen in one dispatch range.
-    private func warmingRuns() -> [(lo: Int, count: Int)] {
-        var runs: [(lo: Int, count: Int)] = []
-        for index in tiles.indices where tiles[index].warmSteps > 0 && tiles[index].heat != nil && !tiles[index].parked {
-            if let last = runs.last, last.lo + last.count == index, tiles[last.lo].warmSteps == tiles[index].warmSteps {
-                runs[runs.count - 1].count += 1
-            } else {
-                runs.append((index, 1))
-            }
-        }
-        return runs
-    }
-
-    private func simulate(_ e: MTLComputeCommandEncoder, span: (lo: Int, count: Int), step: Float, withSparks: Bool = true) {
-        let width = span.count * Self.tileWidth
-        let height = Self.tileHeight
-        func pass(_ dt: Float, open: Float = 0) {
-            var pass = Pass(dt: dt, open: open, time: simulationTime, lo: UInt32(span.lo))
-            e.setBytes(&pass, length: MemoryLayout<Pass>.stride, index: 1)
-        }
-        func run(_ name: String, _ textures: [MTLTexture]) {
+    private func simulate(_ e: MTLComputeCommandEncoder, runs: [Run], step: Float, time: Float, withSparks: Bool = true) {
+        func run(_ name: String, _ textures: [MTLTexture], dt: Float = step, open: Float = 0) {
             e.setComputePipelineState(compute[name]!)
             for (index, texture) in textures.enumerated() { e.setTexture(texture, index: index) }
-            dispatch(e, width: width, height: height)
+            for range in runs {
+                var pass = Pass(dt: dt, open: open, time: time, lo: UInt32(range.lo))
+                e.setBytes(&pass, length: MemoryLayout<Pass>.stride, index: 1)
+                dispatch(e, width: range.count * Self.tileWidth, height: Self.tileHeight)
+            }
         }
         let v = velocity[0]
-        pass(step, open: 1)
-        run("hearthAdvect", [v, scalar[0], forward])
-        pass(-step)
-        run("hearthAdvect", [v, forward, backward])
-        pass(step)
+        run("hearthAdvect", [v, scalar[0], forward], open: 1)
+        run("hearthAdvect", [v, forward, backward], dt: -step)
         run("hearthMacCormack", [v, scalar[0], forward, backward, scalar[1]])
         scalar.swapAt(0, 1)
         run("hearthAdvect", [v, v, velocity[1]])
@@ -518,12 +513,18 @@ final class HearthSimulation {
         e.setTexture(pressure[0], index: 0)
         e.setTexture(divergence, index: 1)
         e.setTexture(pressure[1], index: 2)
-        e.dispatchThreadgroups(MTLSize(width: span.count, height: 1, depth: 1),
-                               threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        for range in runs {
+            var pass = Pass(dt: step, open: 0, time: time, lo: UInt32(range.lo))
+            e.setBytes(&pass, length: MemoryLayout<Pass>.stride, index: 1)
+            e.dispatchThreadgroups(MTLSize(width: range.count, height: 1, depth: 1),
+                                   threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        }
         pressure.swapAt(0, 1)
         run("hearthProject", [pressure[0], velocity[0], velocity[1]])
         velocity.swapAt(0, 1)
         guard withSparks else { return }
+        var pass = Pass(dt: step, open: 0, time: time, lo: 0)
+        e.setBytes(&pass, length: MemoryLayout<Pass>.stride, index: 1)
         e.setComputePipelineState(compute["hearthSparkUpdate"]!)
         e.setBuffer(sparks, offset: 0, index: 2)
         e.setTexture(velocity[0], index: 0)
@@ -533,16 +534,18 @@ final class HearthSimulation {
     /// The probe runs once per frame on lit tiles; its result arrives a frame
     /// or two later and drives a slow integral controller on fuel, so the
     /// flame reaches the height its work asks for (renderer.ts measureAsync).
-    private func measure(_ e: MTLComputeCommandEncoder, span: (lo: Int, count: Int)) -> Int {
+    private func measure(_ e: MTLComputeCommandEncoder, runs: [Run]) -> Int {
         let slot = measureIndex
         measureIndex = (measureIndex + 1) % measurements.count
-        var pass = Pass(dt: 0, open: 0, time: simulationTime, lo: UInt32(span.lo))
-        e.setBytes(&pass, length: MemoryLayout<Pass>.stride, index: 1)
         e.setComputePipelineState(compute["hearthMeasure"]!)
         e.setBuffer(measurements[slot], offset: 0, index: 2)
         e.setTexture(scalar[0], index: 0)
         e.setTexture(blackbody, index: 1)
-        dispatch(e, width: span.count, height: 1)
+        for range in runs {
+            var pass = Pass(dt: 0, open: 0, time: simulationTime, lo: UInt32(range.lo))
+            e.setBytes(&pass, length: MemoryLayout<Pass>.stride, index: 1)
+            dispatch(e, width: range.count, height: 1)
+        }
         return slot
     }
 
