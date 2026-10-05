@@ -5,7 +5,7 @@
 //! `/api/agents/ingest` suffix as the string every other path is derived from;
 //! the route itself no longer exists on either side.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +44,22 @@ use crate::shipping::storage_v2::{
 /// zstd level for runtime-event batches. Level 3 encodes a 2 MiB batch in a
 /// few milliseconds, against round trips of 140 ms and more.
 const RUNTIME_BATCH_ZSTD_LEVEL: i32 = 3;
+/// How long a refused zstd runtime batch keeps this client sending plain.
+/// A host older than the encoding costs one refused, already-compressed
+/// request per window; a batch refused for its content rather than its
+/// encoding (a poison event, isolated plain) costs plain-speed delivery for
+/// one window, not for the life of the process.
+const RUNTIME_BATCH_ZSTD_RETRY: Duration = Duration::from_secs(15 * 60);
+
+/// Origin of a process-local monotonic clock, for refusal timestamps an
+/// atomic can hold.
+static RUNTIME_CLOCK_START: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
+
+fn runtime_clock_ms() -> u64 {
+    RUNTIME_CLOCK_START.elapsed().as_millis() as u64
+}
+
 const WRITE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Write-Backpressure";
 const WRITE_ERROR_KIND_HEADER: &str = "X-Longhouse-Write-Error-Kind";
 const WRITE_LANE_HEADER: &str = "X-Longhouse-Write-Lane";
@@ -212,10 +228,11 @@ pub struct ShipperClient {
     /// Base URL every request path is derived from. Historical name: the
     /// `/api/agents/ingest` suffix is a string template, not a live route.
     ingest_url: String,
-    /// Runtime-event batches go out zstd-encoded while this holds: set for a
-    /// zstd client, cleared for good once the Runtime Host refuses an encoded
-    /// batch it then accepts plain (a host older than the encoding).
-    runtime_batch_zstd: Arc<AtomicBool>,
+    /// Whether runtime-event batches are zstd-encoded: a zstd client's choice.
+    runtime_batch_zstd: bool,
+    /// `runtime_clock_ms()` of the last refused zstd batch; 0 when none was.
+    /// Shared by every clone, since they all talk to the same Runtime Host.
+    runtime_batch_zstd_refused_at: Arc<AtomicU64>,
 }
 
 impl ShipperClient {
@@ -260,10 +277,8 @@ impl ShipperClient {
         Ok(Self {
             client,
             ingest_url,
-            runtime_batch_zstd: Arc::new(AtomicBool::new(matches!(
-                compression,
-                CompressionAlgo::Zstd
-            ))),
+            runtime_batch_zstd: matches!(compression, CompressionAlgo::Zstd),
+            runtime_batch_zstd_refused_at: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -336,7 +351,11 @@ impl ShipperClient {
 
     /// Whether the next runtime-event batch goes out zstd-encoded.
     pub fn encodes_runtime_batches(&self) -> bool {
-        self.runtime_batch_zstd.load(Ordering::Relaxed)
+        let refused_at = self.runtime_batch_zstd_refused_at.load(Ordering::Relaxed);
+        self.runtime_batch_zstd
+            && (refused_at == 0
+                || runtime_clock_ms().saturating_sub(refused_at)
+                    >= RUNTIME_BATCH_ZSTD_RETRY.as_millis() as u64)
     }
 
     /// POST a runtime-event batch, zstd-encoded when this client encodes them.
@@ -347,17 +366,21 @@ impl ShipperClient {
     /// restates its keys, ids and growing preview text event after event.
     ///
     /// A host older than the encoding cannot read the body and refuses it with
-    /// a 4xx. That refusal is the client's, not the events': the same body goes
-    /// again unencoded, and once that is accepted no later batch is encoded.
-    /// Only a refusal of the plain body is returned, so an encoding mismatch
-    /// never reaches rejection isolation or dead-letter.
+    /// a 4xx. That refusal is the client's, not the events': encoding stops
+    /// (see `RUNTIME_BATCH_ZSTD_RETRY`), and the batch goes again plain if it
+    /// is within `plain_limit`. A larger one is reported as not delivered, to
+    /// be rebuilt within the plain limit: resending 6 MiB plain could miss the
+    /// host's request timeout on a slow uplink every time. Only a refusal of a
+    /// plain body is returned as a refusal, so an encoding mismatch never
+    /// reaches rejection isolation or dead-letter.
     pub async fn post_runtime_event_batch(
         &self,
         path_suffix: &str,
         body: Vec<u8>,
+        plain_limit: usize,
         request_timeout: Option<Duration>,
     ) -> std::result::Result<(), JsonPostError> {
-        if !self.runtime_batch_zstd.load(Ordering::Relaxed) {
+        if !self.encodes_runtime_batches() {
             return self
                 .post_json_classified(path_suffix, body, "identity", request_timeout)
                 .await;
@@ -369,17 +392,20 @@ impl ShipperClient {
             .await
         {
             Err(refusal) if refusal.permanent_status_code().is_some() => {
-                let plain = self
-                    .post_json_classified(path_suffix, body, "identity", request_timeout)
-                    .await;
-                if plain.is_ok() {
-                    self.runtime_batch_zstd.store(false, Ordering::Relaxed);
-                    tracing::warn!(
-                        refusal = %refusal,
-                        "Runtime Host refused a zstd runtime batch and accepted it plain; sending plain from now on"
-                    );
+                self.runtime_batch_zstd_refused_at
+                    .store(runtime_clock_ms().max(1), Ordering::Relaxed);
+                tracing::warn!(
+                    refusal = %refusal,
+                    retry_after_secs = RUNTIME_BATCH_ZSTD_RETRY.as_secs(),
+                    "Runtime Host refused a zstd runtime batch; sending plain"
+                );
+                if body.len() > plain_limit {
+                    return Err(JsonPostError::Transport(
+                        "zstd batch refused; its events go again in plain requests".into(),
+                    ));
                 }
-                plain
+                self.post_json_classified(path_suffix, body, "identity", request_timeout)
+                    .await
             }
             result => result,
         }

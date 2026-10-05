@@ -1510,6 +1510,7 @@ async fn post_runtime_event_batch(
         .post_runtime_event_batch(
             "/api/agents/runtime/events/batch",
             body,
+            RUNTIME_EVENT_BATCH_BYTES,
             Some(RUNTIME_EVENT_POST_TIMEOUT),
         )
         .await
@@ -2807,6 +2808,37 @@ mod tests {
             0,
             "every file removed"
         );
+    }
+
+    /// A refused zstd batch larger than a plain request may be is not resent
+    /// plain as is: on a slow uplink that upload could miss the host's
+    /// request timeout every time. It waits one pass and goes again in plain
+    /// requests within the plain limit.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_refused_zstd_batch_too_big_to_send_plain_goes_again_in_plain_sized_requests() {
+        let (addr, requests, server) = spawn_encoding_runtime_server(false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let client =
+            runtime_test_client_with(addr, crate::pipeline::compressor::CompressionAlgo::Zstd);
+
+        let posts = padded_progress_posts(dir.path(), 30, 100 * 1024);
+        let outcome = post_pending_runtime_event_files_with_outcome(&client, posts).await;
+        assert_eq!(
+            (outcome.sent, outcome.kept),
+            (0, 30),
+            "refused, kept, not dead-lettered"
+        );
+        let posts = padded_progress_posts(dir.path(), 30, 100 * 1024);
+        let outcome = post_pending_runtime_event_files_with_outcome(&client, posts).await;
+        server.abort();
+
+        assert_eq!((outcome.sent, outcome.kept), (30, 0));
+        let requests: Vec<_> = requests.try_iter().collect();
+        assert_eq!(requests[0].0, "zstd");
+        assert!(requests[1..]
+            .iter()
+            .all(|request| request.0 == "identity" && request.1 <= RUNTIME_EVENT_BATCH_BYTES));
+        assert!(!dir.path().join(RUNTIME_EVENT_DEAD_LETTER_DIR).exists());
     }
 
     /// A session whose events outweigh one request goes out in requests no
