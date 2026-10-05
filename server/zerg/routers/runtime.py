@@ -37,10 +37,18 @@ from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import _is_bridge_transcript_event
 
 # A batch is one catalogd apply, so it can never usefully exceed one catalogd
-# frame (8 MiB); twice that bounds what a small zstd body may expand into.
-_MAX_DECODED_BATCH_BYTES = 16 * 1024 * 1024
+# frame (8 MiB); twice that bounds both what a body may carry on the wire and
+# what a small zstd body may expand into.
+_MAX_BATCH_BYTES = 16 * 1024 * 1024
 _ZSTD_MAX_WINDOW_BYTES = 8 * 1024 * 1024
 _ZSTD_READ_CHUNK_BYTES = 1024 * 1024
+
+
+def _batch_too_large() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        detail={"code": "runtime_batch_too_large", "message": "Runtime batch exceeds one catalog apply."},
+    )
 
 
 def _decode_zstd_batch(body: bytes) -> bytes:
@@ -49,12 +57,9 @@ def _decode_zstd_batch(body: bytes) -> bytes:
         decompressor = zstandard.ZstdDecompressor(max_window_size=_ZSTD_MAX_WINDOW_BYTES)
         with decompressor.stream_reader(body, read_across_frames=True) as reader:
             while chunk := reader.read(_ZSTD_READ_CHUNK_BYTES):
+                if len(decoded) + len(chunk) > _MAX_BATCH_BYTES:
+                    raise _batch_too_large()
                 decoded.extend(chunk)
-                if len(decoded) > _MAX_DECODED_BATCH_BYTES:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                        detail={"code": "runtime_batch_too_large", "message": "Runtime batch decodes past one catalog apply."},
-                    )
     except zstandard.ZstdError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -73,7 +78,12 @@ class _RuntimeBatchRequest(Request):
 
     async def body(self) -> bytes:
         if not hasattr(self, "_body"):
-            body = await super().body()
+            wire = bytearray()
+            async for chunk in self.stream():
+                if len(wire) + len(chunk) > _MAX_BATCH_BYTES:
+                    raise _batch_too_large()
+                wire.extend(chunk)
+            body = bytes(wire)
             if (self.headers.get("content-encoding") or "").strip().lower() == "zstd":
                 body = _decode_zstd_batch(body)
             self._body = body

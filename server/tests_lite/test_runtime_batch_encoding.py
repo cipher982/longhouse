@@ -71,3 +71,5 @@ def test_zstd_runtime_batch_applies_like_its_plain_body(live_catalog, live_catal
     assert post(b"not zstd", "zstd").status_code == 400
     bomb = zstandard.ZstdCompressor(level=19).compress(b" " * (17 * 1024 * 1024))
     assert post(bomb, "zstd").status_code == 413
+    # The wire is bounded too, before anything is decoded or parsed.
+    assert post(b"\0" * (17 * 1024 * 1024), "zstd").status_code == 413
