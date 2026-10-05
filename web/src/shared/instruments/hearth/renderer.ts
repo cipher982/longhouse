@@ -847,9 +847,9 @@ export class HearthRenderer {
    * of times: a step swaps the velocity target an odd number of times, so an
    * even count leaves every other tile's state current. Warm steps use their
    * own clock and no sparks, so burning fires keep their flicker. A warming
-   * tile also stays in the main span (setRuns): the main solver takes one
-   * step a frame, an odd number of swaps, so a tile left out of it would be
-   * read from the stale buffer next frame. Returns whether any tile is still
+   * tile also stays in the main span (setRuns): the main solver takes up to
+   * three steps a frame, often an odd number of swaps, so a tile left out of
+   * it could be read from the stale buffer next frame. Returns whether any tile is still
    * warming. */
   private warmUp(): boolean {
     const runs: [number, number][] = [];

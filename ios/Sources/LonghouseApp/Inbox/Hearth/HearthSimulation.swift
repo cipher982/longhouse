@@ -283,6 +283,10 @@ final class HearthSimulation {
         tiles[index].warmSteps > 0
     }
 
+    var anyWarming: Bool {
+        tiles.contains { $0.heat != nil && !$0.parked && $0.warmSteps > 0 }
+    }
+
     // MARK: - Frame (CPU)
 
     /// Advance the flame controller of every attached tile. Heats are stepped
@@ -466,8 +470,11 @@ final class HearthSimulation {
         // Warm new fires ahead on their own clock, a frame's share at a time,
         // without sparks: burning fires keep their state and their flicker.
         var warmTime = simulationTime
+        var budget = 2 * Self.warmupStepsPerFrame
         for run in warming {
             let count = min(Self.warmupStepsPerFrame, tiles[run.lo].warmSteps) / 2 * 2
+            guard max(2, count) <= budget else { break }
+            budget -= max(2, count)
             for _ in 0..<count {
                 warmTime += Float(Self.step)
                 simulate(encoder, runs: [run], step: Float(Self.step), time: warmTime, withSparks: false)

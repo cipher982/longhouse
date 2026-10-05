@@ -256,7 +256,7 @@ final class HearthEngine {
         frames += 1
 
         let pending = tileKeys.contains { key in key.flatMap { entries[$0]?.heat.hasPending } ?? false }
-        let keepGoing = still ? settle > 0 : burning > 0 || pending || now < simulation.sparkUntil
+        let keepGoing = still ? settle > 0 : burning > 0 || pending || simulation.anyWarming || now < simulation.sparkUntil
         if !keepGoing {
             setRunning(false)
             lastFrame = nil
