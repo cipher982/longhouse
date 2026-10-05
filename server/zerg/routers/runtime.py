@@ -7,11 +7,14 @@ import os
 from datetime import datetime
 from datetime import timezone
 
+import zstandard
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogRemoteError
@@ -33,7 +36,61 @@ from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import _is_bridge_transcript_event
 
-router = APIRouter(prefix="/agents/runtime", tags=["agents"])
+# A batch is one catalogd apply, so it can never usefully exceed one catalogd
+# frame (8 MiB); twice that bounds what a small zstd body may expand into.
+_MAX_DECODED_BATCH_BYTES = 16 * 1024 * 1024
+_ZSTD_MAX_WINDOW_BYTES = 8 * 1024 * 1024
+_ZSTD_READ_CHUNK_BYTES = 1024 * 1024
+
+
+def _decode_zstd_batch(body: bytes) -> bytes:
+    decoded = bytearray()
+    try:
+        decompressor = zstandard.ZstdDecompressor(max_window_size=_ZSTD_MAX_WINDOW_BYTES)
+        with decompressor.stream_reader(body, read_across_frames=True) as reader:
+            while chunk := reader.read(_ZSTD_READ_CHUNK_BYTES):
+                decoded.extend(chunk)
+                if len(decoded) > _MAX_DECODED_BATCH_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail={"code": "runtime_batch_too_large", "message": "Runtime batch decodes past one catalog apply."},
+                    )
+    except zstandard.ZstdError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_content_encoding", "message": "Runtime batch is not valid zstd."},
+        ) from exc
+    return bytes(decoded)
+
+
+class _RuntimeBatchRequest(Request):
+    """A runtime batch body, decoded when the Machine Agent sent it as zstd.
+
+    The Machine Agent encodes batches because its uplink, not this host,
+    bounds how fast a backlog drains, and runtime events restate their keys,
+    ids and preview text event after event. An older one sends them plain.
+    """
+
+    async def body(self) -> bytes:
+        if not hasattr(self, "_body"):
+            body = await super().body()
+            if (self.headers.get("content-encoding") or "").strip().lower() == "zstd":
+                body = _decode_zstd_batch(body)
+            self._body = body
+        return self._body
+
+
+class _RuntimeBatchRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def decoding_handler(request: Request) -> Response:
+            return await handler(_RuntimeBatchRequest(request.scope, request.receive))
+
+        return decoding_handler
+
+
+router = APIRouter(prefix="/agents/runtime", tags=["agents"], route_class=_RuntimeBatchRoute)
 _catalog_db_dependency = catalog_db_dependency()
 
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
