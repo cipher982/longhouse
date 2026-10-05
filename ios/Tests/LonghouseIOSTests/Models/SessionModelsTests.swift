@@ -1090,6 +1090,24 @@ struct SessionModelsTests {
         #expect(leanDecoded.sessions.count == 1)
     }
 
+    /// The timeline fire reads the card's archive counters; a counter the
+    /// adapter drops reads as zero and silences that event channel.
+    @Test
+    func timelineCardCarriesTheArchiveCountersTheHearthReads() throws {
+        let json = """
+        {"sessions": [{"thread_id": "t", "timeline_anchor_at": null, "head_origin_label": null, "head": \(apiSessionJSON())}]}
+        """
+        let summary = try #require(
+            try JSONDecoder.snakeCase.decodeSessionFixture(TimelineCardList.self, from: Data(json.utf8)).sessions.first
+        ).sessionSummary
+        #expect(summary.userMessages == 3)
+        #expect(summary.assistantMessages == 2)
+        #expect(summary.toolCalls == 4)
+        let snapshot = HearthSnapshot(session: summary, suppressed: false, now: Date())
+        #expect(snapshot.assistantMessages == 2)
+        #expect(snapshot.toolCalls == 4)
+    }
+
     @Test
     func apiTimelineSessionsListResponseDecodesTimelineCardContract() throws {
         let sessionJSON = apiSessionJSON()

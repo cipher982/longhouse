@@ -607,6 +607,7 @@ private extension APISessionResponse {
             timelineAnchorAt: projectedTimelineAnchorAt ?? timelineAnchorAt,
             userMessages: userMessages,
             toolCalls: toolCalls,
+            assistantMessages: assistantMessages,
             runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
             timelineCard: timelineCard.timelineCardPresentation,
             stateFacts: sessionState.sessionStateFacts
