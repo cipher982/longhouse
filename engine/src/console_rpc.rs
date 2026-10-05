@@ -268,11 +268,15 @@ pub fn find_response(stdout_path: &Path, start: u64, id: &str) -> Option<Value> 
 /// 916 MB of runtime events for a 6.6 MB transcript.
 ///
 /// The Runtime Host takes an assistant message's text from the payload's
-/// `live_text` and only its identity and stop reason from `message`
-/// (server/zerg/services/session_live_previews.py). It never reads
-/// `assistantMessageEvent`, `agent_end`'s `messages`, or `turn_end`'s
-/// `toolResults`. Everything else passes through unchanged, including tool
-/// events, whose arguments and results Pi's tool previews read.
+/// `live_text`, falling back to the message's text blocks when a stream was
+/// joined mid-message; from `message` it otherwise reads only identity and
+/// stop reason (server/zerg/services/session_live_previews.py). So an
+/// assistant message keeps those and its text blocks, and loses the thinking
+/// blocks and signatures that were 99.9% of its bytes (0.23 MB of text in
+/// 394 MB of messages that day). The host never reads `assistantMessageEvent`,
+/// `agent_end`'s `messages`, or `turn_end`'s `toolResults`. Everything else
+/// passes through unchanged, including tool events, whose arguments and
+/// results Pi's tool previews read.
 pub fn runtime_stream_event(event: &Value) -> Value {
     let Some(object) = event.as_object() else {
         return event.clone();
@@ -285,11 +289,28 @@ pub fn runtime_stream_event(event: &Value) -> Value {
             "messages" if event_type == Some("agent_end") => {}
             "toolResults" if event_type == Some("turn_end") => {}
             "message" if value.get("role").and_then(Value::as_str) == Some("assistant") => {
-                let identity = ["id", "role", "stopReason", "errorMessage"]
-                    .into_iter()
-                    .filter_map(|field| Some((field.to_owned(), value.get(field)?.clone())))
-                    .collect();
-                reduced.insert(key.clone(), Value::Object(identity));
+                let mut kept: serde_json::Map<String, Value> =
+                    ["id", "role", "stopReason", "errorMessage"]
+                        .into_iter()
+                        .filter_map(|field| Some((field.to_owned(), value.get(field)?.clone())))
+                        .collect();
+                match value.get("content") {
+                    Some(Value::Array(blocks)) => {
+                        let text = blocks
+                            .iter()
+                            .filter(|block| {
+                                block.get("type").and_then(Value::as_str) == Some("text")
+                            })
+                            .cloned()
+                            .collect();
+                        kept.insert("content".to_owned(), Value::Array(text));
+                    }
+                    Some(content @ Value::String(_)) => {
+                        kept.insert("content".to_owned(), content.clone());
+                    }
+                    _ => {}
+                }
+                reduced.insert(key.clone(), Value::Object(kept));
             }
             _ => {
                 reduced.insert(key.clone(), value.clone());
@@ -434,11 +455,18 @@ mod tests {
 
         let reduced = runtime_stream_event(&update);
 
+        // Identity, stop reason and the text blocks the host falls back to
+        // when it has no live_text; never the reasoning.
         assert_eq!(
             reduced,
             json!({
                 "type": "message_update",
-                "message": {"id": "msg-1", "role": "assistant", "stopReason": null}
+                "message": {
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "stopReason": null,
+                    "content": [{"type": "text", "text": "Hello"}]
+                }
             })
         );
         assert!(serde_json::to_vec(&reduced).unwrap().len() < 200);
