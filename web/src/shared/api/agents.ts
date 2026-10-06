@@ -516,6 +516,7 @@ export interface AgentSessionLastTurn {
 
 export interface AgentEventInputOrigin {
   authored_via: "longhouse" | "terminal";
+  origin?: "user" | "wake" | null;
   session_input_id?: number | null;
   client_request_id?: string | null;
 }

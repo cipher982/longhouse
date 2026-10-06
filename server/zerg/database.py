@@ -1307,7 +1307,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("agent_heartbeats table migration skipped (table may not exist yet)", exc_info=True)
 
     # session_turns table migrations
-    # source_kind, origin, timing_confidence (server_default-backed), expected_user_text_hash
+    # source_kind, timing_confidence (server_default-backed), expected_user_text_hash
     # and baseline_observation_cursor (pure nullable) ALTER ADDs handled by
     # _auto_add_missing_columns. Remaining work: legacy backfill from
     # baseline_runtime_cursor + index creates.

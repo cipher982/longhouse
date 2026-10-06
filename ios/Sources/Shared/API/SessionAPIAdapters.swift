@@ -428,15 +428,18 @@ extension APISessionInputReceiptResponse {
             intent: intent,
             status: status,
             createdAt: createdAt,
-            eventId: eventId
+            eventId: eventId,
+            text: text,
+            origin: origin ?? "user"
         )
     }
 }
 
 extension APIInputOriginResponse {
     var sessionInputOrigin: SessionInputOrigin {
-        SessionInputOrigin(
+        return SessionInputOrigin(
             authoredVia: SessionInputAuthoredVia(serverValue: authoredVia),
+            origin: origin,
             sessionInputId: sessionInputId,
             clientRequestId: clientRequestId
         )

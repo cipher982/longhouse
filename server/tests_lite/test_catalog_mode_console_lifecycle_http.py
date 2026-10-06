@@ -240,3 +240,187 @@ def test_catalog_mode_http_console_lifecycle_survives_ambiguous_start_and_crash_
     finally:
         api_app.dependency_overrides.clear()
         engine.dispose()
+
+
+def test_catalog_mode_http_wake_signal_dispatches_once_after_completed_turn(tmp_path, monkeypatch):
+    from uuid import uuid4
+
+    from zerg.models.live_store import LiveSessionThreadAlias
+    from zerg.routers import agents_sessions
+    from zerg.routers import runtime as runtime_router
+    from zerg.services import catalogd_supervisor
+    from zerg.services import console_sessions
+    from zerg.services import machine_control_channel
+
+    engine = create_catalog_engine(tmp_path / "hosted-console-wake.db")
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.commit()
+    store = CatalogStore(engine)
+    catalog = _CatalogClient(store)
+    registry = _MachineRegistry()
+
+    monkeypatch.setattr(catalogd_supervisor, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(console_sessions, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(machine_control_channel, "get_machine_control_channel_registry", lambda: registry)
+    monkeypatch.setattr(agents_sessions, "get_machine_control_channel_registry", lambda: registry)
+
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(
+        owner_id=1,
+        device_id="cinder",
+        id="token-1",
+    )
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    try:
+        with TestClient(api_app, raise_server_exceptions=False) as client:
+            created = client.post(
+                "/agents/sessions",
+                json={"provider": "claude", "device_id": "cinder", "cwd": "/tmp/longhouse"},
+                headers={"X-Agents-Token": "dev"},
+            )
+            assert created.status_code == 201, created.text
+            session_id = created.json()["session_id"]
+            thread_id = created.json()["thread_id"]
+
+            first_request_id = "wake-route-first"
+            first = client.post(
+                f"/agents/sessions/{session_id}/turns",
+                json={"message": "first response", "client_request_id": first_request_id},
+                headers={"X-Agents-Token": "dev"},
+            )
+            assert first.status_code == 202, first.text
+
+            provider_thread_id = "provider-thread-wake-route"
+            now = datetime.now(timezone.utc)
+            with Session(engine) as db:
+                db.add(
+                    LiveSessionThreadAlias(
+                        thread_id=thread_id,
+                        provider="claude",
+                        alias_kind="provider_session_id",
+                        alias_value=provider_thread_id,
+                        first_seen_at=now,
+                        last_seen_at=now,
+                    )
+                )
+                db.commit()
+
+            invocation_id = str(uuid4())
+
+            def complete_turn(turn, client_request_id: str) -> None:
+                run_id = turn.json()["run_id"]
+                terminal = {
+                    "events": [
+                        {
+                            "runtime_key": f"claude:{session_id}",
+                            "session_id": session_id,
+                            "thread_id": thread_id,
+                            "run_id": run_id,
+                            "provider": "claude",
+                            "device_id": "cinder",
+                            "source": "claude_print",
+                            "kind": "terminal_signal",
+                            "occurred_at": datetime.now(timezone.utc).isoformat(),
+                            "dedupe_key": f"claude-print:{session_id}:{run_id}:terminal",
+                            "payload": {
+                                "managed_transport": "claude_print",
+                                "execution_lifetime": "persistent",
+                                "terminal_state": "run_completed",
+                                "terminal_reason": "completed",
+                                "terminal_source": "claude_print",
+                                "exit_code": 0,
+                                "stderr_tail": None,
+                                "turn_id": turn.json()["turn_id"],
+                                "client_request_id": client_request_id,
+                                "provider_thread_id": provider_thread_id,
+                                "invocation": {
+                                    "id": invocation_id,
+                                    "state": "parked",
+                                    "pending_count": 1,
+                                },
+                            },
+                        }
+                    ]
+                }
+                response = client.post(
+                    "/agents/runtime/events/batch",
+                    json=terminal,
+                    headers={"X-Agents-Token": "dev"},
+                )
+                assert response.status_code == 200, response.text
+
+            complete_turn(first, first_request_id)
+            resumed_request_id = "wake-route-resume"
+            resumed = client.post(
+                f"/agents/sessions/{session_id}/turns",
+                json={"message": "resume the parked session", "client_request_id": resumed_request_id},
+                headers={"X-Agents-Token": "dev"},
+            )
+            assert resumed.status_code == 202, resumed.text
+            user_resume_identity = registry.commands[-1]["payload"]["resume_provider_thread_id"]
+            assert user_resume_identity == provider_thread_id
+            complete_turn(resumed, resumed_request_id)
+
+            wake_id = f"{invocation_id}:1"
+            wake = {
+                "events": [
+                    {
+                        "runtime_key": f"claude:{session_id}",
+                        "session_id": session_id,
+                        "thread_id": thread_id,
+                        "provider": "claude",
+                        "device_id": "cinder",
+                        "source": "claude_console",
+                        "kind": "wake_signal",
+                        "occurred_at": datetime.now(timezone.utc).isoformat(),
+                        "dedupe_key": f"wake:{wake_id}",
+                        "payload": {
+                            "invocation_id": invocation_id,
+                            "wake_id": wake_id,
+                            "provider_thread_id": provider_thread_id,
+                            "trigger": {
+                                "kind": "monitor_event",
+                                "task_ids": ["monitor-1"],
+                                "summary": "the branch is ready",
+                            },
+                        },
+                    }
+                ]
+            }
+            wake_response = client.post(
+                "/agents/runtime/events/batch",
+                json=wake,
+                headers={"X-Agents-Token": "dev"},
+            )
+            assert wake_response.status_code == 200, wake_response.text
+            wake_command = registry.commands[-1]
+            assert wake_command["command_type"] == "session.turn.start"
+            assert wake_command["payload"]["origin"] == "wake"
+            assert "launch_actor" not in wake_command["payload"]
+            assert wake_command["payload"]["wake_id"] == wake_id
+            assert wake_command["payload"]["invocation_id"] == invocation_id
+            assert wake_command["payload"]["message"] == ""
+            assert wake_command["payload"]["resume_provider_thread_id"] == user_resume_identity
+
+            wake_request_id = f"wake:{wake_id}"
+            detail_receipts = store.list_session_input_receipts(session_id=session_id)["receipts"]
+            wake_detail = next(row for row in detail_receipts if row["client_request_id"] == wake_request_id)
+            assert wake_detail["origin"] == "wake"
+            assert wake_detail["text"] == "Background task finished: the branch is ready"
+            live_receipts = store.list_recent_input_receipts(session_id=session_id)["receipts"]
+            wake_live = next(row for row in live_receipts if row["client_request_id"] == wake_request_id)
+            assert wake_live["turn"]["origin"] == "wake"
+
+            dispatched_count = len(registry.commands)
+            duplicate = client.post(
+                "/agents/runtime/events/batch",
+                json=wake,
+                headers={"X-Agents-Token": "dev"},
+            )
+            assert duplicate.status_code == 200, duplicate.text
+            assert len(registry.commands) == dispatched_count
+    finally:
+        api_app.dependency_overrides.clear()
+        engine.dispose()

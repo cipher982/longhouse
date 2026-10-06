@@ -919,17 +919,17 @@ class LastTurnResponse(BaseModel):
 
 
 class SessionInputReceiptResponse(BaseModel):
-    """A send Longhouse accepted for this session, and the durable event it became.
+    """An accepted session input receipt and the durable event it became.
 
-    `event_id` is set once ingest links the receipt to the transcript entry the
-    provider wrote for it. A client that sent with `client_request_id` resolves
-    its optimistic row from this, whether or not that event is on the page it
-    has loaded.
+    ``origin`` distinguishes a user instruction from a provider wake.
+    ``event_id`` is set once ingest links the receipt to its transcript entry.
     """
 
     client_request_id: Optional[str] = Field(None, description="Client idempotency key supplied with the send")
     intent: str = Field(..., description="auto|steer|queue")
     status: str = Field(..., description="queued|delivering|delivered|cancelled|failed")
+    text: str = Field(..., description="Accepted input text")
+    origin: str = Field("user", description="Turn origin: user|wake")
     created_at: Optional[datetime] = Field(None, description="When the send was accepted")
     event_id: Optional[str] = Field(None, description="Durable transcript event this send became, once linked")
 
@@ -1403,12 +1403,13 @@ class WallResponse(UTCBaseModel):
 
 
 class InputOriginResponse(BaseModel):
-    """Semantic origin for a user-authored transcript event."""
+    """Semantic origin for a transcript input linked to a Longhouse receipt."""
 
     authored_via: Literal["longhouse", "terminal"] = Field(
         ...,
         description="Where this user input was authored: longhouse|terminal",
     )
+    origin: str = Field("user", description="Turn origin: user|wake")
     session_input_id: Optional[int] = Field(None, description="SessionInput row when authored through Longhouse")
     client_request_id: Optional[str] = Field(
         None,

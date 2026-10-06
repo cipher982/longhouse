@@ -202,6 +202,12 @@ extension WebTranscriptView {
     ) -> WebTranscriptPayloadItem {
         switch item {
         case .user(let event):
+            if event.inputOrigin?.origin == "wake" {
+                return providerNotificationPayload(
+                    id: item.id,
+                    text: event.contentText ?? "Background task finished"
+                )
+            }
             return messagePayload(
                 id: item.id,
                 role: "user",
@@ -319,7 +325,10 @@ extension WebTranscriptView {
     }
 
     private nonisolated static func payloadSubmittedInput(_ input: SubmittedInput) -> WebTranscriptPayloadItem {
-        WebTranscriptPayloadItem(
+        if input.origin == "wake" {
+            return providerNotificationPayload(id: input.id, text: input.text)
+        }
+        return WebTranscriptPayloadItem(
             id: input.id,
             kind: "submitted",
             role: "user",

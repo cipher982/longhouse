@@ -20,6 +20,7 @@ export interface ConsoleTurnReceipt {
   receipt_id?: string | null;
   run_id?: string | null;
   state: string;
+  origin?: "user" | "wake" | null;
   is_fresh?: boolean | null;
 }
 

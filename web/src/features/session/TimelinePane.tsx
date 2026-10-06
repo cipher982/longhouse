@@ -1548,6 +1548,19 @@ export function TimelinePane({
     }
 
     if (item.kind === "message") {
+      if (
+        item.event.role === "user" &&
+        item.event.input_origin?.origin === "wake"
+      ) {
+        return (
+          <ProviderNoticeRow
+            key={item.event.id}
+            event={item.event}
+            isSelected={timelineItemContainsSelection(item, selectedKey)}
+          />
+        );
+      }
+
       return <MessageRow key={item.event.id} event={item.event} renderMedia={renderMedia} provider={provider} />;
     }
 

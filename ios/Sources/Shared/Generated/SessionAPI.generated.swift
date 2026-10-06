@@ -134,6 +134,8 @@ struct APISessionInputReceiptResponse: Codable, Hashable, Sendable {
     let clientRequestId: String?
     let intent: String
     let status: String
+    let text: String
+    let origin: String?
     let createdAt: String?
     let eventId: String?
 }
@@ -593,6 +595,7 @@ struct APIEventMediaRefResponse: Codable, Hashable, Sendable {
 
 struct APIInputOriginResponse: Codable, Hashable, Sendable {
     let authoredVia: String
+    let origin: String?
     let sessionInputId: Int?
     let clientRequestId: String?
 }

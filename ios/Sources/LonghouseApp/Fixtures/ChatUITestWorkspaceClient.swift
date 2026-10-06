@@ -209,6 +209,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     receiptId: nil,
                     runId: "fixture-run",
                     state: "active",
+                    origin: "user",
                     isFresh: true
                 ),
                 intent: .auto,
@@ -227,6 +228,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     receiptId: nil,
                     runId: "fixture-completed-run",
                     state: "completed",
+                    origin: "user",
                     isFresh: true
                 ),
                 intent: .auto,

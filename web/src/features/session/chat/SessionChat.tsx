@@ -1123,6 +1123,7 @@ export function SessionChat({
   const dismissedInputIds = readDismissedInputIds(session.id);
   const activeQueuedInputs = (queuedInputsQuery.data ?? []).filter(
     (row) =>
+      row.turn?.origin !== "wake" &&
       !(row.client_request_id && pendingInputIds.has(row.client_request_id)) &&
       !(row.client_request_id && dismissedInputIds.has(row.client_request_id)) &&
       !(row.intent === "steer" && row.last_error === "turn_ended") &&
@@ -1135,6 +1136,7 @@ export function SessionChat({
     activeQueuedInputs.filter((row) => row.status === "queued").length >= 5;
   const failedInputs = (queuedInputsQuery.data ?? []).filter(
     (row) =>
+      row.turn?.origin !== "wake" &&
       !(row.client_request_id && pendingInputIds.has(row.client_request_id)) &&
       !(row.client_request_id && dismissedInputIds.has(row.client_request_id)) &&
       (row.status === "failed" || row.status === "cancelled") &&
@@ -2019,6 +2021,17 @@ export function SessionChat({
         mimeType: attachment.mime_type,
         byteSize: attachment.byte_size,
       }));
+      const origin = row.turn?.origin === "wake" ? "wake" : "user";
+      if (origin === "wake") {
+        inFlight.push({
+          key,
+          text: row.text,
+          attachments,
+          state: "sent",
+          origin,
+        });
+        continue;
+      }
       if (hasUnknownDeliveryError(row.last_error)) {
         inFlight.push({
           key,

@@ -143,6 +143,41 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertNil(rows.first?.role)
     }
 
+    func testWakeReceiptAndDurableEchoRenderAsProviderNotifications() {
+        let wakeText = "Background task finished: the branch is ready"
+        let receiptRows = WebTranscriptView.payloadItems(
+            timelineItems: [],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: wakeText,
+                    clientRequestId: "wake:invocation-1:1",
+                    serverInputId: nil,
+                    origin: "wake"
+                ),
+            ]
+        )
+        XCTAssertEqual(receiptRows.map(\.kind), ["providerNotification"])
+        XCTAssertNil(receiptRows.first?.role)
+        XCTAssertEqual(receiptRows.first?.body, wakeText)
+
+        let wakeEvent = makeUserEvent(
+            id: 44,
+            content: "provider's wake input",
+            inputOrigin: SessionInputOrigin(
+                authoredVia: .longhouse,
+                origin: "wake",
+                sessionInputId: nil,
+                clientRequestId: "wake:invocation-1:1"
+            )
+        )
+        let durableRows = WebTranscriptView.payloadItems(
+            timelineItems: TimelineBuilder.build(events: [wakeEvent]),
+            submittedInputs: []
+        )
+        XCTAssertEqual(durableRows.map(\.kind), ["providerNotification"])
+        XCTAssertNil(durableRows.first?.role)
+    }
+
     /// The transcript document collapses a notice from its text alone, so the
     /// payload must carry a long multi-line job result whole, not preview it.
     func testPayloadCarriesLongProviderNotificationInFull() {
@@ -420,6 +455,7 @@ final class WebTranscriptViewTests: XCTestCase {
         text: String,
         clientRequestId: String,
         serverInputId: Int?,
+        origin: String = "user",
         phase: SubmittedInputPhase = .sent,
         lastError: String? = nil,
         createdAt: Date = Date(timeIntervalSince1970: 0)
@@ -428,6 +464,7 @@ final class WebTranscriptViewTests: XCTestCase {
             id: clientRequestId,
             clientRequestId: clientRequestId,
             text: text,
+            origin: origin,
             intent: "auto",
             phase: phase,
             serverInputId: serverInputId,

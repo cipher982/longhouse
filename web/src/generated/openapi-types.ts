@@ -4811,6 +4811,12 @@ export interface components {
              */
             authored_via: "longhouse" | "terminal";
             /**
+             * Origin
+             * @description Turn origin: user|wake
+             * @default user
+             */
+            origin: string;
+            /**
              * Session Input Id
              * @description SessionInput row when authored through Longhouse
              */
@@ -7781,6 +7787,17 @@ export interface components {
              * @description queued|delivering|delivered|cancelled|failed
              */
             status: string;
+            /**
+             * Text
+             * @description Accepted input text
+             */
+            text: string;
+            /**
+             * Origin
+             * @description Turn origin: user|wake
+             * @default user
+             */
+            origin: string;
             /**
              * Created At
              * @description When the send was accepted

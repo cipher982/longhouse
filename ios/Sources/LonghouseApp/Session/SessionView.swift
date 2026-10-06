@@ -493,12 +493,31 @@ struct SessionView: View {
         )
     }
     private var visibleSubmittedInputs: [SubmittedInput] {
-        guard let decisionId = viewModel.turnEndedDraft?.clientRequestId else {
-            return viewModel.submittedInputs
+        let localInputs: [SubmittedInput]
+        if let decisionId = viewModel.turnEndedDraft?.clientRequestId {
+            localInputs = viewModel.submittedInputs.filter { $0.clientRequestId != decisionId }
+        } else {
+            localInputs = viewModel.submittedInputs
         }
-        return viewModel.submittedInputs.filter {
-            $0.clientRequestId != decisionId
+        let wakeInputs = (viewModel.detail?.inputReceipts ?? []).compactMap { receipt -> SubmittedInput? in
+            guard receipt.origin == "wake",
+                  let clientRequestId = receipt.clientRequestId,
+                  let text = receipt.text,
+                  !text.isEmpty else { return nil }
+            return SubmittedInput(
+                id: clientRequestId,
+                clientRequestId: clientRequestId,
+                text: text,
+                origin: "wake",
+                intent: receipt.intent,
+                phase: .sent,
+                serverInputId: nil,
+                deliveryStatus: receipt.status,
+                lastError: nil,
+                createdAt: receipt.createdAt.flatMap(LonghouseDateParser.parse) ?? .distantPast
+            )
         }
+        return localInputs + wakeInputs
     }
 
     private var transcript: some View {

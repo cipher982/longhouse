@@ -39,6 +39,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-prose-idle --viewport=2000x1200 --css-variant=terminal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-wake-origin
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-ended   # the ended-run notice, resume and branch, no modal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
@@ -67,6 +68,7 @@ import {
   buildSessionToneFixture,
   SESSION_DETAIL_STRESS_NOW,
   SESSION_DETAIL_STRESS_SESSION_ID,
+  SESSION_WAKE_ORIGIN_INPUT_RECEIPTS,
   SESSION_TONES,
   type SessionTone,
 } from "../ui-fixtures/sessionDetailStress";
@@ -123,6 +125,7 @@ const SCENES = [
   "session-prose-idle",
   "session-input-outbox",
   "session-remote-image-outbox",
+  "session-wake-origin",
   "session-question",
   "session-attention",
   "session-resume",
@@ -172,6 +175,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-prose-idle",
   "session-input-outbox",
   "session-remote-image-outbox",
+  "session-wake-origin",
   "session-question",
   "session-attention",
   "session-resume",
@@ -343,6 +347,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-prose-idle" ||
     scene === "session-input-outbox" ||
     scene === "session-remote-image-outbox" ||
+    scene === "session-wake-origin" ||
     scene === "session-question" ||
     scene === "session-attention" ||
     scene === "session-resume" ||
@@ -678,6 +683,17 @@ export async function installSceneMocks(
               created_at: "2026-04-15T14:00:00Z",
             },
           ]),
+        });
+        return;
+      }
+      if (
+        pathname === `/api/sessions/${fixture.session.id}/inputs` &&
+        scene === "session-wake-origin"
+      ) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(SESSION_WAKE_ORIGIN_INPUT_RECEIPTS),
         });
         return;
       }
@@ -1260,6 +1276,14 @@ async function captureBundle(
       screenshotGate ? "body[data-screenshot-ready='true']" : "body[data-ready='true']",
       { timeout: screenshotGate ? 12_000 : 5_000 }, // 12s is ~2.8x the observed 4.27s cold summary request.
     );
+  }
+
+  if (scene === "session-wake-origin") {
+    const wakeRow = page.locator(
+      '[data-testid="session-provider-notification"][data-origin="wake"]',
+    );
+    await wakeRow.waitFor({ state: "visible", timeout: 10_000 });
+    await wakeRow.scrollIntoViewIfNeeded();
   }
 
   if (scene === DEVICES_REVOKE_SCENE) {

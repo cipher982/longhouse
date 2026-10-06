@@ -763,6 +763,9 @@ async def dispatch_catalog_claimed_turn(
         }
         payload["origin"] = origin
         if origin == "wake":
+            # A provider wake is not one of the launch actors; omit that
+            # session-launch provenance from the turn command.
+            payload.pop("launch_actor")
             payload["wake_id"] = str(turn.get("wake_id") or "")
             payload["invocation_id"] = str(turn.get("invocation_id") or "")
             payload["message"] = ""

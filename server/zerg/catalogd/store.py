@@ -1007,14 +1007,6 @@ def _create_console_turn_rows(
 
 
 def _wake_trigger_summary(trigger: Mapping[str, Any]) -> str:
-    labels = {
-        "monitor_event": "Monitor event",
-        "task_completed": "Background task completed",
-        "subagent_result": "Subagent result",
-        "scheduled": "Scheduled wake",
-    }
-    kind = str(trigger.get("kind") or "unknown").strip()
-    label = labels.get(kind, "Background work completed")
     summary = str(trigger.get("summary") or "").strip()
     if not summary:
         task_ids = trigger.get("task_ids")
@@ -1022,7 +1014,7 @@ def _wake_trigger_summary(trigger: Mapping[str, Any]) -> str:
             summary = ", ".join(str(task_id).strip() for task_id in task_ids[:8] if str(task_id).strip())
     if not summary:
         summary = "background work"
-    return f"Background wake · {label}: {summary[:512]}"
+    return f"Background task finished: {summary[:512]}"
 
 
 def _enqueue_console_wake_turn(orm: Session, event: Any, *, observed_at: datetime) -> dict[str, Any] | None:
@@ -1488,13 +1480,16 @@ def _input_receipt_dto(
     *,
     turn: Any | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    origin: str | None = None,
 ) -> dict[str, Any]:
     turn_identity = None
+    origin = str(origin or getattr(turn, "origin", None) or "user")
     if turn is not None:
         turn_identity = {
             "turn_id": str(turn.id),
             "run_id": str(turn.run_id) if turn.run_id is not None else None,
             "state": str(turn.state),
+            "origin": origin,
             "is_fresh": _console_turn_state_is_fresh(turn),
         }
     return {
@@ -1506,6 +1501,7 @@ def _input_receipt_dto(
         "intent": receipt.intent,
         "status": receipt.status,
         "client_request_id": receipt.client_request_id,
+        "origin": origin,
         "payload_digest": getattr(receipt, "payload_digest", None),
         "archive_session_input_id": receipt.archive_session_input_id,
         "durable_event_id": getattr(receipt, "durable_event_id", None),
@@ -1723,14 +1719,19 @@ def _session_read_provider_facts(connection: Connection, *, session_id: str) -> 
 def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
     """Newest input receipts for a session regardless of status, for provenance."""
     table = LiveSessionInputReceipt.__table__
+    turn_table = LiveConsoleTurn.__table__
     rows = (
         connection.execute(
-            select(table).where(table.c.session_id == session_id).order_by(table.c.created_at.desc(), table.c.id.desc()).limit(limit)
+            select(table, turn_table.c.origin.label("turn_origin"))
+            .select_from(table.outerjoin(turn_table, turn_table.c.receipt_id == table.c.id))
+            .where(table.c.session_id == session_id)
+            .order_by(table.c.created_at.desc(), table.c.id.desc())
+            .limit(limit)
         )
         .mappings()
         .all()
     )
-    return [_input_receipt_dto(_RowReceipt(row)) for row in rows]
+    return [_input_receipt_dto(_RowReceipt(row), origin=row["turn_origin"]) for row in rows]
 
 
 def _session_read_media_refs(connection: Connection, *, session_id: str) -> list[dict[str, Any]]:

@@ -733,7 +733,6 @@ class SessionTurn(AgentsBase):
         default="managed_live",
         server_default=text("'managed_live'"),
     )
-    origin = Column(String(16), nullable=True, default="user", server_default=text("'user'"))
     timing_confidence = Column(
         String(20),
         nullable=False,

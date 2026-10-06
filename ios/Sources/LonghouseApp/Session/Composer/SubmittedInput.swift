@@ -58,6 +58,7 @@ struct SubmittedInput: Identifiable, Sendable {
     let id: String
     let clientRequestId: String
     let text: String
+    let origin: String
     let intent: String
     let attachmentSummaries: [SubmittedInputAttachmentSummary]
     var phase: SubmittedInputPhase
@@ -73,6 +74,7 @@ struct SubmittedInput: Identifiable, Sendable {
         id: String,
         clientRequestId: String,
         text: String,
+        origin: String = "user",
         intent: String,
         attachmentSummaries: [SubmittedInputAttachmentSummary] = [],
         phase: SubmittedInputPhase,
@@ -87,6 +89,7 @@ struct SubmittedInput: Identifiable, Sendable {
         self.id = id
         self.clientRequestId = clientRequestId
         self.text = text
+        self.origin = origin
         self.intent = intent
         self.attachmentSummaries = attachmentSummaries
         self.phase = phase

@@ -135,6 +135,8 @@ def input_receipts_from_rows(receipts: object) -> list[dict[str, Any]]:
                 "client_request_id": receipt.get("client_request_id"),
                 "intent": str(receipt.get("intent") or "auto"),
                 "status": str(receipt.get("status") or "queued"),
+                "text": str(receipt.get("text") or ""),
+                "origin": str(receipt.get("origin") or "user"),
                 "created_at": receipt.get("created_at"),
                 "event_id": receipt.get("durable_event_id"),
             }
@@ -150,6 +152,7 @@ def input_origins_by_event(receipts: list[dict[str, Any]]) -> dict[str, dict[str
         if isinstance(event_id, str) and event_id and event_id not in origins:
             origins[event_id] = {
                 "authored_via": "longhouse",
+                "origin": str(receipt.get("origin") or "user"),
                 "session_input_id": None,
                 "client_request_id": receipt.get("client_request_id"),
             }

@@ -2805,6 +2805,54 @@ describe("SessionChat", () => {
       });
     });
 
+    it("preserves wake origin on server-owned transcript rows", async () => {
+      const onOutboxChange = vi.fn();
+      const wakeText = "Background task finished: the branch is ready";
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([
+            {
+              id: 81,
+              live_input_id: "wake-input-1",
+              client_request_id: "wake:invocation-1:1",
+              text: wakeText,
+              intent: "auto",
+              status: "delivered",
+              turn: {
+                turn_id: "wake-turn-1",
+                run_id: "wake-run-1",
+                state: "active",
+                origin: "wake",
+                is_fresh: true,
+              },
+              created_at: "2026-04-15T16:11:55Z",
+            },
+          ]);
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+
+      const view = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+        session: makeSession(),
+      });
+      try {
+        await waitFor(() =>
+          expect(lastOutbox(onOutboxChange)).toMatchObject([
+            { origin: "wake", text: wakeText, state: "sent" },
+          ]),
+        );
+      } finally {
+        view.unmount();
+        view.queryClient.clear();
+      }
+    });
+
     it("polls a remote active Console turn until it terminates", async () => {
       const onOutboxChange = vi.fn();
       const clientRequestId = "remote-console-turn";

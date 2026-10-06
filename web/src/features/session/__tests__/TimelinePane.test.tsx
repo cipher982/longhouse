@@ -1314,6 +1314,40 @@ describe("TimelinePane outbox", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it("renders wake receipts as provider notices rather than user outbox bubbles", () => {
+    render(
+      <TimelinePane
+        items={[]}
+        totalEntries={0}
+        loadedEntries={0}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+        outbox={[
+          {
+            key: "wake:1",
+            text: "Background task finished: the branch is ready",
+            state: "sent",
+            origin: "wake",
+          },
+        ]}
+      />,
+    );
+
+    const row = screen.getByTestId("session-provider-notification");
+    expect(row).toHaveAttribute("data-origin", "wake");
+    expect(row).toHaveTextContent(
+      "Background task finished: the branch is ready",
+    );
+    expect(row).not.toHaveClass("tl-msg--user");
+    expect(screen.queryByTestId("session-outbox-row")).not.toBeInTheDocument();
+  });
+
   it("puts a delivered send above the live reply it is waiting on", () => {
     // F6: the provider's live preview streams before the send's durable echo
     // is ingested; the ask must not render under its own answer.

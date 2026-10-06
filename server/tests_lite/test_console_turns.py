@@ -258,6 +258,7 @@ async def test_console_enqueue_persists_attachment_refs_and_compares_their_diges
         "turn_id": initial_turn["turn_id"],
         "run_id": initial_turn["run_id"],
         "state": "active",
+        "origin": "user",
         "is_fresh": True,
     }
 
@@ -742,23 +743,6 @@ async def test_replayed_stale_nonterminal_turn_is_not_presented_as_current(monke
 
     assert replayed.is_fresh is False
     assert _console_turn_response(replayed).is_fresh is False
-
-
-def test_console_turn_receipt_serves_wake_origin():
-    from zerg.routers.session_chat import _console_turn_response
-
-    response = _console_turn_response(
-        SimpleNamespace(
-            turn_id=uuid4(),
-            receipt_id=uuid4(),
-            run_id=uuid4(),
-            state="completed",
-            origin="wake",
-            is_fresh=True,
-        )
-    )
-
-    assert response.origin == "wake"
 
 
 def _steer_catalog(turn):

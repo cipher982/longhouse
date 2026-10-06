@@ -350,10 +350,20 @@ def test_workspace_envelope_stamps_input_origin_and_lists_receipts():
             "client_request_id": "req-1",
             "intent": "auto",
             "status": "delivered",
+            "text": "fix the flaky test",
+            "origin": "user",
             "created_at": "2026-09-01T12:00:00+00:00",
             "event_id": "echo-1",
         },
-        {"client_request_id": "req-9", "intent": "auto", "status": "queued", "created_at": "2026-09-01T12:01:00+00:00", "event_id": None},
+        {
+            "client_request_id": "req-9",
+            "intent": "auto",
+            "status": "queued",
+            "text": "follow up",
+            "origin": "user",
+            "created_at": "2026-09-01T12:01:00+00:00",
+            "event_id": None,
+        },
     ]
     events = [
         _event("echo-1", "c1", "user", "fix the flaky test"),
@@ -372,7 +382,12 @@ def test_workspace_envelope_stamps_input_origin_and_lists_receipts():
         receipts=receipts,
     )
     items = envelope["projection"]["items"]
-    assert items[0]["event"]["input_origin"] == {"authored_via": "longhouse", "session_input_id": None, "client_request_id": "req-1"}
+    assert items[0]["event"]["input_origin"] == {
+        "authored_via": "longhouse",
+        "origin": "user",
+        "session_input_id": None,
+        "client_request_id": "req-1",
+    }
     assert items[1]["event"]["input_origin"] is None
     assert envelope["session"]["input_receipts"] == receipts
 
@@ -380,9 +395,16 @@ def test_workspace_envelope_stamps_input_origin_and_lists_receipts():
 def test_input_origins_by_event_keeps_first_receipt_per_event():
     origins = input_origins_by_event(
         [
-            {"client_request_id": "req-a", "event_id": "e1"},
-            {"client_request_id": "req-b", "event_id": "e1"},
-            {"client_request_id": "req-c", "event_id": None},
+            {"client_request_id": "req-a", "event_id": "e1", "origin": "wake"},
+            {"client_request_id": "req-b", "event_id": "e1", "origin": "user"},
+            {"client_request_id": "req-c", "event_id": None, "origin": "user"},
         ]
     )
-    assert origins == {"e1": {"authored_via": "longhouse", "session_input_id": None, "client_request_id": "req-a"}}
+    assert origins == {
+        "e1": {
+            "authored_via": "longhouse",
+            "origin": "wake",
+            "session_input_id": None,
+            "client_request_id": "req-a",
+        }
+    }

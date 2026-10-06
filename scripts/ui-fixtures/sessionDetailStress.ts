@@ -107,6 +107,28 @@ type AgentSessionWorkspaceResponse = {
   projection: AgentSessionProjectionResponse;
 };
 
+export const SESSION_WAKE_ORIGIN_INPUT_RECEIPTS = [
+  {
+    id: 9004,
+    live_input_id: "wake-origin-input",
+    client_request_id: "wake:invocation-route-1:1",
+    text: "Background task finished: the branch is ready",
+    intent: "auto",
+    status: "delivered",
+    delivery_status: "delivered",
+    attachments: [],
+    turn: {
+      turn_id: "wake-origin-turn",
+      receipt_id: "wake-origin-input",
+      run_id: "wake-origin-run",
+      state: "active",
+      origin: "wake",
+      is_fresh: true,
+    },
+    created_at: "2026-04-15T16:11:55Z",
+  },
+] as const;
+
 type AgentSessionTurnsListResponse = {
   turns: JsonObject[];
   total: number;

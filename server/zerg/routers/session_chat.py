@@ -1437,6 +1437,7 @@ def _live_queued_summary(receipt: LiveInputReceiptSnapshot) -> QueuedInputSummar
                 receipt_id=receipt.id,
                 run_id=str(receipt.turn["run_id"]) if receipt.turn.get("run_id") is not None else None,
                 state=str(receipt.turn["state"]),
+                origin=str(receipt.turn.get("origin") or "user"),
                 is_fresh=receipt.turn.get("is_fresh"),
             )
             if receipt.turn is not None and receipt.turn.get("turn_id")

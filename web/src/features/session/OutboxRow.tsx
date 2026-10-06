@@ -29,6 +29,7 @@ export interface OutboxEntry {
   text: string;
   attachments?: OutboxAttachmentSummary[];
   state: OutboxEntryState;
+  origin?: "user" | "wake";
   /** Short reason shown after the state word (failures, drain notices). */
   detail?: string | null;
   /** Warning shown when a legacy row cannot reproduce its original model. */
@@ -45,6 +46,23 @@ const STATE_LABEL: Record<OutboxEntryState, string> = {
 };
 
 export function OutboxRow({ entry }: { entry: OutboxEntry }) {
+  if (entry.origin === "wake") {
+    return (
+      <div
+        className="tl-reasoning tl-reasoning--notice"
+        data-testid="session-provider-notification"
+        data-origin="wake"
+      >
+        <div className="tl-reasoning__head">
+          <span className="tl-reasoning__chev" aria-hidden="true">
+            •
+          </span>
+          <span className="tl-reasoning__label">{entry.text}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`tl-msg tl-msg--user tl-msg--outbox tl-msg--outbox-${entry.state}`}

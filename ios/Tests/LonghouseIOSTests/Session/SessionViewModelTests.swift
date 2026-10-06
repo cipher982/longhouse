@@ -989,6 +989,7 @@ struct SessionViewModelTests {
                         receiptId: "live-turn-1",
                         runId: "run-1",
                         state: "active",
+                        origin: "user",
                         isFresh: true
                     ),
                     intent: .auto,
@@ -1185,6 +1186,7 @@ struct SessionViewModelTests {
                     receiptId: nil,
                     runId: "run-1",
                     state: "active",
+                    origin: "user",
                     isFresh: true
                 ),
                 intent: .auto,
@@ -1248,6 +1250,7 @@ struct SessionViewModelTests {
                     receiptId: "live-turn-1",
                     runId: "run-1",
                     state: "starting",
+                    origin: "user",
                     isFresh: true
                 ),
                 intent: .auto,
@@ -1311,6 +1314,7 @@ struct SessionViewModelTests {
                     receiptId: "live-turn-2",
                     runId: "run-2",
                     state: "starting",
+                    origin: "user",
                     isFresh: true
                 )
             )
@@ -1374,6 +1378,7 @@ struct SessionViewModelTests {
                     receiptId: "stale-live-input",
                     runId: "stale-run",
                     state: "active",
+                    origin: "user",
                     isFresh: false
                 )
             )
@@ -1786,6 +1791,7 @@ struct SessionViewModelTests {
                     receiptId: nil,
                     runId: "run-1",
                     state: "active",
+                    origin: "user",
                     isFresh: true
                 ),
                 intent: .auto,
@@ -1830,6 +1836,7 @@ struct SessionViewModelTests {
                     receiptId: nil,
                     runId: "run-1",
                     state: "completed",
+                    origin: "user",
                     isFresh: true
                 ),
                 intent: .auto,

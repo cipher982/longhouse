@@ -441,6 +441,7 @@ struct LonghouseAPI: Sendable {
                 receiptId: (raw["receipt_id"] as? String) ?? (raw["receiptId"] as? String),
                 runId: (raw["run_id"] as? String) ?? (raw["runId"] as? String),
                 state: state,
+                origin: raw["origin"] as? String,
                 isFresh: (raw["is_fresh"] as? Bool) ?? (raw["isFresh"] as? Bool)
             )
         }()
@@ -927,6 +928,7 @@ struct LonghouseAPI: Sendable {
                 receiptId: (raw["receipt_id"] as? String) ?? (raw["receiptId"] as? String),
                 runId: (raw["run_id"] as? String) ?? (raw["runId"] as? String),
                 state: state,
+                origin: raw["origin"] as? String,
                 isFresh: (raw["is_fresh"] as? Bool) ?? (raw["isFresh"] as? Bool)
             )
         }()

@@ -222,8 +222,29 @@ struct SessionInputReceipt: Codable, Hashable, Sendable {
     let intent: String
     let status: String
     let createdAt: String?
+    /// The accepted text and input's user/wake provenance.
+    let text: String?
+    let origin: String?
     /// The durable user event this send became, once ingest linked it.
     let eventId: String?
+
+    init(
+        clientRequestId: String?,
+        intent: String,
+        status: String,
+        createdAt: String?,
+        eventId: String?,
+        text: String? = nil,
+        origin: String? = nil
+    ) {
+        self.clientRequestId = clientRequestId
+        self.intent = intent
+        self.status = status
+        self.createdAt = createdAt
+        self.text = text
+        self.origin = origin
+        self.eventId = eventId
+    }
 }
 
 /// The composer's "N messages queued" line, read from the served receipts.
@@ -344,6 +365,19 @@ struct SessionInputReceiptState: Codable, Sendable, Equatable {
 
 struct SessionInputOrigin: Codable, Hashable, Sendable {
     let authoredVia: SessionInputAuthoredVia
+    let origin: String?
     let sessionInputId: Int?
     let clientRequestId: String?
+
+    init(
+        authoredVia: SessionInputAuthoredVia,
+        origin: String? = nil,
+        sessionInputId: Int?,
+        clientRequestId: String?
+    ) {
+        self.authoredVia = authoredVia
+        self.origin = origin
+        self.sessionInputId = sessionInputId
+        self.clientRequestId = clientRequestId
+    }
 }
