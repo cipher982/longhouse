@@ -14,14 +14,17 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
-import { useAgentSessions, useAgentFilters } from "@/shared/api/useAgentSessions";
+import {
+  agentSessionWorkspaceQueryOptions,
+  useAgentSessions,
+  useAgentFilters,
+} from "@/shared/api/useAgentSessions";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
 import { useAmbientSessionAttentionCue } from "./useAmbientSessionAttentionCue";
 import { useTimelineSessionStream } from "./useTimelineSessionStream";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import {
   type AgentSessionFilters,
-  fetchAgentSessionWorkspace,
   type TimelineHistoryImport,
   type TimelineSessionCard,
 } from "@/shared/api/agents";
@@ -349,19 +352,12 @@ export default function SessionsPage() {
 
     prefetchedSessionIdsRef.current.add(sessionId);
     void queryClient
-      .prefetchQuery({
-        queryKey: [
-          "agent-session-workspace",
-          sessionId,
-          { limit: SESSION_WORKSPACE_PREFETCH_LIMIT, branch_mode: "head" as const },
-        ],
-        queryFn: () =>
-          fetchAgentSessionWorkspace(sessionId, {
-            limit: SESSION_WORKSPACE_PREFETCH_LIMIT,
-            branch_mode: "head",
-          }),
-        staleTime: 10_000,
-      })
+      .prefetchQuery(
+        agentSessionWorkspaceQueryOptions(sessionId, {
+          limit: SESSION_WORKSPACE_PREFETCH_LIMIT,
+          branch_mode: "head",
+        }),
+      )
       .catch(() => {
         prefetchedSessionIdsRef.current.delete(sessionId);
       });

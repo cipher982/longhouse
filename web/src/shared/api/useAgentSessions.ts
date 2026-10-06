@@ -62,37 +62,41 @@ type AgentSessionWorkspaceQueryOptions = Pick<
   "enabled" | "refetchInterval"
 >;
 
-export function useAgentSessionWorkspace(
-  sessionId: string | null,
-  options: AgentSessionWorkspaceQueryOptions & {
-    limit?: number;
-    branch_mode?: "head" | "all";
-    shared_by?: number | null;
-    share_token?: string | null;
-  } = {},
-) {
-  const {
-    limit = 200,
-    branch_mode = "head",
-    shared_by,
-    share_token,
-    enabled,
-    refetchInterval,
-  } = options;
+type AgentSessionWorkspaceParams = {
+  limit?: number;
+  branch_mode?: "head" | "all";
+  shared_by?: number | null;
+  share_token?: string | null;
+};
 
-  return useQuery<AgentSessionWorkspaceResponse>({
-    queryKey: ["agent-session-workspace", sessionId, { limit, branch_mode, shared_by, share_token }],
-    queryFn: () =>
-      fetchAgentSessionWorkspace(sessionId!, {
-        limit,
-        branch_mode,
-        shared_by,
-        share_token,
-      }),
-    enabled: enabled ?? !!sessionId,
-    refetchInterval,
+/**
+ * The one query key and fetch for a session workspace. Prefetchers and the
+ * session page both build from this, so a prefetch lands in the cache entry
+ * the page reads (an `undefined` and a `null` share param hash differently).
+ */
+export function agentSessionWorkspaceQueryOptions(
+  sessionId: string | null,
+  { limit = 200, branch_mode = "head", shared_by, share_token }: AgentSessionWorkspaceParams = {},
+) {
+  const params = { limit, branch_mode, shared_by: shared_by ?? null, share_token: share_token ?? null };
+  return {
+    queryKey: ["agent-session-workspace", sessionId, params] as const,
+    queryFn: () => fetchAgentSessionWorkspace(sessionId!, params),
     staleTime: 10_000,
     gcTime: 5 * 60_000,
+  };
+}
+
+export function useAgentSessionWorkspace(
+  sessionId: string | null,
+  options: AgentSessionWorkspaceQueryOptions & AgentSessionWorkspaceParams = {},
+) {
+  const { enabled, refetchInterval, ...params } = options;
+
+  return useQuery<AgentSessionWorkspaceResponse>({
+    ...agentSessionWorkspaceQueryOptions(sessionId, params),
+    enabled: enabled ?? !!sessionId,
+    refetchInterval,
   });
 }
 

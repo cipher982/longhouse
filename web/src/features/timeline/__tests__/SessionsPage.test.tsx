@@ -35,7 +35,9 @@ const timelineStreamMocks = vi.hoisted(() => ({
   useTimelineSessionStream: vi.fn(),
 }));
 
-vi.mock("@/shared/api/useAgentSessions", () => ({
+vi.mock("@/shared/api/useAgentSessions", async (importOriginal) => ({
+  agentSessionWorkspaceQueryOptions: (await importOriginal<typeof import("@/shared/api/useAgentSessions")>())
+    .agentSessionWorkspaceQueryOptions,
   useAgentSessions: hookMocks.useAgentSessions,
   useAgentFilters: hookMocks.useAgentFilters,
   useRecall: hookMocks.useRecall,

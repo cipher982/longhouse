@@ -2,7 +2,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useAgentSessionProjectionInfinite } from "../useAgentSessions";
+import {
+  agentSessionWorkspaceQueryOptions,
+  useAgentSessionProjectionInfinite,
+  useAgentSessionWorkspace,
+} from "../useAgentSessions";
 import type { AgentSessionProjectionResponse } from "../index";
 
 const apiMocks = vi.hoisted(() => ({
@@ -183,5 +187,35 @@ describe("useAgentSessionProjectionInfinite", () => {
         branch_mode: "head",
       });
     });
+  });
+});
+
+describe("agentSessionWorkspaceQueryOptions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("lands a timeline hover prefetch in the entry the session page reads", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const workspace = { session: { id: "session-1" } };
+    apiMocks.fetchAgentSessionWorkspace.mockResolvedValue(workspace);
+
+    // SessionsPage prefetches without share params; the session page passes them as null.
+    await queryClient.prefetchQuery(
+      agentSessionWorkspaceQueryOptions("session-1", { limit: 200, branch_mode: "head" }),
+    );
+    const { result } = renderHook(
+      () =>
+        useAgentSessionWorkspace("session-1", {
+          limit: 200,
+          branch_mode: "head",
+          shared_by: null,
+          share_token: null,
+        }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    expect(result.current.data).toBe(workspace);
+    expect(apiMocks.fetchAgentSessionWorkspace).toHaveBeenCalledTimes(1);
   });
 });
