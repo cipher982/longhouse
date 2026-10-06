@@ -470,8 +470,6 @@ function NavStatus({ compact = false }: { compact?: boolean }) {
       data-testid="nav-status"
       title={compact ? `${label}\n${title}` : title}
       aria-live="polite"
-      onPointerEnter={preloadMachinesPage}
-      onFocus={preloadMachinesPage}
     >
       <span
         className={clsx("nav-status-dot", {
