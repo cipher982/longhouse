@@ -17,7 +17,7 @@ import {
   relativeTime,
   unmatchedRunners,
 } from "./machinePresentation";
-import { useMachineDirectory, useMachineSummaries } from "./useMachines";
+import { useMachineDirectoryForSummary, useMachineSummaries } from "./useMachines";
 import "./MachinesPage.css";
 
 const AGENTS_SHOWN = 5;
@@ -138,9 +138,9 @@ function MachineRow({ summary }: { summary: MachineSummary }) {
   );
 }
 
-function DirectoryRow({ machine }: { machine: MachineDirectoryEntry }) {
+function DirectoryRow({ machine, provisional = false }: { machine: MachineDirectoryEntry; provisional?: boolean }) {
   return (
-    <li className="machine-row" data-testid={`machine-row-${machine.device_id}`}>
+    <li className="machine-row" data-testid={`${provisional ? "machine-directory-row" : "machine-row"}-${machine.device_id}`}>
       <Link to={`/machines/${encodeURIComponent(machine.device_id)}`} className="machine-directory-row">
         <span className="machine-name">
           <span className={`machine-dot machine-dot--${machine.online ? "idle" : "off"}`} aria-hidden="true" />
@@ -154,12 +154,15 @@ function DirectoryRow({ machine }: { machine: MachineDirectoryEntry }) {
 
 export default function MachinesPage() {
   const { data, isLoading, error, isError, refetch, isRefetchError } = useMachineSummaries();
-  const directory = useMachineDirectory({ enabled: isError && !data });
+  const directory = useMachineDirectoryForSummary({ hasData: data !== undefined, isError });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const [showConnect, setShowConnect] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
 
-  useReadinessFlag({ ready: !isLoading });
+  const waitingForDirectory = isError && !data && directory.isLoading;
+  const pageReady = !isLoading && !waitingForDirectory;
+  const directoryReady = directory.data?.machines !== undefined;
+  useReadinessFlag({ ready: pageReady || directoryReady, screenshotReady: pageReady });
 
   const summaries = data?.machines ?? [];
   const active = summaries.filter((summary) => !machineStatus(summary).quiet);
@@ -170,6 +173,7 @@ export default function MachinesPage() {
   const online = summaries.filter((summary) => summary.machine.online).length;
   const machines = data ? summaries.map((summary) => summary.machine) : directory.data?.machines;
   const strays = machines ? unmatchedRunners(runners ?? [], machines) : [];
+  const directoryIsEmpty = data === undefined && directory.data?.machines?.length === 0;
 
   const connectButton = (
     <Button variant="primary" data-testid="machines-connect-button" onClick={() => setShowConnect(true)}>
@@ -177,10 +181,45 @@ export default function MachinesPage() {
       Connect a machine
     </Button>
   );
+  const firstMachineEmptyState = (
+    <EmptyState
+      title="Connect your first machine"
+      description="Install Longhouse on a machine and the Claude Code, Codex and other agent sessions it runs show up here and on the Timeline."
+      action={
+        <Button variant="primary" size="lg" data-testid="machines-connect-first-button" onClick={() => setShowConnect(true)}>
+          Connect a machine
+        </Button>
+      }
+    />
+  );
 
   let body: ReactNode;
-  if (isLoading) {
+  if (directoryIsEmpty && isError) {
     body = (
+      <>
+        <p className="machines-stale" role="status">
+          Activity and sync are unavailable. {error instanceof Error ? error.message : ""}{" "}
+          <button type="button" className="machines-link-button" onClick={() => { void refetch(); void directory.refetch(); }}>
+            Try again
+          </button>
+        </p>
+        {directory.isError && directory.data && (
+          <p className="machines-stale" role="status">Connection information is also last known; it could not be refreshed.</p>
+        )}
+        {firstMachineEmptyState}
+      </>
+    );
+  } else if (directoryIsEmpty) {
+    body = firstMachineEmptyState;
+  } else if (isLoading || waitingForDirectory) {
+    body = machines?.length ? (
+      <>
+        <p className="machine-meta" role="status">Loading activity and sync…</p>
+        <ul className="machine-list" data-testid="machine-directory-list">
+          {machines.map((machine) => <DirectoryRow key={machine.device_id} machine={machine} provisional />)}
+        </ul>
+      </>
+    ) : (
       <div className="machines-loading">
         <Spinner size="md" label="Loading machines" />
       </div>
@@ -218,17 +257,7 @@ export default function MachinesPage() {
       </>
     );
   } else if (summaries.length === 0) {
-    body = (
-      <EmptyState
-        title="Connect your first machine"
-        description="Install Longhouse on a machine and the Claude Code, Codex and other agent sessions it runs show up here and on the Timeline."
-        action={
-          <Button variant="primary" size="lg" data-testid="machines-connect-first-button" onClick={() => setShowConnect(true)}>
-            Connect a machine
-          </Button>
-        }
-      />
-    );
+    body = firstMachineEmptyState;
   } else {
     body = (
       <>

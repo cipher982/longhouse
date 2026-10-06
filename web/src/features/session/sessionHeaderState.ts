@@ -127,97 +127,30 @@ function plural(count: number, noun: string): string {
 }
 
 /**
- * The header's identity line as one sentence — "OMP working in zerg on
- * cinder, 57 messages and 334 tool calls so far" — instead of a dot-joined
- * fragment list plus a separate "N messages · N tool calls loaded" pill.
- * "working" only applies while the header tone is live; an ended/idle
- * session reads "OMP in zerg on cinder" instead of claiming it's still
- * working.
+ * The app bar's meta line as plain items, joined with " · " by the caller:
+ * "Claude · zerg · cinder · 29 msgs · 85 tools". Every value is plain text;
+ * no count is styled as a control. Counts come from the session's own
+ * totals when it has them, so a partly loaded transcript does not shrink
+ * them, and fall back to what is loaded.
  */
-export function buildSessionMetaSentence({
+export function buildSessionMetaItems({
   provider,
   project,
   host,
   messages,
   toolCalls,
-  tone,
 }: {
   provider: string | null;
   project: string | null;
   host: string | null;
   messages: number;
   toolCalls: number;
-  tone: SessionHeaderStateTone;
-}): string | null {
-  const parts: string[] = [];
-  if (provider) parts.push(provider);
-  if (tone === "live") parts.push("working");
-  if (project) parts.push(`in ${project}`);
-  if (host) parts.push(`on ${host}`);
-  let sentence = parts.length > 1 ? parts.join(" ") : provider ? provider : null;
-
-  const counts: string[] = [];
-  if (messages > 0) counts.push(plural(messages, "message"));
-  if (toolCalls > 0) counts.push(plural(toolCalls, "tool call"));
-  const countsText = counts.length > 0 ? `${counts.join(" and ")} so far` : null;
-
-  if (!sentence) return countsText;
-  return countsText ? `${sentence}, ${countsText}` : sentence;
-}
-
-export interface SessionMetaSentenceParts {
-  /** Text up to (not including) the tool-call count — already carries the
-   * right leading punctuation/conjunction. */
-  before: string;
-  toolCalls: number;
-  toolCallsWord: string;
-  /** Always " so far" — there is a count to trail once toolCalls > 0. */
-  after: string;
-}
-
-/**
- * Phase 4 (Instruments, web-restyle-signal.md): "57 messages" stays plain
- * text but "334 tool calls" renders as a live Nixie. Splits
- * buildSessionMetaSentence's output around the tool-call count so the page
- * can wrap just that number, rather than re-deriving the sentence text
- * twice. Returns null when there are no tool calls to highlight — the
- * caller falls back to the plain buildSessionMetaSentence() string.
- */
-export function buildSessionMetaSentenceParts({
-  provider,
-  project,
-  host,
-  messages,
-  toolCalls,
-  tone,
-}: {
-  provider: string | null;
-  project: string | null;
-  host: string | null;
-  messages: number;
-  toolCalls: number;
-  tone: SessionHeaderStateTone;
-}): SessionMetaSentenceParts | null {
-  if (toolCalls <= 0) return null;
-
-  const parts: string[] = [];
-  if (provider) parts.push(provider);
-  if (tone === "live") parts.push("working");
-  if (project) parts.push(`in ${project}`);
-  if (host) parts.push(`on ${host}`);
-  const sentence = parts.length > 1 ? parts.join(" ") : provider ? provider : null;
-
-  let before = sentence ?? "";
-  if (messages > 0) {
-    before += `${sentence ? ", " : ""}${plural(messages, "message")} and `;
-  } else {
-    before += sentence ? ", " : "";
-  }
-
-  return {
-    before,
-    toolCalls,
-    toolCallsWord: toolCalls === 1 ? "tool call" : "tool calls",
-    after: " so far",
-  };
+}): string[] {
+  const items: string[] = [];
+  if (provider) items.push(provider);
+  if (project) items.push(project);
+  if (host && host !== project) items.push(host);
+  if (messages > 0) items.push(plural(messages, "msg"));
+  if (toolCalls > 0) items.push(plural(toolCalls, "tool"));
+  return items;
 }

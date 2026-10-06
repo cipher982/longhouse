@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { Link } from "react-router";
 import remarkGfm from "remark-gfm";
@@ -92,12 +93,11 @@ interface TimelinePaneProps {
   /** Live/idle state readout (dot + sentence), rendered before the filter
    *  and overflow icons at the far right of the header bar. */
   headerState?: ReactNode;
-  /** Activity sparkline, rendered just left of headerState (Phase 4
-   *  Instruments). Sparkline itself renders nothing when there's too little
-   *  data to draw, so this can always be passed unconditionally. */
-  headerSparkline?: ReactNode;
   /** Actions rendered at the far right of the header bar. */
   headerRight?: ReactNode;
+  /** The app bar's page slot. When set, the header bar renders there (one
+   *  top bar for the whole page) instead of above the transcript. */
+  headerTarget?: HTMLElement | null;
   /** Readout rail (Phase 4 Instruments), rendered inside the transcript
    *  scroller (so wheel input over it scrolls the transcript) and pinned to
    *  its bottom-right on wide viewports; CSS hides it below 1180px. */
@@ -1156,8 +1156,8 @@ export function TimelinePane({
   onVisibleSelectionChange,
   headerLeft,
   headerState,
-  headerSparkline,
   headerRight,
+  headerTarget = null,
   rail = null,
   outline = null,
   dock = null,
@@ -1539,45 +1539,51 @@ export function TimelinePane({
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
+  const headerBar = (
+    <div
+      className={`timeline-pane__header timeline-header${headerTarget ? " timeline-pane__header--app-bar" : ""}`}
+      data-testid="session-timeline-header"
+    >
+      <div className="timeline-pane__header-main">
+        {headerLeft}
+        <div className="timeline-pane__title-group">
+          {/* Counts now live in the header's identity sentence; this stays
+              in the DOM (hidden) so pagination state is still testable. */}
+          <div
+            className="timeline-pane__summary sr-only"
+            data-testid="session-timeline-summary"
+            data-loaded-entries={loadedEntries}
+            data-total-entries={totalEntries}
+          >
+            {transcriptSummary}
+          </div>
+        </div>
+      </div>
+      <div className="timeline-pane__header-right">
+        {headerState}
+        <button
+          type="button"
+          className={`timeline-pane__filter-toggle${showFilters ? " is-active" : ""}`}
+          onClick={() => setFiltersExpanded((prev) => !prev)}
+          aria-label="Toggle filters"
+          title="Toggle filters and search"
+        >
+          <FunnelIcon width={14} height={14} />
+          {eventFilter !== "all" || searchQuery.trim() ? (
+            <span className="timeline-pane__filter-toggle-dot" />
+          ) : null}
+        </button>
+        {headerRight}
+      </div>
+    </div>
+  );
+
   const paneContent = (
     <div
       className={`timeline-pane${dock ? " timeline-pane--with-dock" : ""}`}
       data-testid="session-timeline-pane"
     >
-      <div className="timeline-pane__header timeline-header" data-testid="session-timeline-header">
-        <div className="timeline-pane__header-main">
-          {headerLeft}
-          <div className="timeline-pane__title-group">
-            {/* Counts now live in the header's identity sentence; this stays
-                in the DOM (hidden) so pagination state is still testable. */}
-            <div
-              className="timeline-pane__summary sr-only"
-              data-testid="session-timeline-summary"
-              data-loaded-entries={loadedEntries}
-              data-total-entries={totalEntries}
-            >
-              {transcriptSummary}
-            </div>
-          </div>
-        </div>
-        <div className="timeline-pane__header-right">
-          {headerSparkline}
-          {headerState}
-          <button
-            type="button"
-            className={`timeline-pane__filter-toggle${showFilters ? " is-active" : ""}`}
-            onClick={() => setFiltersExpanded((prev) => !prev)}
-            aria-label="Toggle filters"
-            title="Toggle filters and search"
-          >
-            <FunnelIcon width={14} height={14} />
-            {eventFilter !== "all" || searchQuery.trim() ? (
-              <span className="timeline-pane__filter-toggle-dot" />
-            ) : null}
-          </button>
-          {headerRight}
-        </div>
-      </div>
+      {headerTarget ? createPortal(headerBar, headerTarget) : headerBar}
 
       {showFilters ? (
         <div className="timeline-pane__header-expandable" data-testid="session-timeline-filters">

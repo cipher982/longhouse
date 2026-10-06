@@ -1,0 +1,412 @@
+/* Session rail (session-view-terminal-parity C8, flavor A). */
+.session-rail-frame {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.session-rail-frame__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-rail-frame__main > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.session-rail {
+  flex: 0 0 248px;
+  width: 248px;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 6px 16px;
+  border-right: 1px solid var(--color-border-subtle);
+  background: rgba(7, 6, 5, 0.45);
+}
+
+@media (min-width: 1400px) {
+  .session-rail {
+    flex-basis: 272px;
+    width: 272px;
+  }
+}
+
+.session-rail__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 8px 8px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.session-rail__all {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+.session-rail__all:hover {
+  color: var(--color-text-primary);
+}
+
+.session-rail__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-rail__row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-rail__row:hover {
+  background: rgba(246, 235, 214, 0.035);
+  color: var(--color-text-primary);
+}
+
+.session-rail__row:focus-visible {
+  outline: 1px solid var(--color-brand-primary-hover);
+  outline-offset: 1px;
+}
+
+.session-rail__row.is-active {
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  box-shadow: inset 2px 0 0 var(--color-brand-primary);
+}
+
+.session-rail__glyph {
+  width: 14px;
+  height: 14px;
+}
+
+.session-rail__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-rail__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+}
+
+.session-rail__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-signal-off);
+}
+
+.session-rail__dot--live {
+  background: var(--color-signal-live);
+  box-shadow: 0 0 6px rgba(70, 214, 140, 0.6);
+}
+
+.session-rail__dot--attention {
+  background: var(--color-signal-attention);
+  box-shadow: 0 0 6px rgba(245, 163, 59, 0.6);
+}
+
+.session-rail__dot--unknown {
+  background: var(--color-signal-quiet);
+}
+
+.session-rail__sub {
+  grid-column: 2 / 4;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* The open session's turns, as an accordion under its row. TurnOutline is
+   hidden below 1600px on its own; inside the rail it always shows. */
+.session-rail__turns {
+  margin: 2px 0 6px 24px;
+  border-left: 1px solid var(--color-border-primary);
+}
+
+.session-rail__turns .session-turn-outline {
+  display: block;
+  width: auto;
+  max-height: 42vh;
+  overflow-y: auto;
+  padding: 0 0 0 4px;
+  border-right: 0;
+}
+
+.session-rail__turns .session-turn-outline__item {
+  padding: 4px 8px;
+  font-size: 11.5px;
+}
+
+/* Phones: the rail sits in the menu drawer, full width. */
+.mobile-nav-session-slot .session-rail {
+  flex: none;
+  width: auto;
+  border-right: 0;
+  background: none;
+  overflow: visible;
+}
+
+.session-rail__head-actions {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.session-rail__find {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.session-rail__find:hover {
+  color: var(--color-text-primary);
+}
+
+/* --- ⌘K switcher --- */
+.session-switcher__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: start center;
+  padding: 10vh 16px 16px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.session-switcher {
+  width: min(980px, 100%);
+  height: min(560px, 80vh);
+  display: grid;
+  grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 14px;
+  background: var(--color-surface-overlay);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  font-family: var(--font-family-base);
+}
+
+.session-switcher__query {
+  grid-column: 1 / 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-brand-primary);
+}
+
+.session-switcher__query input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 15px;
+}
+
+.session-switcher__keys {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.session-switcher__list {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.session-switcher__preview {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.session-switcher__preview h3 {
+  margin: 0 0 2px;
+  font-family: var(--font-family-serif);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.session-switcher__meta {
+  margin-bottom: 12px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.session-switcher__reply {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--color-brand-primary);
+  background: rgba(233, 185, 73, 0.05);
+  color: var(--color-text-primary);
+  max-height: 260px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent);
+}
+
+.session-switcher__ask {
+  margin: 0;
+}
+
+/* Rendered markdown, sized for a preview: headings read as bold lead-ins,
+   blocks sit tight, code stays inline-sized. */
+.session-switcher__md > :first-child {
+  margin-top: 0;
+}
+
+.session-switcher__md > :last-child {
+  margin-bottom: 0;
+}
+
+.session-switcher__md :is(p, ul, ol, pre, blockquote, table) {
+  margin: 0 0 6px;
+}
+
+.session-switcher__md :is(ul, ol) {
+  padding-left: 18px;
+}
+
+.session-switcher__md li {
+  margin: 0 0 2px;
+}
+
+.session-switcher__md :is(h1, h2, h3, h4, h5, h6) {
+  margin: 8px 0 4px;
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text-primary);
+}
+
+.session-switcher__md code {
+  font-family: var(--font-family-mono);
+  font-size: 0.9em;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--color-surface-elevated);
+}
+
+.session-switcher__md pre {
+  overflow: hidden;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--color-surface-well);
+}
+
+.session-switcher__md pre code {
+  padding: 0;
+  background: none;
+}
+
+.session-switcher__md a {
+  color: var(--color-brand-primary);
+}
+
+.session-switcher__label,
+.session-switcher__ask > span {
+  display: block;
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.session-switcher__empty {
+  margin: 0;
+  padding: 8px;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 767px) {
+  .session-switcher {
+    grid-template-columns: minmax(0, 1fr);
+    height: min(520px, 80vh);
+  }
+
+  .session-switcher__preview,
+  .session-switcher__keys {
+    display: none;
+  }
+
+  .session-switcher__list {
+    border-right: 0;
+  }
+}
+
+/* No keyboard in a phone drawer: drop the key hints, keep the dots and the
+   search button (the switcher's only touch entry). */
+.mobile-nav-session-slot .session-rail__hotkey,
+.mobile-nav-session-slot .session-rail__find-key {
+  display: none;
+}

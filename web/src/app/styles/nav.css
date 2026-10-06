@@ -692,3 +692,111 @@
 .user-menu-item:hover {
   background: var(--color-surface-overlay);
 }
+
+/* ------------------------------------------------------------------
+   Session routes: one compact app bar. The brand shrinks to its mark,
+   the nav tabs tighten, and the middle is the page's slot (title, meta,
+   state, actions) — see app/headerSlot.tsx and SessionDetailPage.
+   ------------------------------------------------------------------ */
+.main-header--session {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 44px;
+  padding: 0 14px;
+  /* A grid item defaults to its min-content width; the slot's title must be
+     able to shrink, or a long title widens the whole page. */
+  min-width: 0;
+  max-width: 100vw;
+}
+
+.main-header--session .header-left {
+  flex: none;
+  gap: var(--space-2);
+}
+
+.main-header--session h1 {
+  display: none;
+}
+
+.main-header--session .brand-logo {
+  width: 22px;
+  height: 22px;
+}
+
+.main-header--session .header-nav {
+  flex: none;
+  align-self: stretch;
+  gap: 16px;
+  padding-right: 14px;
+  border-right: 1px solid var(--color-border-subtle);
+  margin-block: 10px;
+}
+
+.main-header--session .nav-tab {
+  font-size: 12.5px;
+}
+
+.main-header--session .nav-tab-indicator {
+  display: none;
+}
+
+.main-header--session .nav-tab--active {
+  color: var(--color-text-secondary);
+}
+
+.header-session-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.main-header--session .header-actions {
+  flex: none;
+}
+
+.main-header--session .avatar-badge {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}
+
+.nav-status--compact {
+  font-family: var(--font-family-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (width <= 767px) {
+  .main-header--session {
+    min-height: 0;
+    height: auto;
+    gap: var(--space-2);
+    padding: calc(6px + env(safe-area-inset-top))
+      calc(var(--space-3) + env(safe-area-inset-right))
+      6px
+      calc(var(--space-3) + env(safe-area-inset-left));
+  }
+
+  .main-header--session .header-brand {
+    display: none;
+  }
+
+  .main-header--session .nav-status--compact {
+    display: none;
+  }
+}
+
+/* Session routes: the phone menu drawer also holds the session rail. */
+.mobile-nav-drawer:has(.mobile-nav-session-slot) .mobile-nav-links {
+  flex: none;
+}
+
+.mobile-nav-session-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border-subtle);
+}

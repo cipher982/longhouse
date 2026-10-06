@@ -1675,7 +1675,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: var(--space-3) 0;
+  padding: var(--tl-msg-pad, var(--space-3)) 0;
   max-width: var(--tl-prose-max);
   width: 100%;
 }
@@ -1752,7 +1752,7 @@
    at …" is the label. The serif stays a heading voice. */
 .tl-msg--user .tl-msg__body {
   font-family: var(--font-family-base);
-  font-size: 16px;
+  font-size: var(--tl-ask-size, 16px);
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
   color: var(--color-text-primary);
@@ -1910,26 +1910,29 @@
   min-width: 24px;
   background: linear-gradient(90deg, var(--color-border-primary), transparent);
 }
+/* Display settings (display/displaySettings.ts) set these on the session
+   route; the fallbacks are the Comfortable layout. */
 .tl-msg__body {
   color: rgba(250, 245, 236, 0.96);
-  line-height: 1.6;
-  font-size: 15.5px;
+  line-height: var(--tl-prose-leading, 1.6);
+  font-size: var(--tl-prose-size, 15.5px);
+  font-family: var(--tl-prose-font, inherit);
   text-wrap: pretty;
   word-break: break-word;
 }
 .tl-msg__body p {
-  margin: 0 0 0.6em;
+  margin: 0 0 var(--tl-para-gap, 0.6em);
 }
 .tl-msg__body p:last-child {
   margin-bottom: 0;
 }
 .tl-msg__body ul,
 .tl-msg__body ol {
-  margin: 0.4em 0;
+  margin: var(--tl-list-gap, 0.4em) 0;
   padding-left: 1.4em;
 }
 .tl-msg__body li {
-  margin: 0.15em 0;
+  margin: var(--tl-item-gap, 0.15em) 0;
 }
 .tl-msg__body code {
   font-family: var(--font-family-mono);
@@ -3106,7 +3109,7 @@
 
   .tl-msg {
     gap: 3px;
-    padding: 8px 0;
+    padding: var(--tl-msg-pad, 8px) 0;
     max-width: 100%;
   }
 
@@ -3115,13 +3118,17 @@
     font-size: 10px;
   }
 
+  /* Phones run 1.5px under the chosen size: Terminal (14.5px) keeps the
+     13px phone type, and every step of the size control moves it. Spacing
+     comes from the preset (Comfortable is the roomiest on every width);
+     the fallbacks here only apply outside a session route. */
   .tl-msg__body {
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: calc(var(--tl-prose-size, 14.5px) - 1.5px);
+    line-height: var(--tl-prose-leading, 1.5);
   }
 
   .tl-msg__body p {
-    margin-bottom: 0.45em;
+    margin-bottom: var(--tl-para-gap, 0.45em);
   }
 
   .tl-chip {
@@ -3785,5 +3792,116 @@
     color: var(--color-text-primary);
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+/* ===== App-bar header (session-view-terminal-parity C7) =====
+   The session header renders inside the global app bar's slot
+   (app/headerSlot.tsx), so the page has one ~44px top bar. Two lines on
+   the left (title, plain meta), state and icon actions on the right. */
+.timeline-pane__header.timeline-pane__header--app-bar {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__header-main {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__header-right {
+  flex: none;
+  max-width: none;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__title-stack,
+.timeline-pane__header--app-bar .session-workspace-header__name {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__title-group {
+  display: none;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__left {
+  min-width: 0;
+  gap: 6px;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__left > .ui-button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex: none;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__title-stack {
+  gap: 1px;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__name {
+  font-size: 15.5px;
+  line-height: 1.15;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__identity {
+  font-size: 11.5px;
+  line-height: 1.25;
+  color: var(--color-text-muted);
+}
+
+.timeline-pane__header--app-bar .session-shared-by-pill,
+.timeline-pane__header--app-bar .session-branched-from {
+  display: none;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__header-right {
+  gap: 6px;
+}
+
+.session-context-ring {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: -1px;
+  background: conic-gradient(
+    var(--color-brand-primary) 0 var(--ring-fill, 0%),
+    var(--color-border-primary) var(--ring-fill, 0%) 100%
+  );
+}
+
+/* The readout panel is opt-in: the transcript only reserves its footprint
+   while it is open. */
+.session-workspace-route--single-column:not(.session-workspace-route--readouts) {
+  --tl-rail-space: 0px;
+}
+
+@media (max-width: 1179px) {
+  [data-testid="session-readouts-toggle"] {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .timeline-pane__header.timeline-pane__header--app-bar {
+    gap: var(--session-mobile-gap, 6px);
+  }
+
+  .timeline-pane__header--app-bar .session-workspace-header__identity {
+    display: none;
+  }
+
+  .timeline-pane__header--app-bar .session-workspace-header__name {
+    font-size: 14px;
   }
 }

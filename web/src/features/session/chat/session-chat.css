@@ -523,9 +523,6 @@
   font-weight: 600;
   color: var(--color-text-primary);
 }
-.session-chat-composer__head-label--idle {
-  color: var(--color-text-secondary);
-}
 .session-chat-composer__head-detail {
   font-size: 12px;
   color: var(--color-text-secondary);
@@ -548,16 +545,20 @@
   gap: var(--space-2);
 }
 
-.session-chat-composer-row:focus-within,
-.session-chat-composer-row:has(textarea:not(:placeholder-shown)) {
-  flex-wrap: wrap;
-  justify-content: flex-end;
+/* Phone width: while typing, the input takes the whole first line and the
+   buttons wrap under it. */
+@media (max-width: 640px) {
+  .session-chat-composer-row:focus-within,
+  .session-chat-composer-row:has(textarea:not(:placeholder-shown)) {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .session-chat-composer-row:focus-within .session-chat-composer-input,
+  .session-chat-composer-row:has(textarea:not(:placeholder-shown)) .session-chat-composer-input {
+    flex-basis: 100%;
+  }
 }
-.session-chat-composer-row:focus-within textarea,
-.session-chat-composer-row:has(textarea:not(:placeholder-shown)) textarea {
-  flex-basis: 100%;
-}
-.session-chat-composer-row > .ui-button { min-height: 44px; }
+.session-chat-composer-row > .ui-button { min-height: 36px; }
 
 .session-chat-composer-row textarea {
   flex: 1;
@@ -611,17 +612,78 @@
   color: rgba(168, 148, 119, 0.66);
 }
 
-/* Input: the well color, an inset hairline — no card-within-a-card. */
-.session-chat-composer--dock .session-chat-composer-row textarea {
-  min-height: 38px;
-  border: 0;
+/* One-row composer (session-view-terminal-parity C7): [+] [input] [send].
+   The input is the well color with an inset hairline — no card-within-a-
+   card — and carries the model and evidence chips along its bottom edge. */
+.session-chat-composer--dock {
+  padding: 10px 12px;
+  gap: 8px;
+}
+
+.session-chat-composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   border-radius: 2px;
   background: var(--color-surface-well);
   box-shadow: inset 0 0 0 1px rgba(70, 54, 41, 0.8);
 }
 
-.session-chat-composer--dock .session-chat-composer-row textarea:focus-visible {
+.session-chat-composer-input:focus-within {
   box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.45);
+}
+
+.session-chat-composer--dock .session-chat-composer-input textarea,
+.session-chat-composer--dock .session-chat-composer-input textarea:focus-visible {
+  min-height: 34px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-chat-composer-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 8px 5px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.session-chat-composer-line {
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.session-chat-composer-line textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.session-chat-composer-line .session-chat-composer__head-accessory {
+  flex: none;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+/* Two classes so this beats the base tray's 6px padding declared further
+   down; otherwise the add button makes the one-row composer 12px taller. */
+.session-chat-attachment-tray.session-chat-attachment-tray--add-only {
+  flex: none;
+  padding: 0;
+}
+
+.session-chat-attachment-tray--add-only .session-chat-attachment-tray__add {
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 /* Gold wash, never a solid fill — the shared recipe from the restyle spec. */

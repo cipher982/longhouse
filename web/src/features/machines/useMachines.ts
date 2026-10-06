@@ -13,6 +13,14 @@ export function useMachineDirectory({ enabled = true, refetchInterval = 30_000 }
   });
 }
 
+/** Share directory facts while summaries load, and keep polling after summary failures. */
+export function useMachineDirectoryForSummary({ hasData, isError }: { hasData: boolean; isError: boolean }) {
+  return useMachineDirectory({
+    enabled: !hasData,
+    refetchInterval: isError && !hasData ? 30_000 : false,
+  });
+}
+
 /** Directory + activity + sync for the Machines page and a machine's page. */
 export function useMachineSummaries() {
   return useQuery({

@@ -14,7 +14,11 @@
  * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
  *
  * Usage:
- *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map] [--css-variant=X]
+ *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map] [--css-variant=X] [--action=step;step]
+ *
+ * --action runs steps after the page settles and before the screenshot, so a
+ * frame can show an opened popover or dialog: `click:<selector>` or
+ * `press:<key>` (Playwright key names, e.g. `press:Meta+k`), separated by ";".
  *
  * --css-variant injects scripts/ui/css-variants/<X>.css after the page loads:
  * a layout experiment to look at, never shipped CSS (e.g. terminal density).
@@ -54,6 +58,7 @@ import {
   buildSessionBackgroundNoticesFixture,
   buildSessionDetailStressFixture,
   buildSessionProseIdleFixture,
+  buildRailSessionsFixture,
   buildSessionQuestionFixture,
   buildSessionAttentionFixture,
   buildSessionResumeFixture,
@@ -228,6 +233,7 @@ interface Options {
   probe: string[];
   wheelMap: boolean;
   cssVariant: string | null;
+  actions: string[];
 }
 
 type A11yFormat = "json" | "yaml" | "none";
@@ -266,6 +272,7 @@ function parseArgs(): Options {
   const all = args.includes("--all");
   const wheelMap = args.includes("--wheel-map");
   const cssVariant = args.find((a) => a.startsWith("--css-variant="))?.slice("--css-variant=".length) || null;
+  const actionArg = args.find((a) => a.startsWith("--action="))?.slice("--action=".length) ?? "";
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const parsedViewport = parseViewport(viewportArg);
@@ -283,6 +290,7 @@ function parseArgs(): Options {
     probe: probeArg ? probeArg.split(",").map((s) => s.trim()).filter(Boolean) : [],
     wheelMap,
     cssVariant,
+    actions: actionArg.split(";").map((step) => step.trim()).filter(Boolean),
   };
 }
 
@@ -576,6 +584,23 @@ async function installSceneMocks(
             command: `longhouse codex --cwd /Users/example/git/zerg --resume-session ${fixture.session.id}`,
             handoff: "terminal_command",
           }),
+        });
+        return;
+      }
+
+      // The rail warms its neighbours' workspaces while idle; they have no
+      // transcript in this scene.
+      if (/^\/api\/timeline\/sessions\/rail-[^/]+\/workspace$/.test(pathname)) {
+        await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+        return;
+      }
+
+      // The session rail's list: the timeline's first page.
+      if (pathname === "/api/timeline/sessions") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(buildRailSessionsFixture(fixture.session)),
         });
         return;
       }
@@ -1187,6 +1212,7 @@ async function captureBundle(
   probe: string[] = [],
   wheelMap = false,
   cssVariant: string | null = null,
+  actions: string[] = [],
 ): Promise<CaptureResult> {
   const query = scene === "landing-search" ? `?query=${encodeURIComponent(LANDING_SEARCH_QUERY)}` : "";
   const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}${query}`;
@@ -1201,11 +1227,20 @@ async function captureBundle(
   }
   await page.goto(url);
 
-  // Wait for page stability - prefer shared readiness flags.
+  // `data-ready` allows interaction; an opted-in screenshot gate must also settle.
+  let hasReadinessMarker = false;
   try {
-    await page.waitForSelector("[data-screenshot-ready='true'], [data-ready='true']", { timeout: 5000 });
+    await page.waitForSelector("body[data-screenshot-ready], body[data-ready='true']", { timeout: 5000 });
+    hasReadinessMarker = true;
   } catch {
     await page.waitForLoadState("networkidle", { timeout: 10000 });
+  }
+  if (hasReadinessMarker) {
+    const screenshotGate = (await page.locator("body[data-screenshot-ready]").count()) > 0;
+    await page.waitForSelector(
+      screenshotGate ? "body[data-screenshot-ready='true']" : "body[data-ready='true']",
+      { timeout: screenshotGate ? 12_000 : 5_000 }, // 12s is ~2.8x the observed 4.27s cold summary request.
+    );
   }
 
   if (scene === DEVICES_REVOKE_SCENE) {
@@ -1294,6 +1329,17 @@ async function captureBundle(
   if (scene === "session-resume" && pageName === "session-detail") {
     await page.getByRole("button", { name: /Show resume command/ }).click();
     await page.getByRole("dialog").waitFor();
+  }
+
+  for (const step of actions) {
+    const separator = step.indexOf(":");
+    if (separator === -1) throw new Error(`--action step "${step}" needs a verb: click:<selector> or press:<key>`);
+    const verb = step.slice(0, separator);
+    const target = step.slice(separator + 1);
+    if (verb === "click") await page.click(target);
+    else if (verb === "press") await page.keyboard.press(target);
+    else throw new Error(`Unknown --action step "${step}"; use click:<selector> or press:<key>`);
+    await page.waitForTimeout(150);
   }
 
   // Capture screenshot
@@ -1479,6 +1525,7 @@ async function main() {
           opts.probe,
           opts.wheelMap,
           opts.cssVariant,
+          opts.actions,
         );
       } catch (error) {
         const { message, detail } = formatError(error);

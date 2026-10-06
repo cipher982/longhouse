@@ -17,6 +17,7 @@ import { SwarmLogo } from "@/shared/ui/SwarmLogo";
 import "./styles/layout.css";
 import { XIcon } from "@/shared/ui/icons";
 import { getNavItems } from "./navigation/navItems";
+import { HeaderSlotContext, MobileNavSlotContext, isSessionRoute } from "./headerSlot";
 
 const MACHINE_STATUS_INITIAL_DELAY_MS = 2_500;
 
@@ -42,7 +43,16 @@ function AvatarContent({ user, initials, className }: { user: AvatarUser; initia
   return <span>{initials}</span>;
 }
 
-function WelcomeHeader() {
+function WelcomeHeader({
+  compact = false,
+  slotRef,
+  mobileSlotRef,
+}: {
+  /** Session routes: one ~44px bar whose middle is the page's slot. */
+  compact?: boolean;
+  slotRef?: (node: HTMLDivElement | null) => void;
+  mobileSlotRef?: (node: HTMLDivElement | null) => void;
+}) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -185,7 +195,10 @@ function WelcomeHeader() {
 
   return (
     <>
-    <header className="main-header" data-testid="welcome-header">
+    <header
+      className={clsx("main-header", { "main-header--session": compact })}
+      data-testid="welcome-header"
+    >
       <div className="header-left">
         {/* Mobile hamburger menu - shown only on mobile via CSS */}
         <button
@@ -232,8 +245,12 @@ function WelcomeHeader() {
         })}
       </nav>
 
+      {compact ? (
+        <div className="header-session-slot" ref={slotRef} data-testid="header-session-slot" />
+      ) : null}
+
       <div className="header-actions">
-        <NavStatus />
+        <NavStatus compact={compact} />
         <div className="user-menu-container" ref={userMenuRef}>
           <div
             className="avatar-badge"
@@ -333,6 +350,13 @@ function WelcomeHeader() {
           </button>
         )}
       </div>
+      {compact ? (
+        <div
+          className="mobile-nav-session-slot"
+          ref={mobileSlotRef}
+          data-testid="mobile-nav-session-slot"
+        />
+      ) : null}
       {user && (
         <div className="mobile-nav-footer">
           <div className="mobile-nav-user">
@@ -389,7 +413,7 @@ function WelcomeHeader() {
 // Folded into the nav's right cluster. It says how many enrolled machines hold
 // a live connection, from the machine directory (never the optional Runner
 // count), and only names the API when a request the app tracks has failed.
-function NavStatus() {
+function NavStatus({ compact = false }: { compact?: boolean }) {
   const documentVisible = useDocumentVisible();
   const [queryEnabled, setQueryEnabled] = useState(false);
   const apiError = useApiHealth();
@@ -429,7 +453,13 @@ function NavStatus() {
       : machines.map((machine) => `${machine.machine_name}: ${machine.online ? "online" : "offline"}`).join("\n");
 
   return (
-    <Link to="/machines" className="nav-status" data-testid="nav-status" title={title} aria-live="polite">
+    <Link
+      to="/machines"
+      className={clsx("nav-status", { "nav-status--compact": compact })}
+      data-testid="nav-status"
+      title={compact ? `${label}\n${title}` : title}
+      aria-live="polite"
+    >
       <span
         className={clsx("nav-status-dot", {
           "nav-status-dot--error": Boolean(apiError),
@@ -437,23 +467,38 @@ function NavStatus() {
         })}
         aria-hidden="true"
       />
-      {label}
+      {/* The compact bar keeps the count, not the sentence; the session page
+          no longer repeats it anywhere else. */}
+      {compact && !apiError && !directoryUnavailable ? (
+        <>
+          <span aria-hidden="true">{online}/{machines.length}</span>
+          <span className="sr-only">{label}</span>
+        </>
+      ) : (
+        label
+      )}
     </Link>
   );
 }
 
 export default function Layout({ children }: PropsWithChildren) {
   useWebClientPresence();
+  const location = useLocation();
+  const compact = isSessionRoute(location.pathname);
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null);
+  const [mobileSlot, setMobileSlot] = useState<HTMLDivElement | null>(null);
 
   return (
-    <>
-      <WelcomeHeader />
-      <div
-        id="app-container"
-        data-testid="app-container"
-      >
-        {children}
-      </div>
-    </>
+    <HeaderSlotContext.Provider value={compact ? slot : null}>
+      <MobileNavSlotContext.Provider value={compact ? mobileSlot : null}>
+        <WelcomeHeader compact={compact} slotRef={setSlot} mobileSlotRef={setMobileSlot} />
+        <div
+          id="app-container"
+          data-testid="app-container"
+        >
+          {children}
+        </div>
+      </MobileNavSlotContext.Provider>
+    </HeaderSlotContext.Provider>
   );
 }

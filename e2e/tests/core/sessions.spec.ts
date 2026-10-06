@@ -1243,18 +1243,18 @@ test.describe("Session Detail Page", () => {
     const paneHeight = box?.height ?? 0;
     const paneWidth = box?.width ?? 0;
     const gutterY = Math.max(40, Math.floor(paneHeight * 0.5));
-    const leftX = Math.min(
-      Math.max(24, Math.floor(paneWidth * 0.08)),
-      Math.max(24, paneWidth - 24),
-    );
-    const rightX = Math.max(24, paneWidth - 24);
-
-    // The probe points must sit beside the reading column, not inside it:
-    // when the scroller was itself the narrow centered column, hovering
-    // "inside the list" could never reach a gutter and this test passed
-    // while real gutters scrolled nothing.
+    // The session rail changes the pane width; probe the actual gap instead
+    // of a fixed percent that can land inside the reading column.
     const rowsBox = await page.locator(".timeline-pane__rows").boundingBox();
     expect(rowsBox).toBeTruthy();
+    const leftGutterWidth = (rowsBox?.x ?? 0) - (box?.x ?? 0);
+    const rightGutterWidth =
+      (box?.x ?? 0) + paneWidth - ((rowsBox?.x ?? 0) + (rowsBox?.width ?? 0));
+    expect(leftGutterWidth).toBeGreaterThan(0);
+    expect(rightGutterWidth).toBeGreaterThan(0);
+    const leftX = Math.floor(leftGutterWidth / 2);
+    const rightX = paneWidth - Math.ceil(rightGutterWidth / 2);
+
     expect((box?.x ?? 0) + leftX).toBeLessThan(rowsBox?.x ?? 0);
     expect((box?.x ?? 0) + rightX).toBeGreaterThan(
       (rowsBox?.x ?? 0) + (rowsBox?.width ?? 0),

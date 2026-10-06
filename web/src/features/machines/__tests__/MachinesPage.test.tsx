@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
@@ -69,6 +69,90 @@ describe("MachinesPage", () => {
     api.listMachineSummaries.mockReset();
     api.listMachines.mockReset().mockResolvedValue({ machines: [] });
     api.fetchRunners.mockReset().mockResolvedValue([]);
+  });
+
+  it("shows known machines while activity and sync are loading", async () => {
+    let resolveSummary!: (value: MachinesSummaryResponse) => void;
+    api.listMachineSummaries.mockImplementation(
+      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
+    );
+    api.listMachines.mockResolvedValue({ machines: [summary("cinder").machine] });
+    renderPage();
+
+    const row = await screen.findByTestId("machine-directory-row-cinder");
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
+    expect(row).toHaveTextContent("cinder");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
+    expect(within(row).queryByText("No recent sessions")).toBeNull();
+
+    await act(async () => resolveSummary(response([summary("cinder")])));
+    expect(await screen.findByTestId("machine-row-cinder")).toHaveTextContent("No recent sessions");
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
+  });
+
+
+  it("shows the first-machine action when the empty directory arrives before summaries", async () => {
+    let resolveSummary!: (value: MachinesSummaryResponse) => void;
+    api.listMachineSummaries.mockImplementation(
+      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
+    );
+    api.listMachines.mockResolvedValue({ machines: [] });
+    renderPage();
+
+    expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
+    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
+
+    await act(async () => resolveSummary(response([])));
+    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.body).toHaveAttribute("data-ready", "true");
+      expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
+    });
+  });
+
+  it("shows summary failure when an empty directory is returned", async () => {
+    let rejectSummary!: (error: Error) => void;
+    api.listMachineSummaries
+      .mockImplementationOnce(
+        () => new Promise<MachinesSummaryResponse>((_resolve, reject) => { rejectSummary = reject; }),
+      )
+      .mockRejectedValueOnce(new Error("The session catalog is restarting."));
+    api.listMachines.mockResolvedValue({ machines: [] });
+    renderPage();
+
+    expect(await screen.findByTestId("machines-connect-first-button")).toBeInTheDocument();
+    await act(async () => rejectSummary(new Error("The session catalog is restarting.")));
+    expect(await screen.findByRole("button", { name: "Try again" }, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Activity and sync are unavailable");
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    await waitFor(() => expect(document.body).toHaveAttribute("data-screenshot-ready", "true"));
+  });
+
+
+  it("shows directory-backed machine details while activity loads", async () => {
+    let resolveSummary!: (value: MachinesSummaryResponse) => void;
+    api.listMachineSummaries.mockImplementation(
+      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
+    );
+    api.listMachines.mockResolvedValue({ machines: [summary("cinder").machine] });
+    renderPage(true);
+
+    expect(await screen.findByTestId("machine-name")).toHaveTextContent("cinder");
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
+    expect(screen.queryByText("Last 14 days")).toBeNull();
+
+    await act(async () => resolveSummary(response([summary("cinder")])));
+    expect(await screen.findByText("Last 14 days")).toBeInTheDocument();
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
   });
 
   it("lists active machines with their live work and folds quiet ones into one line", async () => {
@@ -153,10 +237,12 @@ describe("MachinesPage", () => {
     ]);
     renderPage();
 
+    expect(await screen.findByRole("button", { name: "Try again" }, { timeout: 5000 })).toBeInTheDocument();
     const row = await screen.findByTestId("machine-row-cinder", {}, { timeout: 5000 });
     expect(within(row).getByRole("link")).toHaveAttribute("href", "/machines/cinder");
-    expect(screen.getByTestId("machines-unmatched-runners")).not.toHaveTextContent("cinder");
-    expect(screen.getByTestId("machines-unmatched-runners")).toHaveTextContent("clifford");
+    const unmatched = await screen.findByTestId("machines-unmatched-runners");
+    expect(unmatched).not.toHaveTextContent("cinder");
+    expect(unmatched).toHaveTextContent("clifford");
     expect(screen.queryByTestId("machines-summary")).toBeNull();
     expect(screen.queryByTestId("machines-connect-first-button")).toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
@@ -173,6 +259,7 @@ describe("MachinesPage", () => {
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.queryByText("No upload reports from this machine in the last 30 days.")).toBeNull();
     expect(screen.queryByText("Last 14 days")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Retry" }, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("unavailable");
   });
 

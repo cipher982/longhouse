@@ -3643,6 +3643,47 @@ describe("SessionChat composer status", () => {
     expect(composerHead()).not.toHaveTextContent("Working");
   });
 
+  it("folds idle into the placeholder and keeps the composer to one row", () => {
+    const lastResultAt = "2026-10-06T02:21:00Z";
+    renderSessionChat({
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          activity: "quiescent",
+          lastResultAt,
+          observedAt: lastResultAt,
+        }),
+      }),
+      composerHeaderAccessory: <span data-testid="evidence-accessory" />,
+    });
+
+    expect(screen.queryByTestId("session-chat-composer-head")).not.toBeInTheDocument();
+    const input = screen.getByLabelText("Next instruction");
+    expect(input).toHaveAttribute("placeholder", expect.stringMatching(/^Idle since .+ — message to continue$/));
+    // The evidence chip rides on the input's own line, so an idle Helm
+    // composer is one line tall; the chips row is only for a model picker.
+    expect(input.parentElement).toContainElement(screen.getByTestId("evidence-accessory"));
+    expect(screen.queryByTestId("session-chat-composer-chips")).not.toBeInTheDocument();
+  });
+
+  it("keeps the caller's placeholder on a closed session that still takes input", () => {
+    renderSessionChat({
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          activity: "quiescent",
+          closed: true,
+          lastResultAt: "2026-10-06T02:21:00Z",
+        }),
+      }),
+      composerPlaceholder: "Message the ended run",
+    });
+
+    const input = screen.getByLabelText("Next instruction");
+    expect(input).toBeEnabled();
+    expect(input).toHaveAttribute("placeholder", "Message the ended run");
+  });
+
   it("demotes an expired work claim instead of repeating the cached label", () => {
     const now = Date.now();
     renderSessionChat(

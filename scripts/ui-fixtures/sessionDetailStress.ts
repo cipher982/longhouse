@@ -1745,3 +1745,114 @@ export function buildSessionProseIdleFixture(): SessionDetailFixture {
     turns: { turns: [], total: 0 },
   };
 }
+
+/**
+ * The session rail's list: the timeline's first page, with the open session
+ * plus neighbours in every state a rail row shows (running, needs you,
+ * idle, ended, uncertain), across providers and machines.
+ */
+export function buildRailSessionsFixture(active: AgentSession): JsonObject {
+  const now = SESSION_DETAIL_STRESS_NOW;
+  const idleState = (endedAt: string) =>
+    makeSessionState({
+      working_set: "recent",
+      activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: endedAt, valid_until: null },
+      delegation: { state: "none", count: 0, kinds: {}, source: "claude_hook", observed_at: endedAt, valid_until: null, items: [], recent_items: [] },
+      last_result_at: endedAt,
+      presentation: {
+        primary: { key: "idle", label: "Idle", tone: "idle", observed_at: endedAt },
+        access: { key: "live_control", label: "Live control", tone: "live", observed_at: endedAt },
+        transcript: null,
+      },
+    });
+  const neighbours: Array<Partial<AgentSession>> = [
+    {
+      id: "rail-reconnect",
+      provider: "codex",
+      summary_title: "Fix the flaky reconnect test",
+      device_id: "cinder",
+    },
+    {
+      id: "rail-image-eval",
+      provider: "codex",
+      summary_title: "Image model eval plan",
+      device_id: "cinder",
+      session_state: makeSessionState({
+        activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: now, valid_until: null },
+        delegation: { state: "none", count: 0, kinds: {}, source: "codex", observed_at: now, valid_until: null, items: [], recent_items: [] },
+        presentation: {
+          primary: { key: "needs_answer", label: "Needs your answer", tone: "blocked", observed_at: now },
+          access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
+          transcript: null,
+        },
+      }),
+    },
+    {
+      id: "rail-backlog",
+      provider: "claude",
+      summary_title: "Drain the review backlog",
+      device_id: "cinder",
+      session_state: idleState("2026-04-15T15:40:00Z"),
+    },
+    {
+      id: "rail-omp-hang",
+      provider: "omp",
+      summary_title: "OMP hang on a stuck pid",
+      device_id: "cube",
+    },
+    {
+      id: "rail-glm",
+      provider: "omp",
+      summary_title: "Add GLM 5.3 to the Bedrock router",
+      device_id: "cinder",
+      session_state: idleState("2026-04-15T11:02:00Z"),
+    },
+    {
+      id: "rail-bracket",
+      provider: "claude",
+      summary_title: "Bracket v3 for the mouse camera",
+      device_id: "cinder",
+      session_state: makeSessionState({
+        working_set: "history",
+        disposition: { state: "closed", closed_at: "2026-04-14T21:30:00Z", close_reason: "user_closed" },
+        run: { lifecycle: "ended", started_at: "2026-04-14T20:00:00Z", ended_at: "2026-04-14T21:30:00Z" },
+        activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: "2026-04-14T21:30:00Z", valid_until: null },
+        delegation: { state: "none", count: 0, kinds: {}, source: "claude_hook", observed_at: "2026-04-14T21:30:00Z", valid_until: null, items: [], recent_items: [] },
+        last_result_at: "2026-04-14T21:30:00Z",
+        presentation: {
+          primary: { key: "ended", label: "Ended", tone: "closed", observed_at: "2026-04-14T21:30:00Z" },
+          access: null,
+          transcript: null,
+        },
+      }),
+    },
+    {
+      id: "rail-gitops",
+      provider: "codex",
+      summary_title: "Deploy the gitops sync job",
+      device_id: "cinder",
+      session_state: makeSessionState({
+        activity: { state: "unknown", raw_kind: null, tool: null, observed_at: "2026-04-15T15:58:00Z", valid_until: null },
+        delegation: { state: "none", count: 0, kinds: {}, source: "codex", observed_at: now, valid_until: null, items: [], recent_items: [] },
+        presentation: {
+          primary: { key: "activity_unknown", label: "Activity unknown", tone: "quiet", observed_at: now },
+          access: null,
+          transcript: null,
+        },
+      }),
+    },
+  ];
+  const sessions = [active, ...neighbours.map((overrides) => makeSession(overrides))];
+  return {
+    sessions: sessions.map((head) => ({
+      thread_id: head.id,
+      timeline_anchor_at: head.timeline_anchor_at ?? now,
+      head,
+      continuation_count: 0,
+      started_origin_label: null,
+      head_origin_label: null,
+    })),
+    total: sessions.length,
+    has_real_sessions: true,
+  };
+}
