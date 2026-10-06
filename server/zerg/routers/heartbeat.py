@@ -8,11 +8,15 @@ Authentication: same X-Agents-Token / device token as the ingest endpoint.
 
 from __future__ import annotations
 
+import gzip
+import io
 import json
 import logging
 import os
+import random
 import re
 import time
+import zlib
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -27,6 +31,10 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import ValidationError
@@ -43,7 +51,6 @@ from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
 from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
-from zerg.machine_evidence import machine_evidence_bytes
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_rejected_total
@@ -56,6 +63,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.schemas.history_import import HistoryImportSnapshot
+from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.machine_identity import resolve_machine_id
@@ -70,7 +78,92 @@ from zerg.utils.time import normalize_utc
 logger = logging.getLogger(__name__)
 _catalog_db_dependency = catalog_db_dependency()
 
-router = APIRouter(prefix="/agents", tags=["agents"])
+MAX_HEARTBEAT_DECODED_BYTES = 8 * 1024 * 1024
+_HEARTBEAT_DISPATCH_MAX_AGE_SECONDS = 5.0
+_HEARTBEAT_RESPONSE_HEADERS = {
+    "X-Longhouse-Request-Encodings": "gzip",
+    "X-Longhouse-Machine-Fresh-Horizon": str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS),
+}
+
+
+def _heartbeat_stage_ms(request: Request, stage: str) -> float | None:
+    timing = getattr(request.state, "heartbeat_timing", {})
+    value = timing.get(f"{stage}_ms")
+    return round(value, 1) if isinstance(value, (int, float)) else None
+
+
+def _log_heartbeat_timing(request: Request, status_code: int | None) -> None:
+    timing = getattr(request.state, "heartbeat_timing", {})
+    started_at = getattr(request.state, "heartbeat_timing_started_at", time.monotonic())
+    total_ms = (time.monotonic() - started_at) * 1000
+    skipped = timing.get("write_skipped")
+    sampled = total_ms <= 500 and random.randrange(50) == 0
+    if total_ms <= 500 and not sampled and not skipped:
+        return
+
+    event = {
+        "event": "heartbeat_request_timing",
+        "status_code": status_code,
+        "content_encoding": request.headers.get("Content-Encoding", "identity").lower(),
+        "body_read_ms": _heartbeat_stage_ms(request, "body_read"),
+        "gzip_decode_ms": _heartbeat_stage_ms(request, "gzip_decode"),
+        "json_parse_validation_ms": _heartbeat_stage_ms(request, "json_parse_validation"),
+        "auth_resolve_ms": _heartbeat_stage_ms(request, "auth_resolve"),
+        "evidence_validation_ms": _heartbeat_stage_ms(request, "evidence_validation"),
+        "retention_copy_build_ms": _heartbeat_stage_ms(request, "retention_copy_build"),
+        "catalogd_rpc_ms": _heartbeat_stage_ms(request, "catalogd_rpc"),
+        "total_ms": round(total_ms, 1),
+        "wire_bytes": timing.get("wire_bytes"),
+        "decoded_bytes": timing.get("decoded_bytes"),
+        "evidence_rows": timing.get("evidence_rows"),
+        "write_skipped": skipped,
+        "sampled": sampled and total_ms <= 500,
+    }
+    logger.info("heartbeat_request_timing %s", json.dumps(event, separators=(",", ":")))
+
+
+class HeartbeatRoute(APIRoute):
+    """Add heartbeat capability headers and request-level timing around dependencies."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def timed_handler(request: Request) -> Response:
+            request.state.heartbeat_timing_started_at = time.monotonic()
+            request.state.heartbeat_timing = {}
+            response: Response | None = None
+            try:
+                response = await handler(request)
+            except HTTPException as exc:
+                response = JSONResponse(
+                    status_code=exc.status_code,
+                    content=jsonable_encoder({"detail": exc.detail}),
+                    headers=exc.headers,
+                )
+            except RequestValidationError as exc:
+                response = JSONResponse(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    content=jsonable_encoder({"detail": exc.errors()}),
+                )
+            except Exception:
+                logger.exception("Unhandled heartbeat request failure")
+                response = Response(
+                    content="Internal Server Error",
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    media_type="text/plain",
+                )
+            finally:
+                _log_heartbeat_timing(request, response.status_code if response is not None else None)
+            assert response is not None
+            response.headers.update(_HEARTBEAT_RESPONSE_HEADERS)
+            return response
+
+        return timed_handler
+
+
+router = APIRouter(prefix="/agents", tags=["agents"], route_class=HeartbeatRoute)
+
+
 # The response acknowledges liveness independently from the bulk evidence it
 # carried. Keep these wire values aligned with catalogd's
 # ``shadow_reducer.status`` values; ``rejected`` is reserved for evidence
@@ -547,10 +640,272 @@ class HeartbeatIn(BaseModel):
             return HistoryImportSnapshot.unavailable()
 
 
+_HEARTBEAT_RETENTION_FIELDS = frozenset(HeartbeatIn.model_fields) - {
+    "machine_evidence",
+    "sessions",
+    "managed_sessions",
+}
+
+
+def _decode_heartbeat_body(raw_body: bytes, content_encoding: str) -> bytes:
+    """Decode one identity/gzip heartbeat body without exceeding the decoded budget."""
+
+    encoding = content_encoding.strip().lower() or "identity"
+    if encoding == "identity":
+        decoded = raw_body
+    elif encoding == "gzip":
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(raw_body)) as stream:
+                decoded = stream.read(MAX_HEARTBEAT_DECODED_BYTES + 1)
+        except (EOFError, OSError, zlib.error) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Corrupt gzip heartbeat body") from exc
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Unsupported heartbeat content encoding",
+        )
+    if len(decoded) > MAX_HEARTBEAT_DECODED_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Heartbeat body exceeds the decoded size limit",
+        )
+    return decoded
+
+
+def _json_text_encoding(raw_body: bytes) -> str:
+    if raw_body.startswith(b"\x00\x00\xfe\xff") or raw_body.startswith(b"\x00\x00\x00{"):
+        return "utf-32-be"
+    if raw_body.startswith(b"\xff\xfe\x00\x00") or raw_body.startswith(b"{\x00\x00\x00"):
+        return "utf-32-le"
+    if raw_body.startswith(b"\xfe\xff") or raw_body.startswith(b"\x00{"):
+        return "utf-16-be"
+    if raw_body.startswith(b"\xff\xfe") or raw_body.startswith(b"{\x00"):
+        return "utf-16-le"
+    return "utf-8"
+
+
+def _json_string_end(text: str, start: int) -> int | None:
+    if start >= len(text) or text[start] != '"':
+        return None
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            return index + 1
+        if char == "\\":
+            index += 2
+        else:
+            index += 1
+    return None
+
+
+def _json_value_end(text: str, start: int) -> int | None:
+    if start >= len(text):
+        return None
+    if text[start] == '"':
+        return _json_string_end(text, start)
+    if text[start] in "[{":
+        stack = ["]" if text[start] == "[" else "}"]
+        index = start + 1
+        while index < len(text):
+            char = text[index]
+            if char == '"':
+                string_end = _json_string_end(text, index)
+                if string_end is None:
+                    return None
+                index = string_end
+                continue
+            if char in "[{":
+                stack.append("]" if char == "[" else "}")
+            elif char in "]}":
+                if not stack or char != stack[-1]:
+                    return None
+                stack.pop()
+                if not stack:
+                    return index + 1
+            index += 1
+        return None
+    index = start
+    while index < len(text) and text[index] not in " \t\r\n,}]":
+        index += 1
+    return index if index > start else None
+
+
+def _json_string_end_bytes(raw_body: bytes, start: int) -> int | None:
+    if start >= len(raw_body) or raw_body[start] != 34:
+        return None
+    index = raw_body.find(b'"', start + 1)
+    while index >= 0:
+        slash_index = index - 1
+        while slash_index > start and raw_body[slash_index] == 92:
+            slash_index -= 1
+        if (index - slash_index - 1) % 2 == 0:
+            return index + 1
+        index = raw_body.find(b'"', index + 1)
+    return None
+
+
+_JSON_STRUCTURE_RE = re.compile(rb'[\[\]{}"]')
+
+
+def _json_value_end_bytes(raw_body: bytes, start: int) -> int | None:
+    if start >= len(raw_body):
+        return None
+    if raw_body[start] == 34:
+        return _json_string_end_bytes(raw_body, start)
+    if raw_body[start] in (91, 123):
+        stack = [93 if raw_body[start] == 91 else 125]
+        index = start + 1
+        while index < len(raw_body):
+            match = _JSON_STRUCTURE_RE.search(raw_body, index)
+            if match is None:
+                return None
+            index = match.start()
+            byte = raw_body[index]
+            if byte == 34:
+                string_end = _json_string_end_bytes(raw_body, index)
+                if string_end is None:
+                    return None
+                index = string_end
+                continue
+            if byte in (91, 123):
+                stack.append(93 if byte == 91 else 125)
+            elif byte in (93, 125):
+                if not stack or byte != stack[-1]:
+                    return None
+                stack.pop()
+                if not stack:
+                    return index + 1
+            index += 1
+        return None
+    index = start
+    while index < len(raw_body) and raw_body[index] not in b" \t\r\n,}]":
+        index += 1
+    return index if index > start else None
+
+
+def _machine_evidence_decoded_bytes_utf8(raw_body: bytes) -> int | None:
+    index = 3 if raw_body.startswith(b"\xef\xbb\xbf") else 0
+
+    def skip_whitespace(position: int) -> int:
+        while position < len(raw_body) and raw_body[position] in b" \t\r\n":
+            position += 1
+        return position
+
+    index = skip_whitespace(index)
+    if index >= len(raw_body) or raw_body[index] != 123:
+        return None
+    index += 1
+    evidence_bytes: int | None = None
+    while True:
+        index = skip_whitespace(index)
+        if index >= len(raw_body) or raw_body[index] == 125:
+            return evidence_bytes
+        key_start = index
+        key_end = _json_string_end_bytes(raw_body, key_start)
+        if key_end is None:
+            return None
+        key_token = raw_body[key_start:key_end]
+        is_machine_evidence = key_token == b'"machine_evidence"'
+        if not is_machine_evidence and b"\\" in key_token:
+            try:
+                is_machine_evidence = json.loads(key_token) == "machine_evidence"
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return None
+        index = skip_whitespace(key_end)
+        if index >= len(raw_body) or raw_body[index] != 58:
+            return None
+        value_start = skip_whitespace(index + 1)
+        value_end = _json_value_end_bytes(raw_body, value_start)
+        if value_end is None:
+            return None
+        if is_machine_evidence:
+            evidence_bytes = value_end - value_start
+        index = skip_whitespace(value_end)
+        if index >= len(raw_body):
+            return None
+        if raw_body[index] == 44:
+            index += 1
+            continue
+        if raw_body[index] == 125:
+            return evidence_bytes
+        return None
+
+
+def _machine_evidence_decoded_bytes(decoded_body: bytes) -> int | None:
+    """Measure the raw decoded JSON value for machine_evidence without re-encoding it."""
+
+    encoding = _json_text_encoding(decoded_body)
+    if encoding == "utf-8":
+        return _machine_evidence_decoded_bytes_utf8(decoded_body)
+
+    try:
+        text = decoded_body.decode(encoding)
+    except UnicodeDecodeError:
+        return None
+    if text.startswith("\ufeff"):
+        text = text[1:]
+
+    def skip_whitespace(index: int) -> int:
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        return index
+
+    index = skip_whitespace(0)
+    if index >= len(text) or text[index] != "{":
+        return None
+    index += 1
+    evidence_bytes: int | None = None
+    while True:
+        index = skip_whitespace(index)
+        if index >= len(text) or text[index] == "}":
+            return evidence_bytes
+        key_start = index
+        key_end = _json_string_end(text, key_start)
+        if key_end is None:
+            return None
+        try:
+            key = json.loads(text[key_start:key_end])
+        except json.JSONDecodeError:
+            return None
+        index = skip_whitespace(key_end)
+        if index >= len(text) or text[index] != ":":
+            return None
+        value_start = skip_whitespace(index + 1)
+        value_end = _json_value_end(text, value_start)
+        if value_end is None:
+            return None
+        if key == "machine_evidence":
+            try:
+                evidence_bytes = len(text[value_start:value_end].encode(encoding))
+            except UnicodeEncodeError:
+                return None
+        index = skip_whitespace(value_end)
+        if index >= len(text):
+            return None
+        if text[index] == ",":
+            index += 1
+            continue
+        if text[index] == "}":
+            return evidence_bytes
+        return None
+
+
+def _machine_evidence_row_count(evidence: object) -> int:
+    if not isinstance(evidence, dict):
+        return 0
+    return sum(
+        len(rows)
+        for family in ("run", "process", "activity", "control", "transcript", "readiness", "continuation")
+        if isinstance((rows := evidence.get(family)), list)
+    )
+
+
 def _accepted_machine_evidence(
     evidence: object,
     *,
     device_id: str,
+    decoded_evidence_bytes: int | None,
 ) -> tuple[str | None, dict | None]:
     """Return the pre-catalog disposition and evidence that may be shipped.
 
@@ -577,18 +932,16 @@ def _accepted_machine_evidence(
             _validation_reason(exc),
         )
         return "rejected", None
-    serialized = parsed.model_dump(mode="json", exclude_none=True)
-    size = machine_evidence_bytes(serialized)
-    if size > MAX_MACHINE_EVIDENCE_BYTES:
+    if decoded_evidence_bytes is not None and decoded_evidence_bytes > MAX_MACHINE_EVIDENCE_BYTES:
         agents_machine_evidence_dropped_total.labels(reason="oversize").inc()
         logger.warning(
             "Dropping oversized machine evidence device=%s bytes=%d budget=%d",
             device_id,
-            size,
+            decoded_evidence_bytes,
             MAX_MACHINE_EVIDENCE_BYTES,
         )
         return "oversize_evidence", None
-    return None, serialized
+    return None, parsed.model_dump(mode="json", exclude_none=True)
 
 
 def _catalog_machine_evidence_disposition(result: object) -> str:
@@ -986,9 +1339,27 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
     return events
 
 
-@router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+@router.post(
+    "/heartbeat",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": HeartbeatIn.model_json_schema()}},
+        },
+        "parameters": [
+            {
+                "name": "Content-Encoding",
+                "in": "header",
+                "required": False,
+                "description": "Send gzip when compressing the heartbeat request body.",
+                "schema": {"type": "string", "enum": ["identity", "gzip"]},
+            }
+        ],
+    },
+)
 async def ingest_heartbeat(
-    payload: HeartbeatIn,
     request: Request,
     db: Session | None = Depends(_heartbeat_db_dependency),
     _token: DeviceToken | None = Depends(verify_agents_caller),
@@ -1003,6 +1374,45 @@ async def ingest_heartbeat(
     request_status_label = "internal_error"
 
     try:
+        timing = request.state.heartbeat_timing
+        body_started = time.monotonic()
+        raw_body = await request.body()
+        timing["body_read_ms"] = (time.monotonic() - body_started) * 1000
+        timing["wire_bytes"] = len(raw_body)
+        agents_heartbeat_payload_bytes.observe(len(raw_body))
+
+        decode_started = time.monotonic()
+        try:
+            decoded_body = _decode_heartbeat_body(raw_body, request.headers.get("Content-Encoding", "identity"))
+        finally:
+            timing["gzip_decode_ms"] = (time.monotonic() - decode_started) * 1000
+        timing["decoded_bytes"] = len(decoded_body)
+
+        parse_started = time.monotonic()
+        try:
+            try:
+                decoded_payload = json.loads(decoded_body)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                error_position = exc.pos if isinstance(exc, json.JSONDecodeError) else exc.start
+                raise RequestValidationError(
+                    [
+                        {
+                            "type": "json_invalid",
+                            "loc": ("body", error_position),
+                            "msg": "JSON decode error",
+                            "input": {},
+                            "ctx": {"error": str(exc)},
+                        }
+                    ],
+                    body=decoded_body,
+                ) from exc
+            try:
+                payload = HeartbeatIn.model_validate(decoded_payload)
+            except ValidationError as exc:
+                raise RequestValidationError(exc.errors(), body=decoded_payload) from exc
+        finally:
+            timing["json_parse_validation_ms"] = (time.monotonic() - parse_started) * 1000
+
         # Device-token identity is authoritative. In AUTH_DISABLED/dev mode,
         # preserve the explicit machine identity used by storage and control
         # WebSocket requests; only fall back to the peer address when absent.
@@ -1017,6 +1427,39 @@ async def ingest_heartbeat(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+        evidence_started = time.monotonic()
+        # A document within the budget proves its evidence subtree also fits;
+        # scan an exact raw span only when the whole decoded body exceeds it.
+        decoded_evidence_bytes = (
+            _machine_evidence_decoded_bytes(decoded_body)
+            if len(decoded_body) > MAX_MACHINE_EVIDENCE_BYTES and isinstance(payload.machine_evidence, dict)
+            else None
+        )
+        timing["evidence_rows"] = _machine_evidence_row_count(payload.machine_evidence)
+        pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
+            payload.machine_evidence,
+            device_id=device_id,
+            decoded_evidence_bytes=decoded_evidence_bytes,
+        )
+        timing["evidence_validation_ms"] = (time.monotonic() - evidence_started) * 1000
+
+        retention_started = time.monotonic()
+        # Retain only the stamp fields directly. The large evidence document and
+        # per-session arrays travel separately or are deliberately not retained.
+        payload_for_retention = payload.model_dump(mode="json", include=_HEARTBEAT_RETENTION_FIELDS)
+        if "history_import" not in payload.model_fields_set:
+            payload_for_retention.pop("history_import", None)
+        if "shipping_progress" not in payload.model_fields_set:
+            payload_for_retention.pop("shipping_progress", None)
+        for field_name in (
+            "storage_v2_outbox",
+            "managed_launch_recovery",
+            "runtime_event_outbox",
+        ):
+            if field_name not in payload.model_fields_set:
+                payload_for_retention.pop(field_name, None)
+        payload_json = json.dumps(_retained_heartbeat_evidence(payload_for_retention))
+        timing["retention_copy_build_ms"] = (time.monotonic() - retention_started) * 1000
         last_ship_at: datetime | None = None
         if payload.last_ship_at:
             try:
@@ -1029,32 +1472,6 @@ async def ingest_heartbeat(
                 last_ship_attempt_at = datetime.fromisoformat(payload.last_ship_attempt_at.replace("Z", "+00:00"))
             except ValueError:
                 pass
-
-        wire_bytes = len(await request.body())
-        # The stamp's ``raw_json`` is a bounded forensic copy of the
-        # payload (catalogd caps it at 512 KiB). Machine evidence is
-        # bulk fact data -- hundreds of kilobytes on a busy machine --
-        # so it travels as its own catalogd parameter and never rides
-        # this size-capped forensic copy.
-        payload_for_retention = payload.model_dump(mode="json")
-        if "history_import" not in payload.model_fields_set:
-            payload_for_retention.pop("history_import", None)
-        if "shipping_progress" not in payload.model_fields_set:
-            payload_for_retention.pop("shipping_progress", None)
-        for field_name in (
-            "storage_v2_outbox",
-            "managed_launch_recovery",
-            "runtime_event_outbox",
-        ):
-            if field_name not in payload.model_fields_set:
-                payload_for_retention.pop(field_name, None)
-        payload_for_retention.pop("machine_evidence", None)
-        pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
-            payload.machine_evidence,
-            device_id=device_id,
-        )
-        payload_json = json.dumps(_retained_heartbeat_evidence(payload_for_retention))
-        agents_heartbeat_payload_bytes.observe(wire_bytes)
 
         _device_id = device_id
         _payload_json = payload_json
@@ -1142,6 +1559,19 @@ async def ingest_heartbeat(
             "sessions_sequence": payload.sessions_sequence,
         }
 
+        request_age = time.monotonic() - request.state.heartbeat_timing_started_at
+        skip_reason = "request_aged" if request_age > _HEARTBEAT_DISPATCH_MAX_AGE_SECONDS else None
+        if skip_reason is None and await request.is_disconnected():
+            skip_reason = "client_disconnected"
+        if skip_reason is not None:
+            timing["write_skipped"] = skip_reason
+            request_status_label = "abandoned"
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "heartbeat_abandoned", "retryable": True},
+                headers={"Retry-After": "1"},
+            )
+
         write_started = time.monotonic()
         try:
             catalogd = get_catalogd_client()
@@ -1153,19 +1583,24 @@ async def ingest_heartbeat(
                         "message": "Catalog mutation is temporarily unavailable.",
                     },
                 )
-            result = await catalogd.call(
-                "machine.heartbeat.apply.v2",
-                {
-                    "heartbeat": {
-                        key: (value.isoformat() if isinstance(value, datetime) else value) for key, value in heartbeat_stamp_kwargs.items()
+            rpc_started = time.monotonic()
+            try:
+                result = await catalogd.call(
+                    "machine.heartbeat.apply.v2",
+                    {
+                        "heartbeat": {
+                            key: (value.isoformat() if isinstance(value, datetime) else value)
+                            for key, value in heartbeat_stamp_kwargs.items()
+                        },
+                        "machine_evidence": machine_evidence,
+                        "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
+                        "managed_leases_present": _managed_leases_present,
+                        "owner_id": getattr(_token, "owner_id", None),
                     },
-                    "machine_evidence": machine_evidence,
-                    "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
-                    "managed_leases_present": _managed_leases_present,
-                    "owner_id": getattr(_token, "owner_id", None),
-                },
-                timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
-            )
+                    timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+                )
+            finally:
+                timing["catalogd_rpc_ms"] = (time.monotonic() - rpc_started) * 1000
             previous_sessions_digest = result.get("previous_sessions_digest")
             commit_seq = result.get("commit_seq")
             exact_replay = result.get("exact_replay")
@@ -1229,6 +1664,9 @@ async def ingest_heartbeat(
             status_code=status.HTTP_204_NO_CONTENT,
             headers={_MACHINE_EVIDENCE_ACK_HEADER: evidence_disposition},
         )
+    except RequestValidationError:
+        request_status_label = "http_error"
+        raise
     except HTTPException:
         # Preserve typed route errors such as hot-write backpressure instead
         # of logging them as heartbeat ingest internals.
@@ -1236,7 +1674,6 @@ async def ingest_heartbeat(
             request_status_label = "http_error"
         raise
     except Exception:
-        logger.exception("Failed to ingest heartbeat")
         request_status_label = "internal_error"
         raise
     finally:

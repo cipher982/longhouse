@@ -247,6 +247,23 @@ def _decode_catalog_datetime(value: object) -> datetime | None:
 def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken | None:
     """Verify the agents API token for write operations."""
     settings = get_settings()
+    normalized_path = request.url.path[4:] if request.url.path.startswith("/api/") else request.url.path
+    heartbeat_request = request.method.upper() == "POST" and normalized_path == "/agents/heartbeat"
+
+    def resolve_device_token(token: str) -> DeviceToken | None:
+        if not heartbeat_request:
+            return _validate_device_token_for_request(token)
+        started_at = time.monotonic()
+        request.state.heartbeat_auth_resolve_started_at = started_at
+        try:
+            return _validate_device_token_for_request(token)
+        finally:
+            finished_at = time.monotonic()
+            request.state.heartbeat_auth_resolve_finished_at = finished_at
+            timing = getattr(request.state, "heartbeat_timing", None)
+            if isinstance(timing, dict):
+                timing["auth_resolve_ms"] = (finished_at - started_at) * 1000
+
     if settings.auth_disabled:
         request.state.agents_rate_key = "auth-disabled"
         request.state.principal = "auth-disabled"
@@ -255,7 +272,7 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
         # storage-v2 writes and reads share the same single-tenant identity.
         provided_token = request.headers.get("X-Agents-Token")
         if provided_token and provided_token.startswith("zdt_"):
-            device_token = _validate_device_token_for_request(provided_token)
+            device_token = resolve_device_token(provided_token)
             if device_token is not None:
                 request.state.principal = f"device:{device_token.id}"
                 return device_token
@@ -274,7 +291,7 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
         )
 
     if provided_token.startswith("zdt_"):
-        device_token = _validate_device_token_for_request(provided_token)
+        device_token = resolve_device_token(provided_token)
         if device_token:
             logger.debug("Device token validated for device %s", device_token.device_id)
             request.state.principal = f"device:{device_token.id}"

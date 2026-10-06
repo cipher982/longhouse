@@ -16,9 +16,11 @@ it rejects, what it retains, and what it hands the catalog.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
+import time
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -28,6 +30,7 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import Request
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -47,6 +50,7 @@ from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
 from zerg.models.live_store import LiveSessionConnection  # noqa: E402
 from zerg.models.live_store import LiveSessionRun  # noqa: E402
 from zerg.models.live_store import LiveSessionThread  # noqa: E402
+from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS  # noqa: E402
 from zerg.services.catalogd_supervisor import catalogd_paths  # noqa: E402
 from zerg.services.session_runtime import runtime_key_for_session  # noqa: E402
 
@@ -430,6 +434,8 @@ def test_heartbeat_endpoint_creates_row(live_catalog, live_catalog_client):
     )
     assert response.status_code == 204, response.text
     assert response.headers["x-longhouse-machine-evidence"] == "no_evidence"
+    assert response.headers["x-longhouse-request-encodings"] == "gzip"
+    assert response.headers["x-longhouse-machine-fresh-horizon"] == str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS)
 
     stamp = _one_stamp()
     assert stamp["device_id"] == DEVICE_ID
@@ -452,6 +458,123 @@ def test_heartbeat_endpoint_creates_row(live_catalog, live_catalog_client):
     assert stamp["ship_latency_p95_ms_1h"] is None
     assert stamp["disk_free_bytes"] == 50_000_000_000
     assert stamp["is_offline"] == 0
+
+
+def test_heartbeat_gzip_round_trip_matches_identity(live_catalog, live_catalog_client):
+    device_id = "gzip-round-trip-machine"
+    headers = _headers(live_catalog, device_id)
+    payload = {
+        "version": "gzip-round-trip",
+        "daemon_pid": 731,
+        "spool_pending_count": 4,
+        "disk_free_bytes": 1_234_567,
+    }
+    identity_response = live_catalog_client.post("/agents/heartbeat", headers=headers, json=payload)
+    encoded_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    gzip_response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers={**headers, "Content-Encoding": "gzip"},
+        content=gzip.compress(encoded_body),
+    )
+
+    assert identity_response.status_code == 204, identity_response.text
+    assert gzip_response.status_code == 204, gzip_response.text
+    assert gzip_response.headers["x-longhouse-request-encodings"] == "gzip"
+    assert gzip_response.headers["x-longhouse-machine-fresh-horizon"] == str(
+        DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
+    )
+    stamps = _stamps(device_id)
+    assert len(stamps) == 2
+    assert stamps[0]["raw_json"] == stamps[1]["raw_json"]
+
+
+def test_heartbeat_rejects_gzip_beyond_decoded_limit(live_catalog, live_catalog_client):
+    headers = _headers(live_catalog, "oversized-gzip-machine")
+    decoded_body = b'{"version":"' + b"x" * (8 * 1024 * 1024) + b'"}'
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers={**headers, "Content-Encoding": "gzip"},
+        content=gzip.compress(decoded_body),
+    )
+
+    assert response.status_code == 413
+    assert response.headers["x-longhouse-request-encodings"] == "gzip"
+    assert response.headers["x-longhouse-machine-fresh-horizon"] == str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS)
+    assert _stamps("oversized-gzip-machine") == []
+
+
+def test_heartbeat_rejects_corrupt_gzip(live_catalog, live_catalog_client):
+    headers = _headers(live_catalog, "corrupt-gzip-machine")
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers={**headers, "Content-Encoding": "gzip"},
+        content=b"not a gzip stream",
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-longhouse-request-encodings"] == "gzip"
+    assert response.headers["x-longhouse-machine-fresh-horizon"] == str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS)
+    assert _stamps("corrupt-gzip-machine") == []
+
+
+def test_heartbeat_parse_once_retains_the_legacy_stamp_bytes(live_catalog, live_catalog_client):
+    from zerg.routers.heartbeat import HeartbeatIn
+    from zerg.routers.heartbeat import _retained_heartbeat_evidence
+
+    device_id = "parse-once-machine"
+    headers = _headers(live_catalog, device_id)
+    payload = {
+        "version": "retention-fixture",
+        "daemon_pid": 91,
+        "last_ship_at": "2026-10-06T08:00:00Z",
+        "spool_pending_count": 2,
+        "shipping_progress": {
+            "pending_work": True,
+            "stalled": False,
+            "seconds_without_progress": 8,
+            "observed_at": "2026-10-06T08:00:00Z",
+        },
+        "storage_v2_outbox": {"pending_count": 3},
+        "managed_launch_recovery": {"active_count": 1},
+        "runtime_event_outbox": {"pending_count": 5},
+        "machine_evidence": _machine_evidence_payload(),
+    }
+    legacy_model = HeartbeatIn.model_validate(payload)
+    legacy_payload = legacy_model.model_dump(mode="json")
+    for field_name in (
+        "history_import",
+        "shipping_progress",
+        "storage_v2_outbox",
+        "managed_launch_recovery",
+        "runtime_event_outbox",
+    ):
+        if field_name not in legacy_model.model_fields_set:
+            legacy_payload.pop(field_name, None)
+    legacy_payload.pop("machine_evidence", None)
+    expected_raw_json = json.dumps(_retained_heartbeat_evidence(legacy_payload))
+
+    response = live_catalog_client.post("/agents/heartbeat", headers=headers, json=payload)
+
+    assert response.status_code == 204, response.text
+    assert _one_stamp(device_id)["raw_json"] == expected_raw_json
+
+
+def test_heartbeat_aged_request_does_not_dispatch_catalog_write(live_catalog):
+    device_id = "aged-heartbeat-machine"
+    owner_id = live_catalog.create_user("owner@aged-heartbeat.test")
+
+    def aged_caller(request: Request):
+        request.state.heartbeat_timing_started_at = time.monotonic() - 6
+        return SimpleNamespace(id="aged-token", owner_id=owner_id, device_id=device_id)
+
+    with live_catalog.http_client(extra_overrides={verify_agents_caller: aged_caller}) as client:
+        response = client.post("/agents/heartbeat", json={"version": "aged"})
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "heartbeat_abandoned"
+    assert response.headers["x-longhouse-request-encodings"] == "gzip"
+    assert response.headers["x-longhouse-machine-fresh-horizon"] == str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS)
+    assert _stamps(device_id) == []
 
 
 def test_heartbeat_shipping_progress_reaches_machine_health_route(live_catalog, live_catalog_client):
