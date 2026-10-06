@@ -17,14 +17,29 @@ describe("ErrorBoundary", () => {
     vi.restoreAllMocks();
   });
 
-  it("reloads the document to retry a failed lazy page module", () => {
+  it.each([
+    "Failed to fetch dynamically imported module: /assets/MachinesPage.js",
+    "Importing a module script failed.",
+    "Failed to load module script: Expected a JavaScript module but the server responded with a MIME type of text/html.",
+  ])("reloads the document to retry a failed lazy page module: %s", (message) => {
     const reload = vi.fn();
+    const originalWindow = window;
+    vi.stubGlobal(
+      "window",
+      new Proxy(originalWindow, {
+        get(target, property) {
+          if (property === "location") return { reload };
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    );
+
     render(
       <ErrorBoundary>
-        <ThrowError error={new TypeError("Failed to fetch dynamically imported module: /assets/MachinesPage.js")} />
+        <ThrowError error={new TypeError(message)} />
       </ErrorBoundary>,
     );
-    vi.stubGlobal("window", { location: { reload } });
 
     expect(screen.getByText("Longhouse could not load this page. Retry the page load.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Reload to try again" }));
@@ -32,6 +47,16 @@ describe("ErrorBoundary", () => {
     expect(reload).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Try Again" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reload Page" })).not.toBeInTheDocument();
+  });
+
+  it("uses generic recovery copy for errors without messages", () => {
+    render(
+      <ErrorBoundary>
+        <ThrowError error={new Error("")} />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText(/An unexpected error occurred/)).toBeInTheDocument();
   });
 
   it("keeps the in-place retry for render errors", () => {

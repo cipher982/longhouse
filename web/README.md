@@ -22,7 +22,7 @@ The desktop Machines tab prefetches route code on pointer hover or keyboard focu
 The activity/sync summary still loads only after navigation, while the directory
 remains visible.
 
-If a page bundle cannot be downloaded, its error page reloads the app on retry to clear the browser's failed module cache.
+If Vite cannot load a lazy page chunk, Longhouse reloads once; a repeated failure shows a manual reload action instead of a dead in-place retry.
 Machine filters apply before lexical and semantic result limits, including retained
 history whose display metadata lacks a device ID. The disposable search index adds
 nullable machine identity and uses retained source identity for existing rows; source
