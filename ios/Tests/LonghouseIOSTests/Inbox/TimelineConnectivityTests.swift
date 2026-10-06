@@ -398,6 +398,14 @@ struct TimelineConnectivityTests {
         #expect(state.banner(at: now) == .updating)
         #expect(state.hostUpdate.waitingForAction)
     }
+    @Test
+    func authenticationRequirementOverridesAHostUpdateClaim() {
+        var state = TimelineConnectivityState()
+        state.apply(.hostLifecycle(hostLifecycle()), now: now)
+        state.apply(.authFailed, now: now.addingTimeInterval(2))
+
+        #expect(state.banner(at: now.addingTimeInterval(3)) == .authRequired)
+    }
 
     @Test
     func claimRenewalKeepsItsStartAndSlowUpdateShowsElapsedTime() {

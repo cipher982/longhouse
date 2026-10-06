@@ -1320,10 +1320,18 @@ final class SessionViewModel: ObservableObject {
         Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self,
-                  self.submittedInputs.first(where: { $0.clientRequestId == pending.clientRequestId })?.phase == .submitting
+                  let phase = self.submittedInputs.first(where: {
+                      $0.clientRequestId == pending.clientRequestId
+                  })?.phase,
+                  phase == .submitting || phase == .couldNotConfirm,
+                  let current = self.pendingInput(
+                      clientRequestId: pending.clientRequestId,
+                      sessionId: sessionId,
+                      appState: appState
+                  )
             else { return }
             _ = await self.dispatchPendingInput(
-                pending,
+                current,
                 sessionId: sessionId,
                 appState: appState,
                 automaticResendAttempt: attempt + 1

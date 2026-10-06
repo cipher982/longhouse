@@ -1038,6 +1038,9 @@ struct SessionViewModelTests {
         #expect(model.submittedInputsForTranscript(at: Date()).first?.lastError == HostLinkCopy.sendQueued)
         #expect(await api.sentRequestIds() == [requestId])
 
+        model.submittedInputs[0].phase = .couldNotConfirm
+        model.submittedInputs[0].lastError = "Delivery status is not confirmed yet."
+        #expect(model.submittedInputsForTranscript(at: Date()).first?.lastError == HostLinkCopy.sendQueued)
         await waitForCount("runtime restart same-id resend", atLeast: 2, sourceLocation: #_sourceLocation) {
             await api.sentRequestIds().count
         }

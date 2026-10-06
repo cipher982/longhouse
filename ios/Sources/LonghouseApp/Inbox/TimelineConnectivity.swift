@@ -208,7 +208,8 @@ struct TimelineConnectivityState: Equatable {
     /// Claims are separate from transport failures: a planned restart is
     /// announced calmly, while a plain stream loss keeps the existing path.
     func banner(at now: Date) -> TimelineConnectivityBanner {
-        if let update = hostUpdate.presentation(at: now) {
+        if reachability != .authRequired,
+           let update = hostUpdate.presentation(at: now) {
             switch update {
             case .updating:
                 return .updating
