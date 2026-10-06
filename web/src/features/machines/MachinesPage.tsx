@@ -154,7 +154,7 @@ function DirectoryRow({ machine }: { machine: MachineDirectoryEntry }) {
 
 export default function MachinesPage() {
   const { data, isLoading, error, isError, refetch, isRefetchError } = useMachineSummaries();
-  const directory = useMachineDirectory({ enabled: !data, refetchInterval: false });
+  const directory = useMachineDirectory({ enabled: !data, refetchInterval: isError && !data ? 30_000 : false });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const [showConnect, setShowConnect] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
