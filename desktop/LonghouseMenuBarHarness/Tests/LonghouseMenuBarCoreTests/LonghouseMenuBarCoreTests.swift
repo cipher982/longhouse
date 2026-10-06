@@ -378,9 +378,9 @@ struct LonghouseMenuBarCoreTests {
             hostLink: presentationHostLink(
                 state: "updating",
                 claimStartedAt: acknowledgedAt,
-                lastAcknowledgedAt: acknowledgedAt,
                 deadline: "1970-01-01T00:01:30Z",
-                cutoff: "1970-01-01T00:02:30Z"
+                cutoff: "1970-01-01T00:02:30Z",
+                lastAcknowledgedAt: acknowledgedAt
             )
         )
 
@@ -407,7 +407,6 @@ struct LonghouseMenuBarCoreTests {
                 claimStartedAt: "1970-01-01T00:01:37Z"
             )
         )
-
         #expect(snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100)).hostUpdateClaimIsValid)
         #expect(panel(snapshot).showsTroubleCard)
     }
