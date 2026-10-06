@@ -1,0 +1,87 @@
+schema_version: 1
+
+states:
+  host_link:
+    - serving
+    - updating
+    - slow_update
+    - unreachable
+  host_lifecycle:
+    - updating
+    - serving
+  admission:
+    - open
+    - pending
+    - draining
+
+host_link:
+  fields:
+    state: [serving, updating, slow_update, unreachable]
+    since: rfc3339_utc
+    claim: HostLifecycle|null
+    claim_started_at: rfc3339_utc|null
+    last_acknowledged_at: rfc3339_utc|null
+    fresh_horizon_secs: integer|null
+    runtime_epoch: string|null
+
+host_lifecycle:
+  type: host.lifecycle
+  fields:
+    state: [updating, serving]
+    runtime_epoch: string
+    attempt_id: string|null
+    phase: deployer_phase|null
+    expected_back_by: rfc3339_utc|null
+    deadline: rfc3339_utc|null
+    cutoff: rfc3339_utc|null
+  deployer_phases:
+    - prepare
+    - drain
+    - stop
+    - recovery_point
+    - migrate
+    - start
+    - readiness
+    - probe
+    - reopen
+    - rollback_stop
+    - rollback_start
+    - rollback_readiness
+    - rollback_probe
+    - rollback_reopen
+
+k1:
+  codes:
+    - runtime_restarting
+    - runtime_unreachable
+  response_fields:
+    - code
+    - retryable
+    - runtime_epoch
+    - admission
+    - claim
+  retry_after_min_seconds: 1
+
+k3:
+  admission_enum: [open, pending, draining]
+
+default_horizons_seconds:
+  draining:
+    expected_back_by: 30
+    deadline: 360
+    cutoff: 960
+  pending:
+    expected_back_by: 15
+    deadline: 300
+    cutoff: 960
+
+copy:
+  updating.headline: Longhouse is updating
+  updating.detail: Your agents keep running on this Mac. Nothing is lost; updates resume in a few seconds.
+  updating.web_bar: Updating Longhouse · back in a moment
+  updating.dock: Updates paused · Longhouse is updating
+  slow_update.headline: Update is taking longer than usual
+  slow_update.elapsed: elapsed time since claim_started_at
+  unreachable.headline: Can't reach Longhouse
+  send_queued: Queued, sends when the update finishes
+  web_reload: Longhouse updated · Reload

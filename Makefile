@@ -775,7 +775,7 @@ VALIDATE_MEMBERS := \
 	validate-format \
 	validate-provider-brands \
 	validate-managed-session-contract \
-	validate-session-state-contract \
+	validate-host-link-contract \
 	validate-phase-contract \
 	validate-managed-identity \
 	validate-managed-provider-contracts \
@@ -865,9 +865,11 @@ validate-managed-session-contract: ## @internal Guard managed provider session c
 	@bash scripts/qa/check-managed-session-contract.sh
 	@python3 scripts/tests/managed-session-contract.test.py
 
+validate-host-link-contract: ## @internal Guard canonical host-link and runtime lifecycle vocabulary
+	@uv run --no-project --with pyyaml python scripts/generate/validate_host_link.py --check
+
 validate-session-state-contract: ## @internal Guard canonical session-state vocabulary and generated client DTOs
 	@uv run --no-project --with pyyaml python scripts/generate/generate_session_state_contract.py --check
-
 generate-phase-contract: ## Regenerate the engine wire-phase vocabulary from the phase contract
 	@python3 scripts/generate/managed_phase_contract_rs.py
 
