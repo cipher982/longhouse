@@ -2409,9 +2409,11 @@ class CatalogStore:
             "created_at",
             "updated_at",
         )
-        # Raising a search target must realign its embedding row, and a newly
-        # inserted search row can meet an embedding row seeded at another
-        # revision; the alignment scan saw neither.
+        # A search row this write inserts starts at the session revision, which
+        # its current render can be past; the render scan never saw it. Raising
+        # a search target must then realign its embedding row, and an inserted
+        # search row can meet an embedding row seeded at another revision; the
+        # alignment scan saw neither.
         search_touched = {*plan.stale_render, *plan.missing_search}
         with _write_transaction(self.engine) as connection:
             now = datetime.now(UTC)
@@ -2493,7 +2495,7 @@ class CatalogStore:
                 ),
             )
             counts["advanced_render_consumers"] = per_batch(
-                plan.stale_render,
+                search_touched,
                 lambda batch: update(states)
                 .where(*p.stale_render, states.c.session_id.in_(batch))
                 .values(desired_revision=p.session_revision, **released_claim, **cleared_failure),
