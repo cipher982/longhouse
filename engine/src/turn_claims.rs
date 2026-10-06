@@ -77,7 +77,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-const CLAIM_SCHEMA_VERSION: u32 = 5;
+const CLAIM_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct OwnedProcessIdentity {
@@ -118,6 +118,14 @@ pub struct TurnClaim {
     pub adapter: Option<String>,
     #[serde(default)]
     pub launch_id: Option<String>,
+    #[serde(default)]
+    pub invocation_state: Option<String>,
+    #[serde(default)]
+    pub pending_count: usize,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub adopted_parked_invocation: bool,
     #[serde(default)]
     pub stdout_path: Option<String>,
     #[serde(default)]
@@ -215,6 +223,10 @@ impl TurnClaimRegistry {
             process_start_time: None,
             adapter: None,
             launch_id: None,
+            invocation_state: None,
+            pending_count: 0,
+            origin: None,
+            adopted_parked_invocation: false,
             stdout_path: None,
             stderr_path: None,
             cancel_requested_at: None,
@@ -304,6 +316,34 @@ impl TurnClaimRegistry {
         claim.stderr_path = Some(stderr_path.to_string());
         claim.result = Some(result);
         claim.error = None;
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+    pub fn record_invocation_turn(
+        &self,
+        run_id: &str,
+        origin: &str,
+        adopted_parked_invocation: bool,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        claim.origin = Some(origin.to_string());
+        claim.adopted_parked_invocation = adopted_parked_invocation;
+        claim.invocation_state = Some("responding".to_string());
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    pub fn record_invocation_state(
+        &self,
+        run_id: &str,
+        invocation_state: &str,
+        pending_count: usize,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        claim.invocation_state = Some(invocation_state.to_string());
+        claim.pending_count = pending_count;
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
         Ok(claim)

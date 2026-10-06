@@ -1,39 +1,40 @@
-//! Claude Console turns through stock `claude --print`.
+//! Claude Console turns through a long-lived `claude --print` stream-json process.
 //!
-//! Turn-scoped adapter: one `claude --print --output-format stream-json`
-//! invocation per Console turn. The first turn mints the provider session
-//! UUID via `--session-id`; later turns resume it natively via `--resume`.
-//! Unlike Cursor, Claude's native resume restores full model context, so no
-//! synthetic continuation prompt is needed.
+//! Each provider result settles one Longhouse turn. The process stays open
+//! while Claude reports pending background work and resumes on user input or
+//! a provider-originated wake.
 
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::process::{Child, Command};
+use tokio::io::AsyncWriteExt;
+use tokio::process::{Child, ChildStdin, Command};
 
 use crate::console_adapter::{claim_process_liveness, read_growth, stderr_tail, ClaimLiveness};
+use crate::console_lifecycle::{
+    ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationState, PendingItem,
+    TurnBinding, TurnOrigin,
+};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const CLAUDE_PRINT_ADAPTER: &str = "claude_print";
+const CLAUDE_RUNTIME_SOURCE: &str = "claude_console";
 #[cfg(test)]
 pub const DEFAULT_CLAUDE_BIN: &str = "claude";
 
-/// Claude can start, find no usable credential, and answer with a synthetic
-/// "Not logged in" message without ever reaching the model. The credential is
-/// fine: the CLI lost a race reading or refreshing it while other Claude
-/// processes did the same (anthropics/claude-code#37324, #37402, #43392), and
-/// the same launch a moment later succeeds. Nothing ran, so the turn is
-/// replayed rather than surfaced; one delay per retry.
+/// Claude can answer with a synthetic auth failure before reaching the model.
+/// Replay that input on the same provider thread after one bounded retry.
 #[cfg(not(test))]
 const AUTH_PREFLIGHT_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
 #[cfg(test)]
@@ -50,9 +51,13 @@ pub struct ClaudePrintRunConfig {
     pub cwd: PathBuf,
     pub claude_bin: String,
     pub prompt: String,
+    pub image_paths: Vec<PathBuf>,
     pub resume_provider_thread_id: Option<String>,
     pub model: Option<String>,
     pub permission_mode: String,
+    pub origin: String,
+    pub wake_id: Option<String>,
+    pub invocation_id: Option<String>,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -86,98 +91,113 @@ struct ClaudePrintSink {
     runtime_events_outbox_dir: PathBuf,
 }
 
-/// What `monitor_claude_print` needs to launch the same turn again.
 struct RetryContext {
     config: ClaudePrintRunConfig,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
 }
 
-/// The monitor's view of one run's stream, across launch attempts.
 #[derive(Default)]
 struct StreamProgress {
     seq: u64,
     terminal_from_stream: Option<ProviderTerminalResult>,
     identity_confirmed: bool,
-    /// Claude's own text when this attempt reported `authentication_failed`.
     auth_failure: Option<String>,
-    /// The attempt produced model output (an assistant or tool event other
-    /// than the auth failure), so replaying it would repeat work.
     made_progress: bool,
-    /// The failed attempt's auth-failure and result events, withheld from the
-    /// timeline while a retry is still possible.
     held: Vec<(u64, Value)>,
 }
 
 impl StreamProgress {
-    async fn ingest(
-        &mut self,
-        sink: &ClaudePrintSink,
-        lines: Vec<Vec<u8>>,
-        may_hold: bool,
-    ) -> Result<()> {
-        for bytes in lines {
-            self.seq += 1;
-            let seq = self.seq;
-            let event = match serde_json::from_slice::<Value>(&bytes) {
-                Ok(event) => event,
-                Err(error) => {
-                    sink.post_decode_gap(seq, &error.to_string(), &bytes).await;
-                    continue;
-                }
-            };
-            validate_stream_identity(&event, &sink.provider_thread_id)?;
-            if stream_session_identity(&event).is_some() {
-                self.identity_confirmed = true;
-            }
-            if let Some(terminal) = terminal_result_from_event(&event) {
-                self.terminal_from_stream = Some(terminal);
-            }
-            let is_auth_failure = match auth_failure_message(&event) {
-                Some(message) => {
-                    self.auth_failure = Some(message.to_string());
-                    true
-                }
-                None => false,
-            };
-            let kind = event.get("type").and_then(Value::as_str);
-            let is_result = kind == Some("result");
-            if !is_auth_failure
-                && !is_result
-                && !matches!(kind, Some("system") | Some("rate_limit_event"))
-            {
-                self.made_progress = true;
-            }
-            if may_hold
-                && self.auth_failure.is_some()
-                && !self.made_progress
-                && (is_auth_failure || is_result)
-            {
-                self.held.push((seq, event));
-            } else {
-                sink.post_stream_event(seq, event).await;
-            }
+    fn observe(&mut self, event: &Value) -> bool {
+        if stream_session_identity(event).is_some() {
+            self.identity_confirmed = true;
         }
-        Ok(())
+        if let Some(terminal) = terminal_result_from_event(event) {
+            self.terminal_from_stream = Some(terminal);
+        }
+        let is_auth_failure = if let Some(message) = auth_failure_message(event) {
+            self.auth_failure = Some(message.to_string());
+            true
+        } else {
+            false
+        };
+        let kind = event.get("type").and_then(Value::as_str);
+        let is_result = kind == Some("result");
+        if !is_auth_failure
+            && !is_result
+            && !matches!(
+                kind,
+                Some("system") | Some("rate_limit_event") | Some("user")
+            )
+        {
+            self.made_progress = true;
+        }
+        is_auth_failure
     }
 
     fn wants_auth_retry(&self) -> bool {
         self.auth_failure.is_some() && !self.made_progress
     }
 
-    async fn flush_held(&mut self, sink: &ClaudePrintSink) {
-        for (seq, event) in std::mem::take(&mut self.held) {
-            sink.post_stream_event(seq, event).await;
-        }
-    }
-
-    /// A retry is a fresh launch: forget the failed attempt. Its lines stay in
-    /// the stdout file as evidence and its sequence numbers are not reused.
     fn begin_attempt(&mut self) {
         self.terminal_from_stream = None;
         self.auth_failure = None;
         self.made_progress = false;
         self.held.clear();
+    }
+
+    fn begin_turn(&mut self) {
+        self.terminal_from_stream = None;
+        self.auth_failure = None;
+        self.made_progress = false;
+        self.held.clear();
+    }
+}
+
+struct ClaudeInput {
+    stdin: tokio::sync::Mutex<Option<ChildStdin>>,
+}
+
+impl ClaudeInput {
+    fn new(stdin: ChildStdin) -> Self {
+        Self {
+            stdin: tokio::sync::Mutex::new(Some(stdin)),
+        }
+    }
+
+    async fn write_message(&self, text: &str) -> Result<()> {
+        self.send_input(text, &[]).await
+    }
+}
+
+impl ConsoleInput for ClaudeInput {
+    fn send_input<'a>(
+        &'a self,
+        text: &'a str,
+        _images: &'a [PathBuf],
+    ) -> crate::console_lifecycle::InputFuture<'a> {
+        Box::pin(async move {
+            let mut stdin = self.stdin.lock().await;
+            let writer = stdin.as_mut().context("Claude stdin is closed")?;
+            let message = json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}]
+                }
+            });
+            writer.write_all(&serde_json::to_vec(&message)?).await?;
+            writer.write_all(b"\n").await?;
+            writer.flush().await?;
+            Ok(())
+        })
+    }
+
+    fn close_input(&self) -> crate::console_lifecycle::InputFuture<'_> {
+        Box::pin(async move {
+            self.stdin.lock().await.take();
+            Ok(())
+        })
     }
 }
 
@@ -193,18 +213,42 @@ pub async fn start_claude_print_turn(
     if config.permission_mode != "bypass" {
         anyhow::bail!("Claude Console currently supports bypass permission mode only");
     }
-    let (provider_thread_id, is_resume) =
-        match normalized_optional(&config.resume_provider_thread_id) {
-            Some(value) => {
-                validate_uuid(&value, "resume_provider_thread_id")?;
-                (value, true)
-            }
-            None => (Uuid::new_v4().to_string(), false),
-        };
-    let launch_id = Uuid::new_v4().to_string();
     require_claude_lifecycle_hook()?;
-    let lock = acquire_conversation_lock(&claude_managed_root()?, &provider_thread_id)?;
 
+    if config.origin == "wake" {
+        let invocation_id = config.invocation_id.as_deref().unwrap_or_default();
+        let wake_id = config.wake_id.as_deref().unwrap_or_default();
+        if let Some(invocation) = crate::console_lifecycle::lookup_launch(invocation_id) {
+            if let Ok(summary) = bind_wake_turn(&config, invocation, wake_id).await {
+                return Ok(summary);
+            }
+        }
+        return cancel_missing_wake(&config).await;
+    }
+
+    let resume_provider_thread_id = normalized_optional(&config.resume_provider_thread_id);
+    if let Some(provider_thread_id) = resume_provider_thread_id.as_deref() {
+        validate_uuid(provider_thread_id, "resume_provider_thread_id")?;
+        if let Some(invocation) = crate::console_lifecycle::lookup("claude", provider_thread_id) {
+            match invocation.state() {
+                InvocationState::Parked => {
+                    return adopt_parked_turn(&config, invocation).await;
+                }
+                InvocationState::Closed => {
+                    invocation.wait_stopped().await;
+                    crate::console_lifecycle::unregister(&invocation.launch_id);
+                }
+                InvocationState::Responding => {}
+            }
+        }
+    }
+
+    let (provider_thread_id, is_resume) = match resume_provider_thread_id {
+        Some(value) => (value, true),
+        None => (Uuid::new_v4().to_string(), false),
+    };
+    let launch_id = Uuid::new_v4().to_string();
+    let lock = acquire_conversation_lock(&claude_managed_root()?, &provider_thread_id)?;
     let run_dir = crate::config::get_agent_dir()?
         .join("claude-console")
         .join(&config.session_id)
@@ -215,40 +259,24 @@ pub async fn start_claude_print_turn(
     let stderr_path = run_dir.join("stderr.log");
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
-
-    // `--verbose` is required by the Claude CLI when combining `--print`
-    // with `--output-format stream-json`.
-    let (args, recorded_args) = build_claude_args(
-        &provider_thread_id,
-        is_resume,
-        config.model.as_deref(),
-        &config.prompt,
-    );
+    let (args, recorded_args) =
+        build_claude_args(&provider_thread_id, is_resume, config.model.as_deref());
     let argv = std::iter::once(config.claude_bin.clone())
         .chain(recorded_args)
         .collect::<Vec<_>>();
-
-    let mut child = match spawn_claude(&config, &args, stdout_file, stderr_file) {
-        Ok(child) => child,
-        Err(error) => {
-            return Err(error).with_context(|| format!("spawning `{}` --print", config.claude_bin))
-        }
-    };
+    let registry = crate::turn_claims::default_registry()?;
+    let mut sink = make_sink(&config, &provider_thread_id, &launch_id, None)?;
+    let mut child = spawn_claude(&config, &args, stdout_file, stderr_file)
+        .with_context(|| format!("spawning `{}` --print", config.claude_bin))?;
     let pid = child.id().context("claude --print returned no pid")?;
     let process_group_id = i32::try_from(pid).context("Claude pid exceeds process-group range")?;
-    let sink = ClaudePrintSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
-        provider_thread_id: provider_thread_id.clone(),
-        launch_id: launch_id.clone(),
-        process_group_id: Some(process_group_id),
-        machine_name: config.machine_name.clone(),
-        local_db_path: config.local_db_path.clone(),
-        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
-    };
+    let input = Arc::new(ClaudeInput::new(
+        child
+            .stdin
+            .take()
+            .context("Claude stdin pipe was not created")?,
+    ));
+    sink.process_group_id = Some(process_group_id);
     let result = spawn_record(
         &config,
         &provider_thread_id,
@@ -259,7 +287,7 @@ pub async fn start_claude_print_turn(
         &stderr_path,
         &argv,
     );
-    if let Err(error) = crate::turn_claims::default_registry()?.mark_spawned_invocation(
+    if let Err(error) = registry.mark_spawned_invocation(
         &config.run_id,
         pid,
         process_group_id,
@@ -271,115 +299,486 @@ pub async fn start_claude_print_turn(
         &stderr_path.to_string_lossy(),
         result,
     ) {
-        cleanup_process_group(Some(process_group_id)).await;
-        let _ = child.kill().await;
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(process_group_id),
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
         return Err(error).context("persisting Claude Console spawn identity");
     }
+    if let Err(error) = registry.record_invocation_turn(&config.run_id, "user", false) {
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(process_group_id),
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+        return Err(error).context("recording Claude Console turn origin");
+    }
+    let binding = turn_binding(&config, TurnOrigin::User);
+    let invocation = Arc::new(ConsoleInvocation::new(
+        "claude",
+        provider_thread_id.clone(),
+        launch_id.clone(),
+        pid,
+        process_group_id,
+        binding,
+        input.clone(),
+    ));
+    if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
+        input.close_input().await.ok();
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(process_group_id),
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
+        return Err(error);
+    }
+    sink.post_phase("thinking", None).await;
+    if let Err(error) = input.write_message(&config.prompt).await {
+        invocation.take_active_turn();
+        let _ = registry.record_invocation_state(&config.run_id, "closed", 0);
+        invocation.close_input().await.ok();
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(process_group_id),
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+        drop(lock);
+        invocation.process_exited();
+        crate::console_lifecycle::unregister(&launch_id);
+        return Err(error).context("writing Claude Console input");
+    }
     let monitor = crate::turn_claims::register_monitor(&config.run_id);
-    let monitor_path = stdout_path.clone();
-    let monitor_stderr = stderr_path.clone();
     let retry = RetryContext {
         config: config.clone(),
         stdout_path: stdout_path.clone(),
         stderr_path: stderr_path.clone(),
     };
-    tokio::spawn(async move {
-        monitor_claude_print(
-            &mut child,
-            &monitor_path,
-            &monitor_stderr,
-            sink,
-            retry,
-            lock,
-        )
-        .await;
-        drop(monitor);
-    });
-
-    Ok(ClaudePrintRunSummary {
-        session_id: config.session_id,
-        thread_id: config.thread_id,
-        run_id: config.run_id,
+    let summary = ClaudePrintRunSummary {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        run_id: config.run_id.clone(),
         provider_thread_id,
-        launch_id,
+        launch_id: launch_id.clone(),
         pid,
         process_group_id,
         stdout_path: stdout_path.to_string_lossy().to_string(),
         stderr_path: stderr_path.to_string_lossy().to_string(),
         argv,
+    };
+    tokio::spawn(async move {
+        monitor_claude_print(
+            child,
+            stdout_path,
+            stderr_path,
+            sink,
+            retry,
+            invocation,
+            lock,
+        )
+        .await;
+        drop(monitor);
+    });
+    Ok(summary)
+}
+fn turn_binding(config: &ClaudePrintRunConfig, origin: TurnOrigin) -> TurnBinding {
+    TurnBinding {
+        run_id: config.run_id.clone(),
+        turn_id: config.turn_id.clone(),
+        client_request_id: config.client_request_id.clone(),
+        origin,
+    }
+}
+
+fn make_sink(
+    config: &ClaudePrintRunConfig,
+    provider_thread_id: &str,
+    launch_id: &str,
+    process_group_id: Option<i32>,
+) -> Result<ClaudePrintSink> {
+    Ok(ClaudePrintSink {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        turn_id: config.turn_id.clone(),
+        run_id: config.run_id.clone(),
+        client_request_id: config.client_request_id.clone(),
+        provider_thread_id: provider_thread_id.to_string(),
+        launch_id: launch_id.to_string(),
+        process_group_id,
+        machine_name: config.machine_name.clone(),
+        local_db_path: config.local_db_path.clone(),
+        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     })
 }
 
-pub async fn recover_claude_print_turns(
-    machine_name: &str,
-    local_db_path: Option<PathBuf>,
-) -> Result<usize> {
+async fn adopt_parked_turn(
+    config: &ClaudePrintRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+) -> Result<ClaudePrintRunSummary> {
     let registry = crate::turn_claims::default_registry()?;
-    // One coherent inventory for the whole pass, and `None` when `ps` could
-    // not be read at all. Settling a claim is an actuator -- it kills the
-    // process group and dispatches the next queued turn -- so a scan we could
-    // not read leaves every claim alone for a later pass.
-    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
-    let mut recovered = 0;
-    for claim in registry.list_nonterminal()? {
-        if claim.adapter.as_deref() != Some(CLAUDE_PRINT_ADAPTER) || claim.state != "spawned" {
-            continue;
+    let previous = registry.read(&invocation.latest_turn().run_id)?;
+    let stdout_path = previous
+        .stdout_path
+        .as_deref()
+        .context("parked Claude invocation has no stdout path")?;
+    let stderr_path = previous
+        .stderr_path
+        .as_deref()
+        .context("parked Claude invocation has no stderr path")?;
+    let (pid, process_group_id) = invocation.process_identity();
+    let argv = previous
+        .result
+        .as_ref()
+        .and_then(|result| result.get("argv"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let sink = make_sink(
+        config,
+        &invocation.provider_thread_id,
+        &invocation.launch_id,
+        Some(process_group_id),
+    )?;
+    let result = spawn_record(
+        config,
+        &invocation.provider_thread_id,
+        &invocation.launch_id,
+        pid,
+        process_group_id,
+        Path::new(stdout_path),
+        Path::new(stderr_path),
+        &argv,
+    );
+    registry.mark_spawned_invocation(
+        &config.run_id,
+        pid,
+        process_group_id,
+        crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        CLAUDE_PRINT_ADAPTER,
+        &invocation.launch_id,
+        Some(&invocation.provider_thread_id),
+        stdout_path,
+        stderr_path,
+        result,
+    )?;
+    registry.record_invocation_turn(&config.run_id, "user", true)?;
+    registry.mark_provider_binding(&config.run_id, &invocation.provider_thread_id, None)?;
+    sink.post_phase("thinking", None).await;
+    if let Err(error) = invocation
+        .send_user_input(
+            turn_binding(config, TurnOrigin::User),
+            &config.prompt,
+            &config.image_paths,
+        )
+        .await
+    {
+        invocation.close_input().await.ok();
+        return Err(error).context("writing user input to parked Claude invocation");
+    }
+    let monitor = crate::turn_claims::register_monitor(&config.run_id);
+    let monitored_invocation = invocation.clone();
+    tokio::spawn(async move {
+        while monitored_invocation.state() != InvocationState::Closed {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
-            let _ = registry.mark_terminal(
-                &claim.run_id,
-                "run_failed",
-                Some("Claude Console claim has no stdout path".to_string()),
-            );
-            continue;
-        };
-        let stderr_path = claim
-            .stderr_path
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
-        let provider_thread_id = claim.provider_thread_id.clone().unwrap_or_default();
-        if provider_thread_id.is_empty() {
-            let _ = registry.mark_terminal(
-                &claim.run_id,
-                "run_failed",
-                Some("Claude Console claim has no provider identity".to_string()),
-            );
-            continue;
+        drop(monitor);
+    });
+    Ok(ClaudePrintRunSummary {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        run_id: config.run_id.clone(),
+        provider_thread_id: invocation.provider_thread_id.clone(),
+        launch_id: invocation.launch_id.clone(),
+        pid,
+        process_group_id,
+        stdout_path: stdout_path.to_string(),
+        stderr_path: stderr_path.to_string(),
+        argv,
+    })
+}
+
+async fn bind_wake_turn(
+    config: &ClaudePrintRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+    wake_id: &str,
+) -> Result<ClaudePrintRunSummary> {
+    let latest_run = invocation.latest_turn().run_id;
+    let previous = crate::turn_claims::default_registry()?.read(&latest_run)?;
+    let stdout_path = previous
+        .stdout_path
+        .as_deref()
+        .context("parked Claude invocation has no stdout path")?;
+    let stderr_path = previous
+        .stderr_path
+        .as_deref()
+        .context("parked Claude invocation has no stderr path")?;
+    let (pid, process_group_id) = invocation.process_identity();
+    let binding = turn_binding(config, TurnOrigin::Wake);
+    let wake = invocation.bind_wake(&invocation.launch_id, wake_id, binding)?;
+    let argv = previous
+        .result
+        .as_ref()
+        .and_then(|result| result.get("argv"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let sink = make_sink(
+        config,
+        &invocation.provider_thread_id,
+        &invocation.launch_id,
+        Some(process_group_id),
+    )?;
+    let result = spawn_record(
+        config,
+        &invocation.provider_thread_id,
+        &invocation.launch_id,
+        pid,
+        process_group_id,
+        Path::new(stdout_path),
+        Path::new(stderr_path),
+        &argv,
+    );
+    let claims = crate::turn_claims::default_registry()?;
+    claims.mark_spawned_invocation(
+        &config.run_id,
+        pid,
+        process_group_id,
+        crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        CLAUDE_PRINT_ADAPTER,
+        &invocation.launch_id,
+        Some(&invocation.provider_thread_id),
+        stdout_path,
+        stderr_path,
+        result,
+    )?;
+    claims.record_invocation_turn(&config.run_id, "wake", true)?;
+    claims.mark_provider_binding(&config.run_id, &invocation.provider_thread_id, None)?;
+    sink.post_phase("thinking", None).await;
+    for event in wake.buffered_events {
+        sink.post_stream_event(event.sequence, event.value).await;
+    }
+    if let Some((_, snapshot)) = invocation.delegation_snapshot() {
+        sink.post_delegation_snapshot(snapshot).await;
+    }
+    if let Some(outcome) = wake.deferred_idle {
+        complete_idle(&invocation, &sink, outcome).await;
+    }
+    let monitor = crate::turn_claims::register_monitor(&config.run_id);
+    let monitored_invocation = invocation.clone();
+    tokio::spawn(async move {
+        while monitored_invocation.state() != InvocationState::Closed {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        let sink = ClaudePrintSink {
-            session_id: claim.session_id.clone(),
-            thread_id: claim.thread_id.clone(),
-            turn_id: claim.turn_id.clone(),
-            run_id: claim.run_id.clone(),
-            client_request_id: claim.client_request_id.clone(),
-            provider_thread_id: provider_thread_id.clone(),
-            launch_id: claim.launch_id.clone().unwrap_or_default(),
-            process_group_id: claim.process_group_id,
-            machine_name: machine_name.to_string(),
-            local_db_path: local_db_path.clone(),
-            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
-        };
-        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
-            ClaimLiveness::Live => {
-                let lock = acquire_conversation_lock(&claude_managed_root()?, &provider_thread_id)?;
-                let monitor = crate::turn_claims::register_monitor(&claim.run_id);
-                tokio::spawn(async move {
-                    monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
-                    drop(monitor);
-                });
-                recovered += 1;
-            }
-            ClaimLiveness::Gone => {
-                settle_recovered_dead_claim(&claim, &stdout_path, &stderr_path, &sink).await;
-            }
-            ClaimLiveness::Unknown => tracing::warn!(
-                run_id = %claim.run_id,
-                "Process inventory unavailable; leaving Claude Console turn claim for a later scan"
-            ),
+        drop(monitor);
+    });
+    Ok(ClaudePrintRunSummary {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        run_id: config.run_id.clone(),
+        provider_thread_id: invocation.provider_thread_id.clone(),
+        launch_id: invocation.launch_id.clone(),
+        pid,
+        process_group_id,
+        stdout_path: stdout_path.to_string(),
+        stderr_path: stderr_path.to_string(),
+        argv,
+    })
+}
+
+async fn cancel_missing_wake(config: &ClaudePrintRunConfig) -> Result<ClaudePrintRunSummary> {
+    let launch_id = config.invocation_id.as_deref().unwrap_or_default();
+    let provider_thread_id =
+        normalized_optional(&config.resume_provider_thread_id).unwrap_or_default();
+    let sink = make_sink(config, &provider_thread_id, launch_id, None)?;
+    sink.post_terminal_with_lifecycle(
+        "run_cancelled",
+        None,
+        Some("wake target is gone or wake_id is unknown".to_string()),
+        Some("closed"),
+        Some(0),
+        Some("wake_target_gone"),
+    )
+    .await;
+    Ok(ClaudePrintRunSummary {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        run_id: config.run_id.clone(),
+        provider_thread_id,
+        launch_id: launch_id.to_string(),
+        pid: 0,
+        process_group_id: 0,
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        argv: Vec::new(),
+    })
+}
+
+async fn complete_idle(
+    invocation: &ConsoleInvocation,
+    sink: &ClaudePrintSink,
+    outcome: IdleOutcome,
+) -> bool {
+    let turn_sink = sink.for_binding(&outcome.binding);
+    turn_sink
+        .post_terminal_with_lifecycle(
+            &outcome.signal.terminal_state,
+            outcome.signal.exit_code,
+            outcome.signal.stderr,
+            Some(outcome.invocation_state.as_str()),
+            Some(outcome.pending_count),
+            None,
+        )
+        .await;
+    if outcome.invocation_state == InvocationState::Parked {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            sink.for_binding(&binding)
+                .post_delegation_snapshot(snapshot)
+                .await;
         }
     }
+    if outcome.invocation_state == InvocationState::Closed {
+        let _ = invocation.close_input().await;
+        true
+    } else {
+        false
+    }
+}
+
+pub async fn recover_claude_print_turns(
+    _machine_name: &str,
+    _local_db_path: Option<PathBuf>,
+) -> Result<usize> {
+    let registry = crate::turn_claims::default_registry()?;
+    let Some(inventory) = crate::process_identity::try_collect_process_facts_by_pid() else {
+        tracing::warn!("Process inventory unavailable; leaving Claude Console claims untouched");
+        return Ok(0);
+    };
+    let claims = registry.list_all()?;
+    let mut seen_launches = std::collections::HashSet::new();
+    let mut recovered = 0;
+    for claim in claims.into_iter().rev() {
+        if claim.adapter.as_deref() != Some(CLAUDE_PRINT_ADAPTER) {
+            continue;
+        }
+        let Some(launch_id) = claim.launch_id.as_deref() else {
+            continue;
+        };
+        if !seen_launches.insert(launch_id.to_string())
+            || crate::console_lifecycle::lookup_launch(launch_id).is_some()
+        {
+            continue;
+        }
+        let parked = claim.invocation_state.as_deref() == Some("parked");
+        let active = claim.state == "spawned";
+        if !parked && !active {
+            continue;
+        }
+        let process_gone = match crate::console_adapter::claim_liveness(&claim, Some(&inventory)) {
+            ClaimLiveness::Unknown => {
+                tracing::warn!(
+                    run_id = %claim.run_id,
+                    "Could not prove the Claude process identity during recovery"
+                );
+                continue;
+            }
+            ClaimLiveness::Live => false,
+            ClaimLiveness::Gone => true,
+        };
+        if let Some(pgid) = claim
+            .process_group_id
+            .filter(|pgid| crate::process_group::group_is_alive(*pgid))
+        {
+            if !claim.process_group_is_from_this_boot()
+                || !claim_has_live_group_identity(&claim, &inventory)
+            {
+                tracing::warn!(
+                    run_id = %claim.run_id,
+                    process_group_id = pgid,
+                    "Claude process group is live but its exact identity cannot be verified"
+                );
+                if !process_gone {
+                    continue;
+                }
+            } else {
+                let outcome =
+                    crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE)
+                        .await;
+                if !outcome.is_gone() {
+                    tracing::error!(
+                        run_id = %claim.run_id,
+                        process_group_id = pgid,
+                        "Claude process group survived Machine Agent recovery shutdown"
+                    );
+                    continue;
+                }
+            }
+        }
+        if active {
+            let stdout_path = claim.stdout_path.as_deref().map(PathBuf::from);
+            let stderr_path = claim.stderr_path.as_deref().map(PathBuf::from).or_else(|| {
+                stdout_path
+                    .as_ref()
+                    .map(|path| path.with_file_name("stderr.log"))
+            });
+            let sink = ClaudePrintSink {
+                session_id: claim.session_id.clone(),
+                thread_id: claim.thread_id.clone(),
+                turn_id: claim.turn_id.clone(),
+                run_id: claim.run_id.clone(),
+                client_request_id: claim.client_request_id.clone(),
+                provider_thread_id: claim.provider_thread_id.clone().unwrap_or_default(),
+                launch_id: launch_id.to_string(),
+                process_group_id: claim.process_group_id,
+                machine_name: _machine_name.to_string(),
+                local_db_path: _local_db_path.clone(),
+                runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+            };
+            sink.post_terminal_with_lifecycle(
+                "run_cancelled",
+                None,
+                stderr_path.as_deref().and_then(stderr_tail),
+                Some("closed"),
+                Some(claim.pending_count),
+                Some("machine_agent_restart"),
+            )
+            .await;
+        }
+        let _ = registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count);
+        recovered += 1;
+    }
     Ok(recovered)
+}
+
+fn claim_has_live_group_identity(
+    claim: &crate::turn_claims::TurnClaim,
+    inventory: &std::collections::HashMap<u32, crate::process_identity::ProcessFact>,
+) -> bool {
+    let Some(pgid) = claim.process_group_id else {
+        return false;
+    };
+    claim.owned_processes.iter().any(|owned| {
+        if owned.process_group_id != pgid {
+            return false;
+        }
+        let Some(expected_start) = owned.process_start_time.as_deref() else {
+            return false;
+        };
+        inventory.get(&owned.pid).is_some_and(|facts| {
+            facts.lstart == expected_start
+                && unsafe { libc::getpgid(owned.pid as libc::pid_t) } == pgid
+        })
+    })
 }
 
 /// Enter a running Claude Console turn with `text` (see
@@ -466,159 +865,366 @@ pub fn interrupt_claude_print_turn(
 }
 
 async fn monitor_claude_print(
-    child: &mut Child,
-    stdout_path: &Path,
-    stderr_path: &Path,
+    mut child: Child,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
     mut sink: ClaudePrintSink,
     retry: RetryContext,
-    _lock: File,
+    invocation: Arc<ConsoleInvocation>,
+    lock: File,
 ) {
-    sink.post_phase("thinking", None).await;
+    let mut conversation_lock = Some(lock);
     let mut offset = 0_u64;
-    let mut pending = Vec::new();
+    let mut pending_bytes = Vec::new();
     let mut stream = StreamProgress::default();
-    let mut retries_used = 0_usize;
+    let mut retries_used = 0;
+    let mut last_trigger = json!({"kind": "unknown", "task_ids": [], "summary": ""});
+    let mut deferred_completion: Option<RegistryUpdate> = None;
+    let mut observed_run = invocation.latest_turn().run_id;
+
     loop {
-        if crate::turn_claims::monitor_cancel_requested(&sink.run_id) {
-            return;
-        }
-        let may_hold = retries_used < AUTH_PREFLIGHT_RETRY_DELAYS.len();
-        match read_growth(stdout_path, &mut offset, &mut pending) {
-            Ok(lines) => {
-                let had_lines = !lines.is_empty();
-                if let Err(error) = stream.ingest(&sink, lines, may_hold).await {
-                    cleanup_process_group(sink.process_group_id).await;
-                    sink.post_terminal("run_failed", None, Some(error.to_string()))
-                        .await;
-                    return;
-                }
-                // Do not advance the durable projection past the provider's
-                // result until the terminal claim is posted. If the agent
-                // dies in that gap, recovery must replay the result instead
-                // of classifying an already-successful provider run failed.
-                if had_lines && stream.terminal_from_stream.is_none() {
-                    persist_projection_checkpoint(&sink.run_id, offset, pending.len(), stream.seq);
-                }
-            }
+        let lines = match read_growth(&stdout_path, &mut offset, &mut pending_bytes) {
+            Ok(lines) => lines,
             Err(error) => {
-                // The run is over, so the group must go with it. Returning
-                // here without this abandoned a live provider group that
-                // nothing else owned — the same leak that accumulated 430
-                // orphans on the author's machine.
-                cleanup_process_group(sink.process_group_id).await;
-                sink.post_terminal("run_failed", None, Some(error.to_string()))
-                    .await;
-                return;
-            }
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                if let Ok(lines) = read_growth(stdout_path, &mut offset, &mut pending) {
-                    let had_lines = !lines.is_empty();
-                    if let Err(error) = stream.ingest(&sink, lines, may_hold).await {
-                        cleanup_process_group(sink.process_group_id).await;
-                        sink.post_terminal("run_failed", status.code(), Some(error.to_string()))
-                            .await;
-                        return;
-                    }
-                    if had_lines && stream.terminal_from_stream.is_none() {
-                        persist_projection_checkpoint(
-                            &sink.run_id,
-                            offset,
-                            pending.len(),
-                            stream.seq,
-                        );
-                    }
-                }
-                let claim = crate::turn_claims::default_registry()
-                    .and_then(|registry| registry.read(&sink.run_id))
-                    .ok();
-                let cancel_requested = claim
-                    .as_ref()
-                    .and_then(|item| item.cancel_requested_at.as_ref())
-                    .is_some();
-                if may_hold && !cancel_requested && stream.wants_auth_retry() {
-                    let delay = AUTH_PREFLIGHT_RETRY_DELAYS[retries_used];
-                    retries_used += 1;
-                    eprintln!(
-                        "[claude-print] session={} run={} Claude found no credential before the model ran; \
-                         relaunching with --resume (retry {retries_used}/{}) after {delay:?}",
-                        sink.session_id,
-                        sink.run_id,
-                        AUTH_PREFLIGHT_RETRY_DELAYS.len(),
-                    );
-                    cleanup_process_group(sink.process_group_id).await;
-                    tokio::time::sleep(delay).await;
-                    if crate::turn_claims::monitor_cancel_requested(&sink.run_id) {
-                        return;
-                    }
-                    match respawn_claude(&retry, &mut sink).await {
-                        Ok(next) => {
-                            *child = next;
-                            stream.begin_attempt();
-                            continue;
-                        }
-                        Err(error) => {
-                            stream.flush_held(&sink).await;
-                            sink.post_terminal(
-                                "run_failed",
-                                status.code(),
-                                Some(format!(
-                                    "relaunching Claude after an auth failure: {error:#}"
-                                )),
-                            )
-                            .await;
-                            return;
-                        }
-                    }
-                }
-                stream.flush_held(&sink).await;
-                let terminal = settle_terminal_state(
-                    cancel_requested,
-                    status.success(),
-                    stream.identity_confirmed,
-                    stream.terminal_from_stream,
-                );
-                if terminal != "run_completed" {
-                    cleanup_process_group(sink.process_group_id).await;
-                }
-                // Claude reports a missing credential on the stream, not on
-                // stderr, so stderr alone never classified it.
-                let auth_failed = terminal == "run_failed" && stream.auth_failure.is_some();
-                sink.post_terminal_with_reason(
-                    &terminal,
-                    status.code(),
-                    stderr_tail(stderr_path).or(stream.auth_failure.clone()),
-                    auth_failed.then_some("provider_auth_required"),
+                fail_active_turn(
+                    &mut child,
+                    &invocation,
+                    &sink,
+                    &stderr_path,
+                    error.to_string(),
+                    &mut conversation_lock,
                 )
                 .await;
                 return;
             }
-            Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
+        };
+        let had_lines = !lines.is_empty();
+        let mut retry_now = false;
+        for bytes in lines {
+            stream.seq += 1;
+            let sequence = stream.seq;
+            let event = match serde_json::from_slice::<Value>(&bytes) {
+                Ok(event) => event,
+                Err(error) => {
+                    let binding = invocation.latest_turn();
+                    sink.for_binding(&binding)
+                        .post_decode_gap(sequence, &error.to_string(), &bytes)
+                        .await;
+                    continue;
+                }
+            };
+            if let Err(error) = validate_stream_identity(&event, &invocation.provider_thread_id) {
+                fail_active_turn(
+                    &mut child,
+                    &invocation,
+                    &sink,
+                    &stderr_path,
+                    error.to_string(),
+                    &mut conversation_lock,
+                )
+                .await;
+                return;
+            }
+            if invocation.latest_turn().run_id != observed_run {
+                observed_run = invocation.latest_turn().run_id;
+                stream.begin_turn();
+            }
+            let is_auth_failure = stream.observe(&event);
+            let is_result = event.get("type").and_then(Value::as_str) == Some("result");
+            let may_hold = retries_used < AUTH_PREFLIGHT_RETRY_DELAYS.len();
+            if may_hold && stream.wants_auth_retry() && (is_auth_failure || is_result) {
+                stream.held.push((sequence, event));
+                retry_now = is_result;
+                if retry_now {
+                    break;
+                }
+                continue;
+            }
+
+            if is_response_start(&event) && invocation.state() == InvocationState::Parked {
+                stream.begin_turn();
+                if let Some(wake) = invocation.response_started(last_trigger.clone()) {
+                    let wake_sink = sink.for_binding(&invocation.latest_turn());
+                    wake_sink.post_wake_signal(&wake).await;
+                    if let Some(update) = deferred_completion.take() {
+                        if apply_registry_update(&invocation, &sink, update).await {
+                            close_invocation(&mut child, &invocation, &mut conversation_lock).await;
+                            return;
+                        }
+                    }
+                }
+            }
+            if let Some(trigger) = task_trigger(&event) {
+                last_trigger = trigger;
+            }
+            if let Some(update) = registry_update(&event) {
+                let defer_completion = invocation.state() == InvocationState::Parked
+                    && match &update {
+                        RegistryUpdate::Item(_, pending) => {
+                            !*pending && is_task_completion_event(&event)
+                        }
+                        RegistryUpdate::Snapshot(items, _) => {
+                            items.is_empty() && deferred_completion.is_some()
+                        }
+                    };
+                if defer_completion {
+                    deferred_completion = Some(update);
+                } else if apply_registry_update(&invocation, &sink, update).await {
+                    close_invocation(&mut child, &invocation, &mut conversation_lock).await;
+                    return;
+                }
+            }
+
+            if let Some((binding, event)) = invocation.route_stream_event(sequence, event) {
+                let event_sink = sink.for_binding(&binding);
+                event_sink.post_stream_event(sequence, event).await;
+            }
+
+            if is_result && invocation.state() == InvocationState::Parked {
+                if let Some(update) = deferred_completion.take() {
+                    if apply_registry_update(&invocation, &sink, update).await {
+                        close_invocation(&mut child, &invocation, &mut conversation_lock).await;
+                        return;
+                    }
+                }
+                if invocation.state() == InvocationState::Parked {
+                    continue;
+                }
+            }
+            if is_result {
+                let claim = crate::turn_claims::default_registry()
+                    .and_then(|claims| claims.read(&invocation.latest_turn().run_id))
+                    .ok();
+                let cancelled = claim
+                    .as_ref()
+                    .is_some_and(|claim| claim.cancel_requested_at.is_some());
+                let terminal = settle_terminal_state(
+                    cancelled,
+                    true,
+                    stream.identity_confirmed,
+                    stream.terminal_from_stream,
+                );
+                let stderr = stderr_tail(&stderr_path).or(stream.auth_failure.clone());
+                if let Some(outcome) = invocation.idle(IdleSignal {
+                    terminal_state: terminal,
+                    exit_code: None,
+                    stderr,
+                }) {
+                    let closed = complete_idle(&invocation, &sink, outcome).await;
+                    stream.begin_turn();
+                    if closed {
+                        close_invocation(&mut child, &invocation, &mut conversation_lock).await;
+                        return;
+                    }
+                }
+            }
+        }
+
+        if retry_now {
+            if retries_used < AUTH_PREFLIGHT_RETRY_DELAYS.len() {
+                let delay = AUTH_PREFLIGHT_RETRY_DELAYS[retries_used];
+                retries_used += 1;
+                let (_, process_group_id) = invocation.process_identity();
+                let _ = invocation.close_input().await;
+                crate::process_group::shutdown_owned_child(
+                    &mut child,
+                    Some(process_group_id),
+                    crate::process_group::DEFAULT_GRACE,
+                )
+                .await;
+                tokio::time::sleep(delay).await;
+                match respawn_claude(&retry, &sink, &invocation).await {
+                    Ok((next, next_sink)) => {
+                        child = next;
+                        sink = next_sink;
+                        stream.begin_attempt();
+                        continue;
+                    }
+                    Err(error) => {
+                        let failed_sink = sink.for_binding(&invocation.latest_turn());
+                        for (sequence, event) in std::mem::take(&mut stream.held) {
+                            failed_sink.post_stream_event(sequence, event).await;
+                        }
+                        fail_active_turn(
+                            &mut child,
+                            &invocation,
+                            &sink,
+                            &stderr_path,
+                            stream.auth_failure.clone().unwrap_or_else(|| {
+                                format!("relaunching Claude after an auth failure: {error:#}")
+                            }),
+                            &mut conversation_lock,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
+            let failed_sink = sink.for_binding(&invocation.latest_turn());
+            for (sequence, event) in std::mem::take(&mut stream.held) {
+                failed_sink.post_stream_event(sequence, event).await;
+            }
+            fail_active_turn(
+                &mut child,
+                &invocation,
+                &sink,
+                &stderr_path,
+                stream.auth_failure.clone().unwrap_or_else(|| {
+                    "Claude authentication failed before the model ran".to_string()
+                }),
+                &mut conversation_lock,
+            )
+            .await;
+            return;
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let active = invocation.take_active_turn();
+                if let Some(binding) = active {
+                    let terminal = if crate::turn_claims::default_registry()
+                        .and_then(|claims| claims.read(&binding.run_id))
+                        .ok()
+                        .is_some_and(|claim| claim.cancel_requested_at.is_some())
+                    {
+                        "run_cancelled"
+                    } else {
+                        "run_failed"
+                    };
+                    sink.for_binding(&binding)
+                        .post_terminal_with_lifecycle(
+                            terminal,
+                            status.code(),
+                            stderr_tail(&stderr_path),
+                            Some("closed"),
+                            Some(invocation.pending_count()),
+                            None,
+                        )
+                        .await;
+                }
+                let outcome = crate::process_group::shutdown_owned_child(
+                    &mut child,
+                    Some(invocation.process_identity().1),
+                    crate::process_group::DEFAULT_GRACE,
+                )
+                .await;
+                if !outcome.is_gone() {
+                    tracing::error!(
+                        process_group_id = invocation.process_identity().1,
+                        "Claude process group survived child-exit cleanup"
+                    );
+                    if let Ok(claims) = crate::turn_claims::default_registry() {
+                        let binding = invocation.latest_turn();
+                        let _ = claims.record_invocation_state(
+                            &binding.run_id,
+                            "parked",
+                            invocation.pending_count(),
+                        );
+                    }
+                    return;
+                }
+                drop(conversation_lock.take());
+                invocation.mark_stopped();
+                record_closed_invocation(&invocation);
+                crate::console_lifecycle::unregister(&invocation.launch_id);
+                return;
+            }
+            Ok(None) => {}
             Err(error) => {
-                // The run is over, so the group must go with it. Returning
-                // here without this abandoned a live provider group that
-                // nothing else owned — the same leak that accumulated 430
-                // orphans on the author's machine.
-                cleanup_process_group(sink.process_group_id).await;
-                sink.post_terminal("run_failed", None, Some(error.to_string()))
-                    .await;
+                fail_active_turn(
+                    &mut child,
+                    &invocation,
+                    &sink,
+                    &stderr_path,
+                    error.to_string(),
+                    &mut conversation_lock,
+                )
+                .await;
                 return;
             }
         }
+        if had_lines && stream.terminal_from_stream.is_none() {
+            let run_id = invocation.latest_turn().run_id;
+            persist_projection_checkpoint(&run_id, offset, pending_bytes.len(), stream.seq);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// Launch the turn again after an auth-only failure. The failed attempt already
-/// created the provider session, so this is a `--resume`, appending to the same
-/// stdout/stderr so the projection offsets and sequence keep moving forward.
-async fn respawn_claude(retry: &RetryContext, sink: &mut ClaudePrintSink) -> Result<Child> {
+async fn fail_active_turn(
+    child: &mut Child,
+    invocation: &ConsoleInvocation,
+    sink: &ClaudePrintSink,
+    stderr_path: &Path,
+    error: String,
+    lock: &mut Option<File>,
+) {
+    let stderr = stderr_tail(stderr_path).unwrap_or(error);
+    let pending_count = invocation.pending_count();
+    let active = invocation.take_active_turn();
+    if let Some(binding) = active {
+        sink.for_binding(&binding)
+            .post_terminal_with_lifecycle(
+                "run_failed",
+                None,
+                Some(stderr),
+                Some("closed"),
+                Some(pending_count),
+                None,
+            )
+            .await;
+    }
+    close_invocation(child, invocation, lock).await;
+}
+
+async fn close_invocation(
+    child: &mut Child,
+    invocation: &ConsoleInvocation,
+    lock: &mut Option<File>,
+) {
+    let _ = invocation.close_input().await;
+    let process_group_id = invocation.process_identity().1;
+    let outcome = crate::process_group::shutdown_owned_child(
+        child,
+        Some(process_group_id),
+        crate::process_group::DEFAULT_GRACE,
+    )
+    .await;
+    if !outcome.is_gone() {
+        eprintln!("[claude-print] process group {process_group_id} survived shutdown");
+        if let Ok(claims) = crate::turn_claims::default_registry() {
+            let binding = invocation.latest_turn();
+            let _ = claims.record_invocation_state(
+                &binding.run_id,
+                "parked",
+                invocation.pending_count(),
+            );
+        }
+        return;
+    }
+    drop(lock.take());
+    invocation.process_exited();
+    record_closed_invocation(invocation);
+    crate::console_lifecycle::unregister(&invocation.launch_id);
+}
+
+fn record_closed_invocation(invocation: &ConsoleInvocation) {
+    if let Ok(claims) = crate::turn_claims::default_registry() {
+        let binding = invocation.latest_turn();
+        let _ =
+            claims.record_invocation_state(&binding.run_id, "closed", invocation.pending_count());
+    }
+}
+
+async fn respawn_claude(
+    retry: &RetryContext,
+    sink: &ClaudePrintSink,
+    invocation: &ConsoleInvocation,
+) -> Result<(Child, ClaudePrintSink)> {
     let (args, recorded_args) = build_claude_args(
         &sink.provider_thread_id,
         true,
         retry.config.model.as_deref(),
-        &retry.config.prompt,
     );
     let argv = std::iter::once(retry.config.claude_bin.clone())
         .chain(recorded_args)
@@ -630,10 +1236,23 @@ async fn respawn_claude(retry: &RetryContext, sink: &mut ClaudePrintSink) -> Res
         append_output_file(&retry.stderr_path)?,
     )
     .with_context(|| format!("spawning `{}` --print", retry.config.claude_bin))?;
-    let pid = child.id().context("claude --print returned no pid")?;
+    let pid = child.id().context("relaunched Claude returned no pid")?;
     let process_group_id = i32::try_from(pid).context("Claude pid exceeds process-group range")?;
-    let result = spawn_record(
-        &retry.config,
+    let input = Arc::new(ClaudeInput::new(
+        child
+            .stdin
+            .take()
+            .context("Claude stdin pipe was not created")?,
+    ));
+    let current = invocation.latest_turn();
+    let config = ClaudePrintRunConfig {
+        run_id: current.run_id.clone(),
+        turn_id: current.turn_id.clone(),
+        client_request_id: current.client_request_id.clone(),
+        ..retry.config.clone()
+    };
+    let record = spawn_record(
+        &config,
         &sink.provider_thread_id,
         &sink.launch_id,
         pid,
@@ -642,26 +1261,46 @@ async fn respawn_claude(retry: &RetryContext, sink: &mut ClaudePrintSink) -> Res
         &retry.stderr_path,
         &argv,
     );
-    if let Err(error) = crate::turn_claims::default_registry().and_then(|registry| {
-        registry.mark_spawned_invocation(
-            &sink.run_id,
-            pid,
-            process_group_id,
-            crate::turn_claims::process_start_time_for_pid(Some(pid)),
-            CLAUDE_PRINT_ADAPTER,
-            &sink.launch_id,
-            Some(&sink.provider_thread_id),
-            &retry.stdout_path.to_string_lossy(),
-            &retry.stderr_path.to_string_lossy(),
-            result,
+    let claims = crate::turn_claims::default_registry()?;
+    if let Err(error) = claims.mark_spawned_invocation(
+        &current.run_id,
+        pid,
+        process_group_id,
+        crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        CLAUDE_PRINT_ADAPTER,
+        &sink.launch_id,
+        Some(&sink.provider_thread_id),
+        &retry.stdout_path.to_string_lossy(),
+        &retry.stderr_path.to_string_lossy(),
+        record,
+    ) {
+        input.close_input().await.ok();
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(process_group_id),
+            crate::process_group::DEFAULT_GRACE,
         )
-    }) {
-        cleanup_process_group(Some(process_group_id)).await;
-        let _ = child.kill().await;
-        return Err(error).context("persisting relaunched Claude Console spawn identity");
+        .await;
+        return Err(error);
     }
-    sink.process_group_id = Some(process_group_id);
-    Ok(child)
+    if let Err(error) = input.write_message(&retry.config.prompt).await {
+        input.close_input().await.ok();
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(process_group_id),
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+        return Err(error).context("writing retried Claude Console input");
+    }
+    invocation.replace_process(pid, process_group_id);
+    invocation.replace_input(input);
+    let mut next_sink = sink.clone();
+    next_sink.run_id = current.run_id;
+    next_sink.turn_id = current.turn_id;
+    next_sink.client_request_id = current.client_request_id;
+    next_sink.process_group_id = Some(process_group_id);
+    Ok((child, next_sink))
 }
 
 fn spawn_claude(
@@ -674,7 +1313,7 @@ fn spawn_claude(
     command
         .args(args)
         .current_dir(&config.cwd)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     ManagedIdentity::new(ManagedProvider::Claude, &config.session_id)
@@ -739,132 +1378,11 @@ fn auth_failure_message(event: &Value) -> Option<&str> {
     )
 }
 
-async fn monitor_recovered_claim(
-    claim: crate::turn_claims::TurnClaim,
-    stdout_path: PathBuf,
-    stderr_path: PathBuf,
-    sink: ClaudePrintSink,
-    _lock: File,
-) {
-    let mut offset = claim.projected_stdout_offset;
-    let mut pending = Vec::new();
-    let mut seq = claim.projected_seq;
-    let mut terminal_from_stream = None;
-    let mut identity_confirmed = claim.provider_identity_confirmed;
-    loop {
-        if crate::turn_claims::monitor_cancel_requested(&sink.run_id) {
-            return;
-        }
-        if let Ok(lines) = read_growth(&stdout_path, &mut offset, &mut pending) {
-            let had_lines = !lines.is_empty();
-            for bytes in lines {
-                seq += 1;
-                match serde_json::from_slice::<Value>(&bytes) {
-                    Ok(event) => {
-                        if let Err(error) =
-                            validate_stream_identity(&event, &sink.provider_thread_id)
-                        {
-                            cleanup_process_group(sink.process_group_id).await;
-                            sink.post_terminal("run_failed", None, Some(error.to_string()))
-                                .await;
-                            return;
-                        }
-                        if stream_session_identity(&event).is_some() {
-                            identity_confirmed = true;
-                        }
-                        if let Some(terminal) = terminal_result_from_event(&event) {
-                            terminal_from_stream = Some(terminal);
-                        }
-                        sink.post_stream_event(seq, event).await;
-                    }
-                    Err(error) => sink.post_decode_gap(seq, &error.to_string(), &bytes).await,
-                }
-            }
-            if had_lines && terminal_from_stream.is_none() {
-                persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
-            }
-        }
-        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
-            let cancel_requested = crate::turn_claims::default_registry()
-                .and_then(|registry| registry.read(&claim.run_id))
-                .ok()
-                .and_then(|current| current.cancel_requested_at)
-                .is_some();
-            let terminal = settle_recovered_terminal_state(
-                cancel_requested,
-                identity_confirmed,
-                terminal_from_stream,
-            );
-            cleanup_process_group(sink.process_group_id).await;
-            sink.post_terminal(&terminal, None, stderr_tail(&stderr_path))
-                .await;
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
-}
-
-async fn settle_recovered_dead_claim(
-    claim: &crate::turn_claims::TurnClaim,
-    stdout_path: &Path,
-    stderr_path: &Path,
-    sink: &ClaudePrintSink,
-) {
-    let mut offset = claim.projected_stdout_offset;
-    let mut pending = Vec::new();
-    let mut seq = claim.projected_seq;
-    let mut terminal = None;
-    let mut identity_confirmed = claim.provider_identity_confirmed;
-    if let Ok(lines) = read_growth(stdout_path, &mut offset, &mut pending) {
-        let had_lines = !lines.is_empty();
-        for bytes in lines {
-            seq += 1;
-            match serde_json::from_slice::<Value>(&bytes) {
-                Ok(event) => {
-                    if let Err(error) = validate_stream_identity(&event, &sink.provider_thread_id) {
-                        cleanup_process_group(sink.process_group_id).await;
-                        sink.post_terminal("run_failed", None, Some(error.to_string()))
-                            .await;
-                        return;
-                    }
-                    if stream_session_identity(&event).is_some() {
-                        identity_confirmed = true;
-                    }
-                    terminal = terminal_result_from_event(&event).or(terminal);
-                    sink.post_stream_event(seq, event).await;
-                }
-                Err(error) => sink.post_decode_gap(seq, &error.to_string(), &bytes).await,
-            }
-        }
-        if had_lines && terminal.is_none() {
-            persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
-        }
-    }
-    let terminal = settle_recovered_terminal_state(
-        claim.cancel_requested_at.is_some(),
-        identity_confirmed,
-        terminal,
-    );
-    // Recovery only reaches here because the claim's process is gone, so the
-    // recorded process group id can no longer be verified against it. Signal
-    // it only when this boot is the one that recorded it; otherwise the number
-    // may name an unrelated group and killing it would hit a stranger.
-    if claim.process_group_is_from_this_boot() {
-        cleanup_process_group(sink.process_group_id).await;
-    }
-    sink.post_terminal(&terminal, None, stderr_tail(stderr_path))
-        .await;
-}
-
 fn persist_projection_checkpoint(run_id: &str, read_offset: u64, pending_len: usize, seq: u64) {
     let complete_offset = read_offset.saturating_sub(pending_len as u64);
     if let Ok(registry) = crate::turn_claims::default_registry() {
         let _ = registry.mark_projection_checkpoint(run_id, complete_offset, seq);
     }
-}
-
-async fn cleanup_process_group(process_group_id: Option<i32>) {
-    crate::console_adapter::cleanup_process_group("claude-print", process_group_id).await;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -937,21 +1455,15 @@ fn terminal_reason<'a>(terminal_state: &'a str, stderr: Option<&str>) -> &'a str
     }
 }
 
-fn settle_recovered_terminal_state(
-    cancel_requested: bool,
-    identity_confirmed: bool,
-    provider_result: Option<ProviderTerminalResult>,
-) -> String {
-    if cancel_requested {
-        "run_cancelled".to_string()
-    } else if identity_confirmed && provider_result == Some(ProviderTerminalResult::Success) {
-        "run_completed".to_string()
-    } else {
-        "run_failed".to_string()
-    }
-}
-
 impl ClaudePrintSink {
+    fn for_binding(&self, binding: &TurnBinding) -> Self {
+        let mut sink = self.clone();
+        sink.run_id = binding.run_id.clone();
+        sink.turn_id = binding.turn_id.clone();
+        sink.client_request_id = binding.client_request_id.clone();
+        sink
+    }
+
     async fn post_binding(&self) {
         self.post_events(vec![json!({
             "runtime_key": format!("claude:{}", self.session_id),
@@ -967,7 +1479,7 @@ impl ClaudePrintSink {
             "payload": {
                 "provider_session_id": self.provider_thread_id,
                 "managed_transport": CLAUDE_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
+                "execution_lifetime": "persistent"
             }
         })])
         .await;
@@ -986,7 +1498,7 @@ impl ClaudePrintSink {
             &observed_at.to_rfc3339(),
             phase,
             tool_name.as_deref(),
-            json!({"execution_lifetime": "one_shot", "thread_id": self.thread_id, "device_id": self.machine_name}),
+            json!({"execution_lifetime": "persistent", "thread_id": self.thread_id, "device_id": self.machine_name}),
         );
     }
 
@@ -1028,7 +1540,7 @@ impl ClaudePrintSink {
                 "provider_thread_id": self.provider_thread_id,
                 "event": event,
                 "managed_transport": CLAUDE_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
+                "execution_lifetime": "persistent"
             }
         })])
         .await;
@@ -1054,6 +1566,48 @@ impl ClaudePrintSink {
             }
         })]).await;
     }
+    async fn post_delegation_snapshot(&self, snapshot: Value) {
+        let observed_at = snapshot
+            .get("observed_at")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+        self.post_events(vec![json!({
+            "runtime_key": format!("claude:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "claude",
+            "device_id": self.machine_name,
+            "source": CLAUDE_RUNTIME_SOURCE,
+            "kind": "delegation_signal",
+            "occurred_at": observed_at,
+            "dedupe_key": format!("claude-console:{}:{}:delegation:{}", self.launch_id, self.run_id, snapshot["observed_at"]),
+            "payload": {"delegation": snapshot}
+        })])
+        .await;
+    }
+
+    async fn post_wake_signal(&self, wake: &crate::console_lifecycle::WakeRequest) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("claude:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "provider": "claude",
+            "device_id": self.machine_name,
+            "source": CLAUDE_RUNTIME_SOURCE,
+            "kind": "wake_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("wake:{}", wake.wake_id),
+            "payload": {
+                "invocation_id": wake.invocation_id,
+                "wake_id": wake.wake_id,
+                "provider_thread_id": wake.provider_thread_id,
+                "trigger": wake.trigger
+            }
+        })])
+        .await;
+    }
 
     async fn post_terminal(
         &self,
@@ -1061,8 +1615,15 @@ impl ClaudePrintSink {
         exit_code: Option<i32>,
         stderr: Option<String>,
     ) {
-        self.post_terminal_with_reason(terminal_state, exit_code, stderr, None)
-            .await;
+        self.post_terminal_with_lifecycle(
+            terminal_state,
+            exit_code,
+            stderr,
+            Some("closed"),
+            Some(0),
+            None,
+        )
+        .await;
     }
 
     async fn post_terminal_with_reason(
@@ -1072,7 +1633,46 @@ impl ClaudePrintSink {
         stderr: Option<String>,
         reason: Option<&str>,
     ) {
+        self.post_terminal_with_lifecycle(
+            terminal_state,
+            exit_code,
+            stderr,
+            Some("closed"),
+            Some(0),
+            reason,
+        )
+        .await;
+    }
+
+    async fn post_terminal_with_lifecycle(
+        &self,
+        terminal_state: &str,
+        exit_code: Option<i32>,
+        stderr: Option<String>,
+        invocation_state: Option<&str>,
+        pending_count: Option<usize>,
+        reason: Option<&str>,
+    ) {
         self.persist_local_phase("finished", None, Utc::now());
+        let mut payload = json!({
+            "managed_transport": CLAUDE_PRINT_ADAPTER,
+            "execution_lifetime": "persistent",
+            "terminal_state": terminal_state,
+            "terminal_reason": reason.unwrap_or_else(|| terminal_reason(terminal_state, stderr.as_deref())),
+            "terminal_source": CLAUDE_PRINT_ADAPTER,
+            "exit_code": exit_code,
+            "stderr_tail": stderr,
+            "turn_id": self.turn_id,
+            "client_request_id": self.client_request_id,
+            "provider_thread_id": self.provider_thread_id
+        });
+        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
+            payload["invocation"] = json!({
+                "id": self.launch_id,
+                "state": state,
+                "pending_count": count
+            });
+        }
         self.post_events(vec![json!({
             "runtime_key": format!("claude:{}", self.session_id),
             "session_id": self.session_id,
@@ -1084,18 +1684,7 @@ impl ClaudePrintSink {
             "kind": "terminal_signal",
             "occurred_at": Utc::now().to_rfc3339(),
             "dedupe_key": format!("claude-print:{}:{}:terminal", self.session_id, self.run_id),
-            "payload": {
-                "managed_transport": CLAUDE_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot",
-                "terminal_state": terminal_state,
-                "terminal_reason": reason.unwrap_or_else(|| terminal_reason(terminal_state, stderr.as_deref())),
-                "terminal_source": CLAUDE_PRINT_ADAPTER,
-                "exit_code": exit_code,
-                "stderr_tail": stderr,
-                "turn_id": self.turn_id,
-                "client_request_id": self.client_request_id,
-                "provider_thread_id": self.provider_thread_id
-            }
+            "payload": payload
         })])
         .await;
         crate::turn_claims::mark_terminal(
@@ -1105,6 +1694,11 @@ impl ClaudePrintSink {
                 .then(|| stderr.clone())
                 .flatten(),
         );
+        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
+            if let Ok(registry) = crate::turn_claims::default_registry() {
+                let _ = registry.record_invocation_state(&self.run_id, state, count);
+            }
+        }
     }
 
     fn persist_local_phase(
@@ -1171,6 +1765,179 @@ fn claude_phase_from_event(event: &Value) -> Option<(&'static str, Option<String
     }
 }
 
+enum RegistryUpdate {
+    Snapshot(Vec<PendingItem>, Vec<PendingItem>),
+    Item(PendingItem, bool),
+}
+
+fn is_response_start(event: &Value) -> bool {
+    matches!(
+        (
+            event.get("type").and_then(Value::as_str),
+            event.get("subtype").and_then(Value::as_str)
+        ),
+        (Some("system"), Some("init")) | (Some("assistant"), _)
+    )
+}
+
+fn is_task_completion_event(event: &Value) -> bool {
+    event
+        .get("subtype")
+        .and_then(Value::as_str)
+        .or_else(|| event.get("type").and_then(Value::as_str))
+        .is_some_and(|kind| matches!(kind, "task_notification" | "task_updated"))
+}
+
+async fn apply_registry_update(
+    invocation: &ConsoleInvocation,
+    sink: &ClaudePrintSink,
+    update: RegistryUpdate,
+) -> bool {
+    let (changed, close) = match update {
+        RegistryUpdate::Snapshot(items, recent) => invocation.replace_pending(items, recent),
+        RegistryUpdate::Item(item, pending) => invocation.update_pending_item(item, pending),
+    };
+    if changed || close {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            sink.for_binding(&binding)
+                .post_delegation_snapshot(snapshot)
+                .await;
+        }
+    }
+    close
+}
+fn registry_update(event: &Value) -> Option<RegistryUpdate> {
+    let kind = event.get("type").and_then(Value::as_str);
+    let subtype = event.get("subtype").and_then(Value::as_str);
+    if kind == Some("system") && subtype == Some("background_tasks_changed") {
+        let tasks = event
+            .get("tasks")
+            .or_else(|| event.pointer("/data/tasks"))?
+            .as_array()?;
+        let mut pending = Vec::new();
+        let mut recent = Vec::new();
+        for task in tasks {
+            let item = pending_item(task, None)?;
+            if is_pending_status(&item.status) {
+                pending.push(item);
+            } else {
+                recent.push(item);
+            }
+        }
+        return Some(RegistryUpdate::Snapshot(pending, recent));
+    }
+    let task_event = subtype
+        .or(kind)
+        .filter(|kind| matches!(*kind, "task_started" | "task_updated" | "task_notification"))?;
+    let task = event.get("task").unwrap_or(event);
+    let fallback = match task_event {
+        "task_started" => Some("running"),
+        "task_notification" => Some("completed"),
+        _ => None,
+    };
+    let item = pending_item(task, fallback)?;
+    Some(RegistryUpdate::Item(
+        item.clone(),
+        is_pending_status(&item.status),
+    ))
+}
+
+fn pending_item(task: &Value, fallback_status: Option<&str>) -> Option<PendingItem> {
+    let id = task
+        .get("id")
+        .or_else(|| task.get("task_id"))
+        .or_else(|| task.get("tool_use_id"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let status = task
+        .get("status")
+        .and_then(Value::as_str)
+        .or(fallback_status)
+        .unwrap_or("running")
+        .to_ascii_lowercase();
+    let kind = normalize_task_kind(
+        task.get("kind")
+            .or_else(|| task.get("type"))
+            .or_else(|| task.get("task_type"))
+            .and_then(Value::as_str)
+            .unwrap_or("other"),
+    );
+    let description = task
+        .get("description")
+        .or_else(|| task.get("summary"))
+        .or_else(|| task.get("subject"))
+        .or_else(|| task.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(PendingItem {
+        id,
+        kind,
+        status,
+        description,
+    })
+}
+
+fn is_pending_status(status: &str) -> bool {
+    matches!(
+        status,
+        "running" | "queued" | "pending" | "in_progress" | "working" | "started"
+    )
+}
+
+fn normalize_task_kind(kind: &str) -> String {
+    match kind.to_ascii_lowercase().as_str() {
+        "monitor" | "watch" => "monitor".to_string(),
+        "bash" | "shell" | "command" => "shell".to_string(),
+        "agent" | "subagent" | "task" => "subagent".to_string(),
+        "cron" | "schedule" | "scheduled" => "scheduled".to_string(),
+        _ => "other".to_string(),
+    }
+}
+
+fn task_trigger(event: &Value) -> Option<Value> {
+    let subtype = event
+        .get("subtype")
+        .and_then(Value::as_str)
+        .or_else(|| event.get("type").and_then(Value::as_str))?;
+    if !matches!(subtype, "task_notification" | "task_updated") {
+        return None;
+    }
+    let task = event.get("task").unwrap_or(event);
+    let kind = normalize_task_kind(
+        task.get("kind")
+            .or_else(|| task.get("type"))
+            .or_else(|| task.get("task_type"))
+            .and_then(Value::as_str)
+            .unwrap_or("other"),
+    );
+    let trigger_kind = match kind.as_str() {
+        "monitor" => "monitor_event",
+        "subagent" => "subagent_result",
+        "scheduled" => "scheduled",
+        _ => "task_completed",
+    };
+    let task_ids = task
+        .get("id")
+        .or_else(|| task.get("task_id"))
+        .and_then(Value::as_str)
+        .map(|id| vec![id.to_string()])
+        .unwrap_or_default();
+    let summary = task
+        .get("description")
+        .or_else(|| task.get("summary"))
+        .or_else(|| task.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .chars()
+        .take(180)
+        .collect::<String>();
+    Some(json!({
+        "kind": trigger_kind,
+        "task_ids": task_ids,
+        "summary": summary
+    }))
+}
+
 fn claude_managed_root() -> Result<PathBuf> {
     Ok(crate::config::get_longhouse_home()?
         .join("managed-local")
@@ -1226,7 +1993,6 @@ fn build_claude_args(
     provider_thread_id: &str,
     is_resume: bool,
     model: Option<&str>,
-    prompt: &str,
 ) -> (Vec<String>, Vec<String>) {
     let mut args = vec![
         "--print".to_string(),
@@ -1234,6 +2000,9 @@ fn build_claude_args(
         "stream-json".to_string(),
         "--verbose".to_string(),
         "--dangerously-skip-permissions".to_string(),
+        "--input-format".to_string(),
+        "stream-json".to_string(),
+        "--replay-user-messages".to_string(),
     ];
     args.extend([
         if is_resume {
@@ -1247,13 +2016,7 @@ fn build_claude_args(
     if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--model".to_string(), model.to_string()]);
     }
-    // End of options. Without it a message that opens with `--` is parsed by
-    // the provider CLI as flags instead of as the user's text. Verified
-    // against the installed `claude`: everything after `--` is the prompt.
-    args.push("--".to_string());
-    let mut recorded = args.clone();
-    args.push(prompt.to_string());
-    recorded.push("[prompt omitted]".to_string());
+    let recorded = args.clone();
     (args, recorded)
 }
 
@@ -1313,16 +2076,13 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
 
     #[test]
-    fn fresh_and_resume_argv_are_exact_and_claims_redact_prompt() {
+    fn fresh_and_resume_argv_use_stream_json_stdin_without_embedding_prompts() {
         let provider_id = Uuid::new_v4().to_string();
-        let (fresh, fresh_recorded) = build_claude_args(
-            &provider_id,
-            false,
-            Some("claude-sonnet-4-5"),
-            "secret prompt",
-        );
+        let (fresh, recorded) = build_claude_args(&provider_id, false, Some("claude-sonnet-4-5"));
         assert_eq!(
             fresh,
             vec![
@@ -1331,37 +2091,22 @@ mod tests {
                 "stream-json",
                 "--verbose",
                 "--dangerously-skip-permissions",
+                "--input-format",
+                "stream-json",
+                "--replay-user-messages",
                 "--session-id",
                 &provider_id,
                 "--model",
                 "claude-sonnet-4-5",
-                "--",
-                "secret prompt",
             ]
         );
-        assert_eq!(
-            fresh_recorded.last().map(String::as_str),
-            Some("[prompt omitted]")
-        );
-        assert!(!fresh_recorded.iter().any(|value| value == "secret prompt"));
+        assert_eq!(recorded, fresh);
+        assert!(!fresh.contains(&"secret prompt".to_string()));
 
-        let (resume, _) = build_claude_args(&provider_id, true, None, "next");
-        assert_eq!(resume[5], "--resume");
-        assert_eq!(resume[6], provider_id);
-    }
-
-    /// A message that opens with `--` is text, not flags. `--` before it is
-    /// what keeps the provider CLI from parsing it as options.
-    #[test]
-    fn a_prompt_that_looks_like_flags_stays_a_prompt() {
-        let provider_id = Uuid::new_v4().to_string();
-        let (args, _) = build_claude_args(&provider_id, false, None, "--dangerous-thing");
-        let separator = args
-            .iter()
-            .position(|arg| arg == "--")
-            .expect("argv must carry an end-of-options separator");
-        assert_eq!(args[separator + 1], "--dangerous-thing");
-        assert_eq!(separator + 2, args.len());
+        let (resume, _) = build_claude_args(&provider_id, true, None);
+        assert_eq!(resume[8], "--resume");
+        assert_eq!(resume[9], provider_id);
+        assert!(!resume.iter().any(|arg| arg == "--"));
     }
 
     #[test]
@@ -1507,9 +2252,13 @@ mod tests {
                 cwd: cwd.to_path_buf(),
                 claude_bin: claude_bin.to_string(),
                 prompt,
+                image_paths: Vec::new(),
                 resume_provider_thread_id: resume,
                 model: None,
                 permission_mode: "bypass".to_string(),
+                origin: "user".to_string(),
+                wake_id: None,
+                invocation_id: None,
                 machine_name: "claude-console-canary".to_string(),
                 local_db_path: None,
             })
@@ -1611,8 +2360,7 @@ mod tests {
         assert_eq!(auth_failure_message(&wrong_type), None);
     }
 
-    /// A tempdir holding a fake `claude` that reports an auth failure for its
-    /// first `failures` launches and completes on the next. Records each argv.
+    /// A Python fake Claude CLI that speaks stream-json on stdout and stdin.
     struct FakeClaude {
         dir: tempfile::TempDir,
         bin: PathBuf,
@@ -1623,28 +2371,81 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let dir = tempfile::tempdir().unwrap();
             let bin = dir.path().join("claude");
+            std::fs::write(dir.path().join("failures"), failures.to_string()).unwrap();
             std::fs::write(
                 &bin,
-                format!(
-                    r#"#!/bin/sh
-D=$(dirname "$0")
-n=$(cat "$D/count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/count"
-echo "$@" >> "$D/argv.log"
-sid=""; prev=""
-for a in "$@"; do
-  if [ "$prev" = "--session-id" ] || [ "$prev" = "--resume" ]; then sid="$a"; fi
-  prev="$a"
-done
-echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$sid\"}}"
-if [ "$n" -le {failures} ]; then
-  echo "{{\"type\":\"assistant\",\"error\":\"authentication_failed\",\"is_api_error_message\":true,\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"Not logged in - Please run /login\"}}]}}}}"
-  echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"duration_api_ms\":0}}"
-  exit 1
-fi
-echo "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"fake answer\"}}]}}}}"
-echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_api_ms\":5}}"
-"#
-                ),
+                r#"#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+import time
+
+root = pathlib.Path(__file__).parent
+count_file = root / "count"
+count = int(count_file.read_text() if count_file.exists() else "0") + 1
+count_file.write_text(str(count))
+args = sys.argv[1:]
+with (root / "argv.log").open("a") as output:
+    output.write(json.dumps(args) + "\n")
+with (root / "pid.log").open("a") as output:
+    output.write(str(__import__("os").getpid()) + "\n")
+session_id = ""
+for index, arg in enumerate(args[:-1]):
+    if arg in ("--session-id", "--resume"):
+        session_id = args[index + 1]
+
+def emit(value):
+    print(json.dumps(value), flush=True)
+
+def assistant(text):
+    emit({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+
+task = {"id": "task-1", "kind": "monitor", "status": "running", "description": "watch project files"}
+emit({"type": "system", "subtype": "init", "session_id": session_id})
+raw = sys.stdin.readline()
+if not raw:
+    sys.exit(2)
+request = json.loads(raw)
+message = request["message"]
+prompt = next((part.get("text", "") for part in message.get("content", []) if part.get("type") == "text"), "")
+emit({"type": "user", "message": message})
+if count <= int((root / "failures").read_text()):
+    emit({"type": "assistant", "error": "authentication_failed", "is_api_error_message": True, "message": {"content": [{"type": "text", "text": "Not logged in - Please run /login"}]}})
+    emit({"type": "result", "subtype": "success", "is_error": True})
+    sys.exit(1)
+
+if prompt.startswith("scenario=background") or prompt.startswith("scenario=park") or prompt.startswith("scenario=restart") or prompt.startswith("scenario=wake") or prompt.startswith("scenario=drain"):
+    emit({"type": "system", "subtype": "background_tasks_changed", "tasks": [task]})
+    assistant("waiting for background work")
+    emit({"type": "result", "subtype": "success", "is_error": False})
+    if prompt.startswith("scenario=wake") or prompt.startswith("scenario=drain"):
+        time.sleep(0.15)
+        emit({"type": "system", "subtype": "task_notification", "task": dict(task, status="completed")})
+        assistant("background task completed")
+        next_tasks = [] if prompt.startswith("scenario=drain") else [task]
+        emit({"type": "system", "subtype": "background_tasks_changed", "tasks": next_tasks})
+        emit({"type": "result", "subtype": "success", "is_error": False})
+    else:
+        for next_raw in sys.stdin:
+            next_request = json.loads(next_raw)
+            emit({"type": "user", "message": next_request["message"]})
+            assistant("user message handled")
+            emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
+            emit({"type": "result", "subtype": "success", "is_error": False})
+            break
+else:
+    assistant("fake answer")
+    emit({"type": "result", "subtype": "success", "is_error": False})
+for next_raw in sys.stdin:
+    next_request = json.loads(next_raw)
+    emit({"type": "user", "message": next_request["message"]})
+    assistant("user message handled")
+    emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
+    emit({"type": "result", "subtype": "success", "is_error": False})
+    break
+for _ in sys.stdin:
+    pass
+"#,
             )
             .unwrap();
             std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1657,6 +2458,434 @@ echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duratio
                 .lines()
                 .map(str::to_string)
                 .collect()
+        }
+
+        fn pids(&self) -> Vec<u32> {
+            std::fs::read_to_string(self.dir.path().join("pid.log"))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| line.parse().ok())
+                .collect()
+        }
+    }
+    struct FakeHome {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        root: tempfile::TempDir,
+        previous_home: Option<std::ffi::OsString>,
+        previous_config: Option<std::ffi::OsString>,
+    }
+
+    impl FakeHome {
+        fn new() -> Self {
+            let guard = crate::console_adapter::longhouse_home_test_guard();
+            let root = tempfile::tempdir().unwrap();
+            let previous_home = std::env::var_os("LONGHOUSE_HOME");
+            let previous_config = std::env::var_os("CLAUDE_CONFIG_DIR");
+            let provider_home = root.path().join("claude-home");
+            std::fs::create_dir_all(&provider_home).unwrap();
+            std::fs::write(
+                provider_home.join("settings.json"),
+                serde_json::to_vec(&json!({
+                    "hooks": {"SessionStart": [{"hooks": [{"command": "/x/longhouse-hook.sh"}]}]}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            unsafe {
+                std::env::set_var("LONGHOUSE_HOME", root.path().join("longhouse"));
+                std::env::set_var("CLAUDE_CONFIG_DIR", provider_home);
+            }
+            Self {
+                _guard: guard,
+                root,
+                previous_home,
+                previous_config,
+            }
+        }
+
+        fn cwd(&self) -> &Path {
+            self.root.path()
+        }
+
+        fn events(&self) -> Vec<Value> {
+            let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() else {
+                return Vec::new();
+            };
+            std::fs::read_dir(outbox)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| std::fs::read(entry.ok()?.path()).ok())
+                .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .collect()
+        }
+    }
+
+    impl Drop for FakeHome {
+        fn drop(&mut self) {
+            for (key, previous) in [
+                ("LONGHOUSE_HOME", self.previous_home.take()),
+                ("CLAUDE_CONFIG_DIR", self.previous_config.take()),
+            ] {
+                match previous {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
+
+    async fn start_fake_turn(
+        home: &FakeHome,
+        fake: &FakeClaude,
+        session_id: &str,
+        thread_id: &str,
+        prompt: &str,
+        resume_provider_thread_id: Option<String>,
+        origin: &str,
+        wake_id: Option<String>,
+        invocation_id: Option<String>,
+    ) -> ClaudePrintRunSummary {
+        let run_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
+        let client_request_id = format!("fake-{run_id}");
+        let registry = crate::turn_claims::default_registry().unwrap();
+        assert!(matches!(
+            registry
+                .claim(
+                    &run_id,
+                    session_id,
+                    thread_id,
+                    Some(&turn_id),
+                    Some(&client_request_id),
+                    "claude",
+                )
+                .unwrap(),
+            crate::turn_claims::ClaimOutcome::Acquired
+        ));
+        start_claude_print_turn(ClaudePrintRunConfig {
+            session_id: session_id.to_string(),
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id),
+            run_id,
+            client_request_id: Some(client_request_id),
+            cwd: home.cwd().to_path_buf(),
+            claude_bin: fake.bin.to_string_lossy().to_string(),
+            prompt: prompt.to_string(),
+            image_paths: Vec::new(),
+            resume_provider_thread_id,
+            model: None,
+            permission_mode: "bypass".to_string(),
+            origin: origin.to_string(),
+            wake_id,
+            invocation_id,
+            machine_name: "fake-box".to_string(),
+            local_db_path: None,
+        })
+        .await
+        .unwrap()
+    }
+    async fn wait_for_terminal(run_id: &str) -> crate::turn_claims::TurnClaim {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                return claim;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Claude run {run_id} did not settle: {claim:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn wait_for_event(home: &FakeHome, session_id: &str, kind: &str) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(event) = home
+                .events()
+                .into_iter()
+                .find(|event| event["session_id"] == session_id && event["kind"] == kind)
+            {
+                return event;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Claude did not post {kind} for session {session_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn terminal_event<'a>(events: &'a [Value], session_id: &str, run_id: &str) -> &'a Value {
+        events
+            .iter()
+            .find(|event| {
+                event["session_id"] == session_id
+                    && event["run_id"] == run_id
+                    && event["kind"] == "terminal_signal"
+            })
+            .expect("terminal runtime event")
+    }
+
+    async fn assert_fake_groups_gone(fake: &FakeClaude) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let live_pid = fake
+                .pids()
+                .into_iter()
+                .find(|pid| crate::process_group::group_is_alive(*pid as i32));
+            if let Some(pid) = live_pid {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "fake Claude process group {pid} was left running"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            } else {
+                return;
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum LifecycleScenario {
+        Plain,
+        Background,
+        WakePending,
+        UserSend,
+        WakeDrained,
+        Restart,
+    }
+
+    type ScenarioRunner = fn(LifecycleScenario) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+    fn run_claude_scenario(
+        scenario: LifecycleScenario,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'static>> {
+        Box::pin(run_claude_scenario_inner(scenario))
+    }
+
+    async fn run_claude_scenario_inner(scenario: LifecycleScenario) {
+        let home = FakeHome::new();
+        let fake = FakeClaude::new(0);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let prompt = match scenario {
+            LifecycleScenario::Plain => "plain message",
+            LifecycleScenario::Background | LifecycleScenario::UserSend => "scenario=park",
+            LifecycleScenario::WakePending => "scenario=wake",
+            LifecycleScenario::WakeDrained => "scenario=drain",
+            LifecycleScenario::Restart => "scenario=restart",
+        };
+        let first = start_fake_turn(
+            &home,
+            &fake,
+            &session_id,
+            &thread_id,
+            prompt,
+            None,
+            "user",
+            None,
+            None,
+        )
+        .await;
+        let first_claim = wait_for_terminal(&first.run_id).await;
+        let events = home.events();
+
+        match scenario {
+            LifecycleScenario::Plain => {
+                assert_eq!(
+                    first_claim.result.as_ref().unwrap()["terminal_state"],
+                    "run_completed"
+                );
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("closed"));
+                assert_eq!(
+                    terminal_event(&events, &session_id, &first.run_id)["payload"]["invocation"]
+                        ["state"],
+                    "closed"
+                );
+                assert_eq!(fake.pids().len(), 1);
+                assert_fake_groups_gone(&fake).await;
+            }
+            LifecycleScenario::Background | LifecycleScenario::UserSend => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                let delegation = events
+                    .iter()
+                    .find(|event| {
+                        event["session_id"] == session_id
+                            && event["run_id"] == first.run_id
+                            && event["kind"] == "delegation_signal"
+                    })
+                    .expect("pending task snapshot");
+                assert_eq!(delegation["provider"], "claude");
+                assert_eq!(delegation["source"], CLAUDE_RUNTIME_SOURCE);
+                assert_eq!(delegation["payload"]["delegation"]["count"], 1);
+                assert!(crate::process_group::group_is_alive(first.process_group_id));
+                let prompt = "continue with this exact text";
+                let second = start_fake_turn(
+                    &home,
+                    &fake,
+                    &session_id,
+                    &thread_id,
+                    prompt,
+                    Some(first.provider_thread_id.clone()),
+                    "user",
+                    None,
+                    None,
+                )
+                .await;
+                assert_eq!(second.pid, first.pid);
+                assert_eq!(second.launch_id, first.launch_id);
+                let second_claim = wait_for_terminal(&second.run_id).await;
+                assert_eq!(second_claim.origin.as_deref(), Some("user"));
+                assert!(second_claim.adopted_parked_invocation);
+                assert_eq!(second_claim.invocation_state.as_deref(), Some("closed"));
+                let events = home.events();
+                if matches!(scenario, LifecycleScenario::UserSend) {
+                    assert!(events.iter().any(|event| {
+                        event["run_id"] == second.run_id
+                            && event["kind"] == "progress_signal"
+                            && event["payload"]["event"]["type"] == "user"
+                            && event["payload"]["event"]["message"]["content"][0]["text"] == prompt
+                    }));
+                }
+                assert_eq!(fake.pids().len(), 1);
+                assert_fake_groups_gone(&fake).await;
+            }
+            LifecycleScenario::WakePending | LifecycleScenario::WakeDrained => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                let wake = wait_for_event(&home, &session_id, "wake_signal").await;
+                assert_eq!(wake["source"], CLAUDE_RUNTIME_SOURCE);
+                assert_eq!(wake["payload"]["invocation_id"], first.launch_id);
+                assert_eq!(
+                    wake["payload"]["provider_thread_id"],
+                    first.provider_thread_id
+                );
+                assert_eq!(wake["payload"]["trigger"]["task_ids"][0], "task-1");
+                let wake_run = start_fake_turn(
+                    &home,
+                    &fake,
+                    &session_id,
+                    &thread_id,
+                    "",
+                    Some(first.provider_thread_id.clone()),
+                    "wake",
+                    wake["payload"]["wake_id"].as_str().map(str::to_string),
+                    wake["payload"]["invocation_id"]
+                        .as_str()
+                        .map(str::to_string),
+                )
+                .await;
+                assert_eq!(wake_run.pid, first.pid);
+                let wake_claim = wait_for_terminal(&wake_run.run_id).await;
+                assert_eq!(wake_claim.origin.as_deref(), Some("wake"));
+                assert!(wake_claim.adopted_parked_invocation);
+                let expected_state = if matches!(scenario, LifecycleScenario::WakeDrained) {
+                    "closed"
+                } else {
+                    "parked"
+                };
+                assert_eq!(wake_claim.invocation_state.as_deref(), Some(expected_state));
+                let events = home.events();
+                assert!(events.iter().any(|event| {
+                    event["run_id"] == wake_run.run_id
+                        && event["kind"] == "progress_signal"
+                        && event["payload"]["event"]["type"] == "assistant"
+                }));
+                assert_eq!(fake.pids().len(), 1);
+                if matches!(scenario, LifecycleScenario::WakeDrained) {
+                    assert!(events.iter().any(|event| {
+                        event["run_id"] == wake_run.run_id
+                            && event["kind"] == "delegation_signal"
+                            && event["payload"]["delegation"]["count"] == 0
+                    }));
+                }
+                if matches!(scenario, LifecycleScenario::WakePending) {
+                    let cleanup = start_fake_turn(
+                        &home,
+                        &fake,
+                        &session_id,
+                        &thread_id,
+                        "finish pending work",
+                        Some(first.provider_thread_id.clone()),
+                        "user",
+                        None,
+                        None,
+                    )
+                    .await;
+                    wait_for_terminal(&cleanup.run_id).await;
+                } else {
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+                    while crate::console_lifecycle::lookup_launch(&first.launch_id).is_some()
+                        || crate::process_group::group_is_alive(first.process_group_id)
+                    {
+                        assert!(tokio::time::Instant::now() < deadline);
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    let resumed = start_fake_turn(
+                        &home,
+                        &fake,
+                        &session_id,
+                        &thread_id,
+                        "resume after background work drained",
+                        Some(first.provider_thread_id.clone()),
+                        "user",
+                        None,
+                        None,
+                    )
+                    .await;
+                    assert_ne!(resumed.pid, first.pid);
+                    assert_ne!(resumed.launch_id, first.launch_id);
+                    assert_eq!(resumed.provider_thread_id, first.provider_thread_id);
+                    let resumed_claim = wait_for_terminal(&resumed.run_id).await;
+                    assert_eq!(resumed_claim.invocation_state.as_deref(), Some("closed"));
+                    assert_eq!(fake.pids().len(), 2);
+                }
+                assert_fake_groups_gone(&fake).await;
+            }
+            LifecycleScenario::Restart => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                crate::console_lifecycle::unregister(&first.launch_id);
+                assert_eq!(
+                    recover_claude_print_turns("fake-box", None).await.unwrap(),
+                    1
+                );
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+                while crate::process_group::group_is_alive(first.process_group_id)
+                    && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let recovered = crate::turn_claims::default_registry()
+                    .unwrap()
+                    .read(&first.run_id)
+                    .unwrap();
+                assert_eq!(recovered.invocation_state.as_deref(), Some("closed"));
+                assert_fake_groups_gone(&fake).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn console_lifecycle_conformance_runs_phase_one_scenarios() {
+        let scenarios = [
+            ("1", LifecycleScenario::Plain),
+            ("2", LifecycleScenario::Background),
+            ("3", LifecycleScenario::WakePending),
+            ("4", LifecycleScenario::UserSend),
+            ("5", LifecycleScenario::WakeDrained),
+            ("8", LifecycleScenario::Restart),
+        ];
+        let adapters: [(&str, ScenarioRunner); 1] = [("claude", run_claude_scenario)];
+        for (provider, run) in adapters {
+            for (scenario_id, scenario) in scenarios {
+                let _case = format!("{provider} scenario {scenario_id}");
+                run(scenario).await;
+            }
         }
     }
 
@@ -1709,9 +2938,13 @@ echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duratio
             cwd: temp.path().to_path_buf(),
             claude_bin: fake.bin.to_string_lossy().to_string(),
             prompt: "hello".to_string(),
+            image_paths: Vec::new(),
             resume_provider_thread_id: None,
             model: None,
             permission_mode: "bypass".to_string(),
+            origin: "user".to_string(),
+            wake_id: None,
+            invocation_id: None,
             machine_name: "fake-box".to_string(),
             local_db_path: None,
         })
@@ -1773,6 +3006,7 @@ echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duratio
             "the failed attempt leaked into the timeline: {posted}"
         );
         assert!(posted.contains("fake answer"), "{posted}");
+        assert_fake_groups_gone(&fake).await;
     }
 
     #[tokio::test]
@@ -1797,6 +3031,7 @@ echo "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duratio
         // Giving up releases the withheld failure so the user sees why.
         let posted = serde_json::to_string(&events).unwrap();
         assert!(posted.contains("authentication_failed"), "{posted}");
+        assert_fake_groups_gone(&fake).await;
     }
 
     #[test]

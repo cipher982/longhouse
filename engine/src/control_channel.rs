@@ -40,7 +40,6 @@ use crate::codex_bridge::{
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig, CODEX_EXEC_ADAPTER};
 use crate::config::ShipperConfig;
 use crate::console_adapter::ConsoleSteerOutcome;
-use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
 use crate::omp_print::{start_omp_print_turn, OmpPrintRunConfig, OMP_PRINT_ADAPTER};
 use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
@@ -1440,8 +1439,7 @@ async fn execute_command(
             let resume_target = payload_resume_target(&payload)?;
             let launch_actor = payload_optional_string(&payload, "launch_actor");
             let launch_surface = payload_optional_string(&payload, "launch_surface");
-            let provider_prompt =
-                run_once_provider_prompt(&initial_prompt, resume_target.is_some());
+            let provider_prompt = initial_prompt;
             let local_db_path = config
                 .db_path
                 .clone()
@@ -2465,9 +2463,14 @@ async fn execute_turn_start(
             cwd,
             claude_bin: console_provider_binary_with_env("claude", &|name| std::env::var_os(name)),
             prompt: message,
+            image_paths: image_paths.clone(),
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
             permission_mode,
+            origin: payload_optional_string(payload, "origin")
+                .unwrap_or_else(|| "user".to_string()),
+            wake_id: payload_optional_string(payload, "wake_id"),
+            invocation_id: payload_optional_string(payload, "invocation_id"),
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -3569,14 +3572,6 @@ impl CompletedCommandCache {
     }
 }
 
-fn run_once_provider_prompt(user_prompt: &str, is_resume: bool) -> String {
-    if is_resume {
-        user_prompt.to_string()
-    } else {
-        wrap_console_run_once_prompt(user_prompt)
-    }
-}
-
 /// The websocket URL for the control channel.
 ///
 /// Plaintext is judged by the shared rule (`plaintext_http`): everything on
@@ -4529,20 +4524,6 @@ mod tests {
 
         assert_eq!(err.code, "invalid_command");
         assert!(err.message.contains("mode=continue"));
-    }
-
-    #[test]
-    fn run_once_provider_prompt_leaves_resume_turns_unwrapped() {
-        let user_prompt = "Continue with the next fix.";
-        assert_eq!(run_once_provider_prompt(user_prompt, true), user_prompt);
-    }
-
-    #[test]
-    fn run_once_provider_prompt_wraps_fresh_console_turns() {
-        let prompt = run_once_provider_prompt("Start the task.", false);
-
-        assert!(prompt.starts_with("Longhouse Console runtime note:"));
-        assert!(prompt.ends_with("User message:\nStart the task."));
     }
 
     #[test]

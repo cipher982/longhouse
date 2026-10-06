@@ -26,7 +26,6 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::codex_source::{parse_codex_subagent_source, parse_codex_subagent_source_str};
-use crate::console_prompt::strip_console_run_once_prompt;
 use crate::media_redaction::{
     provider_blob_root, redact_source_line_with_media, InlineImageRedaction,
 };
@@ -5439,9 +5438,6 @@ fn extract_codex_events(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let real_text = strip_console_run_once_prompt(&real_text)
-                .map(str::to_string)
-                .unwrap_or(real_text);
 
             // If there are images but no real text, emit a placeholder so the user
             // event is always stored (prevents assistant appearing as first event).
@@ -8984,41 +8980,6 @@ mod tests {
         assert_eq!(
             result.events[1].content_text.as_deref(),
             Some("Please quote <codex_internal_context source=\"goal\"> in your answer")
-        );
-    }
-
-    #[test]
-    fn test_codex_console_run_once_context_unwrapped() {
-        let dir = tempfile::tempdir().unwrap();
-        let wrapped_prompt = crate::console_prompt::wrap_console_run_once_prompt(
-            "please research the steering shaft options",
-        );
-        let line = serde_json::json!({
-            "type": "response_item",
-            "timestamp": "2026-03-01T10:00:00Z",
-            "payload": {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": wrapped_prompt}]
-            }
-        })
-        .to_string();
-        let path = {
-            let path = dir
-                .path()
-                .join("019c638d-0000-0000-0000-000000000014.jsonl");
-            let mut f = std::fs::File::create(&path).unwrap();
-            use std::io::Write;
-            writeln!(f, "{}", line).unwrap();
-            path
-        };
-
-        let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(
-            result.events[0].content_text.as_deref(),
-            Some("please research the steering shaft options")
         );
     }
 
