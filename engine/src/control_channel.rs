@@ -6047,7 +6047,7 @@ exit 1
 
     #[test]
     fn antigravity_console_claim_survives_dispatch_and_recovers_its_native_source() {
-        let guard_runtime = tokio::runtime::Builder::new_current_thread()
+        let _guard_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();

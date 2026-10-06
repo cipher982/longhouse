@@ -265,7 +265,6 @@ struct RawLine {
     label: Option<String>,
     name: Option<String>,
     title: Option<String>,
-    reason: Option<String>,
     #[serde(rename = "tokensBefore")]
     tokens_before: Option<u64>,
     #[serde(rename = "isSidechain")]
@@ -427,9 +426,6 @@ struct CodexPayloadParentage {
     /// carries every field Codex supplied.
     subagent_depth: Option<u32>,
     subagent_name: Option<String>,
-    agent_nickname: Option<String>,
-    agent_role: Option<String>,
-    agent_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1191,9 +1187,6 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
             is_sidechain: true,
             subagent_depth: source.depth,
             subagent_name: source.agent_nickname.clone().or(source.agent_role.clone()),
-            agent_nickname: source.agent_nickname,
-            agent_role: source.agent_role,
-            agent_path: source.agent_path,
         };
     }
 
@@ -1206,9 +1199,6 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
         is_sidechain: false,
         subagent_depth: None,
         subagent_name: None,
-        agent_nickname: None,
-        agent_role: None,
-        agent_path: None,
     }
 }
 

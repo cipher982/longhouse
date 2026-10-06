@@ -61,6 +61,7 @@ pub fn monitor_is_active(run_id: &str) -> bool {
         .is_some_and(|monitors| monitors.contains_key(run_id))
 }
 
+#[cfg(test)]
 pub fn monitor_cancel_requested(run_id: &str) -> bool {
     ACTIVE_MONITORS
         .lock()
