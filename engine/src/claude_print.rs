@@ -307,7 +307,9 @@ pub async fn start_claude_print_turn(
         .await;
         return Err(error).context("persisting Claude Console spawn identity");
     }
-    if let Err(error) = registry.record_invocation_turn(&config.run_id, "user", false) {
+    if let Err(error) =
+        registry.record_invocation_turn(&config.run_id, TurnOrigin::User.as_str(), false)
+    {
         crate::process_group::shutdown_owned_child(
             &mut child,
             Some(process_group_id),
@@ -469,7 +471,7 @@ async fn adopt_parked_turn(
         stderr_path,
         result,
     )?;
-    registry.record_invocation_turn(&config.run_id, "user", true)?;
+    registry.record_invocation_turn(&config.run_id, TurnOrigin::User.as_str(), true)?;
     registry.mark_provider_binding(&config.run_id, &invocation.provider_thread_id, None)?;
     sink.post_phase("thinking", None).await;
     if let Err(error) = invocation
@@ -562,7 +564,7 @@ async fn bind_wake_turn(
         stderr_path,
         result,
     )?;
-    claims.record_invocation_turn(&config.run_id, "wake", true)?;
+    claims.record_invocation_turn(&config.run_id, TurnOrigin::Wake.as_str(), true)?;
     claims.mark_provider_binding(&config.run_id, &invocation.provider_thread_id, None)?;
     sink.post_phase("thinking", None).await;
     for event in wake.buffered_events {
@@ -1606,41 +1608,6 @@ impl ClaudePrintSink {
                 "trigger": wake.trigger
             }
         })])
-        .await;
-    }
-
-    async fn post_terminal(
-        &self,
-        terminal_state: &str,
-        exit_code: Option<i32>,
-        stderr: Option<String>,
-    ) {
-        self.post_terminal_with_lifecycle(
-            terminal_state,
-            exit_code,
-            stderr,
-            Some("closed"),
-            Some(0),
-            None,
-        )
-        .await;
-    }
-
-    async fn post_terminal_with_reason(
-        &self,
-        terminal_state: &str,
-        exit_code: Option<i32>,
-        stderr: Option<String>,
-        reason: Option<&str>,
-    ) {
-        self.post_terminal_with_lifecycle(
-            terminal_state,
-            exit_code,
-            stderr,
-            Some("closed"),
-            Some(0),
-            reason,
-        )
         .await;
     }
 

@@ -6202,6 +6202,7 @@ printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","st
         std::fs::create_dir(&workspace).unwrap();
         let args_path = temp.path().join("claude-args.txt");
         let env_path = temp.path().join("claude-env.txt");
+        let prompt_path = temp.path().join("claude-prompt.json");
         let fake = temp.path().join("claude");
         write_test_executable(
             &fake,
@@ -6209,21 +6210,22 @@ printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","st
                 r#"#!/bin/sh
 printf '%s\n' "$@" > '{}'
 printf '%s|%s|%s|%s\n' "$LONGHOUSE_MANAGED_SESSION_ID" "$LONGHOUSE_RUN_ID" "$LONGHOUSE_CHANNEL_SESSION_ID" "$LONGHOUSE_PERMISSION_HOOK_ENABLED" > '{}'
+IFS= read -r input
+printf '%s\n' "$input" > '{}'
 provider_id=""
 previous=""
-last=""
 for value in "$@"; do
   if [ "$previous" = "--session-id" ] || [ "$previous" = "--resume" ]; then provider_id="$value"; fi
   previous="$value"
-  last="$value"
 done
 printf '{{"type":"system","subtype":"init","session_id":"%s"}}\n' "$provider_id"
-if [ "$last" = "sleep prompt" ]; then sleep 30; fi
+case "$input" in *'sleep prompt'*) sleep 30;; esac
 printf '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"done"}}]}}}}\n'
 printf '{{"type":"result","subtype":"success","is_error":false}}\n'
 "#,
                 args_path.display(),
                 env_path.display(),
+                prompt_path.display(),
             ),
         );
         let claude_home = temp.path().join("claude-home");
@@ -6293,10 +6295,9 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
                 ));
                 assert_eq!(response["ok"], true, "{response}");
                 let argv = response["result"]["argv"].as_array().unwrap();
-                assert_eq!(
-                    argv.last().and_then(Value::as_str),
-                    Some("[prompt omitted]")
-                );
+                assert!(argv.iter().any(|value| value == "--input-format"));
+                assert!(argv.iter().any(|value| value == "stream-json"));
+                assert!(argv.iter().any(|value| value == "--replay-user-messages"));
                 assert!(!argv.iter().any(|value| value == "private prompt"));
                 let deadline = std::time::Instant::now() + Duration::from_secs(30);
                 loop {
@@ -6315,6 +6316,18 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
                     );
                     runtime.block_on(async { tokio::time::sleep(Duration::from_millis(20)).await });
                 }
+                let submitted: Value =
+                    serde_json::from_str(&std::fs::read_to_string(&prompt_path).unwrap()).unwrap();
+                assert_eq!(
+                    submitted,
+                    json!({
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "private prompt"}]
+                        }
+                    })
+                );
                 assert_eq!(
                     std::fs::read_to_string(&env_path).unwrap().trim(),
                     format!("{session_id}|{run_id}||")
@@ -6330,7 +6343,7 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
             let first_args = std::fs::read_to_string(&args_path).unwrap();
             assert!(first_args.contains("--session-id"));
             assert!(first_args.contains(&provider_thread_id));
-            assert!(first_args.contains("private prompt"));
+            assert!(!first_args.contains("private prompt"));
 
             let second = run_turn(Some(&provider_thread_id));
             assert_eq!(second["result"]["provider_thread_id"], provider_thread_id);

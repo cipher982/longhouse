@@ -89,7 +89,6 @@ pub struct WakeRequest {
     pub wake_id: String,
     pub provider_thread_id: String,
     pub trigger: Value,
-    pub run_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -255,7 +254,6 @@ impl ConsoleInvocation {
             wake_id,
             provider_thread_id: self.provider_thread_id.clone(),
             trigger,
-            run_id: state.latest_turn.run_id.clone(),
         })
     }
 
