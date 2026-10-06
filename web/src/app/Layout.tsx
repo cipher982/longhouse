@@ -1,11 +1,18 @@
 import clsx from "clsx";
 import { useState, useCallback, useEffect, useRef, type PropsWithChildren } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router";
 import { useAuth, useAuthMethods } from "@/features/auth/auth";
 import { buildLoginUrl } from "@/features/auth/loginRedirect";
 import { clearLogoutBarrier } from "@/features/auth/auth-refresh";
 import { requestNativeAuth } from "@/features/auth/nativeAuthBridge";
 import { useApiHealth } from "./apiHealth";
+import { request } from "@/shared/api/base";
+import {
+  HostLinkBanner,
+  startHostLinkMonitoring,
+  type HostHealthResponse,
+} from "@/shared/hostLink";
 import { useBodyScrollLock } from "@/shared/hooks/useBodyScrollLock";
 import { useClickOutside } from "@/shared/hooks/useClickOutside";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
@@ -488,6 +495,20 @@ function NavStatus({ compact = false }: { compact?: boolean }) {
 
 export default function Layout({ children }: PropsWithChildren) {
   useWebClientPresence();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const stopMonitoring = startHostLinkMonitoring(() =>
+      request<HostHealthResponse>("/health"),
+    );
+    const refreshForNewRuntime = () => {
+      void queryClient.invalidateQueries();
+    };
+    window.addEventListener("longhouse:host-link-epoch-changed", refreshForNewRuntime);
+    return () => {
+      stopMonitoring();
+      window.removeEventListener("longhouse:host-link-epoch-changed", refreshForNewRuntime);
+    };
+  }, [queryClient]);
   const location = useLocation();
   const compact = isSessionRoute(location.pathname);
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
@@ -497,6 +518,7 @@ export default function Layout({ children }: PropsWithChildren) {
     <HeaderSlotContext.Provider value={compact ? slot : null}>
       <MobileNavSlotContext.Provider value={compact ? mobileSlot : null}>
         <WelcomeHeader compact={compact} slotRef={setSlot} mobileSlotRef={setMobileSlot} />
+        <HostLinkBanner />
         <div
           id="app-container"
           data-testid="app-container"

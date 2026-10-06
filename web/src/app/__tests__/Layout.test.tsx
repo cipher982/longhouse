@@ -19,6 +19,12 @@ vi.mock("@/shared/ui/confirm", () => ({
   useConfirm: () => vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock("@/shared/api/base", () => ({
+  request: vi.fn().mockResolvedValue({
+    runtime: { epoch: "layout-test", admission: "open" },
+    build: { commit: "layout-test" },
+  }),
+}));
 vi.mock("../apiHealth", () => ({
   useApiHealth: () => null,
 }));

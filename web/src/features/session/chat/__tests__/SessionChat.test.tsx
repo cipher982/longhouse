@@ -15,6 +15,8 @@ import type { SessionLockInfo } from "@/shared/api/index";
 import type { TimelineItem } from "@/shared/session/model";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
 import type { OutboxEntry } from "../../OutboxRow";
+import { HOST_LINK_COPY } from "@/shared/hostLink/copy";
+import { hostLinkStore } from "@/shared/hostLink/store";
 
 const { fetchWithRefreshMock } = vi.hoisted(() => ({
   fetchWithRefreshMock: vi.fn(),
@@ -208,6 +210,10 @@ function makeLonghouseUserItem({
 
 describe("SessionChat", () => {
   beforeEach(() => {
+    hostLinkStore.observeLifecycle({
+      state: "serving",
+      runtime_epoch: "session-chat-test",
+    });
     fetchWithRefreshMock.mockReset();
     requestMock.mockReset();
     writeTextMock.mockReset();
@@ -867,6 +873,139 @@ describe("SessionChat", () => {
       ) ?? "null",
     );
     expect(stored).toMatchObject({ deliveryConfirmed: true, attachments: [] });
+  });
+  it("queues a send during an update and sends it under the stored ID when serving resumes", async () => {
+    const user = userEvent.setup();
+    const postedRequestIds: string[] = [];
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).includes("/inputs?client_request_id=")) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/inputs") && !init?.method) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        postedRequestIds.push(payload.client_request_id);
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 7,
+          intent: payload.intent,
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const now = Date.now();
+    hostLinkStore.observeLifecycle({
+      state: "updating",
+      runtime_epoch: "runtime-old",
+      attempt_id: "attempt-1",
+      expected_back_by: new Date(now + 30_000).toISOString(),
+      deadline: new Date(now + 60_000).toISOString(),
+      cutoff: new Date(now + 90_000).toISOString(),
+    });
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+
+    await user.type(screen.getByRole("textbox"), "wait for the update");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByTestId("session-chat-update-queued")).toHaveTextContent(
+      HOST_LINK_COPY.sendQueued,
+    );
+    expect(postedRequestIds).toHaveLength(0);
+    const storedKey = Array.from({ length: window.localStorage.length }, (_, index) =>
+      window.localStorage.key(index),
+    ).find((key) => key?.startsWith("longhouse:session-input:sess-1:"));
+    expect(storedKey).toBeTruthy();
+    const stored = JSON.parse(window.localStorage.getItem(storedKey!) ?? "null");
+
+    act(() =>
+      hostLinkStore.observeLifecycle({
+        state: "serving",
+        runtime_epoch: "runtime-new",
+      }),
+    );
+    await waitFor(() => expect(postedRequestIds).toEqual([stored.clientRequestId]));
+    expect(screen.queryByText("Not delivered")).not.toBeInTheDocument();
+  });
+
+  it("does not mark a K1 runtime_restarting refusal failed and retries with its ID", async () => {
+    const user = userEvent.setup();
+    const postedRequestIds: string[] = [];
+    const now = Date.now();
+    const lifecycle = {
+      type: "host.lifecycle" as const,
+      state: "updating" as const,
+      runtime_epoch: "runtime-old",
+      attempt_id: "attempt-1",
+      phase: "drain",
+      expected_back_by: new Date(now + 30_000).toISOString(),
+      deadline: new Date(now + 60_000).toISOString(),
+      cutoff: new Date(now + 90_000).toISOString(),
+    };
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).includes("/inputs?client_request_id=")) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/inputs") && !init?.method) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        postedRequestIds.push(payload.client_request_id);
+        if (postedRequestIds.length === 1) {
+          const body = {
+            code: "runtime_restarting",
+            retryable: true,
+            runtime_epoch: "runtime-old",
+            admission: "draining",
+            claim: lifecycle,
+          };
+          hostLinkStore.observeApiError(503, body);
+          return Promise.reject(
+            new ApiError({ url: String(path), status: 503, body }),
+          );
+        }
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 8,
+          intent: payload.intent,
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+
+    await user.type(screen.getByRole("textbox"), "restart raced the send");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByTestId("session-chat-update-queued")).toHaveTextContent(
+      HOST_LINK_COPY.sendQueued,
+    );
+    expect(postedRequestIds).toHaveLength(1);
+    expect(screen.queryByText("Not delivered")).not.toBeInTheDocument();
+    const requestId = postedRequestIds[0];
+
+    act(() =>
+      hostLinkStore.observeLifecycle({
+        state: "serving",
+        runtime_epoch: "runtime-new",
+      }),
+    );
+    await waitFor(() => expect(postedRequestIds).toHaveLength(2));
+    expect(postedRequestIds[1]).toBe(requestId);
+    expect(screen.queryByText("Not delivered")).not.toBeInTheDocument();
   });
   it("retains provider-ambiguous intent after explicit same-ID replay", async () => {
     const user = userEvent.setup();

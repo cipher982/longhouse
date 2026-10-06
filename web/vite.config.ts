@@ -24,21 +24,26 @@ function loadDevProxy(): { target: string; bearer: string } | null {
   }
 }
 
-/** Replace __BUILD_HASH__ in index.html with the short git SHA. */
+/** Replace build identity placeholders in index.html with the current git SHA. */
 function buildHashPlugin(): Plugin {
   let hash = "dev";
+  let commit = "dev";
   return {
     name: "build-hash",
     configResolved() {
       try {
-        hash = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+        commit = execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+        hash = commit.slice(0, 7);
       } catch {
         hash = Date.now().toString(36);
+        commit = hash;
       }
     },
     transformIndexHtml(html) {
       return {
-        html: html.replace(/__BUILD_HASH__/g, hash),
+        html: html
+          .replace(/__BUILD_HASH__/g, hash)
+          .replace(/__BUILD_COMMIT__/g, commit),
         tags: [
           {
             tag: "script",

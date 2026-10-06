@@ -33,7 +33,7 @@
   /* The React root acts as the application grid */
   #react-root {
     display: grid;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
     height: 100%;
     min-height: 100vh;
     min-height: 100dvh; /* modern viewport units */
@@ -67,7 +67,7 @@
 
   /* Content area - pass-through container (no scroll here) */
   #app-container {
-    grid-row: 2;
+    grid-row: 3;
     min-height: 0; /* required for grid children to respect overflow */
     display: flex;
     flex-direction: column;
@@ -104,5 +104,50 @@
   .page-loader-spinner {
     border-color: var(--color-border-subtle, #333);
     border-top-color: var(--color-brand-primary, #E9B949);
+  }
+}
+@layer components {
+  .host-link-banner {
+    grid-row: 2;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 7px 16px;
+    border-bottom: 1px solid rgba(179, 190, 198, 0.2);
+    background: rgba(29, 34, 38, 0.96);
+    color: #e4e9ec;
+    font-family: var(--font-ui, Inter, sans-serif);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    line-height: 1.25;
+    text-align: center;
+  }
+
+  .host-link-banner--slow {
+    border-bottom-color: rgba(214, 163, 62, 0.45);
+    background: rgba(81, 57, 18, 0.96);
+    color: #f2d28d;
+  }
+
+  .host-link-banner--reload {
+    border-bottom-color: rgba(112, 168, 129, 0.38);
+    background: rgba(28, 57, 39, 0.96);
+    color: #d0efd7;
+  }
+
+  .host-link-banner--reload button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .host-link-banner--reload button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 3px;
   }
 }

@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
+const { fetchWithRefreshMock } = vi.hoisted(() => ({
+  fetchWithRefreshMock: vi.fn(),
+}));
+
 
 // Mock the config module before importing buildUrl
+vi.mock("@/features/auth/auth-refresh", () => ({
+  fetchWithRefresh: fetchWithRefreshMock,
+}));
+
 vi.mock('@/shared/lib/config', () => ({
   config: { apiBaseUrl: '/api' },
 }));
@@ -11,7 +19,8 @@ vi.mock('@/shared/lib/logger', () => ({
   },
 }));
 
-import { ApiError, buildUrl } from '../base';
+import { hostLinkStore } from "@/shared/hostLink/store";
+import { ApiError, buildUrl, request } from "../base";
 
 describe('buildUrl', () => {
   it('prepends /api to a path without prefix', () => {
@@ -50,5 +59,54 @@ describe('ApiError', () => {
     });
 
     expect(error.message).toBe('text: String should have at least 1 character');
+  });
+});
+
+describe("host-link API observations", () => {
+  it("records K1 restart refusals and accepts any successful write as serving evidence", async () => {
+    fetchWithRefreshMock.mockReset();
+    hostLinkStore.observeLifecycle({
+      state: "serving",
+      runtime_epoch: "runtime-before",
+    });
+    const now = Date.now();
+    const body = {
+      code: "runtime_restarting",
+      retryable: true,
+      runtime_epoch: "runtime-candidate",
+      admission: "draining",
+      claim: {
+        type: "host.lifecycle",
+        state: "updating",
+        runtime_epoch: "runtime-candidate",
+        attempt_id: "attempt-1",
+        phase: "drain",
+        expected_back_by: new Date(now + 30_000).toISOString(),
+        deadline: new Date(now + 60_000).toISOString(),
+        cutoff: new Date(now + 90_000).toISOString(),
+      },
+    };
+    fetchWithRefreshMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      request("/sessions/session-1/input", { method: "POST" }),
+    ).rejects.toBeInstanceOf(ApiError);
+    expect(hostLinkStore.getSnapshot()).toMatchObject({
+      state: "updating",
+      runtimeEpoch: "runtime-candidate",
+      claim: { attempt_id: "attempt-1" },
+    });
+
+    fetchWithRefreshMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await request("/sessions/session-1/input", { method: "POST" });
+    expect(hostLinkStore.getSnapshot()).toMatchObject({
+      state: "serving",
+      claim: null,
+    });
   });
 });

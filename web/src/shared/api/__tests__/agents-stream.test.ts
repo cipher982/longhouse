@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { connectSessionWorkspaceStream, connectTimelineSessionsStream } from "../agents";
+import { hostLinkStore } from "@/shared/hostLink/store";
 
 type EventListener = (event: MessageEvent) => void;
 
@@ -225,5 +226,43 @@ describe("Timeline session stream", () => {
     });
 
     disconnect();
+  });
+  it("feeds connected runtime fields and lifecycle events into the shared store", () => {
+    const disconnectTimeline = connectTimelineSessionsStream();
+    MockEventSource.instances[0].emit("connected", {
+      stream_epoch: "stream-1",
+      runtime_epoch: "runtime-candidate",
+      admission: "draining",
+    });
+    MockEventSource.instances[0].emit("host_lifecycle", {
+      type: "host.lifecycle",
+      state: "updating",
+      runtime_epoch: "runtime-candidate",
+      attempt_id: "attempt-1",
+      phase: "drain",
+      expected_back_by: new Date(Date.now() + 30_000).toISOString(),
+      deadline: new Date(Date.now() + 60_000).toISOString(),
+      cutoff: new Date(Date.now() + 90_000).toISOString(),
+    });
+
+    expect(hostLinkStore.getSnapshot()).toMatchObject({
+      state: "updating",
+      runtimeEpoch: "runtime-candidate",
+      claim: { attempt_id: "attempt-1" },
+    });
+    disconnectTimeline();
+
+    const disconnectWorkspace = connectSessionWorkspaceStream("session-1");
+    MockEventSource.instances[1].emit("connected", {
+      session_id: "session-1",
+      runtime_epoch: "runtime-candidate",
+      admission: "open",
+    });
+    expect(hostLinkStore.getSnapshot()).toMatchObject({
+      state: "serving",
+      runtimeEpoch: "runtime-candidate",
+      claim: null,
+    });
+    disconnectWorkspace();
   });
 });

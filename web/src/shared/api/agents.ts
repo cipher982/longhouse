@@ -8,6 +8,12 @@
 import { buildUrl, request } from "./base";
 import { hydrateLiteProjection, hydrateLiteWorkspace } from "./liteTranscript";
 import type { components } from "@/generated/openapi-types";
+import {
+  observeHostLifecycle,
+  observeHostLinkConnected,
+  type HostLifecycle,
+  type RuntimeAdmission,
+} from "@/shared/hostLink/store";
 
 const TIMELINE_API_PREFIX = "/timeline";
 const TIMELINE_SESSIONS_PREFIX = `${TIMELINE_API_PREFIX}/sessions`;
@@ -693,11 +699,14 @@ export interface TimelineSessionRemoveEvent {
 
 export interface TimelineSessionStreamConnected {
   stream_epoch?: string;
+  runtime_epoch?: string;
+  admission?: RuntimeAdmission;
 }
 
 export interface TimelineSessionStreamHandlers {
   onConnected?: (data: TimelineSessionStreamConnected) => void;
   onHeartbeat?: (timestamp: string) => void;
+  onHostLifecycle?: (data: HostLifecycle) => void;
   onSessionUpsert?: (event: TimelineSessionUpsertEvent) => void;
   onSessionRemove?: (event: TimelineSessionRemoveEvent) => void;
   onError?: (error: Event) => void;
@@ -884,6 +893,16 @@ export function connectTimelineSessionsStream(
         stream_epoch: data.stream_epoch,
       });
       handlers.onConnected?.(data);
+      observeHostLinkConnected({
+        runtime_epoch: data.runtime_epoch,
+        admission: data.admission,
+      });
+    });
+    eventSource.addEventListener("host_lifecycle", (event: MessageEvent) => {
+      const data = parseStreamEventData<HostLifecycle>(event);
+      if (!data) return;
+      observeHostLifecycle(data);
+      handlers.onHostLifecycle?.(data);
     });
 
     eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
@@ -928,6 +947,8 @@ export interface SessionWorkspaceStreamConnected {
   session_id: string;
   stream_epoch?: string;
   server_now_ms?: number;
+  runtime_epoch?: string;
+  admission?: RuntimeAdmission;
 }
 
 export interface SessionWorkspaceStreamReplayGap {
@@ -959,6 +980,7 @@ export interface SessionWorkspaceStreamHandlers {
   onWorkspaceChanged?: (data: SessionWorkspaceStreamChange) => void;
   onHeartbeat?: (timestamp: string) => void;
   onError?: (error: Event) => void;
+  onHostLifecycle?: (data: HostLifecycle) => void;
 }
 
 /**
@@ -1001,6 +1023,12 @@ export function connectSessionWorkspaceStream(
         client_received_at_ms: Date.now(),
       });
       handlers.onConnected?.(data ?? { session_id: sessionId });
+      if (data) {
+        observeHostLinkConnected({
+          runtime_epoch: data.runtime_epoch,
+          admission: data.admission,
+        });
+      }
     });
 
     eventSource.addEventListener("workspace_changed", (event: MessageEvent) => {
@@ -1029,6 +1057,12 @@ export function connectSessionWorkspaceStream(
         });
         handlers.onWorkspaceChanged?.(data);
       }
+    });
+    eventSource.addEventListener("host_lifecycle", (event: MessageEvent) => {
+      const data = parseStreamEventData<HostLifecycle>(event);
+      if (!data) return;
+      observeHostLifecycle(data);
+      handlers.onHostLifecycle?.(data);
     });
 
     eventSource.addEventListener("replay_gap", (event: MessageEvent) => {

@@ -79,6 +79,10 @@ import { buildFirstRunMachinesSummary, buildMachinesFleetFixture } from "../ui-f
 import { buildTimelineCardStressFixture } from "../ui-fixtures/timelineCardStress";
 import { buildTimelineHearthFixture, buildTimelineHearthStreamBatch } from "../ui-fixtures/timelineHearth";
 import {
+  buildHostLinkFixture,
+  type HostLinkFixtureState,
+} from "../ui-fixtures/hostLink";
+import {
   LANDING_SEARCH_QUERY,
   buildLandingSessionFixture,
   buildLandingTimelineFixture,
@@ -117,6 +121,9 @@ const SCENES = [
   "timeline-card-stress",
   "timeline-error",
   "timeline-hearth",
+  "host-link-updating",
+  "host-link-slow-update",
+  "host-link-reload",
   "launch-unavailable",
   "launch-no-machines",
   "launch-model-picker",
@@ -168,6 +175,11 @@ const DEVICES_REVOKE_SCENE: SceneName = "devices-revoke";
 // live connection, quiet machines) for PAGE=machines and PAGE=machine-detail;
 // machines-unavailable serves the same directory but fails the summary read.
 const MACHINES_SCENES: readonly SceneName[] = ["machines-fleet", "machines-unavailable"];
+const HOST_LINK_SCENES: readonly SceneName[] = [
+  "host-link-updating",
+  "host-link-slow-update",
+  "host-link-reload",
+];
 
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
@@ -336,6 +348,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "timeline-card-stress" ||
     scene === "timeline-error" ||
     scene === "timeline-hearth" ||
+    HOST_LINK_SCENES.includes(scene) ||
     scene === "launch-unavailable" ||
     scene === "launch-no-machines" ||
     scene === "launch-model-picker" ||
@@ -387,6 +400,9 @@ function validateOptions(opts: Options): void {
   }
   if (MACHINES_SCENES.includes(opts.scene) && opts.page !== "machines" && opts.page !== "machine-detail") {
     throw new Error(`--scene=${opts.scene} captures PAGE=machines or PAGE=machine-detail.`);
+  }
+  if (HOST_LINK_SCENES.includes(opts.scene) && opts.page !== "timeline") {
+    throw new Error(`--scene=${opts.scene} captures PAGE=timeline only.`);
   }
   if (opts.page === "session-detail" && !SESSION_DETAIL_SCENES.includes(opts.scene)) {
     throw new Error(`session-detail requires one of: ${SESSION_DETAIL_SCENES.map((s) => `--scene=${s}`).join(", ")}.`);
@@ -833,6 +849,15 @@ export async function installSceneMocks(
   }
 
   const fixture = scene === "timeline-hearth" ? buildTimelineHearthFixture() : buildTimelineCardStressFixture();
+  const hostLinkState: HostLinkFixtureState | null =
+    scene === "host-link-updating"
+      ? "updating"
+      : scene === "host-link-slow-update"
+        ? "slow_update"
+        : scene === "host-link-reload"
+          ? "reload"
+          : null;
+  const hostLinkFixture = hostLinkState ? buildHostLinkFixture(hostLinkState) : null;
   // The hearth scene streams: each EventSource reconnect gets the next batch
   // of growing counts, so the fires see real tool/reply/prompt deltas.
   let hearthBatch = 0;
@@ -841,6 +866,25 @@ export async function installSceneMocks(
     const requestUrl = new URL(route.request().url());
     const pathname = requestUrl.pathname;
 
+    if (hostLinkFixture && pathname === "/api/health") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(hostLinkFixture.health),
+      });
+      return;
+    }
+    if (
+      hostLinkFixture &&
+      /^\/api\/timeline\/sessions\/[^/]+\/workspace$/.test(pathname)
+    ) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: "{}",
+      });
+      return;
+    }
     if (scene === FIRST_RUN_SCENE && pathname === "/api/timeline/sessions") {
       await route.fulfill({
         status: 200,
@@ -934,6 +978,22 @@ export async function installSceneMocks(
       return;
     }
 
+    if (hostLinkFixture && pathname === "/api/timeline/sessions/stream") {
+      const frames = [
+        `event: connected\ndata: ${JSON.stringify(hostLinkFixture.connected)}\n\n`,
+        ...(hostLinkFixture.lifecycle
+          ? [
+              `event: host_lifecycle\ndata: ${JSON.stringify(hostLinkFixture.lifecycle)}\n\n`,
+            ]
+          : []),
+      ];
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: frames.join(""),
+      });
+      return;
+    }
     if (pathname === "/api/timeline/sessions/stream" && scene === "timeline-hearth") {
       await route.fulfill({
         status: 200,
@@ -1168,13 +1228,15 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     return;
   }
 
-  const fixtureNowIso = SESSION_DETAIL_SCENES.includes(scene)
-    ? SESSION_DETAIL_STRESS_NOW
-    : new Date(FIRST_RUN_NOW).toISOString();
-  await page.addInitScript((nowIso) => {
-    const fixtureNow = Date.parse(nowIso);
-    Date.now = () => fixtureNow;
-  }, fixtureNowIso);
+  if (!HOST_LINK_SCENES.includes(scene)) {
+    const fixtureNowIso = SESSION_DETAIL_SCENES.includes(scene)
+      ? SESSION_DETAIL_STRESS_NOW
+      : new Date(FIRST_RUN_NOW).toISOString();
+    await page.addInitScript((nowIso) => {
+      const fixtureNow = Date.parse(nowIso);
+      Date.now = () => fixtureNow;
+    }, fixtureNowIso);
+  }
 
   if (scene === "session-input-outbox") {
     await page.addInitScript((sessionId) => {
@@ -1276,6 +1338,17 @@ async function captureBundle(
       screenshotGate ? "body[data-screenshot-ready='true']" : "body[data-ready='true']",
       { timeout: screenshotGate ? 12_000 : 5_000 }, // 12s is ~2.8x the observed 4.27s cold summary request.
     );
+  }
+  if (HOST_LINK_SCENES.includes(scene)) {
+    const expectedState =
+      scene === "host-link-updating"
+        ? "updating"
+        : scene === "host-link-slow-update"
+          ? "slow_update"
+          : "reload";
+    await page.locator(
+      `[data-testid="host-link-banner"][data-state="${expectedState}"]`,
+    ).waitFor({ state: "visible", timeout: 6_000 });
   }
 
   if (scene === "session-wake-origin") {

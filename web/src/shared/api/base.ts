@@ -1,6 +1,10 @@
 import { config } from "@/shared/lib/config";
 import { fetchWithRefresh } from "@/features/auth/auth-refresh";
 import { logger } from "@/shared/lib/logger";
+import {
+  observeHostLinkApiError,
+  observeHostLinkSuccessfulWrite,
+} from "@/shared/hostLink/store";
 
 export const DEMO_READ_ONLY_MESSAGE =
   "This is a demo. You can browse sessions, but changes and session control are disabled.";
@@ -138,7 +142,13 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
+    observeHostLinkApiError(response.status, data);
     throw new ApiError({ url, status: response.status, body: data });
+  }
+
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+    observeHostLinkSuccessfulWrite();
   }
 
   return data as T;

@@ -31,6 +31,8 @@ import {
   type SessionLockInfo,
 } from "@/shared/api/index";
 import type { AgentSession } from "@/shared/api/agents";
+import { HOST_LINK_COPY } from "@/shared/hostLink/copy";
+import { hostLinkStore } from "@/shared/hostLink/store";
 import { refreshAgentSessionProjectionTail } from "@/shared/api/useAgentSessions";
 import type {
   ManagedLaunchSuggestion,
@@ -745,6 +747,14 @@ export function SessionChat({
       timers.clear();
     };
   }, []);
+  const hostResumeRetryWaitersRef = useRef(new Map<string, () => void>());
+  useEffect(() => {
+    const waiters = hostResumeRetryWaitersRef.current;
+    return () => {
+      for (const cancel of waiters.values()) cancel();
+      waiters.clear();
+    };
+  }, [session.id]);
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -1148,6 +1158,44 @@ export function SessionChat({
   const [turnEndedDraft, setTurnEndedDraft] =
     useState<TurnEndedDraft | null>(null);
   const [editingPendingId, setEditingPendingId] = useState<string | null>(null);
+  const queueSendUntilHostServes = useCallback(
+    (
+      message: string,
+      intent: "auto" | "queue" | "steer",
+      attachments: { blob: Blob; filename: string }[],
+      options: ManagedSendOptions,
+      clientRequestId: string,
+      model: string | null | undefined,
+    ): ManagedSendResult => {
+      setPendingManagedLocalInputs((current) =>
+        current.map((pending) =>
+          pending.clientRequestId === clientRequestId
+            ? {
+                ...pending,
+                phase: "submitting",
+                detail: HOST_LINK_COPY.sendQueued,
+              }
+            : pending,
+        ),
+      );
+      setError(null);
+
+      if (!hostResumeRetryWaitersRef.current.has(clientRequestId)) {
+        const cancel = hostLinkStore.waitForServing(() => {
+          hostResumeRetryWaitersRef.current.delete(clientRequestId);
+          void outboxActionsRef.current.retry(message, intent, attachments, {
+            existingClientRequestId: clientRequestId,
+            model,
+            legacyModelMissing: options.legacyModelMissing,
+          });
+        });
+        hostResumeRetryWaitersRef.current.set(clientRequestId, cancel);
+      }
+
+      return { kind: "accepted", clientRequestId };
+    },
+    [],
+  );
   const handleManagedLocalSend = useCallback(
     async (
       message: string,
@@ -1391,6 +1439,19 @@ export function SessionChat({
       };
 
       try {
+        if (
+          hostLinkStore.getSnapshot().state === "updating" ||
+          hostLinkStore.getSnapshot().state === "slow_update"
+        ) {
+          return queueSendUntilHostServes(
+            message,
+            intent,
+            attachments,
+            options,
+            clientRequestId,
+            model,
+          );
+        }
         const result: SessionInputResponse = attachments.length
           ? await postSessionInputMultipart(session.id, {
               text: message,
@@ -1541,6 +1602,24 @@ export function SessionChat({
         );
         return { kind: "unknown", clientRequestId, error: UNCONFIRMED_DELIVERY_ERROR };
       } catch (error) {
+        const apiError =
+          error && typeof error === "object"
+            ? (error as { status?: unknown; body?: unknown })
+            : null;
+        const apiBody =
+          apiError?.body && typeof apiError.body === "object"
+            ? (apiError.body as { code?: unknown })
+            : null;
+        if (apiError?.status === 503 && apiBody?.code === "runtime_restarting") {
+          return queueSendUntilHostServes(
+            message,
+            intent,
+            attachments,
+            options,
+            clientRequestId,
+            model,
+          );
+        }
         const structured = structuredInputErrorDetail(error);
         if (
           structured?.client_request_id &&
@@ -1696,6 +1775,7 @@ export function SessionChat({
       markInputDelivered,
       queryClient,
       refreshCurrentSessionWorkspace,
+      queueSendUntilHostServes,
       selectedModel,
       session.id,
     ],
@@ -1938,6 +2018,8 @@ export function SessionChat({
 
   const handleDiscardPending = useCallback(
     (clientRequestId: string) => {
+      hostResumeRetryWaitersRef.current.get(clientRequestId)?.();
+      hostResumeRetryWaitersRef.current.delete(clientRequestId);
       try {
         dismissInputReceipt(session.id, clientRequestId);
       } catch {
@@ -1960,6 +2042,8 @@ export function SessionChat({
 
   const handleEditPending = useCallback(
     (pending: PendingManagedLocalInput) => {
+      hostResumeRetryWaitersRef.current.get(pending.clientRequestId)?.();
+      hostResumeRetryWaitersRef.current.delete(pending.clientRequestId);
       setEditingPendingId(pending.clientRequestId);
       setDraft(pending.text);
       if (!pending.legacyModelMissing) {
@@ -2170,7 +2254,10 @@ export function SessionChat({
         inFlight.push({
           ...base,
           state: "sending",
-          detail: pending.detail ?? null,
+          detail:
+            pending.detail === HOST_LINK_COPY.sendQueued
+              ? null
+              : pending.detail ?? null,
         });
       }
     }
@@ -2215,6 +2302,11 @@ export function SessionChat({
     (Boolean(turnEndedDraft) ||
       (error?.endsWith(UNCONFIRMED_DELIVERY_ERROR) ?? false));
 
+  const hostUpdateQueued = pendingManagedLocalInputs.some(
+    (pending) =>
+      pending.phase === "submitting" &&
+      pending.detail === HOST_LINK_COPY.sendQueued,
+  );
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -2523,6 +2615,15 @@ export function SessionChat({
         </p>
       ) : null}
 
+      {hostUpdateQueued ? (
+        <div
+          className="session-chat-host-link-queued"
+          data-testid="session-chat-update-queued"
+          role="status"
+        >
+          {HOST_LINK_COPY.sendQueued}
+        </div>
+      ) : null}
       <form
         className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}${isDock && composerState.tone === "live" ? " session-chat-composer--running" : ""}`}
         onSubmit={handleSend}
