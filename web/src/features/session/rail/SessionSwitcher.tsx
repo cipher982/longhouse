@@ -84,7 +84,10 @@ function SwitcherPreview({ row }: { row: RailActiveSession }) {
       </div>
       {askIsNewer ? askBlock : null}
       {reply ? (
-        <blockquote className="session-switcher__reply">{reply}</blockquote>
+        <>
+          {askIsNewer ? <p className="session-switcher__label">Earlier reply</p> : null}
+          <blockquote className="session-switcher__reply">{reply}</blockquote>
+        </>
       ) : loading ? (
         <p className="session-switcher__empty">Loading…</p>
       ) : askIsNewer ? null : (

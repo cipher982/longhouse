@@ -314,8 +314,10 @@
   white-space: pre-wrap;
 }
 
+.session-switcher__label,
 .session-switcher__ask span {
   display: block;
+  margin: 0;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.08em;

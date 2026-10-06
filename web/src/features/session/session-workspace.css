@@ -3119,7 +3119,9 @@
   }
 
   /* Phones run 1.5px under the chosen size: Terminal (14.5px) keeps the
-     13px phone type, and every step of the size control moves it. */
+     13px phone type, and every step of the size control moves it. Spacing
+     comes from the preset (Comfortable is the roomiest on every width);
+     the fallbacks here only apply outside a session route. */
   .tl-msg__body {
     font-size: calc(var(--tl-prose-size, 14.5px) - 1.5px);
     line-height: var(--tl-prose-leading, 1.5);

@@ -117,20 +117,23 @@ function SessionRail({
   // Focus goes back where it was before the switcher opened (the composer,
   // a rail row), read before the switcher's own field takes it.
   const focusBeforeSwitcher = useRef<HTMLElement | null>(null);
+  const switcherOpenRef = useRef(false);
   const setSwitcherOpen = useCallback((next: boolean | ((open: boolean) => boolean)) => {
-    setSwitcherOpenState((open) => {
-      const value = typeof next === "function" ? next(open) : next;
-      if (value && !open) {
-        focusBeforeSwitcher.current =
-          document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      }
-      if (!value && open) {
-        const target = focusBeforeSwitcher.current;
-        focusBeforeSwitcher.current = null;
-        queueMicrotask(() => target?.isConnected && target.focus());
-      }
-      return value;
-    });
+    const open = switcherOpenRef.current;
+    const value = typeof next === "function" ? next(open) : next;
+    if (value === open) return;
+    switcherOpenRef.current = value;
+    if (value) {
+      focusBeforeSwitcher.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    } else {
+      const target = focusBeforeSwitcher.current;
+      focusBeforeSwitcher.current = null;
+      queueMicrotask(() => {
+        if (target?.isConnected) target.focus();
+      });
+    }
+    setSwitcherOpenState(value);
   }, []);
 
   const rows = useMemo(() => {
