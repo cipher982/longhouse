@@ -145,6 +145,7 @@ function SessionRail({
         setSwitcherOpen((open) => !open);
         return;
       }
+      if (switcherOpen) return;
       const index = railHotkeyIndex(event, mac);
       if (index == null || index >= Math.min(rows.length, RAIL_HOTKEY_COUNT)) return;
       // Alt+digit types characters on some layouts; never take it from a field.
@@ -156,7 +157,7 @@ function SessionRail({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac, openSession, rows]);
+  }, [mac, openSession, rows, switcherOpen]);
 
   return (
     <nav className="session-rail" aria-label="Sessions" data-testid="session-rail">
@@ -171,7 +172,8 @@ function SessionRail({
             data-testid="session-switcher-open"
           >
             <SearchIcon width={12} height={12} />
-            {switcherLabel}
+            <span className="session-rail__find-key">{switcherLabel}</span>
+            <span className="sr-only">Switch session</span>
           </button>
           <Link to={returnTo} className="session-rail__all">
             Timeline
@@ -215,7 +217,9 @@ function SessionRail({
                 <span className="session-rail__title">{row.title}</span>
                 <span className="session-rail__key">
                   <span className={`session-rail__dot session-rail__dot--${row.tone}`} aria-hidden="true" />
-                  {index < RAIL_HOTKEY_COUNT ? railHotkeyLabel(index, mac) : null}
+                  {index < RAIL_HOTKEY_COUNT ? (
+                    <span className="session-rail__hotkey">{railHotkeyLabel(index, mac)}</span>
+                  ) : null}
                 </span>
                 <span className="session-rail__sub">
                   {[row.host, row.stateText].filter(Boolean).join(" · ")}

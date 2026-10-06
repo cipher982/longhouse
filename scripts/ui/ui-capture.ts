@@ -1324,6 +1324,7 @@ async function captureBundle(
 
   for (const step of actions) {
     const separator = step.indexOf(":");
+    if (separator === -1) throw new Error(`--action step "${step}" needs a verb: click:<selector> or press:<key>`);
     const verb = step.slice(0, separator);
     const target = step.slice(separator + 1);
     if (verb === "click") await page.click(target);

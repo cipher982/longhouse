@@ -2,12 +2,20 @@
  * ⌘K session switcher (session-view-terminal-parity C8): type to filter the
  * rail's sessions, ↑/↓ to move, ↵ to open. The preview reads the same
  * workspace cache entry the session page uses, so a session the rail has
- * already warmed previews instantly; one it has not is fetched on highlight.
+ * already warmed previews instantly; one it has not is fetched once the
+ * highlight rests on it, not for every row an arrow key passes over.
  */
-import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentSessionWorkspaceResponse } from "@/shared/api/agents";
 import { agentSessionWorkspaceQueryOptions } from "@/shared/api/useAgentSessions";
+import { useDebouncedValue } from "@/shared/hooks/useDebouncedValue";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { SearchIcon } from "@/shared/ui/icons";
@@ -28,43 +36,61 @@ export function filterSwitcherRows<T extends Pick<RailActiveSession, "title" | "
   });
 }
 
-/** The newest ask and the newest reply, from a cached workspace page. */
+/** The newest ask and the newest reply, from a cached workspace page, and
+ * whether the ask came after the reply (it is still waiting for one). */
 export function previewFromWorkspace(workspace: AgentSessionWorkspaceResponse | undefined) {
   const items = workspace?.projection.items ?? [];
   let ask: string | null = null;
   let reply: string | null = null;
+  let askIsNewer = false;
   for (let index = items.length - 1; index >= 0 && (ask == null || reply == null); index -= 1) {
     const event = items[index].event;
     const text = event?.content_text?.trim();
     if (!event || !text || event.tool_name) continue;
     if (event.role === "assistant" && reply == null) reply = text.slice(0, PREVIEW_CHARS);
-    if (event.role === "user" && ask == null) ask = text.slice(0, PREVIEW_CHARS);
+    if (event.role === "user" && ask == null) {
+      ask = text.slice(0, PREVIEW_CHARS);
+      askIsNewer = reply == null;
+    }
   }
-  return { ask, reply };
+  return { ask, reply, askIsNewer };
+}
+
+/** The highlighted session's workspace: whatever the cache already holds at
+ * once, and a fetch only after the highlight has rested for a moment. */
+function useSwitcherPreview(sessionId: string) {
+  const queryClient = useQueryClient();
+  const settledId = useDebouncedValue(sessionId, 250);
+  const options = agentSessionWorkspaceQueryOptions(sessionId, { limit: 200 });
+  const query = useQuery({ ...options, enabled: settledId === sessionId });
+  const cached = queryClient.getQueryData<AgentSessionWorkspaceResponse>(options.queryKey);
+  return { data: query.data ?? cached, loading: !cached && query.data == null };
 }
 
 function SwitcherPreview({ row }: { row: RailActiveSession }) {
-  const { data, isLoading } = useQuery(agentSessionWorkspaceQueryOptions(row.id, { limit: 200 }));
-  const { ask, reply } = previewFromWorkspace(data);
+  const { data, loading } = useSwitcherPreview(row.id);
+  const { ask, reply, askIsNewer } = previewFromWorkspace(data);
+  const askBlock = ask ? (
+    <p className="session-switcher__ask">
+      <span>{askIsNewer ? "Newest ask, no reply yet" : "Last ask"}</span>
+      {ask}
+    </p>
+  ) : null;
   return (
     <div className="session-switcher__preview" data-testid="session-switcher-preview">
       <h3>{row.title}</h3>
       <div className="session-switcher__meta">
         {[row.provider, row.host, row.stateText].filter(Boolean).join(" · ")}
       </div>
+      {askIsNewer ? askBlock : null}
       {reply ? (
         <blockquote className="session-switcher__reply">{reply}</blockquote>
-      ) : isLoading ? (
+      ) : loading ? (
         <p className="session-switcher__empty">Loading…</p>
       ) : (
         <p className="session-switcher__empty">No reply yet.</p>
       )}
-      {ask ? (
-        <p className="session-switcher__ask">
-          <span>Last ask</span>
-          {ask}
-        </p>
-      ) : null}
+      {askIsNewer ? null : askBlock}
     </div>
   );
 }
@@ -86,7 +112,20 @@ export function SessionSwitcher({
   const [highlight, setHighlight] = useState(0);
   const matches = useMemo(() => filterSwitcherRows(rows, query), [rows, query]);
   const selected = matches[Math.min(highlight, Math.max(0, matches.length - 1))] ?? null;
+  const inputRef = useRef<HTMLInputElement>(null);
   useEscapeKey(onClose, true);
+
+  // Focus goes back where it was when the switcher closes.
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => previous?.focus();
+  }, []);
+
+  // The keyboard selection never leaves the visible list.
+  useEffect(() => {
+    if (!selected) return;
+    document.getElementById(`session-switcher-${selected.id}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -107,10 +146,23 @@ export function SessionSwitcher({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="session-switcher" role="dialog" aria-modal="true" aria-label="Switch session">
+      <div
+        className="session-switcher"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Switch session"
+        onKeyDown={(event) => {
+          // The filter field is the dialog's one stop; Tab never leaves it.
+          if (event.key === "Tab") {
+            event.preventDefault();
+            inputRef.current?.focus();
+          }
+        }}
+      >
         <label className="session-switcher__query">
           <SearchIcon width={15} height={15} />
           <input
+            ref={inputRef}
             autoFocus
             value={query}
             placeholder="Switch to a session…"

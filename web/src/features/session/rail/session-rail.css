@@ -345,11 +345,9 @@
   }
 }
 
-/* No keyboard in a phone drawer: drop the jump-key hints, keep the dots. */
-.mobile-nav-session-slot .session-rail__key {
-  font-size: 0;
-}
-
-.mobile-nav-session-slot .session-rail__find {
+/* No keyboard in a phone drawer: drop the key hints, keep the dots and the
+   search button (the switcher's only touch entry). */
+.mobile-nav-session-slot .session-rail__hotkey,
+.mobile-nav-session-slot .session-rail__find-key {
   display: none;
 }

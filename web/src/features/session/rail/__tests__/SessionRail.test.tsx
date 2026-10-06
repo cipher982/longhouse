@@ -265,8 +265,18 @@ describe("session switcher", () => {
         ],
       },
     } as unknown as AgentSessionWorkspaceResponse;
-    expect(previewFromWorkspace(workspace)).toEqual({ ask: "first ask", reply: "reply" });
-    expect(previewFromWorkspace(undefined)).toEqual({ ask: null, reply: null });
+    expect(previewFromWorkspace(workspace)).toEqual({ ask: "first ask", reply: "reply", askIsNewer: false });
+    expect(previewFromWorkspace(undefined)).toEqual({ ask: null, reply: null, askIsNewer: false });
+
+    const waiting = {
+      projection: {
+        items: [
+          { kind: "event", event: { role: "assistant", content_text: "old reply", tool_name: null } },
+          { kind: "event", event: { role: "user", content_text: "new ask", tool_name: null } },
+        ],
+      },
+    } as unknown as AgentSessionWorkspaceResponse;
+    expect(previewFromWorkspace(waiting)).toEqual({ ask: "new ask", reply: "old reply", askIsNewer: true });
   });
 
   it("opens on Command-K, filters, previews and opens the match on Enter", async () => {
@@ -277,8 +287,48 @@ describe("session switcher", () => {
     fireEvent.change(input, { target: { value: "session b" } });
     expect(screen.getAllByTestId("session-switcher-row")).toHaveLength(1);
     expect(await screen.findByText("Shipped in abc123.")).toBeInTheDocument();
+    // Jump keys belong to the switcher's owner page only while it is closed.
+    fireEvent.keyDown(window, { code: "Digit3", ctrlKey: true });
+    expect(navigateMock).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Enter" });
     expect(navigateMock).toHaveBeenCalledWith("/timeline/b", { state: { from: "/timeline" } });
     expect(screen.queryByTestId("session-switcher")).not.toBeInTheDocument();
+  });
+});
+
+describe("session switcher preview fetching", () => {
+  const platform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+
+  beforeEach(() => {
+    Object.defineProperty(window.navigator, "platform", { value: "MacIntel", configurable: true });
+    fetchAgentSessionsMock.mockResolvedValue(list(["a", "b", "c", "d"]));
+    fetchWorkspaceMock.mockResolvedValue({ projection: { items: [] } });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    if (platform) Object.defineProperty(window.navigator, "platform", platform);
+    else delete (window.navigator as { platform?: string }).platform;
+  });
+
+  it("fetches only the row the highlight rests on, not every row it passes", async () => {
+    renderRail("a");
+    await screen.findAllByTestId("session-rail-row");
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const input = screen.getByLabelText("Filter sessions");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    const previewed = fetchWorkspaceMock.mock.calls.map(([id]) => id);
+    // The first row previews on open (normally the open, already cached
+    // session); rows the arrows only passed over are never fetched.
+    expect(previewed).toContain("d");
+    expect(previewed).not.toContain("b");
+    expect(previewed).not.toContain("c");
   });
 });
