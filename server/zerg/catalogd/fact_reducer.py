@@ -448,14 +448,16 @@ def read_registry_lifecycle_heads(
     """Read the delegation_lifecycle heads that can refine a delegation registry.
 
     A lifecycle edge only updates a subagent the registry already names
-    (``existing_exact_link_only``), keyed ``run:<run>:agent:<id>`` under the
-    registry's source and run. Every SubagentStart leaves one such head and
-    nothing retires it, so a long coordinating session accumulates hundreds
-    that can no longer match anything. Reading by the registry's own members
-    bounds this by the registry's item limit instead of by session age.
+    (``existing_exact_link_only``), matched by item id or parent tool call under
+    the registry's source and run (session_state_facts_projector
+    ``_registry_items_with_lifecycle``). Every SubagentStart leaves one such
+    head and nothing retires it, so a long coordinating session accumulates
+    hundreds that can no longer match anything. Keeping only edges that match
+    a registry member bounds what is served by the registry's item limit
+    instead of by session age.
     """
 
-    keys: set[tuple[str, str, str, str]] = set()
+    members: dict[str, dict[tuple[str, str], tuple[set[str], set[str]]]] = {}
     for session_id, heads in heads_by_session.items():
         for head in heads:
             if head.get("family") != "delegation":
@@ -465,24 +467,39 @@ def read_registry_lifecycle_heads(
             except (TypeError, ValueError):
                 continue
             run_id = str(head.get("source_epoch") or "")
-            if not run_id:
+            if not isinstance(value, dict) or not run_id:
                 continue
+            ids, tool_ids = members.setdefault(session_id, {}).setdefault((str(head["source"]), run_id), (set(), set()))
             for item in [*(value.get("items") or []), *(value.get("recent_items") or [])]:
-                if isinstance(item, dict) and item.get("kind") == "subagent" and isinstance(item.get("id"), str) and item["id"]:
-                    keys.add((session_id, f"run:{run_id}:agent:{item['id']}", str(head["source"]), run_id))
+                if not isinstance(item, dict) or item.get("kind") != "subagent":
+                    continue
+                if isinstance(item.get("id"), str) and item["id"]:
+                    ids.add(item["id"])
+                if isinstance(item.get("parent_tool_call_id"), str) and item["parent_tool_call_id"]:
+                    tool_ids.add(item["parent_tool_call_id"])
     grouped: dict[str, list[dict[str, Any]]] = {session_id: [] for session_id in heads_by_session}
-    if not keys:
+    wanted = {session_id for session_id, coordinates in members.items() if any(ids or tools for ids, tools in coordinates.values())}
+    if not wanted:
         return grouped
     rows = connection.execute(
         select(FactHead.__table__)
-        .where(
-            FactHead.family == "delegation_lifecycle",
-            tuple_(FactHead.session_id, FactHead.subject_key, FactHead.source, FactHead.source_epoch).in_(sorted(keys)),
-        )
+        .where(FactHead.family == "delegation_lifecycle", FactHead.session_id.in_(sorted(wanted)))
         .order_by(FactHead.session_id.asc(), FactHead.updated_commit_seq.desc(), FactHead.subject_key.asc())
     ).mappings()
     for row in rows:
-        grouped.setdefault(str(row["session_id"]), []).append(dict(row))
+        session_id = str(row["session_id"])
+        coordinate = members.get(session_id, {}).get((str(row["source"]), str(row["source_epoch"])))
+        if coordinate is None:
+            continue
+        try:
+            item = json.loads(row["value_json"]).get("item")
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not isinstance(item, dict):
+            continue
+        ids, tool_ids = coordinate
+        if item.get("id") in ids or (item.get("parent_tool_call_id") and item.get("parent_tool_call_id") in tool_ids):
+            grouped.setdefault(session_id, []).append(dict(row))
     return grouped
 
 

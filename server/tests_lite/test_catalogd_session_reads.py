@@ -1932,6 +1932,7 @@ def test_shadow_state_reads_only_registry_matched_lifecycle_heads(daemon_paths):
         "items": [
             {"id": "monitor-1", "kind": "monitor", "status": "running"},
             {"id": "agent-kept", "kind": "subagent", "status": "running"},
+            {"id": "agent-by-tool", "kind": "subagent", "status": "running", "parent_tool_call_id": "toolu-kept"},
         ],
     }
     rows = [head("delegation", f"run:{run_id}", registry, 1)]
@@ -1940,6 +1941,15 @@ def test_shadow_state_reads_only_registry_matched_lifecycle_heads(daemon_paths):
         for index in range(300)
     ]
     rows.append(head("delegation_lifecycle", f"run:{run_id}:agent:agent-kept", {"item": {"id": "agent-kept"}}, 5))
+    # The projector also folds an edge by parent tool call when the ids differ.
+    rows.append(
+        head(
+            "delegation_lifecycle",
+            f"run:{run_id}:agent:agent-native",
+            {"item": {"id": "agent-native", "parent_tool_call_id": "toolu-kept"}},
+            6,
+        )
+    )
     with engine.begin() as connection:
         connection.execute(LiveUser.__table__.insert().values(id=7, email="owner@example.com", role="ADMIN", is_active=True))
         _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
@@ -1966,12 +1976,15 @@ def test_shadow_state_reads_only_registry_matched_lifecycle_heads(daemon_paths):
 
     [row] = [row for row in listed["rows"] if row["facts"]["catalog"]["session_id"] == session_id]
     assert row["heads_truncated"] is False
-    assert [h["subject_key"] for h in row["heads"] if h["family"] == "delegation_lifecycle"] == [f"run:{run_id}:agent:agent-kept"]
+    assert [h["subject_key"] for h in row["heads"] if h["family"] == "delegation_lifecycle"] == [
+        f"run:{run_id}:agent:agent-native",
+        f"run:{run_id}:agent:agent-kept",
+    ]
     for result in (single, many):
         assert result["heads_truncated"] is False
         lifecycle = [h["subject_key"] for h in result["heads"] if h["family"] == "delegation_lifecycle"]
-        assert lifecycle == [f"run:{run_id}:agent:agent-kept"]
-        assert result["head_count"] == 2
+        assert lifecycle == [f"run:{run_id}:agent:agent-native", f"run:{run_id}:agent:agent-kept"]
+        assert result["head_count"] == 3
 
 
 @pytest.mark.asyncio
