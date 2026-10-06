@@ -263,7 +263,8 @@ test.describe("Console lifecycle contract", () => {
 
       const terminal = await readSession(request, created.session_id);
       expect(terminal.session_state.run.lifecycle).toBe("ended");
-      expect(terminal.session_state.presentation.primary.key).toBe("ended");
+      // A completed Console turn leaves a reusable session: Idle, not Ended.
+      expect(terminal.session_state.presentation.primary.key).toBe("idle");
       expect(terminal.session_state.presentation.access.key).toBe(
         "live_control",
       );
