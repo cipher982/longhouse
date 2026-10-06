@@ -2132,7 +2132,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
-                        if host_link.is_updating() {
+                        if host_link.explains_failure(&err.to_string()) {
                             tracing::debug!("Outbox presence POST task deferred during Runtime Host update: {}", err);
                         } else {
                             tracing::warn!("Outbox presence POST task failed: {}", err);
@@ -2232,7 +2232,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             runtime_outbox_consecutive_failures.saturating_add(1);
                         runtime_outbox_retry_after =
                             Some(Instant::now() + LIVE_LOCAL_RETRY_DELAY);
-                        if host_link.is_updating() {
+                        if host_link.explains_failure(&err.to_string()) {
                             tracing::debug!("Runtime-event outbox task deferred during Runtime Host update: {}", err);
                         } else {
                             tracing::warn!("Outbox runtime-event POST task failed: {}", err);
@@ -2333,7 +2333,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 {
                                     pending_truth_heartbeat = None;
                                 }
-                                if host_link.is_updating() {
+                                // The failed send did not deliver this truth: forget it, so the
+                                // next projection retries it (after the 1 s window) instead of
+                                // waiting for the 60 s periodic heartbeat.
+                                if last_runtime_truth_signature.as_deref() == Some(result.signature.as_str()) {
+                                    last_runtime_truth_signature = None;
+                                }
+                                if host_link.explains_failure(&error) {
                                     tracing::debug!(
                                         reason = result.reason,
                                         error = %error,
@@ -2373,7 +2379,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             chrono::Utc::now().to_rfc3339(),
                             &error,
                         );
-                        if host_link.is_updating() {
+                        if host_link.explains_failure(&error) {
                             tracing::debug!(error = %error, "Heartbeat POST task deferred during Runtime Host update");
                         } else if transitioned {
                             tracing::warn!(error = %error, "Heartbeat POST task failed");
@@ -6702,7 +6708,11 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             if crate::shipping::client::is_connect_error(&error) {
                 result.had_connect_error = true;
             }
-            if task_context.client.host_link().is_updating() {
+            if task_context
+                .client
+                .host_link()
+                .explains_failure(&format!("{error:#}"))
+            {
                 tracing::debug!(
                     path = %result.job.path.display(),
                     provider = result.job.provider,
@@ -8086,9 +8096,7 @@ mod tests {
             schema_version: 3,
             observed_at: "2026-05-05T12:00:00Z".to_string(),
             identities: Vec::new(),
-            candidate_identities: std::sync::Arc::<[heartbeat::EvidenceIdentity]>::from(
-                Vec::new(),
-            ),
+            candidate_identities: std::sync::Arc::<[heartbeat::EvidenceIdentity]>::from(Vec::new()),
             run: Vec::new(),
             process: Vec::new(),
             activity: vec![heartbeat::ActivityEvidence {
@@ -8216,9 +8224,7 @@ mod tests {
             schema_version: 3,
             observed_at: "2026-08-03T12:00:00Z".to_string(),
             identities: Vec::new(),
-            candidate_identities: std::sync::Arc::<[heartbeat::EvidenceIdentity]>::from(
-                Vec::new(),
-            ),
+            candidate_identities: std::sync::Arc::<[heartbeat::EvidenceIdentity]>::from(Vec::new()),
             run: Vec::new(),
             process: Vec::new(),
             activity: Vec::new(),

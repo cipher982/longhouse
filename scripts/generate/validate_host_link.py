@@ -52,6 +52,7 @@ EXPECTED = {
             "claim_started_at": "rfc3339_utc|null",
             "last_acknowledged_at": "rfc3339_utc|null",
             "fresh_horizon_secs": "integer|null",
+            "last_serving_at": "rfc3339_utc|null",
             "runtime_epoch": "string|null",
         }
     },

@@ -114,6 +114,17 @@ impl HostLink {
         matches!(self.refresh().state.as_str(), "updating" | "slow_update")
     }
 
+    /// Whether a planned restart explains this failure, so it may log quietly.
+    /// Only restart-shaped failures qualify, and only while a claim is held:
+    /// transport errors and timeouts, typed restart refusals
+    /// (`runtime_restarting` / `runtime_unreachable`), or a gateway page with
+    /// no body of ours. Anything else, such as a 4xx, a typed backpressure
+    /// refusal or a serialization error, is a genuine failure and keeps its
+    /// normal level during an update.
+    pub fn explains_failure(&self, error: &str) -> bool {
+        self.is_updating() && restart_shaped_failure(error)
+    }
+
     pub fn observe_lifecycle_value(&self, value: &Value) {
         let Ok(lifecycle) = serde_json::from_value::<HostLifecycle>(value.clone()) else {
             return;
@@ -269,6 +280,33 @@ impl HostLink {
             }
         }
     }
+}
+
+pub(crate) fn restart_shaped_failure(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    if error.contains("runtime_restarting") || error.contains("runtime_unreachable") {
+        return true;
+    }
+    let transport = [
+        "error sending request",
+        "connection",
+        "timed out",
+        "timeout",
+        "post failed",
+        "put failed",
+        "broken pipe",
+        "reset by peer",
+    ];
+    if transport.iter().any(|needle| error.contains(needle)) && !error.contains("returned 4") {
+        return true;
+    }
+    let gateway_status = ["returned 502", "returned 503", "returned 504"]
+        .iter()
+        .any(|needle| error.contains(needle));
+    gateway_status
+        && (error.contains("<!doctype")
+            || error.contains("<html")
+            || error.trim_end().ends_with(':'))
 }
 
 impl Default for HostLink {
@@ -544,5 +582,23 @@ mod tests {
             !link.observe_http_rejection(503, &json!({"code": "write_backpressure"}).to_string())
         );
         assert!(!link.observe_http_rejection(503, "<!DOCTYPE html>"));
+    }
+
+    #[test]
+    fn only_restart_shaped_failures_log_quietly_during_an_update() {
+        let link = HostLink::new();
+        link.observe_claim(claim(30, 360, 960, "attempt"));
+        // Expected while the host restarts: transport errors, typed refusals,
+        // gateway pages.
+        assert!(link.explains_failure("POST failed: error sending request for url"));
+        assert!(link.explains_failure(r#"POST returned 503: {"code":"runtime_restarting"}"#));
+        assert!(link.explains_failure("POST returned 502: <!DOCTYPE html><title>Bad gateway"));
+        // Genuine failures keep their level even during an update.
+        assert!(!link.explains_failure(r#"POST returned 422: {"detail":"invalid event"}"#));
+        assert!(!link.explains_failure(r#"POST returned 503: {"code":"write_backpressure"}"#));
+        assert!(!link.explains_failure("task 12 panicked with message \"boom\""));
+        assert!(!link.explains_failure("runtime event could not be serialized"));
+        // Without a claim nothing is explained away.
+        assert!(!HostLink::new().explains_failure("POST failed: error sending request for url"));
     }
 }

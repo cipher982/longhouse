@@ -1532,7 +1532,7 @@ async fn post_runtime_event_batch(
             outcome = isolate_permanent_runtime_event_rejection(client, batch).await;
         }
         Err(error) => {
-            if client.host_link().is_updating() {
+            if client.host_link().explains_failure(&error.to_string()) {
                 tracing::debug!(
                     error = %error,
                     event_count = batch.len(),
@@ -1624,7 +1624,7 @@ async fn isolate_permanent_runtime_event_rejection(
                 }
             }
             Err(error) => {
-                if client.host_link().is_updating() {
+                if client.host_link().explains_failure(&error.to_string()) {
                     tracing::debug!(
                         path = %post_path_display(post),
                         error = %error,
