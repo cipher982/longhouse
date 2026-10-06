@@ -381,6 +381,106 @@ struct TimelineConnectivityTests {
         #expect(state.banner(at: now) == .offline)
     }
 
+    @Test
+    func hostUpdateClaimWaitsTwoSecondsBeforeRendering() {
+        var state = TimelineConnectivityState()
+        state.apply(.hostLifecycle(hostLifecycle()), now: now)
+
+        #expect(state.banner(at: now.addingTimeInterval(1.999)) == .none)
+        #expect(state.banner(at: now.addingTimeInterval(2)) == .updating)
+    }
+
+    @Test
+    func actionWaitingOnRuntimeRestartShowsUpdateImmediately() {
+        var state = TimelineConnectivityState()
+        state.apply(.runtimeRestarting(hostLifecycle()), now: now)
+
+        #expect(state.banner(at: now) == .updating)
+        #expect(state.hostUpdate.waitingForAction)
+    }
+
+    @Test
+    func claimRenewalKeepsItsStartAndSlowUpdateShowsElapsedTime() {
+        var state = TimelineConnectivityState()
+        state.apply(
+            .hostLifecycle(hostLifecycle(expectedBackBy: now.addingTimeInterval(3))),
+            now: now
+        )
+
+        #expect(state.banner(at: now.addingTimeInterval(2)) == .updating)
+        #expect(state.banner(at: now.addingTimeInterval(3)) == .slowUpdate(elapsed: "3s"))
+
+        let renewed = hostLifecycle(
+            runtimeEpoch: "candidate",
+            expectedBackBy: now.addingTimeInterval(2)
+        )
+        state.apply(.hostLifecycle(renewed), now: now.addingTimeInterval(4))
+
+        #expect(state.hostUpdate.claimStartedAt == now)
+        #expect(state.banner(at: now.addingTimeInterval(4)) == .slowUpdate(elapsed: "4s"))
+    }
+
+    @Test
+    func epochAloneDoesNotEndClaimButServingEvidenceDoes() {
+        var state = TimelineConnectivityState()
+        state.apply(.hostLifecycle(hostLifecycle()), now: now)
+        state.apply(
+            .servingEvidence(.admission(nil, runtimeEpoch: "candidate")),
+            now: now.addingTimeInterval(2)
+        )
+        #expect(state.banner(at: now.addingTimeInterval(2)) == .updating)
+
+        state.apply(
+            .servingEvidence(.admission(.pending, runtimeEpoch: "candidate")),
+            now: now.addingTimeInterval(3)
+        )
+        #expect(state.banner(at: now.addingTimeInterval(3)) == .updating)
+
+        state.apply(
+            .servingEvidence(.admission(.open, runtimeEpoch: "candidate")),
+            now: now.addingTimeInterval(4)
+        )
+        #expect(state.banner(at: now.addingTimeInterval(4)) == .none)
+    }
+
+    @Test
+    func servingLifecycleAndAcceptedWriteEndClaim() {
+        var eventState = TimelineConnectivityState()
+        eventState.apply(.hostLifecycle(hostLifecycle()), now: now)
+        eventState.apply(.hostLifecycle(hostLifecycle(state: .serving)), now: now.addingTimeInterval(1))
+        #expect(eventState.banner(at: now.addingTimeInterval(1)) == .none)
+
+        var writeState = TimelineConnectivityState()
+        writeState.apply(.hostLifecycle(hostLifecycle()), now: now)
+        writeState.apply(.servingEvidence(.writeAccepted), now: now.addingTimeInterval(1))
+        #expect(writeState.banner(at: now.addingTimeInterval(1)) == .none)
+    }
+
+    private func hostLifecycle(
+        state: HostLifecycleState = .updating,
+        runtimeEpoch: String = "runtime-a",
+        attemptId: String = "attempt-1",
+        expectedBackBy: Date? = nil,
+        deadline: Date? = nil,
+        cutoff: Date? = nil
+    ) -> HostLifecycle {
+        HostLifecycle(
+            state: state,
+            runtimeEpoch: runtimeEpoch,
+            attemptId: attemptId,
+            phase: "drain",
+            expectedBackBy: expectedBackBy.map(timestamp),
+            deadline: deadline.map(timestamp),
+            cutoff: cutoff.map(timestamp)
+        )
+    }
+
+    private func timestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
     private func loadedFreshState() -> TimelineConnectivityState {
         TimelineConnectivityState(
             reachability: .reachable,

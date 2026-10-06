@@ -501,6 +501,8 @@ private func firstRunImportedSessions() -> [SessionSummary] {
         ("degraded", .degraded),
         ("offline", .offline),
         ("sign in required", .authRequired),
+        ("updating", .updating),
+        ("slow update", .slowUpdate(elapsed: "42s")),
     ]
     return ScrollView {
         VStack(alignment: .leading, spacing: 18) {
@@ -520,6 +522,54 @@ private func firstRunImportedSessions() -> [SessionSummary] {
     }
     .background(Ember.page)
     .preferredColorScheme(.dark)
+    .emberChrome()
+}
+
+#Preview("Timeline host update · Dark") {
+    let session = mockSession(
+        id: "host-update",
+        project: "zerg",
+        title: "A calm timeline during an update",
+        summary: "The agent continues while Longhouse is updating.",
+        statusLabel: "Thinking",
+        statusTone: "thinking",
+        activityRecency: "live",
+        anchorSecondsAgo: 5,
+        seenAtSecondsAgo: 5
+    )
+    ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+            ConnectionStatusStrip(banner: .updating)
+            TimelineSessionCardRow(session: session, role: .open, connectivityBanner: .updating)
+        }
+        .padding(16)
+    }
+    .background(Ember.page)
+    .preferredColorScheme(.dark)
+    .emberChrome()
+}
+
+#Preview("Timeline host update · Light") {
+    let session = mockSession(
+        id: "host-update-light",
+        project: "zerg",
+        title: "A calm timeline during an update",
+        summary: "The agent continues while Longhouse is updating.",
+        statusLabel: "Thinking",
+        statusTone: "thinking",
+        activityRecency: "live",
+        anchorSecondsAgo: 5,
+        seenAtSecondsAgo: 5
+    )
+    ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+            ConnectionStatusStrip(banner: .updating)
+            TimelineSessionCardRow(session: session, role: .open, connectivityBanner: .updating)
+        }
+        .padding(16)
+    }
+    .background(Ember.page)
+    .preferredColorScheme(.light)
     .emberChrome()
 }
 

@@ -246,6 +246,8 @@ private struct SessionScreenPreview: View {
         "Checksums so far match the manifest; continuing with the exact restore.",
     ]
     var connection: SessionRealtimeConnection = .connected
+    var hostUpdateState: HostUpdateState = HostUpdateState()
+    var hostUpdateNow: Date = Date()
     var isSending: Bool = false
     var queuedInputCount: Int = 0
     var queuedElsewhereCount: Int = 0
@@ -263,7 +265,9 @@ private struct SessionScreenPreview: View {
         draft: String = "",
         isSending: Bool = false,
         queuedInputCount: Int = 0,
-        queuedElsewhereCount: Int = 0
+        queuedElsewhereCount: Int = 0,
+        hostUpdateState: HostUpdateState = HostUpdateState(),
+        hostUpdateNow: Date = Date()
     ) {
         self.detail = detail
         self.activity = activity
@@ -272,6 +276,8 @@ private struct SessionScreenPreview: View {
         self.isSending = isSending
         self.queuedInputCount = queuedInputCount
         self.queuedElsewhereCount = queuedElsewhereCount
+        self.hostUpdateState = hostUpdateState
+        self.hostUpdateNow = hostUpdateNow
         _text = State(initialValue: draft)
     }
 
@@ -292,7 +298,13 @@ private struct SessionScreenPreview: View {
                     activity: activity
                 ) {
                     VStack(alignment: .leading, spacing: 8) {
-                        SessionRuntimeDock(detail: detail, activity: activity, realtimeConnection: connection)
+                        SessionRuntimeDock(
+                            detail: detail,
+                            activity: activity,
+                            realtimeConnection: connection,
+                            hostUpdateState: hostUpdateState,
+                            hostUpdateNow: hostUpdateNow
+                        )
                         if SessionComposerControlState.isVisible(for: detail) {
                             SessionComposer(
                                 detail: detail,
@@ -1125,4 +1137,55 @@ private func previewTask(
     SessionDelegationTaskSheet(facts: facts, asOf: Date(), onOpenSubagent: { _ in })
         .preferredColorScheme(.light)
         .emberChrome()
+}
+
+#Preview("Updates paused · Dark") {
+    updatesPausedSessionPreview()
+        .preferredColorScheme(.dark)
+        .emberChrome()
+}
+
+#Preview("Updates paused · Light") {
+    updatesPausedSessionPreview()
+        .preferredColorScheme(.light)
+        .emberChrome()
+}
+
+@MainActor
+private func updatesPausedSessionPreview() -> SessionScreenPreview {
+    let now = Date()
+    var hostUpdateState = HostUpdateState()
+    hostUpdateState.apply(
+        HostLifecycle(
+            state: .updating,
+            runtimeEpoch: "preview-runtime",
+            attemptId: "preview-attempt",
+            phase: "drain",
+            expectedBackBy: nil,
+            deadline: nil,
+            cutoff: nil
+        ),
+        now: now.addingTimeInterval(-3)
+    )
+    return SessionScreenPreview(
+        detail: .mock(
+            provider: "codex",
+            canSteer: true,
+            canQueue: true,
+            executing: true,
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "shell",
+                observedAt: isoDate(secondsAgo: 3),
+                validUntil: isoDate(secondsAgo: -90),
+                primaryKey: "executing",
+                primaryLabel: "Using shell",
+                primaryTone: "running"
+            )
+        ),
+        activity: codexBurst(),
+        draft: "The message stays queued",
+        hostUpdateState: hostUpdateState,
+        hostUpdateNow: now
+    )
 }

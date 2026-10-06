@@ -20,6 +20,8 @@ enum TimelineConnectivityBanner: Equatable, Hashable {
     case degraded
     case offline
     case authRequired
+    case updating
+    case slowUpdate(elapsed: String)
 }
 
 enum StreamDisconnectReason: Equatable {
@@ -32,6 +34,110 @@ enum StreamDisconnectReason: Equatable {
     case waitingForConnectivity
     case unknown
 }
+
+enum HostUpdatePresentation: Equatable, Hashable {
+    case updating
+    case slowUpdate(elapsed: String)
+}
+
+struct HostUpdateState: Equatable, Hashable, Sendable {
+    static let announceAfterSeconds: TimeInterval = 2
+
+    private(set) var claim: HostLifecycle?
+    private(set) var claimStartedAt: Date?
+    private(set) var waitingForAction = false
+    init() {}
+
+    var hasClaim: Bool { claim != nil }
+
+    func isActive(at now: Date) -> Bool {
+        guard claimStartedAt != nil else { return false }
+        guard let expiresAt = expiryDate, expiresAt <= now else { return true }
+        return false
+    }
+
+    func presentation(at now: Date) -> HostUpdatePresentation? {
+        guard isActive(at: now), let claimStartedAt else { return nil }
+        if let expectedBackBy = claim?.expectedBackBy.flatMap(LonghouseDateParser.parse),
+           expectedBackBy <= now {
+            return .slowUpdate(elapsed: RuntimeElapsed.label(from: claimStartedAt, to: now, precise: true))
+        }
+        guard waitingForAction || now.timeIntervalSince(claimStartedAt) >= Self.announceAfterSeconds else {
+            return nil
+        }
+        return .updating
+    }
+
+    mutating func apply(_ lifecycle: HostLifecycle, now: Date) {
+        guard lifecycle.state == .updating else {
+            observeServingEvidence()
+            return
+        }
+        if !isActive(at: now) {
+            observeServingEvidence()
+        }
+        let sameAttempt = claim.map { current in
+            guard let currentId = current.attemptId, let nextId = lifecycle.attemptId else {
+                // Epoch changes identify a new process, not a reopened host.
+                return true
+            }
+            return currentId == nextId
+        } ?? (waitingForAction && claimStartedAt != nil)
+        if !sameAttempt {
+            claimStartedAt = now
+        } else if claimStartedAt == nil {
+            claimStartedAt = now
+        }
+        claim = lifecycle
+    }
+
+    mutating func observeRuntimeRestarting(claim lifecycle: HostLifecycle?, now: Date) {
+        if !isActive(at: now) {
+            observeServingEvidence()
+        }
+        if let lifecycle, lifecycle.state == .updating {
+            apply(lifecycle, now: now)
+        } else if claimStartedAt == nil {
+            claimStartedAt = now
+        }
+        waitingForAction = true
+    }
+
+    mutating func observeServingEvidence() {
+        claim = nil
+        claimStartedAt = nil
+        waitingForAction = false
+    }
+
+    func nextClockInterval(at now: Date, default interval: TimeInterval) -> TimeInterval {
+        guard isActive(at: now), let claimStartedAt else { return interval }
+        var transitions = [Date]()
+        if !waitingForAction {
+            transitions.append(claimStartedAt.addingTimeInterval(Self.announceAfterSeconds))
+        }
+        if let expectedBackBy = claim?.expectedBackBy.flatMap(LonghouseDateParser.parse) {
+            transitions.append(expectedBackBy)
+            if expectedBackBy <= now {
+                transitions.append(now.addingTimeInterval(1))
+            }
+        }
+        if let expiryDate { transitions.append(expiryDate) }
+        guard let next = transitions.filter({ $0 > now }).min() else { return interval }
+        return min(interval, max(0.05, next.timeIntervalSince(now)))
+    }
+
+    private var expiryDate: Date? {
+        [claim?.deadline, claim?.cutoff]
+            .compactMap { $0.flatMap(LonghouseDateParser.parse) }
+            .min()
+    }
+}
+
+enum HostUpdateServingEvidence: Equatable, Sendable {
+    case admission(HostAdmission?, runtimeEpoch: String?)
+    case writeAccepted
+}
+
 
 enum TimelineStreamSignal: Equatable {
     case firstConnected
@@ -56,6 +162,9 @@ enum TimelineConnectivityEvent: Equatable {
     case streamDisconnected(StreamDisconnectReason)
     case lifecycleStopped
     case networkPathChanged(TimelineNetworkPathStatus)
+    case hostLifecycle(HostLifecycle)
+    case runtimeRestarting(HostLifecycle?)
+    case servingEvidence(HostUpdateServingEvidence)
 }
 
 struct TimelineConnectivityState: Equatable {
@@ -69,6 +178,7 @@ struct TimelineConnectivityState: Equatable {
     var hasLoadedData = false
     var hasFreshnessEvidence = false
     var networkPathStatus: TimelineNetworkPathStatus = .unknown
+    var hostUpdate = HostUpdateState()
 
     init(
         reachability: SnapshotReachability = .unknown,
@@ -76,7 +186,8 @@ struct TimelineConnectivityState: Equatable {
         lastUpdatedAt: Date? = nil,
         hasLoadedData: Bool = false,
         hasFreshnessEvidence: Bool? = nil,
-        networkPathStatus: TimelineNetworkPathStatus = .unknown
+        networkPathStatus: TimelineNetworkPathStatus = .unknown,
+        hostUpdate: HostUpdateState = HostUpdateState()
     ) {
         self.reachability = reachability
         self.consecutiveSnapshotFailures = consecutiveSnapshotFailures
@@ -84,8 +195,8 @@ struct TimelineConnectivityState: Equatable {
         self.hasLoadedData = hasLoadedData
         self.hasFreshnessEvidence = hasFreshnessEvidence ?? hasLoadedData
         self.networkPathStatus = networkPathStatus
+        self.hostUpdate = hostUpdate
     }
-
     func freshness(at now: Date) -> TimelineFreshness {
         guard hasFreshnessEvidence, let lastUpdatedAt else { return .unknown }
         let age = max(0, now.timeIntervalSince(lastUpdatedAt))
@@ -94,11 +205,17 @@ struct TimelineConnectivityState: Equatable {
         return .stale
     }
 
-    /// There is no "updating" banner. The timeline is a live stream, so
-    /// "we are fetching" is the permanent steady state and saying it is
-    /// noise. Every visible banner names a fault the user can act on
-    /// (retry, reconnect, sign in); everything else is silence.
+    /// Claims are separate from transport failures: a planned restart is
+    /// announced calmly, while a plain stream loss keeps the existing path.
     func banner(at now: Date) -> TimelineConnectivityBanner {
+        if let update = hostUpdate.presentation(at: now) {
+            switch update {
+            case .updating:
+                return .updating
+            case .slowUpdate(let elapsed):
+                return .slowUpdate(elapsed: elapsed)
+            }
+        }
         switch reachability {
         case .authRequired:
             return .authRequired
@@ -106,19 +223,17 @@ struct TimelineConnectivityState: Equatable {
             return .none
         case .degraded:
             // A single failed snapshot is a retry, not a fault. Stay silent
-            // until the data is genuinely stale AND failures have repeated.
+            // until the data is genuinely stale and failures have repeated.
             guard freshness(at: now) == .stale,
                   consecutiveSnapshotFailures >= Self.offlineAfterSnapshotFailures
             else { return .none }
             return .degraded
         case .offline:
             // Offline is hard evidence (OS path or sustained failure). Once
-            // the data stops being fresh, say so rather than showing a
-            // frozen timeline with no explanation.
+            // the data stops being fresh, explain the frozen timeline.
             return freshness(at: now) == .fresh ? .none : .offline
         }
     }
-
     mutating func apply(_ event: TimelineConnectivityEvent, now: Date) {
         switch event {
         case .cacheLoaded(let hasLoadedData, let savedAt):
@@ -149,10 +264,8 @@ struct TimelineConnectivityState: Equatable {
         case .streamSignal(let signal):
             applyStreamSignal(signal, now: now)
         case .streamDisconnected(let reason):
-            // Rule 5: stream disconnects are diagnostics only and must not
-            // alter snapshot reachability OR the user banner. Auth is the one
-            // terminal exception. Transport churn is not evidence of a
-            // product fault — snapshot failures are.
+            // Stream disconnects are diagnostics only. Auth is the terminal
+            // exception; transport churn is not a product fault.
             if reason == .authFailure {
                 reachability = .authRequired
             }
@@ -161,6 +274,17 @@ struct TimelineConnectivityState: Equatable {
         case .networkPathChanged(let status):
             networkPathStatus = status
             applyNetworkPathStatus(status, now: now)
+        case .hostLifecycle(let lifecycle):
+            hostUpdate.apply(lifecycle, now: now)
+        case .runtimeRestarting(let claim):
+            hostUpdate.observeRuntimeRestarting(claim: claim, now: now)
+        case .servingEvidence(let evidence):
+            switch evidence {
+            case .admission(let admission, _):
+                if admission == .open { hostUpdate.observeServingEvidence() }
+            case .writeAccepted:
+                hostUpdate.observeServingEvidence()
+            }
         }
     }
 
@@ -176,8 +300,8 @@ struct TimelineConnectivityState: Equatable {
 
     private mutating func applyStreamSignal(_ signal: TimelineStreamSignal, now: Date) {
         switch signal {
+        // Transport-only signals do not prove data freshness or recovery.
         case .firstConnected, .reconnected, .heartbeat:
-            // Transport-only signals do not prove data freshness or recovery.
             break
         case .upsert, .remove:
             hasLoadedData = true

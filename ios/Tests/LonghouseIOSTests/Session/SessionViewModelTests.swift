@@ -1002,6 +1002,55 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func runtimeRestartingUsesExistingSameIdRetryWithoutFailing() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.setSendSteps([
+            .runtimeRestarting(
+                claim: HostLifecycle(
+                    state: .updating,
+                    runtimeEpoch: "runtime-a",
+                    attemptId: "attempt-1",
+                    phase: "drain",
+                    expectedBackBy: nil,
+                    deadline: nil,
+                    cutoff: nil
+                ),
+                retryAfter: 1
+            )
+        ])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            snapshotStore: Self.isolatedSnapshotStore(),
+            pendingInputStore: Self.isolatedPendingInputStore()
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.sendResult(text: "continue after update", sessionId: "session-1", appState: appState)
+        let requestId = try #require(model.submittedInputs.first?.clientRequestId)
+
+        #expect(!sent.isSuccessfulHandoff)
+        #expect(model.submittedInputs.first?.phase == .submitting)
+        #expect(model.hostUpdateState.presentation(at: Date()) == .updating)
+        #expect(model.submittedInputsForTranscript(at: Date()).first?.lastError == HostLinkCopy.sendQueued)
+        #expect(await api.sentRequestIds() == [requestId])
+
+        await waitForCount("runtime restart same-id resend", atLeast: 2, sourceLocation: #_sourceLocation) {
+            await api.sentRequestIds().count
+        }
+        await waitForCondition("runtime restart send accepted", sourceLocation: #_sourceLocation) {
+            model.submittedInputs.first?.phase == .sent
+        }
+
+        #expect(await api.sentRequestIds() == [requestId, requestId])
+        #expect(model.hostUpdateState.presentation(at: Date()) == nil)
+        model.stop()
+    }
+
+    @Test
     func rejectedAttachmentSendIsTerminalAndKeepsTheServerReason() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
@@ -2960,6 +3009,7 @@ private enum FakeSendStep: Sendable {
     case requestFailed
     case httpRejected(status: Int, message: String)
     case turnEnded(String)
+    case runtimeRestarting(claim: HostLifecycle?, retryAfter: Int)
 }
 
 private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
@@ -2998,6 +3048,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var pausedTailResponseCounts: [Int: Int] = [:]
     private var pausedTailContinuations: [CheckedContinuation<Void, Never>] = []
     private var sentInputs: [String] = []
+    private var sentClientRequestIds: [String] = []
     private var pauseResponseRequests: [PauseResponseRecord] = []
     private var postedRenderBeacons: [RenderBeaconReporter.Payload] = []
     private var lastClientRequestId: String?
@@ -3152,6 +3203,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
         sentInputs.append("\(text):\(intent)")
+        sentClientRequestIds.append(clientRequestId)
         lastClientRequestId = clientRequestId
         if !sendSteps.isEmpty {
             let step = sendSteps.removeFirst()
@@ -3160,6 +3212,8 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
                 return response
             case .requestFailed:
                 throw LonghouseAPIError.requestFailed
+            case .runtimeRestarting(let claim, let retryAfter):
+                throw LonghouseAPIError.runtimeRestarting(claim: claim, retryAfter: retryAfter)
             case .httpRejected(let status, let message):
                 throw LonghouseAPIError.httpRejected(status: status, message: message)
             case .turnEnded(let message):
@@ -3334,6 +3388,9 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func sendRequests() -> [String] {
         sentInputs
+    }
+    func sentRequestIds() -> [String] {
+        sentClientRequestIds
     }
 
     func pauseResponses() -> [PauseResponseRecord] {

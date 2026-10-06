@@ -41,8 +41,11 @@ actor SessionWorkspaceStream {
         let session_id: String
         let server_now_ms: Int64?
         /// Process/runtime epoch. Pubsub sequence numbers are only
-        /// comparable inside this epoch.
+        /// comparable inside this stream epoch.
         var stream_epoch: String? = nil
+        /// Admission is serving evidence only when it is explicitly open.
+        var runtime_epoch: String? = nil
+        var admission: HostAdmission? = nil
     }
 
     struct WorkspaceChanged: Decodable, Sendable {
@@ -113,6 +116,7 @@ actor SessionWorkspaceStream {
         case connected(Connected)
         case changed(WorkspaceChanged)
         case replayGap(ReplayGap)
+        case hostLifecycle(HostLifecycle)
         case heartbeat
         case disconnected(Error?)
         /// The stream got a 401. Cookies are stale; reconnecting with them is
@@ -124,9 +128,7 @@ actor SessionWorkspaceStream {
         /// it: the consumer must refresh from durable state or the change is
         /// lost for good.
         case decodeFailed(detail: String)
-        /// A transport fact worth recording (response headers, first byte,
-        /// stall, negotiated protocol). Never counts as liveness: only server
-        /// frames reset the stale watchdog.
+        /// Transport facts never count as host-serving evidence.
         case diagnostic(stage: String, detail: String)
     }
 
@@ -432,6 +434,13 @@ actor SessionWorkspaceStream {
                 emit(.connected(c))
             } catch {
                 logger.error("workspace stream connected decode failed session=\(self.sessionId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            }
+        case "host_lifecycle":
+            do {
+                let lifecycle = try JSONDecoder.snakeCase.decode(HostLifecycle.self, from: data)
+                emit(.hostLifecycle(lifecycle))
+            } catch {
+                logger.error("workspace stream host_lifecycle decode failed session=\(self.sessionId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
             }
         case "workspace_changed":
             do {

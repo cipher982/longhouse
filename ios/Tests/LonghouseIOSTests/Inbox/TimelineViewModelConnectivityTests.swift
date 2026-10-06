@@ -43,6 +43,43 @@ struct TimelineViewModelConnectivityTests {
     }
 
     @Test
+    func timelineStreamLifecycleClaimUsesTwoSecondAndServingRules() async throws {
+        let api = FakeTimelineSessionsClient([.success([makeSession()])])
+        let stream = TimelineStreamRecorder()
+        let model = makeModel(api: api, stream: stream)
+        let appState = makeAppState()
+
+        await model.refresh(using: appState, force: true)
+        model.startStream(using: appState)
+        await waitUntil { stream.startCount() >= 1 }
+        stream.emit(.connected)
+        await drain()
+        stream.emit(.hostLifecycle(HostLifecycle(
+            state: .updating,
+            runtimeEpoch: "runtime-a",
+            attemptId: "attempt-1",
+            phase: "drain",
+            expectedBackBy: nil,
+            deadline: nil,
+            cutoff: nil
+        )))
+        await drain()
+
+        let startedAt = try #require(model.connectivity.hostUpdate.claimStartedAt)
+        #expect(model.connectionBanner(at: startedAt.addingTimeInterval(1.999)) == .none)
+        #expect(model.connectionBanner(at: startedAt.addingTimeInterval(2)) == .updating)
+
+        stream.emit(.admissionSnapshot(runtimeEpoch: "candidate", admission: .pending))
+        await drain()
+        #expect(model.connectionBanner(at: startedAt.addingTimeInterval(3)) == .updating)
+
+        stream.emit(.admissionSnapshot(runtimeEpoch: "candidate", admission: .open))
+        await drain()
+        #expect(model.connectionBanner(at: startedAt.addingTimeInterval(4)) == .none)
+        model.stopStream()
+    }
+
+    @Test
     func snapshotFailuresDriveBannerOnlyAfterDataIsStale() async {
         let session = makeSession()
         let api = FakeTimelineSessionsClient([

@@ -61,6 +61,9 @@ struct SessionRuntimeDock: View {
     let detail: SessionDetail
     @ObservedObject var activity: ActivityPulseStore
     var realtimeConnection: SessionRealtimeConnection = .disconnected
+    var hostUpdateState: HostUpdateState = HostUpdateState()
+    var hostUpdateNow: Date = Date()
+    var onHostUpdateClock: ((Date) -> Void)? = nil
     /// The enclosing navigation stack owns routes; the dock only supplies the
     /// exact provider-linked child session id.
     var onOpenSubagent: ((String) -> Void)? = nil
@@ -91,9 +94,14 @@ struct SessionRuntimeDock: View {
     var body: some View {
         Group {
             if detail.canDraftBeforeSendReady {
-                launchSetupLine
+                VStack(alignment: .leading, spacing: 3) {
+                    launchSetupLine
+                    if let hostUpdatePresentation {
+                        hostUpdateLine(hostUpdatePresentation)
+                    }
+                }
             } else {
-                statusLines(asOf: evidenceNow)
+                statusLines(asOf: providerEvidenceNow)
                     .id(reduceMotion)
                     .transition(.identity)
             }
@@ -146,16 +154,25 @@ struct SessionRuntimeDock: View {
                 evidenceNow = Date()
             }
         }
-        // A stale observation's age is the one number on this row that keeps
-        // changing while nothing else does. Tick it slowly; minute granularity
-        // needs no more, and a quiet session should stay cheap.
+        // Reuse the existing observation clock for host-update announcement
+        // and elapsed-copy boundaries; it still ticks slowly for quiet status.
         .task(id: observationClockKey) {
-            guard detail.stateFacts.primary?.key == "no_recent_activity" else { return }
-            guard !UITestHooks.holdsAmbientMotion else { return }
+            let observesAge = detail.stateFacts.primary?.key == "no_recent_activity"
+                && !UITestHooks.holdsAmbientMotion
+            guard observesAge || hostUpdateState.claimStartedAt != nil else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                let now = Date()
+                let updateIsActive = hostUpdateState.isActive(at: now)
+                guard updateIsActive || observesAge else { break }
+                let interval = updateIsActive
+                    ? hostUpdateState.nextClockInterval(at: now, default: 30)
+                    : 30
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 if Task.isCancelled { break }
                 evidenceNow = Date()
+                if hostUpdateState.claimStartedAt != nil {
+                    onHostUpdateClock?(evidenceNow)
+                }
             }
         }
         .task(id: noticeTaskKey) {
@@ -214,6 +231,17 @@ struct SessionRuntimeDock: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
+    }
+    private var hostUpdateIsActive: Bool {
+        hostUpdateState.isActive(at: hostUpdateNow)
+    }
+
+    private var providerEvidenceNow: Date {
+        hostUpdateIsActive ? (hostUpdateState.claimStartedAt ?? evidenceNow) : evidenceNow
+    }
+
+    private var hostUpdatePresentation: HostUpdatePresentation? {
+        hostUpdateState.presentation(at: hostUpdateNow)
     }
 
     private var style: RuntimeChromeStyle { RuntimeChromeStyle(detail: detail) }
@@ -280,7 +308,8 @@ struct SessionRuntimeDock: View {
         components.append(detail.stateFacts.delegation?.state ?? "")
         components.append(detail.stateFacts.delegation?.observedAt ?? "")
         components.append(detail.stateFacts.delegation?.validUntil ?? "")
-        components.append(String(describing: ledger(asOf: evidenceNow)))
+        components.append(String(describing: hostUpdatePresentation))
+        components.append(String(describing: ledger(asOf: providerEvidenceNow)))
         components.append(String(describing: realtimeConnection))
         components.append(detail.runtimeDisplay.hostState)
         components.append(detail.stateFacts.transcriptConvergence)
@@ -293,8 +322,18 @@ struct SessionRuntimeDock: View {
     }
 
     private var observationClockKey: String {
-        [detail.id, detail.stateFacts.primary?.key ?? "", detail.stateFacts.primary?.observedAt ?? ""]
-            .joined(separator: ":")
+        let claim = hostUpdateState.claim
+        return [
+            detail.id,
+            detail.stateFacts.primary?.key ?? "",
+            detail.stateFacts.primary?.observedAt ?? "",
+            hostUpdateState.claimStartedAt.map { String($0.timeIntervalSince1970) } ?? "",
+            claim?.attemptId ?? "",
+            claim?.expectedBackBy ?? "",
+            claim?.deadline ?? "",
+            claim?.cutoff ?? "",
+            hostUpdateState.waitingForAction ? "action" : "",
+        ].joined(separator: ":")
     }
 
     private var noticeTaskKey: String {
@@ -309,7 +348,7 @@ struct SessionRuntimeDock: View {
     private func observeStatus() {
         let now = Date()
         transition.observe(
-            state: ledger(asOf: evidenceNow),
+            state: ledger(asOf: providerEvidenceNow),
             evidence: detail.stateFacts.providerEvidenceIdentity,
             resultAt: detail.stateFacts.lastResultAt,
             now: now
@@ -318,14 +357,14 @@ struct SessionRuntimeDock: View {
     }
 
     private var statusGeometrySignature: String {
-        let state = ledger(asOf: evidenceNow)
+        let state = ledger(asOf: providerEvidenceNow)
         // Explicitly typed for the same reason as `statusSignature`: a literal
         // of optional-returning calls is inference work the CI toolchain will
         // not spend.
         let parts: [String] = [
             "\(shouldExpand)", "\(evidenceDisclosure)", "\(noticeIsVisible)",
             headline(for: state), operationLine(for: state) ?? "",
-            subline(for: state, asOf: evidenceNow) ?? "",
+            subline(for: state, asOf: providerEvidenceNow) ?? "",
             delegationSummaryLabel ?? "", exceptionReason(state) ?? ""
         ]
         return parts.joined(separator: "|")
@@ -356,10 +395,8 @@ struct SessionRuntimeDock: View {
     private var isExecuting: Bool { isOpen && detail.isSessionExecuting }
     private func ledger(asOf now: Date) -> SessionLedgerEvidence {
         guard isOpen else { return .quiet }
-        // No transport term here, and no grace: the viewer's socket is not
-        // provider evidence, so `connecting` and `disconnected` never rewrite
-        // the activity claim. They appear on the connection line below, which
-        // keeps its own startup grace.
+        // Viewer transport is separate from provider evidence: the connection
+        // line below records reconnecting without rewriting provider activity.
         return detail.ledgerEvidence(asOf: now)
     }
 
@@ -483,6 +520,9 @@ struct SessionRuntimeDock: View {
                     .accessibilityIdentifier("session-runtime-evidence-toggle")
                 }
             }
+            if let hostUpdatePresentation {
+                hostUpdateLine(hostUpdatePresentation)
+            }
             if !usesPrimaryDelegationHeadline(for: state), let summary = delegationSummaryLabel {
                 Button {
                     delegationSheetPresented = true
@@ -513,12 +553,49 @@ struct SessionRuntimeDock: View {
             }
         }
     }
+    private func hostUpdateLine(_ presentation: HostUpdatePresentation) -> some View {
+        let headline: String
+        let detail: String?
+        let symbol: String
+        let color: Color
+        switch presentation {
+        case .updating:
+            headline = HostLinkCopy.updatingDock
+            detail = nil
+            symbol = "arrow.triangle.2.circlepath"
+            color = Ember.textSecondary
+        case .slowUpdate(let elapsed):
+            headline = HostLinkCopy.slowUpdateHeadline
+            detail = "\(elapsed) elapsed"
+            symbol = "hourglass"
+            color = Ember.signalAttentionText
+        }
+        return HStack(spacing: 7) {
+            Image(systemName: symbol)
+                .font(.caption2.weight(.semibold))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(headline)
+                    .font(.caption.weight(.semibold))
+                if let detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .monospacedDigit()
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(color)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(detail.map { "\(headline), \($0)" } ?? headline)
+        .accessibilityIdentifier("session-runtime-host-update")
+    }
     private var isOpen: Bool {
         !detail.isClosed && detail.stateFacts.workingSet == "open"
     }
 
     private var shouldExpand: Bool {
-        ledger(asOf: evidenceNow) == .uncertain
+        ledger(asOf: providerEvidenceNow) == .uncertain
             || detail.activePauseRequest != nil
             || detail.stateFacts.pendingInteractionKind != nil
             || detail.controlBlock.isFault
@@ -528,6 +605,7 @@ struct SessionRuntimeDock: View {
 
     private var transportFailureVisible: Bool {
         isOpen
+            && !hostUpdateIsActive
             && (hasObservedConnection || startupGraceExpired)
             && realtimeConnection != .connected
     }
@@ -564,7 +642,7 @@ struct SessionRuntimeDock: View {
     }
 
     private func connectionLabel(for state: SessionLedgerEvidence) -> String? {
-        guard isOpen, startupGraceExpired || hasObservedConnection else { return nil }
+        guard isOpen, !hostUpdateIsActive, startupGraceExpired || hasObservedConnection else { return nil }
         switch realtimeConnection {
         case .connected:
             return nil
@@ -689,6 +767,14 @@ struct SessionRuntimeDock: View {
         }
     }
     private func evidenceLabel(_ state: SessionLedgerEvidence) -> String {
+        if let hostUpdatePresentation {
+            switch hostUpdatePresentation {
+            case .updating:
+                return HostLinkCopy.updatingDock
+            case .slowUpdate(let elapsed):
+                return "\(HostLinkCopy.slowUpdateHeadline), \(elapsed) elapsed"
+            }
+        }
         switch realtimeConnection {
         case .connected:
             if state == .uncertain {
@@ -747,7 +833,7 @@ struct SessionRuntimeDock: View {
             )
         } else if state == .working, let start = elapsedStart {
             let validUntil = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse)
-            if reduceMotion || UITestHooks.holdsAmbientMotion {
+            if reduceMotion || UITestHooks.holdsAmbientMotion || hostUpdateIsActive {
                 let end = RuntimeElapsed.observedEnd(validUntil: validUntil, now: now)
                 elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
             } else {
@@ -787,14 +873,22 @@ struct SessionRuntimeDock: View {
     }
 
     private var accessibilityLabel: String {
-        let state = ledger(asOf: evidenceNow)
+        let state = ledger(asOf: providerEvidenceNow)
         if detail.canDraftBeforeSendReady { return detail.launchSetupStatusLabel }
         var parts = [headline(for: state)]
-        if let age = observationAge(asOf: evidenceNow) { parts.append(age) }
+        if let update = hostUpdatePresentation {
+            switch update {
+            case .updating:
+                parts.append(HostLinkCopy.updatingDock)
+            case .slowUpdate(let elapsed):
+                parts.append("\(HostLinkCopy.slowUpdateHeadline), \(elapsed) elapsed")
+            }
+        }
+        if let age = observationAge(asOf: providerEvidenceNow) { parts.append(age) }
         if state == .working, let start = elapsedStart {
             let end = RuntimeElapsed.observedEnd(
                 validUntil: detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse),
-                now: evidenceNow
+                now: providerEvidenceNow
             )
             parts.append(RuntimeElapsed.label(from: start, to: end, precise: true))
         } else if state == .quiet, detail.stateFacts.lastResultAt != nil, let lastTurn = detail.lastTurn {

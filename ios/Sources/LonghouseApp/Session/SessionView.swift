@@ -448,6 +448,9 @@ struct SessionView: View {
                 detail: detail,
                 activity: viewModel.activity,
                 realtimeConnection: viewModel.realtimeConnection,
+                hostUpdateState: viewModel.hostUpdateState,
+                hostUpdateNow: viewModel.hostUpdateNow,
+                onHostUpdateClock: { viewModel.tickHostUpdateClock(at: $0) },
                 onOpenSubagent: onOpenSubagent
             )
         }
@@ -493,11 +496,12 @@ struct SessionView: View {
         )
     }
     private var visibleSubmittedInputs: [SubmittedInput] {
+        let hostUpdateInputs = viewModel.submittedInputsForTranscript(at: viewModel.hostUpdateNow)
         let localInputs: [SubmittedInput]
         if let decisionId = viewModel.turnEndedDraft?.clientRequestId {
-            localInputs = viewModel.submittedInputs.filter { $0.clientRequestId != decisionId }
+            localInputs = hostUpdateInputs.filter { $0.clientRequestId != decisionId }
         } else {
-            localInputs = viewModel.submittedInputs
+            localInputs = hostUpdateInputs
         }
         let wakeInputs = (viewModel.detail?.inputReceipts ?? []).compactMap { receipt -> SubmittedInput? in
             guard receipt.origin == "wake",

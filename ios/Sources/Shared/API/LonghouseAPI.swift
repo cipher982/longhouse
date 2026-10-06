@@ -918,11 +918,34 @@ struct LonghouseAPI: Sendable {
         return stripped.isEmpty ? "image.jpg" : stripped
     }
 
+    static func parseRuntimeRestartingError(
+        statusCode: Int,
+        data: Data,
+        retryAfter: Int = 1
+    ) -> LonghouseAPIError? {
+        guard statusCode == 503,
+              let response = try? JSONDecoder.snakeCase.decode(RuntimeRestartingResponse.self, from: data),
+              response.code == "runtime_restarting",
+              response.retryable
+        else { return nil }
+        return .runtimeRestarting(claim: response.claim, retryAfter: max(1, retryAfter))
+    }
+
+    private static func retryAfterSeconds(from response: HTTPURLResponse) -> Int {
+        guard let rawValue = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let seconds = Int(rawValue)
+        else { return 1 }
+        return max(1, seconds)
+    }
+
     /// Extract stable error codes from wrapped FastAPI HTTPException bodies and
     /// older bare `{"error_code": ..., "error": ...}` payloads.
     /// Returns nil when the body isn't structured, letting callers fall back to
     /// the generic `LonghouseAPIError.from(...)`.
     static func parseStructuredError(statusCode: Int, data: Data) -> LonghouseAPIError? {
+        if let restarting = parseRuntimeRestartingError(statusCode: statusCode, data: data) {
+            return restarting
+        }
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return nil
         }
@@ -1036,6 +1059,9 @@ struct LonghouseAPI: Sendable {
 
     /// A plain session-input 400 is a known rejection, not an ambiguous delivery outcome.
     static func parseSessionInputError(statusCode: Int, data: Data) -> LonghouseAPIError? {
+        if let restarting = parseRuntimeRestartingError(statusCode: statusCode, data: data) {
+            return restarting
+        }
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         if let object,
            let structured = parseStructuredError(statusCode: statusCode, object: object) {
@@ -1407,6 +1433,13 @@ struct LonghouseAPI: Sendable {
             } catch {
                 throw error
             }
+        }
+        if let restarting = Self.parseRuntimeRestartingError(
+            statusCode: httpResponse.statusCode,
+            data: data,
+            retryAfter: Self.retryAfterSeconds(from: httpResponse)
+        ) {
+            throw restarting
         }
         return (data, httpResponse)
     }

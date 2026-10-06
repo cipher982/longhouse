@@ -278,6 +278,42 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func runtimeRestartingBodyRetainsClaimAndRetryAfter() throws {
+        let data = try #require("""
+        {
+          "code": "runtime_restarting",
+          "retryable": true,
+          "runtime_epoch": "candidate-2",
+          "admission": "pending",
+          "claim": {
+            "state": "updating",
+            "runtime_epoch": "candidate-2",
+            "attempt_id": "attempt-1",
+            "phase": "readiness",
+            "expected_back_by": "2026-10-06T12:00:00Z",
+            "deadline": "2026-10-06T12:05:00Z",
+            "cutoff": "2026-10-06T12:16:00Z"
+          }
+        }
+        """.data(using: .utf8))
+
+        guard case let .runtimeRestarting(claim, retryAfter)? = LonghouseAPI.parseRuntimeRestartingError(
+            statusCode: 503,
+            data: data,
+            retryAfter: 0
+        ) else {
+            Issue.record("expected a typed runtime-restarting response")
+            return
+        }
+        #expect(retryAfter == 1)
+        #expect(claim?.state == .updating)
+        #expect(claim?.runtimeEpoch == "candidate-2")
+        #expect(claim?.attemptId == "attempt-1")
+        #expect(claim?.expectedBackBy == "2026-10-06T12:00:00Z")
+        #expect(LonghouseAPI.parseRuntimeRestartingError(statusCode: 502, data: data) == nil)
+    }
+
+    @Test
     func structuredErrorParsingAlsoAcceptsCodeField() throws {
         let data = try #require("""
         {

@@ -23,11 +23,21 @@ enum LonghouseAPIError: Error {
     case serviceUnavailable
     case upstreamFailed
     case unexpectedResponse(String)
+    /// An admission-closed host rejected a write with the K1 continuity body.
+    case runtimeRestarting(claim: HostLifecycle?, retryAfter: Int)
     /// Server returned a structured error payload (e.g. `{"detail": {"error_code": "turn_ended"}}`).
-    /// Carries status + code + message so the caller can branch on the
-    /// semantic outcome instead of parsing ad-hoc strings.
+    /// Carries status + code + message so the caller can branch on the semantic outcome instead of parsing ad-hoc strings.
     case structured(status: Int, errorCode: String, message: String)
-
+    var isRetryableReportHandoff: Bool {
+        switch self {
+        case .serviceUnavailable, .upstreamFailed, .unexpectedResponse, .runtimeRestarting:
+            return true
+        case .structured(_, let code, _):
+            return code == "catalog_unavailable" || code == "turn_start_outcome_unknown"
+        case .httpRejected(_, _), .requestFailed, .notAuthenticated, .conflict:
+            return false
+        }
+    }
     static func from(statusCode: Int) -> LonghouseAPIError {
         switch statusCode {
         case 401:
@@ -43,21 +53,6 @@ enum LonghouseAPIError: Error {
         }
     }
 
-    /// Whether replaying the same handoff request can plausibly change the outcome.
-    ///
-    /// Structured Console failures are terminal unless the server explicitly
-    /// reports an unavailable catalog or an ambiguous dispatch. The request ID
-    /// remains stable in both cases, so a retry can only replay the same intent.
-    var isRetryableReportHandoff: Bool {
-        switch self {
-        case .serviceUnavailable, .upstreamFailed, .unexpectedResponse:
-            return true
-        case .structured(_, let code, _):
-            return code == "catalog_unavailable" || code == "turn_start_outcome_unknown"
-        case .httpRejected(_, _), .requestFailed, .notAuthenticated, .conflict:
-            return false
-        }
-    }
     var structuredCode: String? {
         guard case .structured(_, let code, _) = self else { return nil }
         return code
@@ -94,6 +89,8 @@ extension LonghouseAPIError: LocalizedError {
             return message
         case .httpRejected(_, let message):
             return message.isEmpty ? "Request was rejected." : message
+        case .runtimeRestarting:
+            return HostLinkCopy.updatingHeadline
         case .structured(_, _, let message):
             return message.isEmpty ? "Request was rejected." : message
         }

@@ -209,31 +209,37 @@ private struct CompactRuntimeLine: View {
     }
 }
 
-/// Slim fault strip. Healthy = invisible, and "healthy" includes every
-/// normal moment of a live stream: there is no "updating" state, because
-/// the timeline is always updating. The strip only ever names a fault
-/// (stale + failing, offline, signed out). Pull to refresh is the retry
-/// path; this view is purely informational.
+/// Slim status strip for sustained host updates and connection faults.
+/// Updating claims are calm and passive; pull to refresh remains the existing
+/// retry path for faults.
 struct ConnectionStatusStrip: View {
     let banner: TimelineConnectivityBanner
 
     var body: some View {
         if let style = style(for: banner) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 if let symbol = style.symbol {
                     Image(systemName: symbol)
                         .font(.caption2.weight(.semibold))
                 }
-                Text(style.label)
-                    .font(.caption.weight(.semibold))
-                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(style.label)
+                        .font(.caption.weight(.semibold))
+                    if let detail = style.detail {
+                        Text(detail)
+                            .font(.caption2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .foregroundStyle(style.foreground)
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(style.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .accessibilityLabel(style.label)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(style.accessibilityLabel)
         }
     }
 
@@ -242,12 +248,33 @@ struct ConnectionStatusStrip: View {
         let symbol: String?
         let foreground: Color
         let background: Color
+        var detail: String? = nil
+
+        var accessibilityLabel: String {
+            detail.map { "\(label), \($0)" } ?? label
+        }
     }
 
     private func style(for banner: TimelineConnectivityBanner) -> Style? {
         switch banner {
         case .none:
             return nil
+        case .updating:
+            return Style(
+                label: HostLinkCopy.updatingHeadline,
+                symbol: "arrow.triangle.2.circlepath",
+                foreground: Ember.textSecondary,
+                background: Ember.raised.opacity(0.75),
+                detail: HostLinkCopy.updatingDetail
+            )
+        case .slowUpdate(let elapsed):
+            return Style(
+                label: HostLinkCopy.slowUpdateHeadline,
+                symbol: "hourglass",
+                foreground: Ember.signalAttentionText,
+                background: Ember.signalAttention.opacity(0.12),
+                detail: "\(elapsed) elapsed"
+            )
         case .degraded:
             return Style(label: "Connection degraded", symbol: "exclamationmark.triangle",
                          foreground: Ember.flame,

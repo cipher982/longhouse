@@ -391,6 +391,13 @@ final class TimelineViewModel: ObservableObject {
                 hasReceivedFirstConnect = true
                 applyConnectivity(.streamSignal(.firstConnected), generation: generation)
             }
+        case .admissionSnapshot(let runtimeEpoch, let admission):
+            applyConnectivity(
+                .servingEvidence(.admission(admission, runtimeEpoch: runtimeEpoch)),
+                generation: generation
+            )
+        case .hostLifecycle(let lifecycle):
+            applyConnectivity(.hostLifecycle(lifecycle), generation: generation)
         case .upsert(let card, _, _):
             if let deviceId, let eventDeviceId = card.sessionSummary.deviceId, eventDeviceId != deviceId { return }
             applyUpsert(card.sessionSummary, appState: appState)
@@ -434,6 +441,7 @@ final class TimelineViewModel: ObservableObject {
         now: Date = Date(),
         generation: UInt64? = nil
     ) {
+        let previousHostUpdate = connectivity.hostUpdate
         var next = connectivity
         if let generation {
             next.apply(event, now: now, eventGeneration: generation, currentGeneration: streamGeneration)
@@ -442,18 +450,31 @@ final class TimelineViewModel: ObservableObject {
         }
         connectivity = next
         connectivityNow = now
+        if next.hostUpdate != previousHostUpdate {
+            restartConnectivityClock()
+        }
     }
 
     private func startConnectivityClock() {
         guard enableConnectivityClock, connectivityClockTask == nil else { return }
-        let interval = connectivityClockIntervalNanoseconds
+        let defaultInterval = TimeInterval(connectivityClockIntervalNanoseconds) / 1_000_000_000
         connectivityClockTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: interval)
+                guard let self else { break }
+                let now = Date()
+                let interval = self.connectivity.hostUpdate.nextClockInterval(at: now, default: defaultInterval)
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 if Task.isCancelled { break }
-                self?.tickConnectivityClock()
+                self.tickConnectivityClock()
             }
         }
+    }
+
+    private func restartConnectivityClock() {
+        guard enableConnectivityClock else { return }
+        connectivityClockTask?.cancel()
+        connectivityClockTask = nil
+        startConnectivityClock()
     }
 
     private func stopConnectivityClock() {

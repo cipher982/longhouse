@@ -22,6 +22,8 @@ final class SessionViewModel: ObservableObject {
     }
     /// Viewer transport only. A connected stream is not provider liveness.
     @Published private(set) var realtimeConnection: SessionRealtimeConnection = .disconnected
+    @Published private(set) var hostUpdateState = HostUpdateState()
+    @Published private(set) var hostUpdateNow = Date()
     // Benchmark-only attribution. These deliberately are not @Published: the
     // subsequent transcript mutation owns the SwiftUI invalidation, preventing
     // an extra render of the previous snapshot under the next revision number.
@@ -1270,22 +1272,23 @@ final class SessionViewModel: ObservableObject {
         )
     }
 
-    /// A send that never reached the server (network drop, a deploy
-    /// restart's 502/503, a draining runtime) is re-sent under the same
-    /// request ID; server idempotency makes it land at most once. The row
-    /// keeps "Sending…" meanwhile; an exhausted budget becomes "Not confirmed".
+    /// Automatic retries for transport failures, draining responses and K1
+    /// refusals reuse the original request ID so server idempotency bounds
+    /// duplicate delivery across restarts.
     private static let automaticResendDelays: [Duration] = [
         .seconds(1), .seconds(2), .seconds(3), .seconds(5), .seconds(8),
         .seconds(10), .seconds(10), .seconds(15), .seconds(15), .seconds(20),
     ]
     static let reconnectingDetail = "reconnecting to Longhouse"
 
-    private func transportNeverReachedServer(_ error: Error) -> Bool {
+    private func canRetrySameRequest(_ error: Error) -> Bool {
         switch error {
         case let apiError as LonghouseAPIError:
             switch apiError {
             case .structured(_, _, _):
                 return apiError.isRuntimeDraining
+            case .runtimeRestarting:
+                return true
             case .upstreamFailed, .serviceUnavailable:
                 return true
             default:
@@ -1303,9 +1306,11 @@ final class SessionViewModel: ObservableObject {
         _ pending: PendingInputIntent,
         sessionId: String,
         appState: AppState,
-        attempt: Int
+        attempt: Int,
+        retryAfter: Int? = nil
     ) -> Bool {
         guard attempt < Self.automaticResendDelays.count else { return false }
+        let delay = max(Self.automaticResendDelays[attempt], .seconds(Int64(retryAfter ?? 0)))
         updateSubmittedInput(
             pending.clientRequestId,
             phase: .submitting,
@@ -1313,7 +1318,7 @@ final class SessionViewModel: ObservableObject {
             lastError: Self.reconnectingDetail
         )
         Task { [weak self] in
-            try? await Task.sleep(for: Self.automaticResendDelays[attempt])
+            try? await Task.sleep(for: delay)
             guard let self,
                   self.submittedInputs.first(where: { $0.clientRequestId == pending.clientRequestId })?.phase == .submitting
             else { return }
@@ -1325,6 +1330,57 @@ final class SessionViewModel: ObservableObject {
             )
         }
         return true
+    }
+
+    private func applyHostLifecycle(_ lifecycle: HostLifecycle, sessionId: String) {
+        guard activeSessionId == sessionId, !realtimePaused else { return }
+        if lifecycle.state == .serving {
+            observeHostServingEvidence(sessionId: sessionId)
+            return
+        }
+        let now = Date()
+        var next = hostUpdateState
+        next.apply(lifecycle, now: now)
+        setHostUpdateState(next, at: now)
+    }
+
+    private func observeRuntimeRestarting(_ claim: HostLifecycle?) {
+        let now = Date()
+        var next = hostUpdateState
+        next.observeRuntimeRestarting(claim: claim, now: now)
+        setHostUpdateState(next, at: now)
+    }
+
+    private func observeHostServingEvidence(sessionId: String) {
+        guard activeSessionId == sessionId, !realtimePaused else { return }
+        var next = hostUpdateState
+        next.observeServingEvidence()
+        setHostUpdateState(next, at: Date())
+    }
+
+    private func setHostUpdateState(_ next: HostUpdateState, at now: Date) {
+        let wasActive = hostUpdateState.isActive(at: hostUpdateNow)
+        let isActive = next.isActive(at: now)
+        hostUpdateState = next
+        hostUpdateNow = now
+        if wasActive != isActive { transcriptRevision &+= 1 }
+    }
+
+    func tickHostUpdateClock(at now: Date) {
+        guard hostUpdateState.claimStartedAt != nil else { return }
+        let wasActive = hostUpdateState.isActive(at: hostUpdateNow)
+        hostUpdateNow = now
+        if wasActive != hostUpdateState.isActive(at: now) { transcriptRevision &+= 1 }
+    }
+
+    func submittedInputsForTranscript(at now: Date) -> [SubmittedInput] {
+        guard hostUpdateState.isActive(at: now) else { return submittedInputs }
+        return submittedInputs.map { input in
+            guard input.phase == .submitting || input.phase == .couldNotConfirm else { return input }
+            var queuedInput = input
+            queuedInput.lastError = HostLinkCopy.sendQueued
+            return queuedInput
+        }
     }
 
     private func dispatchPendingInput(
@@ -1473,6 +1529,7 @@ final class SessionViewModel: ObservableObject {
                 guard let self else { return }
                 try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
             }
+            observeHostServingEvidence(sessionId: sessionId)
             switch response.disposition {
             case .accepted:
                 if let turnState {
@@ -1545,10 +1602,35 @@ final class SessionViewModel: ObservableObject {
             errorMessage = "Could not send: \(inputError.message)"
             return .rejected
         } catch {
+            let runtimeRetryAfter: Int?
+            if let runtimeError = error as? LonghouseAPIError,
+               case .runtimeRestarting(let claim, let retryAfter) = runtimeError {
+                observeRuntimeRestarting(claim)
+                runtimeRetryAfter = retryAfter
+            } else {
+                runtimeRetryAfter = nil
+            }
             let failureMessage = sendFailureMessage(for: error)
-            if transportNeverReachedServer(error),
-               scheduleAutomaticResend(pending, sessionId: sessionId, appState: appState, attempt: automaticResendAttempt) {
+            if canRetrySameRequest(error),
+               scheduleAutomaticResend(
+                   pending,
+                   sessionId: sessionId,
+                   appState: appState,
+                   attempt: automaticResendAttempt,
+                   retryAfter: runtimeRetryAfter
+               ) {
                 errorMessage = nil
+                return .unknown
+            }
+            if runtimeRetryAfter != nil {
+                updateSubmittedInput(
+                    pending.clientRequestId,
+                    phase: .couldNotConfirm,
+                    serverInputId: nil,
+                    lastError: HostLinkCopy.sendQueued
+                )
+                errorMessage = nil
+                refreshErrorMessage = nil
                 return .unknown
             }
             if sendConfirmationMayHaveLanded(error) {
@@ -2076,6 +2158,9 @@ final class SessionViewModel: ObservableObject {
                 streamEpoch = epoch
             }
             streamConnected = true
+            if connected.admission == .open {
+                observeHostServingEvidence(sessionId: sessionId)
+            }
             realtimeConnection = .connected
             streamAuthRefreshAttempted = false
             openWaterfall?.mark(
@@ -2106,6 +2191,8 @@ final class SessionViewModel: ObservableObject {
                     authGeneration: authGeneration
                 )
             }
+        case .hostLifecycle(let lifecycle):
+            applyHostLifecycle(lifecycle, sessionId: sessionId)
         case .disconnected(let error):
             streamConnected = false
             realtimeConnection = .disconnected
@@ -3643,7 +3730,7 @@ final class SessionViewModel: ObservableObject {
                  .unexpectedResponse,
                  .serviceUnavailable:
                 return true
-            case .notAuthenticated, .conflict, .httpRejected(_, _):
+            case .notAuthenticated, .conflict, .httpRejected(_, _), .runtimeRestarting:
                 return false
             }
         case is DecodingError:

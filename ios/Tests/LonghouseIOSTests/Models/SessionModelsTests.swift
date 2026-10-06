@@ -46,13 +46,15 @@ struct SessionModelsTests {
     func restartEpochsSurviveConnectedAndReplayGapDecoding() throws {
         let connected = try JSONDecoder().decode(
             SessionWorkspaceStream.Connected.self,
-            from: Data(#"{"session_id":"session-1","stream_epoch":"runtime-b"}"#.utf8)
+            from: Data(#"{"session_id":"session-1","stream_epoch":"runtime-b","runtime_epoch":"runtime-b","admission":"pending"}"#.utf8)
         )
         let gap = try JSONDecoder().decode(
             SessionWorkspaceStream.ReplayGap.self,
             from: Data(#"{"session_id":"session-1","requested_seq":17,"earliest_seq":null,"latest_seq":0,"reason":"epoch_changed","stream_epoch":"runtime-b"}"#.utf8)
         )
         #expect(connected.stream_epoch == "runtime-b")
+        #expect(connected.runtime_epoch == "runtime-b")
+        #expect(connected.admission == .pending)
         #expect(gap.stream_epoch == "runtime-b")
     }
 

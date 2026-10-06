@@ -13,6 +13,29 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / "schemas" / "host_link.yml"
 RUNTIME_ADMISSION = ROOT / "server" / "zerg" / "services" / "runtime_admission.py"
+IOS_COPY_SOURCE = ROOT / "ios" / "Sources" / "Shared" / "Models" / "HostLifecycle.swift"
+IOS_COPY_KEYS = (
+    "updating.headline",
+    "updating.detail",
+    "updating.dock",
+    "slow_update.headline",
+    "send_queued",
+)
+IOS_COPY_REFERENCES = {
+    "ios/Sources/LonghouseApp/Inbox/TimelineRows.swift": (
+        "HostLinkCopy.updatingHeadline",
+        "HostLinkCopy.updatingDetail",
+        "HostLinkCopy.slowUpdateHeadline",
+    ),
+    "ios/Sources/LonghouseApp/Session/Runtime/SessionRuntimeDock.swift": (
+        "HostLinkCopy.updatingDock",
+        "HostLinkCopy.slowUpdateHeadline",
+    ),
+    "ios/Sources/LonghouseApp/Session/SessionViewModel.swift": ("HostLinkCopy.sendQueued",),
+    "ios/Sources/LonghouseApp/Session/Transcript/WebTranscriptPayloadBuilder.swift": (
+        "HostLinkCopy.sendQueued",
+    ),
+}
 
 EXPECTED = {
     "schema_version": 1,
@@ -112,6 +135,27 @@ def validate(path: Path = SCHEMA) -> list[str]:
         return ["schema must contain a YAML object"]
     errors: list[str] = []
     _matches(value, EXPECTED, "schema", errors)
+    copy = value.get("copy")
+    if isinstance(copy, dict):
+        try:
+            copy_source = IOS_COPY_SOURCE.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"cannot read iOS host-link copy: {exc}")
+        else:
+            for key in IOS_COPY_KEYS:
+                expected_copy = copy.get(key)
+                if not isinstance(expected_copy, str) or expected_copy not in copy_source:
+                    errors.append(f"iOS host-link copy differs from schema at copy.{key}")
+        for relative, references in IOS_COPY_REFERENCES.items():
+            path_to_source = ROOT / relative
+            try:
+                source = path_to_source.read_text(encoding="utf-8")
+            except OSError as exc:
+                errors.append(f"cannot read {relative}: {exc}")
+                continue
+            missing = [reference for reference in references if reference not in source]
+            if missing:
+                errors.append(f"{relative} missing host-link copy references: {', '.join(missing)}")
     try:
         module = ast.parse(RUNTIME_ADMISSION.read_text(encoding="utf-8"), filename=str(RUNTIME_ADMISSION))
         runtime_horizons: dict[str, object] = {}

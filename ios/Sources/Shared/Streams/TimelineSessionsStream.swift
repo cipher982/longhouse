@@ -19,10 +19,17 @@ import OSLog
 actor TimelineSessionsStream {
     enum Event: Sendable {
         case connected
+        case admissionSnapshot(runtimeEpoch: String?, admission: HostAdmission?)
+        case hostLifecycle(HostLifecycle)
         case upsert(card: TimelineCard, total: Int?, hasRealSessions: Bool?)
         case remove(threadId: String, total: Int?, hasRealSessions: Bool?)
         case heartbeat
         case disconnected(Error?)
+    }
+
+    struct Connected: Decodable, Sendable {
+        let runtimeEpoch: String?
+        let admission: HostAdmission?
     }
 
     struct UpsertPayload: Decodable, Sendable {
@@ -225,6 +232,16 @@ actor TimelineSessionsStream {
         switch eventName {
         case "connected":
             emit(.connected)
+            if let connected = try? JSONDecoder.snakeCase.decode(Connected.self, from: data) {
+                emit(.admissionSnapshot(runtimeEpoch: connected.runtimeEpoch, admission: connected.admission))
+            }
+        case "host_lifecycle":
+            do {
+                let lifecycle = try JSONDecoder.snakeCase.decode(HostLifecycle.self, from: data)
+                emit(.hostLifecycle(lifecycle))
+            } catch {
+                logger.error("decode host_lifecycle failed: \(error.localizedDescription, privacy: .public)")
+            }
         case "session_upsert":
             do {
                 let parsed = try JSONDecoder.snakeCase.decode(UpsertPayload.self, from: data)
