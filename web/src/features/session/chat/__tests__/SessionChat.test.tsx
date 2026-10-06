@@ -935,6 +935,226 @@ describe("SessionChat", () => {
     expect(screen.queryByText("Not delivered")).not.toBeInTheDocument();
   });
 
+  it("reserves resumed attachments until persistence completes alongside another send", async () => {
+    const user = userEvent.setup();
+    const sends: { text: string; clientRequestId: string; attachment: boolean }[] = [];
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).includes("/inputs?client_request_id=")) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/inputs") && !init?.method) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/inputs-multipart") && init?.method === "POST") {
+        const form = init.body as FormData;
+        const clientRequestId = String(form.get("client_request_id"));
+        const text = String(form.get("text") ?? "");
+        sends.push({ text, clientRequestId, attachment: true });
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: sends.length,
+          intent: "auto",
+          client_request_id: clientRequestId,
+          queued: [],
+        });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        sends.push({
+          text: payload.text,
+          clientRequestId: payload.client_request_id,
+          attachment: false,
+        });
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: sends.length,
+          intent: payload.intent,
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const now = Date.now();
+    hostLinkStore.observeLifecycle({
+      state: "updating",
+      runtime_epoch: "runtime-old",
+      attempt_id: "attempt-1",
+      expected_back_by: new Date(now + 30_000).toISOString(),
+      deadline: new Date(now + 60_000).toISOString(),
+      cutoff: new Date(now + 90_000).toISOString(),
+    });
+    const session = makeSession({
+      provider: "codex",
+      capabilities: { attach_images: true },
+    });
+    const view = renderSessionChat({ chatMode: "managed_local", session });
+
+    await user.type(screen.getByRole("textbox"), "resume text first");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByTestId("session-chat-update-queued");
+    await user.type(screen.getByRole("textbox"), "resume attachment second");
+    const fileInput = view.container.querySelector('input[type="file"]');
+    if (!(fileInput instanceof HTMLInputElement)) {
+      throw new Error("Expected an attachment input");
+    }
+    await user.upload(
+      fileInput,
+      new File([new Uint8Array([7, 8, 9])], "note.png", {
+        type: "image/png",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => {
+      const storedInputs = [];
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index);
+        if (key?.startsWith("longhouse:session-input:sess-1:")) {
+          storedInputs.push(JSON.parse(window.localStorage.getItem(key) ?? "null"));
+        }
+      }
+      expect(storedInputs).toHaveLength(2);
+    });
+    expect(sends).toHaveLength(0);
+
+    const storedInputs: { text: string; clientRequestId: string }[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith("longhouse:session-input:sess-1:")) {
+        storedInputs.push(JSON.parse(window.localStorage.getItem(key) ?? "null"));
+      }
+    }
+    let textRequestId: string | undefined;
+    let attachmentRequestId: string | undefined;
+    for (const stored of storedInputs) {
+      if (stored.text === "resume text first") {
+        textRequestId = stored.clientRequestId;
+      } else if (stored.text === "resume attachment second") {
+        attachmentRequestId = stored.clientRequestId;
+      }
+    }
+    expect(textRequestId).toBeTruthy();
+    expect(attachmentRequestId).toBeTruthy();
+
+    const databaseReady = Promise.withResolvers<IDBDatabase>();
+    const openRequest = window.indexedDB.open("longhouse-input-outbox", 1);
+    openRequest.onsuccess = () => {
+      const database = openRequest.result;
+      databaseReady.resolve(database);
+    };
+    openRequest.onerror = () => {
+      const error = openRequest.error;
+      databaseReady.reject(error ?? new Error("IDB open failed"));
+    };
+    const database = (await databaseReady.promise) as unknown as {
+      transaction: (
+        storeName: string,
+        mode: IDBTransactionMode,
+      ) => {
+        objectStore: (storeName: string) => {
+          put: (value: unknown, key: IDBValidKey) => IDBRequest<unknown>;
+          get: (key: IDBValidKey) => IDBRequest<unknown>;
+          delete: (key: IDBValidKey) => IDBRequest<undefined>;
+        };
+      };
+    };
+    const originalTransaction = database.transaction.bind(database);
+    const delayedWrite = Promise.withResolvers<() => void>();
+    let delayNextWrite = true;
+    database.transaction = function transaction(storeName, mode) {
+      const transaction = originalTransaction(storeName, mode);
+      return {
+        objectStore: function objectStore(name) {
+          const store = transaction.objectStore(name);
+          return {
+            put: function put(value, key) {
+              const request = store.put(value, key);
+              if (!delayNextWrite) return request;
+              delayNextWrite = false;
+              return new Proxy(request, {
+                get(target, property) {
+                  const result = Reflect.get(target, property, target);
+                  return typeof result === "function"
+                    ? result.bind(target)
+                    : result;
+                },
+                set(target, property, value) {
+                  if (property === "onsuccess") {
+                    const onSuccess = value as IDBRequest<unknown>["onsuccess"];
+                    target.onsuccess = (event) => {
+                      const finishAttachmentPersistence = () => {
+                        onSuccess?.call(target, event);
+                      };
+                      delayedWrite.resolve(finishAttachmentPersistence);
+                    };
+                    return true;
+                  }
+                  return Reflect.set(target, property, value, target);
+                },
+              });
+            },
+            get: store.get,
+            delete: store.delete,
+          };
+        },
+      };
+    };
+
+    try {
+      act(() =>
+        hostLinkStore.observeLifecycle({
+          state: "serving",
+          runtime_epoch: "runtime-new",
+        }),
+      );
+      const releaseAttachmentPersistence = await delayedWrite.promise;
+      await screen.findByText("Sent");
+      let attachmentPosts = 0;
+      for (const send of sends) {
+        if (send.clientRequestId === attachmentRequestId) {
+          attachmentPosts += 1;
+        }
+      }
+      expect(attachmentPosts).toBe(0);
+
+      await act(async () => {
+        releaseAttachmentPersistence();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        let matchingAttachmentPosts = 0;
+        for (const send of sends) {
+          if (send.clientRequestId === attachmentRequestId) {
+            matchingAttachmentPosts += 1;
+          }
+        }
+        expect(matchingAttachmentPosts).toBe(1);
+      });
+      expect(sends).toHaveLength(2);
+      let textSend: (typeof sends)[number] | undefined;
+      let attachmentSend: (typeof sends)[number] | undefined;
+      for (const send of sends) {
+        if (send.text === "resume text first") textSend = send;
+        if (send.text === "resume attachment second") attachmentSend = send;
+      }
+      expect(textSend).toMatchObject({
+        clientRequestId: textRequestId,
+        attachment: false,
+      });
+      expect(attachmentSend).toMatchObject({
+        clientRequestId: attachmentRequestId,
+        attachment: true,
+      });
+    } finally {
+      database.transaction = originalTransaction;
+      view.unmount();
+    }
+  });
+
   it("does not mark a K1 runtime_restarting refusal failed and retries with its ID", async () => {
     const user = userEvent.setup();
     const postedRequestIds: string[] = [];

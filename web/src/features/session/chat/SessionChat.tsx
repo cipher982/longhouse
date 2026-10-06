@@ -786,11 +786,13 @@ export function SessionChat({
       timers.clear();
     };
   }, []);
-  const hostResumeRetryWaitersRef = useRef(new Map<string, () => void>());
+  const hostResumeRetryWaitersRef = useRef(
+    new Map<string, (() => void) | null>(),
+  );
   useEffect(() => {
     const waiters = hostResumeRetryWaitersRef.current;
     return () => {
-      for (const cancel of waiters.values()) cancel();
+      for (const cancel of waiters.values()) cancel?.();
       waiters.clear();
     };
   }, [session.id]);
@@ -1222,7 +1224,7 @@ export function SessionChat({
 
       if (!hostResumeRetryWaitersRef.current.has(clientRequestId)) {
         const cancel = hostLinkStore.waitForServing(() => {
-          hostResumeRetryWaitersRef.current.delete(clientRequestId);
+          hostResumeRetryWaitersRef.current.set(clientRequestId, null);
           void outboxActionsRef.current.retry(message, intent, attachments, {
             existingClientRequestId: clientRequestId,
             model,
@@ -1257,11 +1259,36 @@ export function SessionChat({
           model,
           attachments,
         });
+        if (hostResumeRetryWaitersRef.current.get(clientRequestId) === null) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) => {
+              if (
+                pending.clientRequestId === clientRequestId &&
+                pending.detail === HOST_LINK_COPY.sendQueued
+              ) {
+                return { ...pending, detail: undefined };
+              }
+              return pending;
+            }),
+          );
+          hostResumeRetryWaitersRef.current.delete(clientRequestId);
+        }
       } catch (storageError) {
         const errorMessage =
           storageError instanceof Error
             ? storageError.message
             : "Could not persist input intent before sending";
+        if (hostResumeRetryWaitersRef.current.get(clientRequestId) === null) {
+          hostResumeRetryWaitersRef.current.delete(clientRequestId);
+          setInputWaitingForHostUpdate(session.id, clientRequestId, false);
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown", detail: errorMessage }
+                : pending,
+            ),
+          );
+        }
         setError(errorMessage);
         return { kind: "local-persistence-failed", error: errorMessage };
       }
@@ -2122,7 +2149,7 @@ export function SessionChat({
         continue;
       }
       const cancel = hostLinkStore.waitForServing(() => {
-        hostResumeRetryWaitersRef.current.delete(pending.clientRequestId);
+        hostResumeRetryWaitersRef.current.set(pending.clientRequestId, null);
         void outboxActionsRef.current.retry(
           pending.text,
           pending.intent,
