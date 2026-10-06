@@ -17935,39 +17935,48 @@ def _apply_shadow_parity(
                 {"family": family, "reason": "canonical_projector_unavailable"}
                 for family in sorted({fact.family for fact in facts if fact.family != "control"})
             ]
+            # A heartbeat already bounds its facts to MAX_REDUCER_FACTS. Read
+            # their heads and legacy leases set-wise instead of holding the
+            # single writer through two SELECTs per control candidate.
+            heads = {}
+            if candidates:
+                heads = {
+                    (row["family"], row["subject_key"], row["source"], row["source_epoch"]): row
+                    for row in connection.execute(
+                        select(FactHead.__table__).where(
+                            FactHead.family == "control",
+                            tuple_(FactHead.subject_key, FactHead.source, FactHead.source_epoch).in_([key[1:] for key in candidates]),
+                        )
+                    ).mappings()
+                }
+            shadow_values = {}
+            legacy_keys = set()
+            for key, head in heads.items():
+                value = json.loads(str(head["value_json"]))
+                if not isinstance(value, dict):
+                    raise ValueError("shadow fact head value must be an object")
+                shadow_values[key] = value
+                legacy_keys.add((str(value.get("session_id") or ""), str(value.get("provider") or "").strip().lower()))
+            legacy_rows = {}
+            if legacy_keys:
+                for row in connection.execute(
+                    select(LiveControlLease.__table__).where(
+                        LiveControlLease.device_id == str(heartbeat["device_id"]).strip(),
+                        tuple_(LiveControlLease.session_id, LiveControlLease.provider).in_(legacy_keys),
+                    )
+                ).mappings():
+                    legacy_rows.setdefault((row["session_id"], row["provider"]), row)
             compared_axes = deltas = missing_heads = 0
             for fact in (candidates[key] for key in sorted(candidates)):
-                head = (
-                    connection.execute(
-                        select(FactHead.__table__).where(
-                            FactHead.family == fact.family,
-                            FactHead.subject_key == fact.subject_key,
-                            FactHead.source == fact.source,
-                            FactHead.source_epoch == fact.source_epoch,
-                        )
-                    )
-                    .mappings()
-                    .first()
-                )
+                key = (fact.family, fact.subject_key, fact.source, fact.source_epoch)
+                head = heads.get(key)
                 if head is None:
                     missing_heads += 1
                     continue
-                shadow_value = json.loads(str(head["value_json"]))
-                if not isinstance(shadow_value, dict):
-                    raise ValueError("shadow fact head value must be an object")
+                shadow_value = shadow_values[key]
                 session_id = str(shadow_value.get("session_id") or "")
                 provider = str(shadow_value.get("provider") or "").strip().lower()
-                legacy = (
-                    connection.execute(
-                        select(LiveControlLease.__table__).where(
-                            LiveControlLease.session_id == session_id,
-                            LiveControlLease.provider == provider,
-                            LiveControlLease.device_id == str(heartbeat["device_id"]).strip(),
-                        )
-                    )
-                    .mappings()
-                    .first()
-                )
+                legacy = legacy_rows.get((session_id, provider))
                 if legacy is None:
                     compared_axes += 1
                     deltas += _record_shadow_parity_delta(

@@ -1344,6 +1344,70 @@ async def test_shadow_parity_uses_normalized_legacy_control_rows(daemon_paths, m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_count", [3, 256])
+async def test_shadow_parity_keeps_candidate_and_device_boundaries(daemon_paths, monkeypatch, candidate_count):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    evidence = {"schema_version": 3, "control": [], "identities": []}
+    leases = []
+    for index in range(candidate_count):
+        session_id = str(uuid4())
+        provider = "codex" if index % 2 == 0 else "claude"
+        candidate = _schema_v3_control_evidence(session_id=session_id, observed_at=now, provider=provider)
+        candidate["identities"][0]["fact_index"] = index
+        evidence["control"].extend(candidate["control"])
+        evidence["identities"].extend(candidate["identities"])
+        leases.append(_lease(session_id=session_id, observed_at=now, provider=provider))
+    leases[0]["state"] = "degraded"
+    foreign_lease = {**leases[-1], "machine_id": "cube"}
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": _heartbeat(device_id="cube", received_at=now, digest="foreign-lease"),
+                "managed_leases": [foreign_lease],
+                "managed_leases_present": True,
+                "owner_id": 7,
+            },
+        )
+        result = await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": _heartbeat(device_id="cinder", received_at=now, digest="mixed-parity"),
+                "machine_evidence": evidence,
+                "managed_leases": leases[:-1],
+                "managed_leases_present": True,
+                "owner_id": 7,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+    assert result["shadow_parity"] == {
+        "status": "compared",
+        "compared_axes": 3 * (candidate_count - 1) + 1,
+        "deltas": 2,
+        "missing_heads": 0,
+        "unsupported_families": [],
+    }
+    engine = create_catalog_engine(database_path)
+    try:
+        with engine.connect() as connection:
+            deltas = connection.execute(FactParityDelta.__table__.select()).mappings().all()
+        assert {(row["subject_key"], row["axis"], row["reason"]) for row in deltas} == {
+            (evidence["identities"][0]["subject_key"], "state", "value_mismatch"),
+            (evidence["identities"][-1]["subject_key"], "managed_lease", "legacy_missing"),
+        }
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_shadow_parity_skips_when_legacy_snapshot_is_unavailable(daemon_paths, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
     database_path, socket_path = daemon_paths

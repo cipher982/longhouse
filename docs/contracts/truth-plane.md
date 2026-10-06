@@ -131,6 +131,10 @@ trigger at most one immediate heartbeat per second, while observation timestamps
 do not. Gzip is used only after the host advertises it; a 400/415/413 refusal is
 retried once as identity and disables gzip until the engine process restarts.
 
+Heartbeat shadow parity reads the bounded control heads and matching device/provider
+leases in at most two set-wise queries. It preserves candidate-level deltas and the parity
+savepoint without serializing two lookups per candidate behind the catalog writer.
+
 The status file keeps the complete machine-evidence family arrays for local
 health. Each POST includes only the rows referenced by that send's identity
 budget, with `fact_index` remapped and row content (therefore canonical hashes)
