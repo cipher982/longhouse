@@ -460,6 +460,22 @@ def test_heartbeat_endpoint_creates_row(live_catalog, live_catalog_client):
     assert stamp["is_offline"] == 0
 
 
+def test_heartbeat_openapi_body_schema_resolves_nested_types():
+    from zerg.main import api_app
+
+    paths = api_app.openapi()["paths"]
+    path = next(path for path in paths if path.endswith("/agents/heartbeat"))
+    schema = paths[path]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    nodes = [schema]
+    while nodes:
+        node = nodes.pop()
+        if isinstance(node, dict):
+            assert "$ref" not in node
+            nodes.extend(node.values())
+        elif isinstance(node, list):
+            nodes.extend(node)
+
+
 def test_heartbeat_gzip_round_trip_matches_identity(live_catalog, live_catalog_client):
     device_id = "gzip-round-trip-machine"
     headers = _headers(live_catalog, device_id)
@@ -501,6 +517,26 @@ def test_heartbeat_rejects_gzip_beyond_decoded_limit(live_catalog, live_catalog_
     assert response.headers["x-longhouse-request-encodings"] == "gzip"
     assert response.headers["x-longhouse-machine-fresh-horizon"] == str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS)
     assert _stamps("oversized-gzip-machine") == []
+
+
+
+
+def test_heartbeat_identity_body_keeps_legacy_size_behavior(live_catalog, live_catalog_client):
+    from zerg.routers.heartbeat import MAX_HEARTBEAT_DECODED_BYTES
+
+    device_id = "large-identity-machine"
+    headers = _headers(live_catalog, device_id)
+    body = json.dumps({"version": "large-identity"}, separators=(",", ":")).encode("utf-8")
+    body += b" " * (MAX_HEARTBEAT_DECODED_BYTES + 1)
+
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers={**headers, "Content-Type": "application/json"},
+        content=body,
+    )
+
+    assert response.status_code == 204, response.text
+    assert _one_stamp(device_id)["version"] == "large-identity"
 
 
 def test_heartbeat_rejects_corrupt_gzip(live_catalog, live_catalog_client):
@@ -1184,6 +1220,37 @@ def test_heartbeat_drops_evidence_over_the_transport_budget_and_still_lands(live
         {"reason": "oversize"},
     )
     assert dropped == 1
+
+
+
+
+def test_heartbeat_budget_near_boundary_matches_legacy_serialized_size(live_catalog, live_catalog_client, monkeypatch):
+    from zerg.machine_evidence import machine_evidence_bytes
+    from zerg.routers.heartbeat import MachineEvidenceIn
+    from zerg.routers.heartbeat import _machine_evidence_decoded_bytes
+
+    evidence = _machine_evidence_payload()
+    normalized = MachineEvidenceIn.model_validate(evidence).model_dump(mode="json", exclude_none=True)
+    legacy_size = machine_evidence_bytes(normalized)
+    compact_evidence = json.dumps(evidence, separators=(",", ":")).encode("utf-8")
+    target_size = max(legacy_size, len(compact_evidence)) + 50
+    budget = target_size - 1
+    padded_evidence = b"{" + b" " * (target_size - len(compact_evidence)) + compact_evidence[1:]
+    body = b'{"version":"budget-boundary","machine_evidence":' + padded_evidence + b"}"
+
+    assert legacy_size <= budget < target_size
+    assert _machine_evidence_decoded_bytes(body) == target_size
+    monkeypatch.setattr("zerg.routers.heartbeat.MAX_MACHINE_EVIDENCE_BYTES", budget)
+    device_id = "boundary-evidence-machine"
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers={**_headers(live_catalog, device_id), "Content-Type": "application/json"},
+        content=body,
+    )
+
+    assert response.status_code == 204, response.text
+    assert response.headers["x-longhouse-machine-evidence"] != "oversize_evidence"
+    assert _one_stamp(device_id)["version"] == "budget-boundary"
 
 
 def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(live_catalog, live_catalog_client):

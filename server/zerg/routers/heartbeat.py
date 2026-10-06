@@ -51,6 +51,7 @@ from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
 from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
+from zerg.machine_evidence import machine_evidence_bytes
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_rejected_total
@@ -640,6 +641,28 @@ class HeartbeatIn(BaseModel):
             return HistoryImportSnapshot.unavailable()
 
 
+def _heartbeat_openapi_request_schema() -> dict[str, Any]:
+    """Inline Pydantic's local definitions for the operation-level OpenAPI schema."""
+
+    schema = HeartbeatIn.model_json_schema()
+    definitions = schema.pop("$defs", {})
+
+    def inline(value: Any) -> Any:
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if isinstance(reference, str) and reference.startswith("#/$defs/"):
+                definition_name = reference.removeprefix("#/$defs/")
+                expanded = inline(definitions[definition_name])
+                siblings = {key: child for key, child in value.items() if key != "$ref"}
+                return {**expanded, **inline(siblings)}
+            return {key: inline(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [inline(child) for child in value]
+        return value
+
+    return inline(schema)
+
+
 _HEARTBEAT_RETENTION_FIELDS = frozenset(HeartbeatIn.model_fields) - {
     "machine_evidence",
     "sessions",
@@ -648,22 +671,21 @@ _HEARTBEAT_RETENTION_FIELDS = frozenset(HeartbeatIn.model_fields) - {
 
 
 def _decode_heartbeat_body(raw_body: bytes, content_encoding: str) -> bytes:
-    """Decode one identity/gzip heartbeat body without exceeding the decoded budget."""
+    """Bound gzip expansion while leaving legacy identity-body handling unchanged."""
 
     encoding = content_encoding.strip().lower() or "identity"
     if encoding == "identity":
-        decoded = raw_body
-    elif encoding == "gzip":
-        try:
-            with gzip.GzipFile(fileobj=io.BytesIO(raw_body)) as stream:
-                decoded = stream.read(MAX_HEARTBEAT_DECODED_BYTES + 1)
-        except (EOFError, OSError, zlib.error) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Corrupt gzip heartbeat body") from exc
-    else:
+        return raw_body
+    if encoding != "gzip":
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Unsupported heartbeat content encoding",
         )
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(raw_body)) as stream:
+            decoded = stream.read(MAX_HEARTBEAT_DECODED_BYTES + 1)
+    except (EOFError, OSError, zlib.error) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Corrupt gzip heartbeat body") from exc
     if len(decoded) > MAX_HEARTBEAT_DECODED_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -901,6 +923,17 @@ def _machine_evidence_row_count(evidence: object) -> int:
     )
 
 
+def _drop_oversized_machine_evidence(*, device_id: str, size: int) -> tuple[str, None]:
+    agents_machine_evidence_dropped_total.labels(reason="oversize").inc()
+    logger.warning(
+        "Dropping oversized machine evidence device=%s bytes=%d budget=%d",
+        device_id,
+        size,
+        MAX_MACHINE_EVIDENCE_BYTES,
+    )
+    return "oversize_evidence", None
+
+
 def _accepted_machine_evidence(
     evidence: object,
     *,
@@ -932,16 +965,17 @@ def _accepted_machine_evidence(
             _validation_reason(exc),
         )
         return "rejected", None
-    if decoded_evidence_bytes is not None and decoded_evidence_bytes > MAX_MACHINE_EVIDENCE_BYTES:
-        agents_machine_evidence_dropped_total.labels(reason="oversize").inc()
-        logger.warning(
-            "Dropping oversized machine evidence device=%s bytes=%d budget=%d",
-            device_id,
-            decoded_evidence_bytes,
-            MAX_MACHINE_EVIDENCE_BYTES,
-        )
-        return "oversize_evidence", None
-    return None, parsed.model_dump(mode="json", exclude_none=True)
+    lower_fallback_bound = MAX_MACHINE_EVIDENCE_BYTES * 9 // 10
+    upper_fallback_bound = MAX_MACHINE_EVIDENCE_BYTES * 11 // 10
+    if decoded_evidence_bytes is not None and decoded_evidence_bytes > upper_fallback_bound:
+        return _drop_oversized_machine_evidence(device_id=device_id, size=decoded_evidence_bytes)
+
+    serialized = parsed.model_dump(mode="json", exclude_none=True)
+    if decoded_evidence_bytes is not None and decoded_evidence_bytes >= lower_fallback_bound:
+        serialized_size = machine_evidence_bytes(serialized)
+        if serialized_size > MAX_MACHINE_EVIDENCE_BYTES:
+            return _drop_oversized_machine_evidence(device_id=device_id, size=serialized_size)
+    return None, serialized
 
 
 def _catalog_machine_evidence_disposition(result: object) -> str:
@@ -1346,7 +1380,7 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
     openapi_extra={
         "requestBody": {
             "required": True,
-            "content": {"application/json": {"schema": HeartbeatIn.model_json_schema()}},
+            "content": {"application/json": {"schema": _heartbeat_openapi_request_schema()}},
         },
         "parameters": [
             {
