@@ -287,15 +287,22 @@ pub(crate) fn restart_shaped_failure(error: &str) -> bool {
     if error.contains("runtime_restarting") || error.contains("runtime_unreachable") {
         return true;
     }
+    // Network-level evidence only. The generic "POST failed" / "PUT failed"
+    // wrappers also cover local encoding and request-building failures, so
+    // they never count on their own.
+    if error.contains("builder error") || error.contains("could not be serialized") {
+        return false;
+    }
     let transport = [
         "error sending request",
-        "connection",
+        "connection refused",
+        "connection reset",
+        "connection closed",
         "timed out",
-        "timeout",
-        "post failed",
-        "put failed",
         "broken pipe",
         "reset by peer",
+        "dns error",
+        "client error (connect)",
     ];
     if transport.iter().any(|needle| error.contains(needle)) && !error.contains("returned 4") {
         return true;
@@ -598,6 +605,13 @@ mod tests {
         assert!(!link.explains_failure(r#"POST returned 503: {"code":"write_backpressure"}"#));
         assert!(!link.explains_failure("task 12 panicked with message \"boom\""));
         assert!(!link.explains_failure("runtime event could not be serialized"));
+        // The generic wrapper alone is not network evidence.
+        assert!(!link.explains_failure("POST failed: builder error: invalid header value"));
+        assert!(!link.explains_failure("POST failed: relative URL without a base"));
+        // Storage-v2 keeps the typed restart code in its error.
+        assert!(link.explains_failure(
+            r#"storage-v2 envelope POST returned 503 Service Unavailable: {"code":"runtime_restarting","retryable":true}"#
+        ));
         // Without a claim nothing is explained away.
         assert!(!HostLink::new().explains_failure("POST failed: error sending request for url"));
     }

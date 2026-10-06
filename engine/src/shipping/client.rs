@@ -1011,6 +1011,15 @@ impl ShipperClient {
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             self.note_rejection(&retry_lane, status.as_u16(), &headers, &body);
+            // A typed restart refusal is the host restarting, not storage
+            // backpressure or a rejected envelope: keep its code in the error
+            // so the caller can recognise it as restart-shaped.
+            if status.as_u16() == 503
+                && (body.contains("\"runtime_restarting\"")
+                    || body.contains("\"runtime_unreachable\""))
+            {
+                anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
+            }
             if let Some(backpressure) =
                 parse_storage_v2_backpressure(status.as_u16(), &headers, &body, lane)
             {
