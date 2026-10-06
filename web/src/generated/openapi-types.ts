@@ -4801,7 +4801,7 @@ export interface components {
         };
         /**
          * InputOriginResponse
-         * @description Semantic origin for a user-authored transcript event.
+         * @description Semantic origin for a transcript input linked to a Longhouse receipt.
          */
         InputOriginResponse: {
             /**
@@ -7764,12 +7764,10 @@ export interface components {
         };
         /**
          * SessionInputReceiptResponse
-         * @description A send Longhouse accepted for this session, and the durable event it became.
+         * @description An accepted session input receipt and the durable event it became.
          *
-         *     `event_id` is set once ingest links the receipt to the transcript entry the
-         *     provider wrote for it. A client that sent with `client_request_id` resolves
-         *     its optimistic row from this, whether or not that event is on the page it
-         *     has loaded.
+         *     ``origin`` distinguishes a user instruction from a provider wake.
+         *     ``event_id`` is set once ingest links the receipt to its transcript entry.
          */
         SessionInputReceiptResponse: {
             /**
