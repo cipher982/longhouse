@@ -60,6 +60,10 @@ const RUNTIME_BATCH_ZSTD_RETRY: Duration = Duration::from_secs(15 * 60);
 /// `expected_back_by` window, capped at 5 s server-side; 10 s bounds a buggy or
 /// hostile header without starving liveness.
 const MAX_HOST_RETRY_AFTER: Duration = Duration::from_secs(10);
+/// Longest pause one lane's 429/503 `Retry-After` may impose on later
+/// requests to that same lane. The server's own backpressure hints are a few
+/// seconds; 30 s bounds a pathological header.
+const MAX_LANE_RETRY_AFTER: Duration = Duration::from_secs(30);
 
 /// Origin of a process-local monotonic clock, for refusal timestamps an
 /// atomic can hold.
@@ -297,6 +301,10 @@ pub struct ShipperClient {
     heartbeat_gzip_disabled: Arc<AtomicBool>,
     host_link: HostLink,
     retry_after: Arc<Mutex<Option<RetryAfterWindow>>>,
+    /// Caller-local `Retry-After` windows, keyed by request lane (path, plus
+    /// the storage-v2 lane). A 429 or lane 503 paces only later requests on
+    /// the same lane, so backpressure on one route never stalls another.
+    lane_retry_after: Arc<Mutex<std::collections::HashMap<String, Instant>>>,
 }
 
 impl ShipperClient {
@@ -347,6 +355,7 @@ impl ShipperClient {
             heartbeat_gzip_disabled: Arc::new(AtomicBool::new(false)),
             host_link: HostLink::new(),
             retry_after: Arc::new(Mutex::new(None)),
+            lane_retry_after: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -381,7 +390,25 @@ impl ShipperClient {
         );
         Ok(())
     }
-    async fn wait_for_retry_after(&self) {
+    async fn wait_for_retry_after(&self, lane: &str) {
+        self.wait_for_host_retry_after().await;
+        let until = self.lane_retry_after.lock().get(lane).copied();
+        if let Some(until) = until {
+            let remaining = until.saturating_duration_since(Instant::now());
+            if !remaining.is_zero() {
+                tokio::time::sleep(remaining.min(MAX_LANE_RETRY_AFTER)).await;
+            }
+            let mut windows = self.lane_retry_after.lock();
+            if windows
+                .get(lane)
+                .is_some_and(|until| *until <= Instant::now())
+            {
+                windows.remove(lane);
+            }
+        }
+    }
+
+    async fn wait_for_host_retry_after(&self) {
         let mut host_link_changed = self.host_link.subscribe();
         loop {
             let window = *self.retry_after.lock();
@@ -429,14 +456,27 @@ impl ShipperClient {
     }
 
     /// Feed a non-2xx response to the host link and return its `Retry-After`.
-    /// Only a host-wide K1 restart refusal pauses every request to this host;
-    /// lane backpressure (429, storage 503s) stays with the caller that got it,
-    /// so it can never stall heartbeat liveness or unrelated writes.
-    fn note_rejection(&self, status: u16, headers: &HeaderMap, body: &str) -> Option<Duration> {
+    /// A host-wide K1 restart refusal pauses every request to this host; any
+    /// other 429/503 `Retry-After` paces only the lane that received it, so it
+    /// can never stall heartbeat liveness or unrelated writes.
+    fn note_rejection(
+        &self,
+        lane: &str,
+        status: u16,
+        headers: &HeaderMap,
+        body: &str,
+    ) -> Option<Duration> {
         let host_wide = self.host_link.observe_http_rejection(status, body);
         let retry_after = parse_retry_after_seconds(headers).map(Duration::from_secs_f64);
         if host_wide {
             self.record_retry_after(retry_after);
+        } else if let (true, Some(delay)) = (matches!(status, 429 | 503), retry_after) {
+            let until = Instant::now() + delay.min(MAX_LANE_RETRY_AFTER);
+            let mut windows = self.lane_retry_after.lock();
+            let entry = windows.entry(lane.to_string()).or_insert(until);
+            if until > *entry {
+                *entry = until;
+            }
         }
         retry_after
     }
@@ -583,7 +623,7 @@ impl ShipperClient {
         content_encoding: &'static str,
         request_timeout: Option<Duration>,
     ) -> std::result::Result<JsonPostResponse, JsonPostError> {
-        self.wait_for_retry_after().await;
+        self.wait_for_retry_after(path_suffix).await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let wire_bytes = body.len();
         let mut request = self
@@ -622,7 +662,7 @@ impl ShipperClient {
             });
         }
         let body = response.text().await.unwrap_or_default();
-        let retry_after = self.note_rejection(status.as_u16(), &headers, &body);
+        let retry_after = self.note_rejection(path_suffix, status.as_u16(), &headers, &body);
         Err(JsonPostError::Http {
             status: status.as_u16(),
             body,
@@ -731,7 +771,7 @@ impl ShipperClient {
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> Result<T> {
-        self.wait_for_retry_after().await;
+        self.wait_for_retry_after(path_suffix).await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let mut request = self
             .client
@@ -751,7 +791,7 @@ impl ShipperClient {
         self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            self.note_rejection(status.as_u16(), &headers, &body);
+            self.note_rejection(path_suffix, status.as_u16(), &headers, &body);
             anyhow::bail!("POST returned {status}: {body}");
         }
         self.host_link.observe_serving_evidence(runtime_epoch);
@@ -770,7 +810,7 @@ impl ShipperClient {
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> Result<()> {
-        self.wait_for_retry_after().await;
+        self.wait_for_retry_after(path_suffix).await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let mut request = self
             .client
@@ -793,7 +833,7 @@ impl ShipperClient {
         self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            self.note_rejection(status.as_u16(), &response_headers, &body);
+            self.note_rejection(path_suffix, status.as_u16(), &response_headers, &body);
             anyhow::bail!("PUT returned {status}: {body}");
         }
         self.host_link.observe_serving_evidence(runtime_epoch);
@@ -930,7 +970,8 @@ impl ShipperClient {
         if lane != "live" && lane != "repair" {
             anyhow::bail!("storage-v2 lane must be live or repair");
         }
-        self.wait_for_retry_after().await;
+        let retry_lane = format!("{ingest_path}#{lane}");
+        self.wait_for_retry_after(&retry_lane).await;
         let url = self.ingest_url.replace("/api/agents/ingest", ingest_path);
         let mut request = self
             .client
@@ -954,7 +995,7 @@ impl ShipperClient {
         self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            self.note_rejection(status.as_u16(), &headers, &body);
+            self.note_rejection(&retry_lane, status.as_u16(), &headers, &body);
             if let Some(backpressure) =
                 parse_storage_v2_backpressure(status.as_u16(), &headers, &body, lane)
             {
