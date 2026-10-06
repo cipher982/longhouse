@@ -57,6 +57,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
+.PHONY: validate-host-link-contract
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-format validate-legacy-nouns
 .PHONY: validate-review-gate
