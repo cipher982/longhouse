@@ -154,7 +154,20 @@ async def websocket_endpoint(
     try:
         await websocket.accept()
         await topic_manager.connect(client_id, websocket, user_id, auto_system=True, principal=user)
-        await websocket.send_json({"type": "auth_ready"})
+        from zerg.services.runtime_admission import runtime_admission
+
+        runtime = runtime_admission()
+        await websocket.send_json(
+            {
+                "type": "auth_ready",
+                "runtime_epoch": runtime.runtime_epoch,
+                "admission": runtime.admission,
+                "host_lifecycle": runtime.host_lifecycle(),
+            }
+        )
+        release_runtime_admission = (websocket.scope.get("state") or {}).get("runtime_admission_release")
+        if release_runtime_admission is not None:
+            await release_runtime_admission()
         logger.info(f"WebSocket connection established for client {client_id}")
         expires_at = _unverified_expiry(auth_token)
         if expires_at is not None:

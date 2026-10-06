@@ -71,18 +71,72 @@ def _principal_for(caplog, message: str) -> str:
 
 
 def test_browser_stream_logs_the_authenticated_user(monkeypatch, caplog):
-    """``/api/ws`` names the user its own auth call already resolved."""
+    """Browser registration stays admitted through its initial lifecycle frame."""
+
+    from unittest.mock import AsyncMock
+
+    from zerg.routers import websocket as websocket_router
+    from zerg.services import runtime_admission as admission_module
 
     monkeypatch.setattr(
-        "zerg.routers.websocket.validate_ws_jwt",
+        websocket_router,
+        "validate_ws_jwt",
         lambda token, *args, **kwargs: SimpleNamespace(id=BROWSER_USER_ID, email="ws-principal@example.com"),
     )
+    lifecycle = {
+        "type": "host.lifecycle",
+        "state": "serving",
+        "runtime_epoch": "browser-runtime",
+        "attempt_id": None,
+        "phase": None,
+        "expected_back_by": None,
+        "deadline": None,
+        "cutoff": None,
+    }
+
+    class Runtime:
+        runtime_epoch = "browser-runtime"
+        admission = "open"
+
+        def __init__(self):
+            self.in_flight = 0
+            self.admitted_paths = []
+
+        async def try_admit(self, *, path):
+            self.admitted_paths.append(path)
+            self.in_flight += 1
+            return True, {}
+
+        async def release(self):
+            self.in_flight -= 1
+
+        def host_lifecycle(self):
+            return lifecycle
+
+    runtime = Runtime()
+    registration_in_flight = []
+
+    async def register(*_args, **_kwargs):
+        registration_in_flight.append(runtime.in_flight)
+
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(websocket_router.topic_manager, "connect", register)
+    monkeypatch.setattr(websocket_router.topic_manager, "disconnect", AsyncMock())
 
     client = TestClient(app)
     with caplog.at_level(logging.INFO, logger=ACCESS_LOGGER):
-        with client.websocket_connect("/api/ws"):
-            pass
+        with client.websocket_connect("/api/ws") as socket:
+            auth_ready = socket.receive_json()
+            assert auth_ready == {
+                "type": "auth_ready",
+                "runtime_epoch": "browser-runtime",
+                "admission": "open",
+                "host_lifecycle": lifecycle,
+            }
+            assert runtime.in_flight == 0
 
+    assert runtime.admitted_paths == ["/api/ws"]
+    assert registration_in_flight == [1]
     assert _principal_for(caplog, "WS /api/ws accepted") == f"user:{BROWSER_USER_ID}"
 
 
@@ -138,7 +192,11 @@ def test_browser_stream_closes_when_bearer_token_expires(monkeypatch):
 
     client = TestClient(app)
     with client.websocket_connect("/api/ws", headers={"Authorization": f"Bearer {token}"}) as socket:
-        assert socket.receive_json() == {"type": "auth_ready"}
+        auth_ready = socket.receive_json()
+        assert auth_ready["type"] == "auth_ready"
+        assert auth_ready["runtime_epoch"]
+        assert auth_ready["admission"] in {"open", "pending", "draining"}
+        assert auth_ready["host_lifecycle"]["type"] == "host.lifecycle"
         with pytest.raises(WebSocketDisconnect) as exc:
             socket.receive_text()
 

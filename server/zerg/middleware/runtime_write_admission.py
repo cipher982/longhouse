@@ -12,6 +12,7 @@ hold a drain open.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from starlette.responses import JSONResponse
@@ -23,16 +24,22 @@ from starlette.types import Send
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _INTERNAL_CONTROL_PREFIXES = ("/internal/deployments/", "/api/internal/deployments/")
-_RUNTIME_WEBSOCKET_PATHS = frozenset({"/api/agents/control/ws", "/api/runners/ws"})
+_RUNTIME_WEBSOCKET_PATHS = frozenset({"/api/agents/control/ws", "/api/runners/ws", "/api/ws"})
+_REQUEST_BODY_DISCARD_TIMEOUT_SECONDS = 1.0
 
 
-async def _discard_body(receive: Receive) -> None:
-    while True:
-        message = await receive()
-        if message["type"] == "http.disconnect":
-            return
-        if message["type"] == "http.request" and not message.get("more_body", False):
-            return
+async def _discard_body(receive: Receive) -> bool:
+    """Consume a rejected request body, but never let a stalled upload hang its 503."""
+    try:
+        async with asyncio.timeout(_REQUEST_BODY_DISCARD_TIMEOUT_SECONDS):
+            while True:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    return False
+                if message["type"] == "http.request" and not message.get("more_body", False):
+                    return True
+    except TimeoutError:
+        return False
 
 
 async def _deny_websocket(scope: Scope, send: Send, content: dict) -> None:
@@ -70,6 +77,7 @@ class RuntimeWriteAdmissionMiddleware:
                 return
 
             released = False
+            browser_socket = path.rstrip("/") == "/api/ws"
 
             async def release() -> None:
                 nonlocal released
@@ -77,8 +85,11 @@ class RuntimeWriteAdmissionMiddleware:
                     released = True
                     await runtime.release()
 
+            if browser_socket:
+                scope.setdefault("state", {})["runtime_admission_release"] = release
+
             async def send_and_release(message: Message) -> None:
-                if message["type"] == "websocket.accept":
+                if message["type"] == "websocket.accept" and not browser_socket:
                     await release()
                 await send(message)
 
@@ -99,12 +110,16 @@ class RuntimeWriteAdmissionMiddleware:
         runtime = runtime_admission()
         admitted, details = await runtime.try_admit(path=path)
         if not admitted:
-            await _discard_body(receive)
+            body_complete = await _discard_body(receive)
             content = {key: value for key, value in details.items() if key not in {"retry_after_seconds"}}
+            headers = {"Retry-After": "2"}
+            if not body_complete:
+                # Do not reuse a connection whose rejected upload is incomplete.
+                headers["Connection"] = "close"
             await JSONResponse(
                 status_code=503,
                 content=content,
-                headers={"Retry-After": "2"},
+                headers=headers,
             )(scope, receive, send)
             return
 

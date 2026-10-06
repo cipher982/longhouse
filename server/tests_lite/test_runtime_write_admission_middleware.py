@@ -131,6 +131,97 @@ def test_rejected_asgi_request_consumes_a_still_sending_body_before_k1_response(
     assert payload["claim"]["type"] == "host.lifecycle"
 
 
+def test_rejected_stalled_upload_gets_typed_response_and_closes_connection(monkeypatch):
+    import asyncio
+    import json
+
+    from zerg.middleware import runtime_write_admission as admission_middleware
+
+    runtime = _Runtime(open_=False)
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(admission_middleware, "_REQUEST_BODY_DISCARD_TIMEOUT_SECONDS", 0.01)
+    receive_count = 0
+    sent = []
+
+    async def endpoint(_scope, _receive, _send):
+        raise AssertionError("a fenced request must not reach the app")
+
+    async def receive():
+        nonlocal receive_count
+        receive_count += 1
+        if receive_count == 1:
+            return {"type": "http.request", "body": b"partial", "more_body": True}
+        await asyncio.Future()
+
+    async def send(message):
+        sent.append(message)
+
+    middleware = RuntimeWriteAdmissionMiddleware(endpoint)
+    asyncio.run(
+        asyncio.wait_for(
+            middleware(
+                {"type": "http", "method": "POST", "path": "/write", "headers": []},
+                receive,
+                send,
+            ),
+            timeout=0.5,
+        )
+    )
+
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    body = b"".join(message.get("body", b"") for message in sent if message["type"] == "http.response.body")
+    headers = dict(start["headers"])
+    assert receive_count == 2
+    assert start["status"] == 503
+    assert headers[b"retry-after"] == b"2"
+    assert headers[b"connection"] == b"close"
+    payload = json.loads(body)
+    assert payload["code"] == "runtime_restarting"
+    assert payload["retryable"] is True
+
+
+def test_draining_browser_websocket_is_rejected_with_typed_unavailability(monkeypatch):
+    import asyncio
+    import json
+
+    runtime = _Runtime(open_=False)
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    app_called = False
+    sent = []
+
+    async def endpoint(_scope, _receive, _send):
+        nonlocal app_called
+        app_called = True
+
+    async def receive():
+        raise AssertionError("a rejected upgrade must not read WebSocket messages")
+
+    async def send(message):
+        sent.append(message)
+
+    middleware = RuntimeWriteAdmissionMiddleware(endpoint)
+    asyncio.run(
+        middleware(
+            {
+                "type": "websocket",
+                "path": "/api/ws",
+                "extensions": {"websocket.http.response": {}},
+            },
+            receive,
+            send,
+        )
+    )
+
+    start = next(message for message in sent if message["type"] == "websocket.http.response.start")
+    body = b"".join(message.get("body", b"") for message in sent if message["type"] == "websocket.http.response.body")
+    headers = dict(start["headers"])
+    assert not app_called
+    assert start["status"] == 503
+    assert headers[b"content-type"] == b"application/json"
+    assert headers[b"retry-after"] == b"2"
+    assert json.loads(body)["code"] == "runtime_restarting"
+
+
 def test_a_streamed_write_stops_counting_once_its_response_starts(monkeypatch):
     runtime = _Runtime()
     client, seen = _client(monkeypatch, runtime)
