@@ -324,6 +324,22 @@ def seed_corpus(source: Path, home: Path) -> int:
     if not source.is_dir():
         die(f"--seed-corpus {source} is not a directory")
     shutil.copytree(source, home, dirs_exist_ok=True)
+    # A Machine Agent that finds no import scope on a fresh machine imports only
+    # sessions that start from now on, so the seeded history would never ship.
+    # Choose "all local history" for this scratch machine, as the CLI would.
+    scope = home / ".longhouse" / "machine" / "import-scope.json"
+    scope.parent.mkdir(parents=True, exist_ok=True)
+    scope.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "since": None,
+                "projects": [],
+                "chosen_at": datetime.now(timezone.utc).isoformat(),
+                "chosen_via": "cli",
+            }
+        )
+    )
     count = sum(1 for _ in source.rglob("*.jsonl"))
     log(f"seeded {count} transcripts from {source}")
     return count
