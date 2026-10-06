@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, TimelineSessionsListResponse } from "@/shared/api/agents";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
 import { SessionRailFrame, isSwitcherHotkey, railHotkeyIndex, railHotkeyLabel } from "../SessionRail";
-import { filterSwitcherRows, previewFromWorkspace } from "../SessionSwitcher";
+import { filterSwitcherRows, previewFromWorkspace, trimPreviewMarkdown } from "../SessionSwitcher";
 import type { AgentSessionWorkspaceResponse } from "@/shared/api/agents";
 import { RAIL_PREFETCH_COUNT, railPrefetchAllowed } from "../useRailPrefetch";
 
@@ -364,5 +364,14 @@ describe("session switcher focus", () => {
     });
     expect(screen.queryByTestId("session-switcher")).not.toBeInTheDocument();
     expect(composer).toHaveFocus();
+  });
+});
+
+describe("trimPreviewMarkdown", () => {
+  it("cuts at a block boundary, never mid-heading or mid-list", () => {
+    const text = `## Where things stand\n\nFirst paragraph.\n\n- **Task generator:** ${"x".repeat(80)}`;
+    expect(trimPreviewMarkdown(text, 60)).toBe("## Where things stand\n\nFirst paragraph.");
+    expect(trimPreviewMarkdown("short", 60)).toBe("short");
+    expect(trimPreviewMarkdown("y".repeat(100), 60)).toBe(`${"y".repeat(60)}…`);
   });
 });

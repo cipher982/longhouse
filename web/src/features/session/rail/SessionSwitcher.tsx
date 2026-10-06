@@ -13,6 +13,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { AgentSessionWorkspaceResponse } from "@/shared/api/agents";
 import { agentSessionWorkspaceQueryOptions } from "@/shared/api/useAgentSessions";
 import { useDebouncedValue } from "@/shared/hooks/useDebouncedValue";
@@ -22,6 +24,31 @@ import { SearchIcon } from "@/shared/ui/icons";
 import type { RailActiveSession } from "./sessionRailContext";
 
 const PREVIEW_CHARS = 600;
+
+/** Cut long markdown at a block boundary so a heading, list item or code
+ * fence is never split mid-way; fall back to a line, then a hard cut. */
+export function trimPreviewMarkdown(text: string, max = PREVIEW_CHARS): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const block = head.lastIndexOf("\n\n");
+  if (block > max / 3) return head.slice(0, block);
+  const line = head.lastIndexOf("\n");
+  if (line > max / 3) return head.slice(0, line);
+  return `${head.trimEnd()}…`;
+}
+
+function PreviewMarkdown({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+}
 
 /** Every whitespace-separated term must appear in the title, machine or provider. */
 export function filterSwitcherRows<T extends Pick<RailActiveSession, "title" | "host" | "provider">>(
@@ -47,9 +74,9 @@ export function previewFromWorkspace(workspace: AgentSessionWorkspaceResponse | 
     const event = items[index].event;
     const text = event?.content_text?.trim();
     if (!event || !text || event.tool_name) continue;
-    if (event.role === "assistant" && reply == null) reply = text.slice(0, PREVIEW_CHARS);
+    if (event.role === "assistant" && reply == null) reply = trimPreviewMarkdown(text);
     if (event.role === "user" && ask == null) {
-      ask = text.slice(0, PREVIEW_CHARS);
+      ask = trimPreviewMarkdown(text);
       askIsNewer = reply == null;
     }
   }
@@ -71,10 +98,12 @@ function SwitcherPreview({ row }: { row: RailActiveSession }) {
   const { data, loading } = useSwitcherPreview(row.id);
   const { ask, reply, askIsNewer } = previewFromWorkspace(data);
   const askBlock = ask ? (
-    <p className="session-switcher__ask">
+    <div className="session-switcher__ask">
       <span>{askIsNewer ? "Newest ask, no reply yet" : "Last ask"}</span>
-      {ask}
-    </p>
+      <div className="session-switcher__md">
+        <PreviewMarkdown text={ask} />
+      </div>
+    </div>
   ) : null;
   return (
     <div className="session-switcher__preview" data-testid="session-switcher-preview">
@@ -86,7 +115,9 @@ function SwitcherPreview({ row }: { row: RailActiveSession }) {
       {reply ? (
         <>
           {askIsNewer ? <p className="session-switcher__label">Earlier reply</p> : null}
-          <blockquote className="session-switcher__reply">{reply}</blockquote>
+          <div className="session-switcher__reply session-switcher__md" data-testid="session-switcher-reply">
+            <PreviewMarkdown text={reply} />
+          </div>
         </>
       ) : loading ? (
         <p className="session-switcher__empty">Loading…</p>

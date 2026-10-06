@@ -306,16 +306,73 @@
   border-left: 2px solid var(--color-brand-primary);
   background: rgba(233, 185, 73, 0.05);
   color: var(--color-text-primary);
-  white-space: pre-wrap;
+  max-height: 260px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent);
 }
 
 .session-switcher__ask {
   margin: 0;
-  white-space: pre-wrap;
+}
+
+/* Rendered markdown, sized for a preview: headings read as bold lead-ins,
+   blocks sit tight, code stays inline-sized. */
+.session-switcher__md > :first-child {
+  margin-top: 0;
+}
+
+.session-switcher__md > :last-child {
+  margin-bottom: 0;
+}
+
+.session-switcher__md :is(p, ul, ol, pre, blockquote, table) {
+  margin: 0 0 6px;
+}
+
+.session-switcher__md :is(ul, ol) {
+  padding-left: 18px;
+}
+
+.session-switcher__md li {
+  margin: 0 0 2px;
+}
+
+.session-switcher__md :is(h1, h2, h3, h4, h5, h6) {
+  margin: 8px 0 4px;
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text-primary);
+}
+
+.session-switcher__md code {
+  font-family: var(--font-family-mono);
+  font-size: 0.9em;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--color-surface-elevated);
+}
+
+.session-switcher__md pre {
+  overflow: hidden;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--color-surface-well);
+}
+
+.session-switcher__md pre code {
+  padding: 0;
+  background: none;
+}
+
+.session-switcher__md a {
+  color: var(--color-brand-primary);
 }
 
 .session-switcher__label,
-.session-switcher__ask span {
+.session-switcher__ask > span {
   display: block;
   margin: 0;
   font-size: 10.5px;
