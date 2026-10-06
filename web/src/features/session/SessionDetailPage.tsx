@@ -37,6 +37,7 @@ import { BranchSessionCard, branchUnavailableNote } from "./BranchSessionCard";
 import { deriveTurnOutline, TurnOutline, turnRowId, type TurnOutlineTurn } from "./TurnOutline";
 import { useActiveTurn } from "./useActiveTurn";
 import { SessionStateBadge } from "./SessionStateBadge";
+import { SessionOpening } from "./SessionOpening";
 import {
   buildSessionMetaItems,
   getSessionHeaderState,
@@ -337,16 +338,10 @@ function SessionDetailWorkspaceRoute({
     screenshotReady: workspaceReady,
   });
 
+  // The frame after the click: the title bar from the Timeline's data and
+  // placeholder rows, never a blank page or a lone spinner.
   if (sessionLoading) {
-    return (
-      <div className="session-workspace-route session-workspace-route--empty">
-        <EmptyState
-          icon={<Spinner size="lg" />}
-          title="Loading session..."
-          description="Fetching session details."
-        />
-      </div>
-    );
+    return <SessionOpening sessionId={sessionId} headerTarget={headerSlot} onBack={handleBack} />;
   }
 
   // A failed background refresh (a deploy restart answers 502 for a few

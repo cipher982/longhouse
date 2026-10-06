@@ -21,6 +21,7 @@ import { formatRelativeTime } from "@/shared/lib/dateUtils";
 import { getBranchLabel, getDriftTitle, getSessionCardText } from "@/shared/session/sessionLabels";
 import { ACTIVITY_UNCERTAIN_LABEL, workClaimExpired } from "@/shared/session/sessionStatus";
 import { renderHighlightedText } from "./searchHighlight";
+import { preloadSessionDetailPage } from "@/app/routeChunks";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
@@ -209,6 +210,16 @@ export function SessionRow({
       style={style}
       {...(sortableAttributes ?? { role: "button", tabIndex: 0 })}
       {...(sortableListeners ?? {})}
+      // Pressing is the strongest intent there is: start the transcript and
+      // the page's code now instead of after the click lands. dnd-kit's own
+      // handler (drag to reorder) still runs first.
+      onPointerDown={(event) => {
+        sortableListeners?.onPointerDown?.(event);
+        if (event.button > 0) return; // middle or right press: no intent to open here
+        clearHover();
+        onPrefetch?.();
+        preloadSessionDetailPage();
+      }}
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {

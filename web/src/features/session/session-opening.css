@@ -1,0 +1,46 @@
+/* SessionOpening: the frame between the click and the transcript. Bars sit
+   where transcript rows will land, at the bottom like a loaded session. */
+.session-opening__rows {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: var(--space-2) var(--space-4) var(--space-6);
+}
+
+.session-opening__bar {
+  display: block;
+  height: 12px;
+  max-width: 100%;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(196, 176, 150, 0.08) 0%,
+    rgba(196, 176, 150, 0.16) 50%,
+    rgba(196, 176, 150, 0.08) 100%
+  );
+  background-size: 200% 100%;
+  animation: session-opening-shimmer 1.4s ease-in-out infinite;
+}
+
+.session-opening__bar--title {
+  width: 18rem;
+  height: 14px;
+}
+
+@keyframes session-opening-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-opening__bar {
+    animation: none;
+  }
+}

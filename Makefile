@@ -1194,6 +1194,9 @@ qa-live: ## Authenticated hosted browser smoke plus the separate binding audit
 hosted-shipper-mixed-bench: ## Hosted mixed live/archive ingest bench
 	@./scripts/qa/hosted-shipper-mixed-bench.sh
 
+cold-open-probe: ## Time a cold first click from Timeline into a session (production build, fixture API, throttled link; ARGS="--runs=5 --settle-ms=0")
+	@bunx tsx scripts/qa/cold-open-probe.ts --no-webgl $(ARGS)
+
 render-canary: ## Playwright render-latency check against hosted (~2min)
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/render-canary.sh

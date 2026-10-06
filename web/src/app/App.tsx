@@ -26,6 +26,7 @@ import {
 } from "./usePerformance";
 import config from "@/shared/lib/config";
 import { Spinner } from "@/shared/ui/Spinner";
+import { loadSessionDetailPage } from "./routeChunks";
 
 // Pages behind the app shell load on demand. Anonymous visitors to the
 // landing, docs and legal pages never download them, or the markdown, syntax
@@ -37,7 +38,7 @@ const MachinesPage = lazy(() => import("@/features/machines/MachinesPage"));
 const MachineDetailPage = lazy(() => import("@/features/machines/MachineDetailPage"));
 const RunnerDetailPage = lazy(() => import("@/features/runners/RunnerDetailPage"));
 const SessionsPage = lazy(() => import("@/features/timeline/SessionsPage"));
-const SessionDetailPage = lazy(() => import("@/features/session/SessionDetailPage"));
+const SessionDetailPage = lazy(loadSessionDetailPage);
 
 // Suspense sits inside Layout so the shell (nav, status footer, WebSocket)
 // stays mounted while a page chunk loads.

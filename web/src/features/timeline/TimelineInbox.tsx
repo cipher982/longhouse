@@ -27,6 +27,8 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useIdlePreloadSessionDetailPage } from "@/app/routeChunks";
+import { useRailPrefetch } from "@/features/session/rail/useRailPrefetch";
 
 import { type TimelineSessionCard } from "@/shared/api/agents";
 import { buildInboxLayout, type InboxRepoGroup } from "./timelineInboxModel";
@@ -41,6 +43,8 @@ import { HearthProvider } from "@/shared/instruments/hearth/Hearth";
 import { isSessionClosed } from "@/shared/session/sessionRuntime";
 
 const POINTER_ACTIVATION_DISTANCE = 5;
+/** First rows warmed on an idle Timeline: the likely first click. */
+const TIMELINE_WARM_COUNT = 5;
 
 export interface TimelineInboxProps {
   sessions: TimelineSessionCard[];
@@ -73,6 +77,19 @@ export function TimelineInbox({
     () => buildInboxLayout(sessions, order, relativeNowMs),
     [sessions, order, relativeNowMs],
   );
+
+  // A cold first click lands on one of the first rows. Warm their transcripts
+  // while the page is idle (same budget and guards as the session rail), and
+  // the session page's code, so that click paints from cache.
+  const warmSessionIds = useMemo(
+    () =>
+      [...layout.shelf, ...layout.unread, ...layout.history.flatMap((group) => group.sessions)]
+        .slice(0, TIMELINE_WARM_COUNT)
+        .map((card) => card.head.id),
+    [layout],
+  );
+  useRailPrefetch(warmSessionIds, null);
+  useIdlePreloadSessionDetailPage();
 
   const moveShelf = useCallback(
     (from: number, to: number) => {
