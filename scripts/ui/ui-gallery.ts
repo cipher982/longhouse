@@ -82,6 +82,8 @@ function jobKey(job: Job): string {
 }
 
 const children = new Set<ChildProcess>();
+// Set on Ctrl-C: no new capture starts once the sweep is stopping.
+let stopping = false;
 
 function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl: string): Promise<Capture> {
   const dir = path.join(outDir, jobKey(job), viewport);
@@ -111,6 +113,12 @@ function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl
     child.stderr?.pipe(log);
     child.on("close", (code) => {
       children.delete(child);
+      // Anything the capture left in its group (a Chromium) goes with it.
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        /* group already empty */
+      }
       const seconds = (Date.now() - started) / 1000;
       const frames: Frame[] = [];
       let error = code === 0 ? undefined : `exit ${code}`;
@@ -132,7 +140,7 @@ async function runPool<T>(tasks: Array<() => Promise<T>>, limit: number): Promis
   const results: T[] = new Array(tasks.length);
   let next = 0;
   const worker = async () => {
-    while (next < tasks.length) {
+    while (next < tasks.length && !stopping) {
       const index = next++;
       results[index] = await tasks[index]();
     }
@@ -294,19 +302,30 @@ async function main() {
   console.log(`UI gallery: ${tasks.length} captures (${jobs.length} scenes x ${viewportKeys.length} viewports), ${jobsLimit} at a time`);
   console.log(`Output: ${outDir}`);
 
-  const stopFrontend = await ensureFrontend(frontendUrl);
-  const killChildren = () => {
+  const stopFrontend = await ensureFrontend(frontendUrl, { handleSignals: false });
+  const signalChildren = (signal: NodeJS.Signals) => {
     for (const child of children) {
       try {
-        process.kill(-child.pid!, "SIGTERM");
+        process.kill(-child.pid!, signal);
       } catch {
         /* already gone */
       }
     }
   };
+  // SIGTERM each capture's process group, then SIGKILL whatever is left.
+  const killChildren = async () => {
+    stopping = true;
+    signalChildren("SIGTERM");
+    const deadline = Date.now() + 3000;
+    while (children.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    signalChildren("SIGKILL");
+  };
   const onSignal = () => {
-    killChildren();
-    void stopFrontend().finally(() => process.exit(130));
+    void killChildren()
+      .then(stopFrontend)
+      .finally(() => process.exit(130));
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
@@ -314,7 +333,8 @@ async function main() {
   let captures: Capture[] = [];
   try {
     let done = 0;
-    captures = await runPool(
+    // A stopped sweep leaves holes for the captures it never started.
+    captures = (await runPool(
       tasks.map(({ job, viewport }) => async () => {
         const capture = await runCapture(job, viewport, outDir, frontendUrl);
         done += 1;
@@ -323,9 +343,9 @@ async function main() {
         return capture;
       }),
       jobsLimit,
-    );
+    )).filter(Boolean);
   } finally {
-    killChildren();
+    await killChildren();
     await stopFrontend();
   }
 

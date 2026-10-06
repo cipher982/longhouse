@@ -24,7 +24,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * host is local, start Vite in web/ on that port and return a function that
  * stops it. If something already serves it, return a no-op: it is not ours.
  */
-export async function ensureFrontend(baseUrl: string): Promise<() => Promise<void>> {
+/** handleSignals: false when the caller owns Ctrl-C and calls the returned stop itself. */
+export async function ensureFrontend(
+  baseUrl: string,
+  { handleSignals = true }: { handleSignals?: boolean } = {},
+): Promise<() => Promise<void>> {
   if (await isServing(baseUrl)) {
     console.log(`Frontend already serving at ${baseUrl} (not owned by this capture)`);
     return async () => {};
@@ -69,8 +73,10 @@ export async function ensureFrontend(baseUrl: string): Promise<() => Promise<voi
   const onSignal = () => {
     void stop().finally(() => process.exit(130));
   };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+  if (handleSignals) {
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  }
 
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
