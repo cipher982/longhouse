@@ -3,6 +3,7 @@ import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "@/features/auth/auth";
 import { ConfirmProvider } from "@/shared/ui/confirm";
+import { TranscriptPersistence } from "./TranscriptPersistence";
 import App from "./App";
 
 /**
@@ -15,6 +16,7 @@ export function AppProviders({ queryClient, children }: { queryClient: QueryClie
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
+        <TranscriptPersistence />
         <ConfirmProvider>{children}</ConfirmProvider>
       </AuthProvider>
     </QueryClientProvider>

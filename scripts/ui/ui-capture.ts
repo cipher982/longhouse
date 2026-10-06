@@ -53,6 +53,7 @@ import { chromium, type BrowserContext, type Page, type Route } from "playwright
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
+import { pathToFileURL } from "url";
 import { ensureFrontend, REPO_ROOT } from "./frontend";
 import {
   buildSessionBackgroundNoticesFixture,
@@ -81,7 +82,7 @@ import {
   buildLandingTimelineFixture,
 } from "../ui-fixtures/landingShowcase";
 
-const PAGE_DEFINITIONS = {
+export const PAGE_DEFINITIONS = {
   timeline: { path: "/timeline" },
   "session-detail": { path: `/timeline/${SESSION_DETAIL_STRESS_SESSION_ID}` },
   machines: { path: "/machines" },
@@ -479,7 +480,7 @@ async function seedScene(
   }
 }
 
-async function installSceneMocks(
+export async function installSceneMocks(
   context: BrowserContext,
   scene: SceneName,
   baseUrl: string,
@@ -1621,7 +1622,10 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Other probes import the scene mocks; only a direct run captures.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
