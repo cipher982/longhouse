@@ -303,3 +303,46 @@ async def test_event_bodies_refuse_a_cursor_from_another_session(monkeypatch):
         await workspace_module.read_storage_v2_event_bodies(session_id=session_id, owner_id=42, cursors=[_cursor(uuid4(), subordinal=0)])
 
     assert excinfo.value.status_code == 422
+
+
+def test_a_wrapped_edit_keeps_its_presented_input_whole():
+    patch = "*** Begin Patch\n*** Update File: a.py\n" + "+added line\n" * 80 + "*** End Patch"
+    wrapper_input = "const r = await tools.apply_patch(" + repr(patch) + ")"
+    projection = {
+        "focus_session_id": "s-1",
+        "items": [
+            _item(
+                "7",
+                tool_name="exec",
+                tool_input_json=wrapper_input,
+                tool_presentation={
+                    "version": 2,
+                    "tool_name": "apply_patch",
+                    "label": "Edit",
+                    "wrapper_recedes": True,
+                    "tool_input_json": {"patch": patch},
+                    "children": [],
+                },
+            )
+        ],
+    }
+
+    event = lite_projection(projection)["items"][0]["event"]
+
+    assert event["tool_presentation_input"] == {"value": {"patch": patch}}
+
+
+@pytest.mark.asyncio
+async def test_event_bodies_report_a_re_rendered_cursor_missing(monkeypatch):
+    session_id = uuid4()
+    wanted = _cursor(session_id, subordinal=1)
+
+    async def read_page(**_kwargs):
+        raise workspace_module.HTTPException(status_code=409, detail={"code": "stale_generation"})
+
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _sid, **_kw: (_session(session_id), None, "7"))
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
+
+    result = await workspace_module.read_storage_v2_event_bodies(session_id=session_id, owner_id=42, cursors=[wanted])
+
+    assert result == {"events": [], "missing": [wanted]}

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TimelinePane } from "../TimelinePane";
 import type { TimelineItem } from "@/shared/session/model";
 
@@ -55,7 +55,40 @@ function liteToolItem(): TimelineItem {
   };
 }
 
+function renderPane(queryClient: QueryClient) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <TimelinePane
+        items={[liteToolItem()]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />
+    </QueryClientProvider>,
+  );
+}
+
 describe("a tool row from a lite page", () => {
+  beforeEach(() => apiMocks.fetchSessionEventBodies.mockReset());
+
+  it("says it is showing the preview when the server no longer has the body", async () => {
+    apiMocks.fetchSessionEventBodies.mockResolvedValue({ events: [], missing: ["c3"] });
+    renderPane(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    expect(await screen.findByTestId("tool-body-failed")).toBeTruthy();
+  });
+
   it("loads its full output when expanded", async () => {
     apiMocks.fetchSessionEventBodies.mockResolvedValue({
       events: [

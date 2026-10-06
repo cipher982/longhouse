@@ -75,10 +75,13 @@ export function useFullToolInteraction(interaction: ToolInteraction): {
 } {
   const options = bodiesQueryOptions(interaction);
   const { data, isLoading, isError } = useQuery(options);
+  // A cursor the server reports missing (the session was re-rendered since this
+  // page loaded) has no body to show; the row keeps its preview and says so.
+  const missing = Boolean(data?.missing.some((cursor) => options.queryKey[2].includes(cursor)));
   return {
     interaction: mergeEventBodies(interaction, data),
     loading: options.enabled && isLoading,
-    failed: options.enabled && isError,
+    failed: options.enabled && (isError || missing),
   };
 }
 

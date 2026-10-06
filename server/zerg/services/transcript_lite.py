@@ -179,6 +179,7 @@ def _presentation_ref(base: dict[str, Any]) -> str:
 
 def _lite_event(event: dict[str, Any], *, item_timestamp: Any, presentations: dict[str, dict[str, Any]]) -> dict[str, Any]:
     full_input = event.get("tool_input_json")
+    is_edit = _is_edit(event)
     out: dict[str, Any] = {"id": event["id"], "cursor": event["cursor"], "role": event["role"]}
     for key, default in _EVENT_DEFAULTS.items():
         if key in {"tool_input_json", "tool_output_text", "tool_output_truncated", "tool_output_original_chars"}:
@@ -190,7 +191,7 @@ def _lite_event(event: dict[str, Any], *, item_timestamp: Any, presentations: di
         out["timestamp"] = event.get("timestamp")
 
     if full_input is not None:
-        if _is_edit(event):
+        if is_edit:
             out["tool_input_json"] = full_input
         else:
             out["tool_input_json"], cut = truncate_tool_input(full_input)
@@ -218,7 +219,13 @@ def _lite_event(event: dict[str, Any], *, item_timestamp: Any, presentations: di
         out["tool_presentation_ref"] = ref
         presented_input = presentation.get("tool_input_json")
         if presented_input is not None:
-            out["tool_presentation_input"] = "same" if presented_input == full_input else {"value": truncate_tool_input(presented_input)[0]}
+            if presented_input == full_input:
+                out["tool_presentation_input"] = "same"
+            else:
+                # A wrapper's presented input (Codex apply_patch inside exec) is
+                # what an edit row counts, so it stays whole for edits too.
+                kept = presented_input if is_edit else truncate_tool_input(presented_input)[0]
+                out["tool_presentation_input"] = {"value": kept}
         if presentation.get("shell_summary") is not None:
             out["tool_presentation_shell_summary"] = presentation["shell_summary"]
         if presentation.get("children"):

@@ -526,14 +526,21 @@ async def read_storage_v2_event_bodies(
         if decoded.event_subordinal >= (1 << 32) - 1:
             return None
         bound = render_detail_cursor_token(replace(decoded, event_subordinal=decoded.event_subordinal + 1))
-        page = await read_storage_v2_session_events_page(
-            session_id=session_id,
-            owner_id=str(owner_id),
-            cursor=bound,
-            anchor="tail",
-            limit=1,
-            branch_mode="all",
-        )
+        try:
+            page = await read_storage_v2_session_events_page(
+                session_id=session_id,
+                owner_id=str(owner_id),
+                cursor=bound,
+                anchor="tail",
+                limit=1,
+                branch_mode="all",
+            )
+        except HTTPException as exc:
+            # A re-rendered session no longer has this cursor's generation:
+            # report it missing so the rest of the batch still answers.
+            if exc.status_code == status.HTTP_409_CONFLICT:
+                return None
+            raise
         events = page.get("events") if isinstance(page, dict) else None
         event = events[-1] if isinstance(events, list) and events else None
         if not isinstance(event, dict) or event.get("cursor") != token:
