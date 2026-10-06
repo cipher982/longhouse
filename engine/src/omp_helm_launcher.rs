@@ -48,6 +48,255 @@ const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
 /// Why a launch's own session ended when its provider resumed another one.
 const ADOPTED_TERMINAL_REASON: &str = "resumed_another_session";
 const MAX_FRAME_BYTES: usize = 512 * 1024;
+const DELEGATION_SNAPSHOT_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// The UI shows live duration as elapsed time; keep its clock ticks out of the
+/// gate, but include the final duration once progress has reached a terminal status.
+const NATIVE_PROGRESS_SEMANTIC_FIELDS: [&str; 8] = [
+    "status",
+    "current_tool",
+    "last_intent",
+    "tool_count",
+    "requests",
+    "tokens",
+    "context_tokens",
+    "context_window",
+];
+const NATIVE_PROGRESS_FIELDS: [&str; 9] = [
+    "status",
+    "current_tool",
+    "last_intent",
+    "tool_count",
+    "requests",
+    "tokens",
+    "context_tokens",
+    "context_window",
+    "duration_ms",
+];
+struct BackgroundSnapshotItemObservation<'a> {
+    id: &'a str,
+    kind: &'static str,
+    status: &'a str,
+    description: Option<&'a str>,
+    registered_at_ms: Option<i64>,
+    ended_at_ms: Option<i64>,
+    native_child_id: Option<String>,
+    native_child_source_path: Option<PathBuf>,
+    native_progress: Option<NativeProgressObservation<'a>>,
+}
+
+#[derive(Clone, Copy)]
+struct NativeProgressObservation<'a> {
+    semantic_fields: [Option<&'a Value>; 8],
+    duration_ms: Option<&'a Value>,
+}
+impl<'a> NativeProgressObservation<'a> {
+    fn from_value(progress: &'a Value) -> Self {
+        Self {
+            semantic_fields: std::array::from_fn(|index| {
+                progress.get(NATIVE_PROGRESS_SEMANTIC_FIELDS[index])
+            }),
+            duration_ms: progress.get("duration_ms"),
+        }
+    }
+
+    fn output_fields(self) -> impl Iterator<Item = Option<&'a Value>> {
+        self.semantic_fields
+            .into_iter()
+            .chain(std::iter::once(self.duration_ms))
+    }
+}
+
+struct BackgroundSnapshotItemKey {
+    id: String,
+    kind: &'static str,
+    status: String,
+    description: Option<String>,
+    registered_at_ms: Option<i64>,
+    ended_at_ms: Option<i64>,
+    native_child_id: Option<String>,
+    native_child_source_path: Option<PathBuf>,
+    native_progress: Option<NativeProgressKey>,
+}
+impl BackgroundSnapshotItemKey {
+    fn from_observation(item: &BackgroundSnapshotItemObservation<'_>) -> Self {
+        Self {
+            id: item.id.to_owned(),
+            kind: item.kind,
+            status: item.status.to_owned(),
+            description: item.description.map(str::to_owned),
+            registered_at_ms: item.registered_at_ms,
+            ended_at_ms: item.ended_at_ms,
+            native_child_id: item.native_child_id.clone(),
+            native_child_source_path: item.native_child_source_path.clone(),
+            native_progress: item
+                .native_progress
+                .map(NativeProgressKey::from_observation),
+        }
+    }
+
+    fn matches(&self, item: &BackgroundSnapshotItemObservation<'_>) -> bool {
+        self.id == item.id
+            && self.kind == item.kind
+            && self.status == item.status
+            && self.description.as_deref() == item.description
+            && self.registered_at_ms == item.registered_at_ms
+            && self.ended_at_ms == item.ended_at_ms
+            && self.native_child_id.as_deref() == item.native_child_id.as_deref()
+            && self.native_child_source_path.as_ref() == item.native_child_source_path.as_ref()
+            && match (&self.native_progress, item.native_progress) {
+                (Some(previous), Some(current)) => previous.matches(current),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+struct NativeProgressKey {
+    semantic_fields: [Option<Value>; 8],
+    duration_ms: Option<Value>,
+}
+impl NativeProgressKey {
+    fn from_observation(progress: NativeProgressObservation<'_>) -> Self {
+        Self {
+            semantic_fields: std::array::from_fn(|index| progress.semantic_fields[index].cloned()),
+            duration_ms: final_progress_duration(progress).cloned(),
+        }
+    }
+
+    fn matches(&self, progress: NativeProgressObservation<'_>) -> bool {
+        self.semantic_fields
+            .iter()
+            .zip(progress.semantic_fields)
+            .all(|(previous, current)| previous.as_ref() == current)
+            && self.duration_ms.as_ref() == final_progress_duration(progress)
+    }
+}
+fn final_progress_duration<'a>(progress: NativeProgressObservation<'a>) -> Option<&'a Value> {
+    if matches!(
+        progress.semantic_fields[0].and_then(|status| status.as_str()),
+        Some("completed" | "failed" | "cancelled" | "aborted")
+    ) {
+        progress.duration_ms
+    } else {
+        None
+    }
+}
+
+struct BackgroundSnapshotIdentity {
+    session_id: String,
+    run_id: String,
+    provider_session_id: String,
+    connection_id: String,
+    lease_generation: String,
+}
+impl BackgroundSnapshotIdentity {
+    fn from_state(state: &OmpHelmStateFile) -> Self {
+        Self {
+            session_id: state.session_id.clone(),
+            run_id: state.run_id.clone(),
+            provider_session_id: state.native_session_id.clone(),
+            connection_id: state.connection_id.clone(),
+            lease_generation: state.lease_generation.clone(),
+        }
+    }
+
+    fn matches_state(&self, state: &OmpHelmStateFile) -> bool {
+        self.session_id == state.session_id
+            && self.run_id == state.run_id
+            && self.provider_session_id == state.native_session_id
+            && self.connection_id == state.connection_id
+            && self.lease_generation == state.lease_generation
+    }
+}
+
+struct BackgroundSnapshotKey {
+    items: Vec<BackgroundSnapshotItemKey>,
+    recent_items: Vec<BackgroundSnapshotItemKey>,
+}
+impl BackgroundSnapshotKey {
+    fn from_observations(
+        items: &[BackgroundSnapshotItemObservation<'_>],
+        recent_items: &[BackgroundSnapshotItemObservation<'_>],
+    ) -> Self {
+        Self {
+            items: items
+                .iter()
+                .map(BackgroundSnapshotItemKey::from_observation)
+                .collect(),
+            recent_items: recent_items
+                .iter()
+                .map(BackgroundSnapshotItemKey::from_observation)
+                .collect(),
+        }
+    }
+
+    fn matches(
+        &self,
+        items: &[BackgroundSnapshotItemObservation<'_>],
+        recent_items: &[BackgroundSnapshotItemObservation<'_>],
+    ) -> bool {
+        observations_match(&self.items, items)
+            && observations_match(&self.recent_items, recent_items)
+    }
+}
+
+fn observations_match(
+    previous: &[BackgroundSnapshotItemKey],
+    current: &[BackgroundSnapshotItemObservation<'_>],
+) -> bool {
+    previous.len() == current.len()
+        && previous
+            .iter()
+            .zip(current)
+            .all(|(previous, current)| previous.matches(current))
+}
+
+fn sort_background_snapshot_items(items: &mut [BackgroundSnapshotItemObservation<'_>]) {
+    items.sort_unstable_by(|left, right| left.id.cmp(right.id));
+}
+
+struct BackgroundSnapshotEmission {
+    identity: BackgroundSnapshotIdentity,
+    snapshot: BackgroundSnapshotKey,
+    emitted_at: Instant,
+}
+
+#[derive(Default)]
+struct BackgroundSnapshotCoalescer {
+    last: Option<BackgroundSnapshotEmission>,
+}
+impl BackgroundSnapshotCoalescer {
+    fn should_publish(
+        &self,
+        state: &OmpHelmStateFile,
+        items: &[BackgroundSnapshotItemObservation<'_>],
+        recent_items: &[BackgroundSnapshotItemObservation<'_>],
+        now: Instant,
+    ) -> bool {
+        let Some(last) = self.last.as_ref() else {
+            return true;
+        };
+        !last.identity.matches_state(state)
+            || !last.snapshot.matches(items, recent_items)
+            || now.saturating_duration_since(last.emitted_at)
+                >= DELEGATION_SNAPSHOT_REFRESH_INTERVAL
+    }
+
+    fn record_success(
+        &mut self,
+        state: &OmpHelmStateFile,
+        items: &[BackgroundSnapshotItemObservation<'_>],
+        recent_items: &[BackgroundSnapshotItemObservation<'_>],
+        now: Instant,
+    ) {
+        self.last = Some(BackgroundSnapshotEmission {
+            identity: BackgroundSnapshotIdentity::from_state(state),
+            snapshot: BackgroundSnapshotKey::from_observations(items, recent_items),
+            emitted_at: now,
+        });
+    }
+}
+
 const MAX_PENDING_COMMANDS: usize = 64;
 const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
 /// Spacing between late native-identity reconciliation attempts.
@@ -209,6 +458,7 @@ struct OmpHelmServer {
     stop: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
     status: Arc<crate::status_slot::StatusPublisher>,
+    background_snapshot_coalescer: Arc<Mutex<BackgroundSnapshotCoalescer>>,
     coordination_token: Arc<Mutex<Option<String>>>,
 }
 impl OmpHelmServer {
@@ -251,6 +501,9 @@ impl OmpHelmServer {
                 OMP_HELM_TRANSPORT,
             )),
             coordination_token: Arc::new(Mutex::new(None)),
+            background_snapshot_coalescer: Arc::new(Mutex::new(
+                BackgroundSnapshotCoalescer::default(),
+            )),
         };
         server.persist_state()?;
         let acceptor = server.clone();
@@ -1417,6 +1670,8 @@ impl OmpHelmServer {
     /// manufacturing a lifecycle event. Keepalive observations are frequent:
     /// they preserve the current phase and refresh the provider's live
     /// observation. A terminal latch settles only on an idle sample.
+    /// OMP samples `ctx.isIdle()` on each keepalive. That is new provider
+    /// evidence, unlike the daemon's phase-less assertion of machine liveness.
     fn record_keepalive(&self, provider_idle: bool) {
         self.record_keepalive_with_policy(provider_idle);
     }
@@ -1530,9 +1785,8 @@ impl OmpHelmServer {
         if !state.ready || state.pending_transition || state.terminal_state.is_some() {
             return;
         }
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(jobs.len());
         let mut recent_items = Vec::new();
-        let mut kinds = serde_json::Map::new();
         for job in jobs {
             let status = job.get("status").and_then(Value::as_str);
             let running = status == Some("running");
@@ -1554,27 +1808,22 @@ impl OmpHelmServer {
                 (Some("bash"), _) => "shell",
                 _ => "other",
             };
-            let mut item = json!({
-                "id": id,
-                "kind": kind,
-                "status": if running && job.get("queued").and_then(Value::as_bool) == Some(true) { "queued" } else { status.unwrap() },
-                "description": job.get("label").and_then(Value::as_str),
-            });
-            if let Some(registered) = job
+            let status = if running && job.get("queued").and_then(Value::as_bool) == Some(true) {
+                "queued"
+            } else {
+                status.unwrap()
+            };
+            let registered_at_ms = job
                 .get("start_time")
                 .and_then(Value::as_i64)
-                .and_then(chrono::DateTime::from_timestamp_millis)
-            {
-                item["registered_at"] = json!(registered.to_rfc3339());
-            }
-            if let Some(ended) = job
+                .filter(|timestamp| chrono::DateTime::from_timestamp_millis(*timestamp).is_some());
+            let ended_at_ms = job
                 .get("end_time")
                 .and_then(Value::as_i64)
-                .and_then(chrono::DateTime::from_timestamp_millis)
-            {
-                item["ended_at"] = json!(ended.to_rfc3339());
-            }
-            if let Some(agent_id) = agent_id {
+                .filter(|timestamp| chrono::DateTime::from_timestamp_millis(*timestamp).is_some());
+            let mut native_child_id = None;
+            let mut native_child_source_path = None;
+            let native_progress = if let Some(agent_id) = agent_id {
                 let component = Path::new(agent_id);
                 if !agent_id.is_empty()
                     && component.components().count() == 1
@@ -1586,12 +1835,12 @@ impl OmpHelmServer {
                         .join(format!("{agent_id}.jsonl"));
                     if let Ok(child) = crate::omp_session::read_session_header(&child_path) {
                         if child.parent_session.as_deref() == Some(state.session_file.as_str()) {
-                            item["native_child_id"] = json!(child.native_id);
-                            item["native_child_source_path"] = json!(child_path);
+                            native_child_id = Some(child.native_id);
+                            native_child_source_path = Some(child_path);
                         }
                     }
                 }
-                if let Some(progress) = event
+                event
                     .get("task_progress")
                     .and_then(Value::as_array)
                     .and_then(|rows| {
@@ -1603,30 +1852,22 @@ impl OmpHelmServer {
                                     .is_none_or(|job_id| job_id == id)
                         })
                     })
-                {
-                    let mut native = serde_json::Map::new();
-                    native.insert("observed_at".into(), json!(observed_at));
-                    for field in [
-                        "status",
-                        "current_tool",
-                        "last_intent",
-                        "tool_count",
-                        "requests",
-                        "tokens",
-                        "context_tokens",
-                        "context_window",
-                        "duration_ms",
-                    ] {
-                        if let Some(value) = progress.get(field) {
-                            native.insert(field.into(), value.clone());
-                        }
-                    }
-                    item["native_progress"] = Value::Object(native);
-                }
-            }
+                    .map(NativeProgressObservation::from_value)
+            } else {
+                None
+            };
+            let item = BackgroundSnapshotItemObservation {
+                id,
+                kind,
+                status,
+                description: job.get("label").and_then(Value::as_str),
+                registered_at_ms,
+                ended_at_ms,
+                native_child_id,
+                native_child_source_path,
+                native_progress,
+            };
             if running {
-                let amount = kinds.get(kind).and_then(Value::as_u64).unwrap_or_default() + 1;
-                kinds.insert(kind.into(), json!(amount));
                 items.push(item);
             } else {
                 recent_items.push(item);
@@ -1635,11 +1876,39 @@ impl OmpHelmServer {
         if items.len() > 256 || recent_items.len() > 256 {
             return;
         }
+        sort_background_snapshot_items(&mut items);
+        sort_background_snapshot_items(&mut recent_items);
+
+        let mut coalescer = self
+            .background_snapshot_coalescer
+            .lock()
+            .expect("OMP background snapshot mutex poisoned");
+        if !coalescer.should_publish(&state, &items, &recent_items, Instant::now()) {
+            return;
+        }
+
+        let mut kinds = serde_json::Map::new();
+        for item in &items {
+            let count = kinds
+                .get(item.kind)
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                + 1;
+            kinds.insert(item.kind.into(), json!(count));
+        }
+        let item_values = items
+            .iter()
+            .map(|item| Self::background_snapshot_item_value(item, observed_at))
+            .collect::<Vec<_>>();
+        let recent_item_values = recent_items
+            .iter()
+            .map(|item| Self::background_snapshot_item_value(item, observed_at))
+            .collect::<Vec<_>>();
         let snapshot = json!({
             "count": items.len(),
             "kinds": kinds,
-            "items": items,
-            "recent_items": recent_items,
+            "items": item_values,
+            "recent_items": recent_item_values,
             "observed_at": observed_at,
         });
         let event_value = json!({
@@ -1659,12 +1928,58 @@ impl OmpHelmServer {
             },
         });
         if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {
-            if let Err(error) = crate::outbox::enqueue_runtime_event(&outbox, &event_value) {
-                eprintln!("Longhouse: OMP background observation could not be retained: {error}");
+            match crate::outbox::enqueue_runtime_event(&outbox, &event_value) {
+                Ok(()) => coalescer.record_success(&state, &items, &recent_items, Instant::now()),
+                Err(error) => {
+                    eprintln!(
+                        "Longhouse: OMP background observation could not be retained: {error}"
+                    );
+                }
             }
         }
     }
 
+    fn background_snapshot_item_value(
+        item: &BackgroundSnapshotItemObservation<'_>,
+        observed_at: &str,
+    ) -> Value {
+        let mut value = json!({
+            "id": item.id,
+            "kind": item.kind,
+            "status": item.status,
+            "description": item.description,
+        });
+        if let Some(timestamp) = item
+            .registered_at_ms
+            .and_then(chrono::DateTime::from_timestamp_millis)
+        {
+            value["registered_at"] = json!(timestamp.to_rfc3339());
+        }
+        if let Some(timestamp) = item
+            .ended_at_ms
+            .and_then(chrono::DateTime::from_timestamp_millis)
+        {
+            value["ended_at"] = json!(timestamp.to_rfc3339());
+        }
+        if let (Some(child_id), Some(child_path)) = (
+            item.native_child_id.as_deref(),
+            item.native_child_source_path.as_ref(),
+        ) {
+            value["native_child_id"] = json!(child_id);
+            value["native_child_source_path"] = json!(child_path);
+        }
+        if let Some(progress) = item.native_progress {
+            let mut native = serde_json::Map::new();
+            native.insert("observed_at".into(), json!(observed_at));
+            for (field, value) in NATIVE_PROGRESS_FIELDS.iter().zip(progress.output_fields()) {
+                if let Some(value) = value {
+                    native.insert((*field).into(), value.clone());
+                }
+            }
+            value["native_progress"] = Value::Object(native);
+        }
+        value
+    }
     fn publish_phase_snapshot(&self, state: &OmpHelmStateFile, phase: &str, tool: Option<&str>) {
         self.status.publish(
             crate::status_slot::StatusUpdate::phase(
@@ -3060,6 +3375,267 @@ mod tests {
             superseded_by_session_id: None,
             adopted_from_session_id: None,
         }
+    }
+
+    #[test]
+    fn background_snapshots_publish_empty_once_and_refresh_unchanged_leases_every_five_minutes() {
+        let state = state();
+        let empty = [];
+        let now = Instant::now();
+        let mut coalescer = BackgroundSnapshotCoalescer::default();
+
+        assert!(coalescer.should_publish(&state, &empty, &empty, now));
+        coalescer.record_success(&state, &empty, &empty, now);
+        assert!(!coalescer.should_publish(
+            &state,
+            &empty,
+            &empty,
+            now + DELEGATION_SNAPSHOT_REFRESH_INTERVAL - Duration::from_nanos(1),
+        ));
+        assert!(coalescer.should_publish(
+            &state,
+            &empty,
+            &empty,
+            now + DELEGATION_SNAPSHOT_REFRESH_INTERVAL,
+        ));
+
+        let active = [BackgroundSnapshotItemObservation {
+            id: "job",
+            kind: "subagent",
+            status: "running",
+            description: Some("active task"),
+            registered_at_ms: Some(10),
+            ended_at_ms: None,
+            native_child_id: None,
+            native_child_source_path: None,
+            native_progress: None,
+        }];
+        assert!(coalescer.should_publish(&state, &active, &[], now));
+        coalescer.record_success(&state, &active, &[], now);
+        assert!(!coalescer.should_publish(
+            &state,
+            &active,
+            &[],
+            now + DELEGATION_SNAPSHOT_REFRESH_INTERVAL - Duration::from_nanos(1),
+        ));
+        assert!(coalescer.should_publish(
+            &state,
+            &active,
+            &[],
+            now + DELEGATION_SNAPSHOT_REFRESH_INTERVAL,
+        ));
+
+        let restarted = BackgroundSnapshotCoalescer::default();
+        assert!(restarted.should_publish(&state, &empty, &empty, now));
+    }
+
+    #[test]
+    fn background_snapshot_gate_tracks_progress_terminal_details_and_authority() {
+        let state = state();
+        let now = Instant::now();
+        let first_progress = json!({
+            "observed_at": "first",
+            "duration_ms": 1000,
+            "status": "running",
+            "current_tool": "search",
+            "tokens": 12,
+        });
+        let second_progress = json!({
+            "observed_at": "second",
+            "duration_ms": 2000,
+            "status": "running",
+            "current_tool": "search",
+            "tokens": 12,
+        });
+        let changed_progress = json!({
+            "observed_at": "third",
+            "duration_ms": 3000,
+            "status": "running",
+            "current_tool": "write",
+            "tokens": 13,
+        });
+        fn active<'a>(
+            progress: &'a Value,
+            status: &'a str,
+        ) -> BackgroundSnapshotItemObservation<'a> {
+            BackgroundSnapshotItemObservation {
+                id: "job",
+                kind: "subagent",
+                status,
+                description: Some("background task"),
+                registered_at_ms: Some(10),
+                ended_at_ms: None,
+                native_child_id: None,
+                native_child_source_path: None,
+                native_progress: Some(NativeProgressObservation::from_value(progress)),
+            }
+        }
+        let active_items = [active(&first_progress, "running")];
+        let mut coalescer = BackgroundSnapshotCoalescer::default();
+        coalescer.record_success(&state, &active_items, &[], now);
+
+        let clock_only_change = [active(&second_progress, "running")];
+        assert!(!coalescer.should_publish(&state, &clock_only_change, &[], now));
+        let substantive_change = [active(&changed_progress, "running")];
+        assert!(coalescer.should_publish(&state, &substantive_change, &[], now));
+        let status_change = [active(&second_progress, "queued")];
+        assert!(coalescer.should_publish(&state, &status_change, &[], now));
+
+        for transition in ["session", "run", "connection", "lease_generation"] {
+            let mut changed_authority = state.clone();
+            match transition {
+                "session" => changed_authority.session_id.push_str("-next"),
+                "run" => changed_authority.run_id.push_str("-next"),
+                "connection" => changed_authority.connection_id.push_str("-next"),
+                "lease_generation" => changed_authority.lease_generation.push_str("-next"),
+                _ => unreachable!(),
+            }
+            assert!(coalescer.should_publish(&changed_authority, &active_items, &[], now));
+        }
+        let terminal_progress_a = json!({"status": "completed", "duration_ms": 1200});
+        let terminal_progress_b = json!({"status": "completed", "duration_ms": 1300});
+        let terminal_progress_a_items = [active(&terminal_progress_a, "completed")];
+        let terminal_progress_b_items = [active(&terminal_progress_b, "completed")];
+        coalescer.record_success(&state, &[], &terminal_progress_a_items, now);
+        assert!(coalescer.should_publish(&state, &[], &terminal_progress_b_items, now));
+
+        let empty = [];
+        assert!(coalescer.should_publish(&state, &empty, &[], now));
+        let terminal_a = BackgroundSnapshotItemObservation {
+            id: "job",
+            kind: "subagent",
+            status: "completed",
+            description: Some("finished task"),
+            registered_at_ms: Some(10),
+            ended_at_ms: Some(20),
+            native_child_id: None,
+            native_child_source_path: None,
+            native_progress: None,
+        };
+        let terminal_b = BackgroundSnapshotItemObservation {
+            id: "job",
+            kind: "subagent",
+            status: "completed",
+            description: Some("updated terminal detail"),
+            registered_at_ms: Some(10),
+            ended_at_ms: Some(20),
+            native_child_id: None,
+            native_child_source_path: None,
+            native_progress: None,
+        };
+        let terminal_a_items = [terminal_a];
+        let terminal_b_items = [terminal_b];
+        assert!(coalescer.should_publish(&state, &empty, &terminal_a_items, now));
+        coalescer.record_success(&state, &empty, &terminal_a_items, now);
+        assert!(coalescer.should_publish(&state, &empty, &terminal_b_items, now));
+
+        fn membership_item(id: &'static str) -> BackgroundSnapshotItemObservation<'static> {
+            BackgroundSnapshotItemObservation {
+                id,
+                kind: "shell",
+                status: "running",
+                description: None,
+                registered_at_ms: None,
+                ended_at_ms: None,
+                native_child_id: None,
+                native_child_source_path: None,
+                native_progress: None,
+            }
+        }
+        let mut reversed = [membership_item("b"), membership_item("a")];
+        sort_background_snapshot_items(&mut reversed);
+        let mut order_gate = BackgroundSnapshotCoalescer::default();
+        order_gate.record_success(&state, &reversed, &[], now);
+        let mut incidental_reorder = [membership_item("a"), membership_item("b")];
+        sort_background_snapshot_items(&mut incidental_reorder);
+        assert!(!order_gate.should_publish(&state, &incidental_reorder, &[], now));
+    }
+
+    #[test]
+    fn background_snapshot_publisher_retries_and_preserves_native_progress_transitions() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path().as_os_str()), || {
+            let socket_dir = temp.path().join("socket");
+            let mut initial = state();
+            initial.session_file = temp.path().join("session.jsonl").display().to_string();
+            let server = OmpHelmServer::start(
+                initial,
+                socket_dir.join("channel.sock"),
+                socket_dir,
+                temp.path().join("state.json"),
+            )
+            .unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let outbox = temp.path().join("agent/runtime-events-outbox");
+                fs::create_dir_all(outbox.parent().unwrap()).unwrap();
+                fs::write(&outbox, b"blocked outbox").unwrap();
+                let mut frame = json!({"event": {
+                    "async_running_complete": true,
+                    "async_observed_at": "2026-10-06T00:00:00Z",
+                    "async_jobs": [{
+                        "id": "job-1", "source": "async_job_manager", "type": "task",
+                        "agent_id": "child-1", "status": "running"
+                    }],
+                    "task_progress": [{
+                        "job_id": "job-1", "agent_id": "child-1", "status": "running",
+                        "current_tool": "read", "tokens": 12, "duration_ms": 1000
+                    }]
+                }});
+                server.publish_background_snapshot(&frame);
+                fs::remove_file(&outbox).unwrap();
+                server.publish_background_snapshot(&frame);
+                let observations = || {
+                    let mut events = fs::read_dir(&outbox)
+                        .unwrap()
+                        .map(|entry| {
+                            serde_json::from_slice::<Value>(
+                                &fs::read(entry.unwrap().path()).unwrap(),
+                            )
+                            .unwrap()
+                        })
+                        .collect::<Vec<_>>();
+                    events.sort_by(|left, right| {
+                        left["occurred_at"]
+                            .as_str()
+                            .cmp(&right["occurred_at"].as_str())
+                    });
+                    events
+                };
+                assert_eq!(observations().len(), 1);
+                frame["event"]["async_observed_at"] = json!("2026-10-06T00:00:01Z");
+                frame["event"]["task_progress"][0]["duration_ms"] = json!(2000);
+                server.publish_background_snapshot(&frame);
+                assert_eq!(observations().len(), 1);
+                frame["event"]["async_observed_at"] = json!("2026-10-06T00:00:02Z");
+                frame["event"]["task_progress"][0]["tokens"] = json!(13);
+                server.publish_background_snapshot(&frame);
+                frame["event"]["async_observed_at"] = json!("2026-10-06T00:00:03Z");
+                frame["event"]["async_jobs"][0]["status"] = json!("cancelled");
+                frame["event"]["task_progress"][0]["status"] = json!("cancelled");
+                server.publish_background_snapshot(&frame);
+                frame["event"]["async_observed_at"] = json!("2026-10-06T00:00:04Z");
+                frame["event"]["task_progress"][0]["duration_ms"] = json!(2100);
+                server.publish_background_snapshot(&frame);
+                let events = observations();
+                assert_eq!(
+                    events
+                        .iter()
+                        .map(|event| event["payload"]["delegation"]["count"].as_u64().unwrap())
+                        .collect::<Vec<_>>(),
+                    vec![1, 1, 0, 0],
+                );
+                assert_eq!(
+                    events.last().unwrap()["payload"]["delegation"]["recent_items"][0]
+                        ["native_progress"]["duration_ms"],
+                    2100,
+                );
+            }));
+            server.shutdown();
+            if let Err(panic) = result {
+                std::panic::resume_unwind(panic);
+            }
+        });
     }
 
     #[test]
@@ -4939,7 +5515,6 @@ mod tests {
             server.shutdown();
         });
     }
-
 
     #[test]
     fn ordinary_agent_end_is_terminal_without_overriding_continuation() {

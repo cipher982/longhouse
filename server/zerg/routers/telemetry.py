@@ -16,7 +16,9 @@ endpoint stays internal/admin-only.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import logging
 import time
 from collections import deque
@@ -34,8 +36,12 @@ from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 from zerg.config import get_settings
+from zerg.dependencies.agents_auth import owner_id_from_caller
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.auth import require_admin
 from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import canary_latency_seconds
@@ -451,9 +457,9 @@ class CanaryObservation(BaseModel):
     """A single observation from a canary producer or consumer.
 
     hop identifies where in the pipeline the observation was taken:
-      - "ingest": producer measured server receive vs its own emit
-      - "sse":    SSE observer measured server wake vs producer emit
-      - "render": browser/iOS measured rendered_at vs producer emit
+      - "ingest": server-received timestamp minus producer emission
+      - "sse":    observer receipt time minus producer emission
+      - "render": browser/iOS rendered_at minus producer emission
     """
 
     canary_seq: int = Field(..., ge=0)
@@ -463,6 +469,19 @@ class CanaryObservation(BaseModel):
 
 
 _canary_last_obs_monotonic: dict[str, float] = {}
+_CANARY_LATENCY_WINDOW_S = 900.0
+_CANARY_LATENCY_SAMPLE_LIMIT = 1024
+_canary_latency_samples: deque[tuple[float, str, str, float]] = deque(maxlen=_CANARY_LATENCY_SAMPLE_LIMIT)
+
+
+def record_canary_observation(*, canary_seq: int, hop: str, surface: str, latency_ms: int) -> None:
+    latency_s = latency_ms / 1000.0
+    now_monotonic = time.monotonic()
+    canary_latency_seconds.labels(hop=hop, surface=surface).observe(latency_s)
+    canary_observations_total.labels(hop=hop, outcome="ok").inc()
+    canary_seq_last_seen.labels(hop=hop).set(canary_seq)
+    _canary_last_obs_monotonic[hop] = now_monotonic
+    _canary_latency_samples.append((now_monotonic, hop, surface, latency_s))
 
 
 @canary_router.get("/canary-session", include_in_schema=False)
@@ -542,11 +561,12 @@ async def canary_observation(obs: CanaryObservation) -> dict:
     from polluting SLA signal without requiring a browser cookie — the
     producer + observer run without a browser cookie on the build host.
     """
-    latency_s = obs.latency_ms / 1000.0
-    canary_latency_seconds.labels(hop=obs.hop, surface=obs.surface).observe(latency_s)
-    canary_observations_total.labels(hop=obs.hop, outcome="ok").inc()
-    canary_seq_last_seen.labels(hop=obs.hop).set(obs.canary_seq)
-    _canary_last_obs_monotonic[obs.hop] = time.monotonic()
+    record_canary_observation(
+        canary_seq=obs.canary_seq,
+        hop=obs.hop,
+        surface=obs.surface,
+        latency_ms=obs.latency_ms,
+    )
     return {"ok": True, "hop": obs.hop, "seq": obs.canary_seq}
 
 
@@ -559,11 +579,12 @@ def canary_last_obs_age_s(hop: str) -> float | None:
 
 
 # -----------------------------------------------------------------------------
-# Admin selfcheck: surface config + canary health without a dashboard
+# Authenticated canary selfcheck: hop health and bounded SLA summary
 # -----------------------------------------------------------------------------
 
 
 _CANARY_HOPS = ("ingest", "sse", "render")
+_CANARY_SSE_P95_TARGET_MS = 300.0
 
 
 def _histogram_percentile(samples: list[float], p: float) -> float:
@@ -576,21 +597,14 @@ def _histogram_percentile(samples: list[float], p: float) -> float:
 
 @canary_router.get("/selfcheck", include_in_schema=False)
 async def telemetry_selfcheck(window_s: int = 900) -> dict:
-    """Surface canary health in one admin-visible GET.
+    """Report required-hop liveness, sequence correlation, and recent SSE SLA.
 
-    Ops pattern: a cron on the operator's laptop hits this and posts to a
-    webhook on breach. No Alertmanager needed.
-
-    Breach signals:
-      - canary_<hop>_age_s > 120: pipeline hop is dead
-      - canary_<hop>_p95_ms > target: SLA regression
-      - seq_gap: observer fell behind producer (dropped events)
+    Sauron polls this canary-token-protected endpoint. It returns only the
+    bounded p95/sample-count summary used by the realtime canary watchdog.
     """
-    # NOTE: canary stats come from the per-hop last-obs-age tracker and the
-    # prometheus Gauges, not the beacon deque. window_s is accepted for
-    # symmetry with /latency-summary but only affects the caller's window
-    # expectation — not how we read alive/seq.
-    _ = window_s
+    # The latency summary below is a bounded recent view of observations that
+    # were submitted through the authenticated canary observation route.
+    window_s = max(30, min(int(window_s), int(_CANARY_LATENCY_WINDOW_S)))
 
     # `ingest` and `sse` are the load-bearing hops — the producer and
     # observer scripts must be running for the full pipeline to be
@@ -626,8 +640,16 @@ async def telemetry_selfcheck(window_s: int = 900) -> dict:
     # required hops (age None) count as dead so selfcheck can't lie with
     # "ok" when the producer never started.
     required_ok = all(h["alive"] for h in hops.values() if h.get("required"))
-    seq_ok = seq_gap is None or abs(seq_gap) < 10
-    overall_ok = required_ok and seq_ok
+    seq_ok = seq_gap is not None and abs(seq_gap) < 10
+    sample_cutoff = time.monotonic() - window_s
+    sse_samples = [
+        latency_s
+        for observed_at, hop, surface, latency_s in _canary_latency_samples
+        if observed_at >= sample_cutoff and hop == "sse" and surface == "observer"
+    ]
+    sse_p95_ms = _histogram_percentile(sse_samples, 95) if sse_samples else None
+    latency_ok = sse_p95_ms is not None and sse_p95_ms <= _CANARY_SSE_P95_TARGET_MS
+    overall_ok = required_ok and seq_ok and latency_ok
 
     return {
         "ok": overall_ok,
@@ -638,4 +660,115 @@ async def telemetry_selfcheck(window_s: int = 900) -> dict:
             "sse": int(sse_seq) if sse_seq is not None else None,
             "gap": seq_gap,
         },
+        "metrics": {
+            "window_s": window_s,
+            "sse_sample_count": len(sse_samples),
+            "sse_p95_ms": sse_p95_ms,
+        },
     }
+
+
+async def _canary_workspace_stream(request: Request, *, session_id: UUID, owner_id: int):
+    """Project only live producer markers from the canonical workspace invalidation stream."""
+    from zerg.routers.timeline import _live_catalog_workspace_stream
+
+    async for frame in _live_catalog_workspace_stream(
+        request,
+        session_id=session_id,
+        skip_initial=False,
+        owner_id=owner_id,
+        last_event_id=None,
+        stream_epoch=None,
+        include_canary_markers=True,
+        heartbeat_interval_seconds=5.0,
+    ):
+        event_name = frame.get("event")
+        try:
+            data = json.loads(frame.get("data") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            yield {"event": "error", "data": json.dumps({"error": "invalid_workspace_event"})}
+            return
+        if not isinstance(data, dict):
+            yield {"event": "error", "data": json.dumps({"error": "invalid_workspace_event"})}
+            return
+        if event_name == "connected":
+            server_now_ms = data.get("server_now_ms")
+            if type(server_now_ms) is int:
+                yield {"event": "connected", "data": json.dumps({"server_now_ms": server_now_ms})}
+            continue
+        if event_name == "heartbeat":
+            timestamp = data.get("timestamp")
+            if isinstance(timestamp, str):
+                yield {"event": "heartbeat", "data": json.dumps({"timestamp": timestamp})}
+            continue
+        if event_name == "error":
+            error = data.get("error")
+            yield {
+                "event": "error",
+                "data": json.dumps({"error": error if error == "session_not_found" else "workspace_unavailable"}),
+            }
+            return
+        if event_name != "workspace_changed":
+            continue
+        if "canary_seq" not in data and "canary_emitted_at_ms" not in data:
+            # Initial invalidations and unrelated session updates are not
+            # producer deliveries and must not refresh the canary.
+            continue
+        canary_seq = data.get("canary_seq")
+        emitted_at_ms = data.get("canary_emitted_at_ms")
+        server_fanout_at_ms = data.get("server_fanout_at_ms")
+        server_now_ms = data.get("server_now_ms")
+        pubsub_seq = data.get("pubsub_seq")
+        if (
+            type(canary_seq) is not int
+            or canary_seq < 0
+            or type(emitted_at_ms) is not int
+            or emitted_at_ms <= 0
+            or type(server_fanout_at_ms) is not int
+            or type(server_now_ms) is not int
+            or type(pubsub_seq) is not int
+            or pubsub_seq <= 0
+        ):
+            yield {"event": "error", "data": json.dumps({"error": "invalid_canary_marker"})}
+            return
+        yield {
+            "event": "canary_observation",
+            "id": frame.get("id"),
+            "data": json.dumps(
+                {
+                    "canary_seq": canary_seq,
+                    "canary_emitted_at_ms": emitted_at_ms,
+                    "server_fanout_at_ms": server_fanout_at_ms,
+                    "server_now_ms": server_now_ms,
+                    "pubsub_seq": pubsub_seq,
+                }
+            ),
+        }
+
+
+@canary_router.get("/canary-stream", include_in_schema=False)
+async def canary_workspace_stream(
+    request: Request,
+    session_id: UUID,
+    auth: object = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> EventSourceResponse:
+    """Stream live canary markers after owner-scoped canonical session lookup."""
+    from zerg.services.catalog_read_gateway import CatalogReadError
+    from zerg.services.live_catalog_timeline import read_live_catalog_session
+
+    owner_id = owner_id_from_caller(auth)
+    try:
+        session, _provider_alias, _commit_seq = await asyncio.to_thread(
+            read_live_catalog_session,
+            session_id,
+            owner_id=owner_id,
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    if session is None or str(session.provider or "").strip().lower() != "canary":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Canary session not found")
+    return EventSourceResponse(_canary_workspace_stream(request, session_id=session_id, owner_id=owner_id))

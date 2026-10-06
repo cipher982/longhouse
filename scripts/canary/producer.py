@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Longhouse realtime canary producer.
 
-Every INTERVAL seconds, POST a fabricated RuntimeEventIngest to
-/api/agents/runtime/events/batch, stamped with a monotonic canary_seq +
-emitted_at=now(). Measure server receive latency (round-trip minus a
-best-effort network half) and POST a CanaryObservation back.
+Every INTERVAL seconds, POST a canary RuntimeEventIngest with its persistent
+producer sequence and emission timestamp. The server confirms catalog apply,
+returns its receive timestamp, and the producer records that measured ingest
+latency through the canary observation endpoint.
 
 Bootstrap creates the durable StorageSession via storage-v2 (not legacy
 /api/agents/ingest). Runtime binding/progress ticks stay on the runtime
 batch path because they wake workspace SSE.
 
-Runs forever. Re-uses the same canary session_id across restarts so all
-probes aggregate into one session on the server.
+The systemd unit supervises this process. It reuses the same canary session
+UUID and sequence file across restarts so observations remain correlated.
 
 Usage:
     LONGHOUSE_CANARY_URL=https://your-instance.longhouse.ai \
@@ -44,7 +44,12 @@ from pathlib import Path
 import httpx
 
 INTERVAL_S = float(os.environ.get("LONGHOUSE_CANARY_INTERVAL_S", "30"))
-SESSION_ID_FILE = Path(os.environ.get("LONGHOUSE_CANARY_SESSION_FILE", str(Path.home() / ".longhouse" / "canary-session-id")))
+SESSION_ID_FILE = Path(
+    os.environ.get(
+        "LONGHOUSE_CANARY_SESSION_FILE",
+        str(Path.home() / ".longhouse" / "canary-session-id"),
+    )
+)
 SEQ_FILE = SESSION_ID_FILE.with_name("canary-seq")
 _STORAGE_V2_INGEST_PATH = "/api/agents/storage/v2/envelopes"
 _STORAGE_V2_LANE_HEADER = "X-Longhouse-Storage-Lane"
@@ -123,7 +128,10 @@ def _runtime_event(session_id: str, seq: int, machine_name: str, now: datetime) 
         "tool_name": None,
         "occurred_at": now.isoformat().replace("+00:00", "Z"),
         "dedupe_key": f"canary:{session_id}:{seq}",
-        "payload": {"canary_seq": seq, "canary_emitted_at_ms": int(now.timestamp() * 1000)},
+        "payload": {
+            "canary_seq": seq,
+            "canary_emitted_at_ms": int(now.timestamp() * 1000),
+        },
     }
 
 
@@ -153,22 +161,38 @@ def _post_observation(
     surface: str,
     latency_ms: int,
 ) -> None:
-    try:
-        resp = client.post(
-            f"{base_url}/api/telemetry/canary-observation",
-            headers={"X-Canary-Token": canary_token, "Content-Type": "application/json"},
-            json={
-                "canary_seq": canary_seq,
-                "hop": hop,
-                "surface": surface,
-                "latency_ms": max(0, int(latency_ms)),
-            },
-            timeout=10.0,
+    if latency_ms < 0:
+        raise ValueError("canary observation latency cannot be negative")
+    resp = client.post(
+        f"{base_url}/api/telemetry/canary-observation",
+        headers={"X-Canary-Token": canary_token, "Content-Type": "application/json"},
+        json={
+            "canary_seq": canary_seq,
+            "hop": hop,
+            "surface": surface,
+            "latency_ms": int(latency_ms),
+        },
+        timeout=10.0,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"observation post {hop} seq={canary_seq} returned HTTP {resp.status_code}"
         )
-        if resp.status_code >= 300:
-            print(f"observation post {hop} seq={canary_seq} -> {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
-    except Exception as exc:
-        print(f"observation post error: {exc}", file=sys.stderr)
+    try:
+        receipt = resp.json()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"observation post {hop} seq={canary_seq} returned invalid JSON"
+        ) from exc
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("ok") is not True
+        or receipt.get("seq") != canary_seq
+        or receipt.get("hop") != hop
+    ):
+        raise RuntimeError(
+            f"observation post {hop} seq={canary_seq} returned an invalid receipt"
+        )
 
 
 def _agents_headers(agents_token: str) -> dict[str, str]:
@@ -192,7 +216,7 @@ def _bootstrap_storage_v2(
         caps_resp = client.get(
             f"{base_url}/api/agents/storage/v2/capabilities",
             headers=_agents_headers(agents_token),
-            timeout=15.0,
+            timeout=10.0,
         )
     except Exception as exc:
         print(f"FATAL: storage-v2 capabilities network error: {exc}", file=sys.stderr)
@@ -229,10 +253,16 @@ def _bootstrap_storage_v2(
         print("FATAL: storage-v2 capabilities missing machine_id", file=sys.stderr)
         sys.exit(3)
     if ingest_path != _STORAGE_V2_INGEST_PATH:
-        print("FATAL: storage-v2 capabilities returned unexpected ingest_path", file=sys.stderr)
+        print(
+            "FATAL: storage-v2 capabilities returned unexpected ingest_path",
+            file=sys.stderr,
+        )
         sys.exit(3)
     if lane_header != _STORAGE_V2_LANE_HEADER:
-        print("FATAL: storage-v2 capabilities returned unexpected lane_header", file=sys.stderr)
+        print(
+            "FATAL: storage-v2 capabilities returned unexpected lane_header",
+            file=sys.stderr,
+        )
         sys.exit(3)
 
     envelope = _storage_v2_wire.build_canary_bootstrap_envelope(
@@ -246,7 +276,7 @@ def _bootstrap_storage_v2(
             f"{base_url}{ingest_path}",
             headers={**_agents_headers(agents_token), _STORAGE_V2_LANE_HEADER: "live"},
             json=envelope,
-            timeout=30.0,
+            timeout=15.0,
         )
     except Exception as exc:
         print(f"FATAL: storage-v2 envelope network error: {exc}", file=sys.stderr)
@@ -280,7 +310,9 @@ def _bootstrap_storage_v2(
     object_hash = receipt.get("object_hash")
     commit_seq = receipt.get("commit_seq")
     if not isinstance(object_hash, str) or _SHA256_HEX.fullmatch(object_hash) is None:
-        print("FATAL: storage-v2 envelope receipt object_hash is invalid", file=sys.stderr)
+        print(
+            "FATAL: storage-v2 envelope receipt object_hash is invalid", file=sys.stderr
+        )
         sys.exit(3)
     if (
         not isinstance(commit_seq, str)
@@ -289,7 +321,9 @@ def _bootstrap_storage_v2(
         or str(int(commit_seq)) != commit_seq
         or not 0 <= int(commit_seq) < 1 << 64
     ):
-        print("FATAL: storage-v2 envelope receipt commit_seq is invalid", file=sys.stderr)
+        print(
+            "FATAL: storage-v2 envelope receipt commit_seq is invalid", file=sys.stderr
+        )
         sys.exit(3)
     print(
         f"storage-v2 bootstrap ok: session_id={session_id} envelope_id={expected_id[:12]}… "
@@ -301,11 +335,8 @@ def _bootstrap_storage_v2(
 def main() -> int:
     base_url = _require_env("LONGHOUSE_CANARY_URL").rstrip("/")
     agents_token = _require_env("LONGHOUSE_AGENTS_TOKEN")
-    canary_token = os.environ.get("LONGHOUSE_CANARY_TOKEN", "")
+    canary_token = _require_env("LONGHOUSE_CANARY_TOKEN")
     machine_name = os.environ.get("LONGHOUSE_CANARY_MACHINE", socket.gethostname())
-    session_id = _session_uuid()
-
-    print(f"canary producer: session_id={session_id}, interval={INTERVAL_S}s, target={base_url}")
 
     stopping = False
 
@@ -316,15 +347,22 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
-    with httpx.Client(http2=True) as client:
-        # Bootstrap: durable StorageSession via storage-v2, then a binding_signal
-        # so LiveSession runtime liveness exists for canary-session discovery.
+    session_id = _session_uuid()
+    print(
+        f"canary producer: session_id={session_id}, interval={INTERVAL_S}s, target={base_url}"
+    )
+    if stopping:
+        return 0
+
+    with httpx.Client(http2=False) as client:
         _bootstrap_storage_v2(
             client,
             base_url=base_url,
             agents_token=agents_token,
             session_id=session_id,
         )
+        if stopping:
+            return 0
 
         now = datetime.now(timezone.utc)
         bootstrap = {"events": [_binding_event(session_id, machine_name, now)]}
@@ -335,52 +373,78 @@ def main() -> int:
                 json=bootstrap,
                 timeout=15.0,
             )
-            if resp.status_code >= 300:
-                print(f"runtime bootstrap failed {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
+            if resp.status_code != 200:
+                print(
+                    f"FATAL: runtime bootstrap returned HTTP {resp.status_code}: {resp.text[:500]}",
+                    file=sys.stderr,
+                )
                 return 3
         except Exception as exc:
-            print(f"runtime bootstrap network error: {exc}", file=sys.stderr)
+            print(f"FATAL: runtime bootstrap network error: {exc}", file=sys.stderr)
             return 3
+        if stopping:
+            return 0
 
         while not stopping:
             seq = _next_seq()
             emitted_at = datetime.now(timezone.utc)
-            payload = {"events": [_runtime_event(session_id, seq, machine_name, emitted_at)]}
-            send_start = time.perf_counter()
+            emitted_at_ms = int(emitted_at.timestamp() * 1000)
+            event = _runtime_event(session_id, seq, machine_name, emitted_at)
             try:
                 resp = client.post(
                     f"{base_url}/api/agents/runtime/events/batch",
                     headers=_agents_headers(agents_token),
-                    json=payload,
+                    json={"events": [event]},
                     timeout=15.0,
                 )
-                rtt_ms = int((time.perf_counter() - send_start) * 1000)
-                if resp.status_code >= 300:
-                    print(f"ingest post seq={seq} -> {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
-                else:
-                    # Record hop=ingest as one-way latency ≈ RTT/2.
-                    # Honest note: we can't separate send from ack cleanly without
-                    # server echoing our emitted_at; server's event_age_at_ingest
-                    # already measures that properly. The `hop=ingest` canary
-                    # observation is a liveness signal, not an SLA source.
-                    if canary_token:
-                        _post_observation(
-                            client,
-                            base_url,
-                            canary_token,
-                            canary_seq=seq,
-                            hop="ingest",
-                            surface="producer",
-                            latency_ms=rtt_ms,
-                        )
+                if resp.status_code != 200:
+                    print(
+                        f"FATAL: runtime ingest seq={seq} returned HTTP {resp.status_code}: {resp.text[:200]}",
+                        file=sys.stderr,
+                    )
+                    return 3
+                try:
+                    receipt = resp.json()
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("runtime ingest returned invalid JSON") from exc
+                if not isinstance(receipt, dict) or event[
+                    "runtime_key"
+                ] not in receipt.get("updated_runtime_keys", []):
+                    raise RuntimeError(
+                        "runtime ingest did not confirm a live canary update"
+                    )
+                received_at_raw = resp.headers.get("X-Canary-Received-At-Ms", "")
+                if not received_at_raw.isascii() or not received_at_raw.isdecimal():
+                    raise RuntimeError(
+                        "runtime ingest omitted its canary receive timestamp"
+                    )
+                received_at_ms = int(received_at_raw)
+                latency_ms = received_at_ms - emitted_at_ms
+                if latency_ms < 0 or latency_ms > 600_000:
+                    raise RuntimeError(
+                        f"runtime ingest returned invalid canary latency {latency_ms}ms"
+                    )
+                _post_observation(
+                    client,
+                    base_url,
+                    canary_token,
+                    canary_seq=seq,
+                    hop="ingest",
+                    surface="producer",
+                    latency_ms=latency_ms,
+                )
             except Exception as exc:
-                print(f"ingest network error: {exc}", file=sys.stderr)
+                print(
+                    f"FATAL: canary ingest/observation failed seq={seq}: {exc}",
+                    file=sys.stderr,
+                )
+                return 3
 
-            # Sleep in small steps so SIGTERM is responsive.
             slept = 0.0
             while slept < INTERVAL_S and not stopping:
-                time.sleep(min(0.5, INTERVAL_S - slept))
-                slept += 0.5
+                duration = min(0.5, INTERVAL_S - slept)
+                time.sleep(duration)
+                slept += duration
 
     print("canary producer stopping")
     return 0

@@ -202,8 +202,8 @@ pub const STATUS_ASSERTION_INTERVAL: std::time::Duration = std::time::Duration::
 /// The assertion a live slot states: the same status, restated, with no phase.
 ///
 /// Deliberately not a `phase_signal`. Shipping the same phase again is a change
-/// the host would apply — bumping the runtime revision and re-anchoring the
-/// phase — for a statement that says nothing new about the provider. This says
+/// the host would apply — bumping the runtime revision and replacing the
+/// provider observation clock — without a new provider sample. This says
 /// only what the phase cannot: the machine is still here and still willing to
 /// report. Its identity is the assertion time, so a replay restates one the host
 /// has already accepted rather than renewing anything.

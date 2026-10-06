@@ -1678,26 +1678,21 @@ mod tests {
         body: impl FnOnce() -> T,
     ) -> T {
         let _guard = crate::console_adapter::agent_state_guard();
-        let previous_home = std::env::var_os("LONGHOUSE_HOME");
-        let previous_session = std::env::var_os("LONGHOUSE_MANAGED_SESSION_ID");
-        let previous_run = std::env::var_os("LONGHOUSE_RUN_ID");
-        std::env::set_var("LONGHOUSE_HOME", home);
-        std::env::set_var("LONGHOUSE_MANAGED_SESSION_ID", session_id);
-        std::env::set_var("LONGHOUSE_RUN_ID", run_id);
-        let result = body();
-        match previous_home {
-            Some(value) => std::env::set_var("LONGHOUSE_HOME", value),
-            None => std::env::remove_var("LONGHOUSE_HOME"),
-        }
-        match previous_session {
-            Some(value) => std::env::set_var("LONGHOUSE_MANAGED_SESSION_ID", value),
-            None => std::env::remove_var("LONGHOUSE_MANAGED_SESSION_ID"),
-        }
-        match previous_run {
-            Some(value) => std::env::set_var("LONGHOUSE_RUN_ID", value),
-            None => std::env::remove_var("LONGHOUSE_RUN_ID"),
-        }
-        result
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(home.as_os_str())),
+                (
+                    "LONGHOUSE_MANAGED_SESSION_ID",
+                    Some(std::ffi::OsStr::new(session_id)),
+                ),
+                ("LONGHOUSE_RUN_ID", Some(std::ffi::OsStr::new(run_id))),
+                (
+                    "LONGHOUSE_MANAGED_PROVIDER",
+                    Some(std::ffi::OsStr::new("claude")),
+                ),
+            ],
+            body,
+        )
     }
 
     fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {

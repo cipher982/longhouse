@@ -114,6 +114,29 @@ _runtime_db_dependency = (
 )
 
 
+def _canary_runtime_marker(event) -> tuple[int, int] | None:
+    if (
+        (event.provider or "").strip().lower() != "canary"
+        or (event.source or "").strip().lower() != "canary_producer"
+        or event.kind != "progress_signal"
+        or event.session_id is None
+        or event.runtime_key != f"canary:{event.session_id}"
+    ):
+        return None
+    payload = event.payload or {}
+    canary_seq = payload.get("canary_seq")
+    emitted_at_ms = payload.get("canary_emitted_at_ms")
+    if type(canary_seq) is not int or canary_seq < 0 or type(emitted_at_ms) is not int or emitted_at_ms <= 0:
+        return None
+    occurred_at = event.occurred_at
+    if occurred_at.tzinfo is None:
+        occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+    occurred_at_ms = int(occurred_at.timestamp() * 1000)
+    if abs(occurred_at_ms - emitted_at_ms) > 5_000:
+        return None
+    return canary_seq, emitted_at_ms
+
+
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
 async def ingest_runtime_observation_batch(
     payload: RuntimeEventBatchIngest,
@@ -161,20 +184,27 @@ async def ingest_runtime_observation_batch(
 
             from zerg.services.session_pubsub import publish_session_runtime_update
 
-            session_ids_published: set[str] = set()
-            for ev in events:
-                if ev.session_id is None or ev.runtime_key not in updated_runtime_keys:
+            events_by_session: dict[str, list] = {}
+            for event in events:
+                if event.session_id is None or event.runtime_key not in updated_runtime_keys:
                     continue
-                sid = str(ev.session_id)
-                if sid in session_ids_published:
-                    continue
-                session_ids_published.add(sid)
-                publish_session_runtime_update(
-                    session_id=sid,
-                    provider=ev.provider,
-                    source=ev.source,
-                    catalog_commit_seq=catalog_commit_seq,
+                events_by_session.setdefault(str(event.session_id), []).append(event)
+            for session_id, session_events in events_by_session.items():
+                event = next(
+                    (candidate for candidate in reversed(session_events) if _canary_runtime_marker(candidate) is not None),
+                    session_events[0],
                 )
+                marker = _canary_runtime_marker(event)
+                publish_session_runtime_update(
+                    session_id=session_id,
+                    provider=event.provider,
+                    source=event.source,
+                    catalog_commit_seq=catalog_commit_seq,
+                    canary_seq=marker[0] if marker is not None else None,
+                    canary_emitted_at_ms=marker[1] if marker is not None else None,
+                )
+                if marker is not None:
+                    response.headers["X-Canary-Received-At-Ms"] = str(int(now_utc.timestamp() * 1000))
 
         catalogd = get_catalogd_client()
         if catalogd is None:

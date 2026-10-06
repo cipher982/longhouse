@@ -69,6 +69,13 @@ clocks). This collection budget is separate from the 4 KiB scalar fact budget.
 An over-budget observation is omitted without discarding parent activity or
 renewing previous registry evidence; no partial count is presented as complete.
 
+OMP publishes semantic registry changes immediately and refreshes an unchanged
+complete registry every five minutes, below its thirty-minute freshness lease.
+Observation timestamps and live elapsed-duration ticks do not create new snapshots.
+The first empty registry and a running-to-empty transition are still observations;
+terminal task details and final durations are retained. Failed local retention does
+not advance the emission gate, so the next provider frame can retry.
+
 Task status and description come from the provider; raw command strings are not
 included. `first_observed_at` is not a task start or activity time. Start and
 last-activity timestamps, a navigable child session ID, and nullable
@@ -109,6 +116,38 @@ stay visually working on fresh delegation without inventing parent execution
 time. The primary background headline is one navigable disclosure, not a
 duplicate headline plus summary. Expiry becomes uncertain; explicit interaction
 and closed-session precedence remain independent.
+
+## Provider observations and machine liveness
+
+OMP's twenty-second extension keepalive samples the provider's `ctx.isIdle()`.
+Its phase signal is fresh provider evidence even when the sampled phase is unchanged.
+The Machine Agent's five-second `status_assertion` says only that it can still report
+the previously observed state: it renews machine liveness without changing the
+provider observation, phase, or runtime revision. It cannot replace provider samples.
+
+## Realtime canary
+
+The producer commits a canary session through storage-v2 and emits numbered runtime
+observations. The accepted runtime write carries that producer sequence and emission
+time through the same workspace invalidation path used by session clients.
+
+`GET /api/telemetry/canary-stream?session_id=...` requires both `X-Canary-Token`
+and owner-bound `X-Agents-Token` authentication. It accepts only that owner's canary
+sessions and emits timing/sequence coordinates, never transcript previews or tools.
+Initial invalidations and unrelated workspace changes are not delivery observations.
+The observer correlates producer sequences, not the independent pubsub cursor.
+
+The authenticated `/api/telemetry/selfcheck` requires fresh ingest and SSE observations,
+a sequence gap below ten, and actual SSE latency samples with p95 at most 300 ms.
+Render observations are optional. Its sample summary is bounded to fifteen minutes;
+missing samples are unhealthy, not zero latency.
+
+`bash scripts/canary/deploy_cube.sh` installs the source-owned producer/observer units
+using the existing `~/.config/longhouse-canary/env` and preserves the stable session-id
+and sequence files. The observer allows sixty seconds for initial bootstrap visibility
+and uses a finite stream read timeout so SIGTERM is not trapped in an idle stream.
+Both units supervise failures with a fifteen-second restart interval; an external
+watchdog must alert on missing hops, failed/auth-refused checks, and SLA breaches.
 
 ## Non-goals
 

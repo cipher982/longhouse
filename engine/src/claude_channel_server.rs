@@ -1708,8 +1708,23 @@ mod tests {
         serde_json::from_str(&line).unwrap()
     }
 
-    #[tokio::test]
-    async fn bridge_handshake_state_inject_and_shutdown_match_python_contract() {
+    #[test]
+    fn bridge_handshake_state_inject_and_shutdown_match_python_contract() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_COORDINATION_TOKEN", None::<&str>),
+                ("LONGHOUSE_COORDINATION_TOKEN_FILE", None::<&str>),
+            ],
+            || {
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(bridge_handshake_state_inject_and_shutdown());
+            },
+        );
+    }
+
+    async fn bridge_handshake_state_inject_and_shutdown() {
         let temp = tempfile::tempdir().unwrap();
         let (mut stdin_client, stdin_server) = duplex(8192);
         let (stdout_server, stdout_client) = duplex(8192);

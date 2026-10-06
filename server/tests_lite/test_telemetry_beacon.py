@@ -33,6 +33,7 @@ def _client() -> tuple[TestClient, sessionmaker]:
     telemetry_mod._samples.clear()
     telemetry_mod._buckets.clear()
     telemetry_mod._canary_last_obs_monotonic.clear()
+    telemetry_mod._canary_latency_samples.clear()
     # Also reset the canary seq gauge — it's process-global in prometheus_client.
     try:
         from zerg.metrics import canary_seq_last_seen as _gauge
@@ -256,8 +257,14 @@ def test_selfcheck_reports_all_hops_dead_when_no_observations():
 
 def test_selfcheck_ok_when_required_alive_even_if_render_absent():
     c, _factory = _client()
-    c.post("/telemetry/canary-observation", json={"canary_seq": 1, "hop": "ingest", "latency_ms": 25})
-    c.post("/telemetry/canary-observation", json={"canary_seq": 1, "hop": "sse", "latency_ms": 150})
+    c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 1, "hop": "ingest", "surface": "producer", "latency_ms": 25},
+    )
+    c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 1, "hop": "sse", "surface": "observer", "latency_ms": 150},
+    )
     body = c.get("/telemetry/selfcheck").json()
     # render never observed but it's optional
     assert body["hops"]["render"]["alive"] is False
@@ -269,11 +276,11 @@ def test_selfcheck_reports_recent_hops_alive():
     c, _factory = _client()
     c.post(
         "/telemetry/canary-observation",
-        json={"canary_seq": 1, "hop": "ingest", "latency_ms": 25},
+        json={"canary_seq": 1, "hop": "ingest", "surface": "producer", "latency_ms": 25},
     )
     c.post(
         "/telemetry/canary-observation",
-        json={"canary_seq": 1, "hop": "sse", "latency_ms": 150},
+        json={"canary_seq": 1, "hop": "sse", "surface": "observer", "latency_ms": 150},
     )
     body = c.get("/telemetry/selfcheck").json()
     assert body["hops"]["ingest"]["alive"] is True
@@ -282,6 +289,9 @@ def test_selfcheck_reports_recent_hops_alive():
     assert body["seq"]["ingest"] == 1
     assert body["seq"]["sse"] == 1
     assert body["seq"]["gap"] == 0
+    assert body["metrics"]["sse_sample_count"] == 1
+    assert body["metrics"]["sse_p95_ms"] == 150.0
+    assert body["ok"] is True
 
 
 def test_selfcheck_flags_seq_gap():
@@ -298,6 +308,17 @@ def test_selfcheck_flags_seq_gap():
     body = c.get("/telemetry/selfcheck").json()
     assert body["seq"]["gap"] == 90
     # gap >= 10 trips overall ok=False
+    assert body["ok"] is False
+
+
+def test_selfcheck_includes_bounded_recent_sse_latency_summary():
+    c, _factory = _client()
+    telemetry_mod.record_canary_observation(canary_seq=7, hop="sse", surface="observer", latency_ms=180)
+    telemetry_mod.record_canary_observation(canary_seq=8, hop="sse", surface="observer", latency_ms=420)
+
+    body = c.get("/telemetry/selfcheck").json()
+
+    assert body["metrics"] == {"window_s": 900, "sse_sample_count": 2, "sse_p95_ms": 420.0}
     assert body["ok"] is False
 
 

@@ -263,9 +263,8 @@ class Settings:  # noqa: D401 – simple data container
     apns_topic: str | None = None
 
     # Realtime canary -----------------------------------------------------
-    # Shared secret for the always-on QA harness. When set, the canary
-    # observation endpoint accepts X-Canary-Token auth (bypassing admin
-    # cookie), and the workspace SSE accepts it for the canary session only.
+    # Shared runtime secret for telemetry observation/selfcheck. A canary
+    # workspace stream also requires owner-bound machine authentication.
     canary_token: str | None = None
 
     # Provider capability qualification factory -------------------------

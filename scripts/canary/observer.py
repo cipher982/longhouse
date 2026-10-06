@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""Longhouse realtime canary observer.
-
-Subscribes to the canary session's workspace SSE stream, measures server
-wake latency by comparing the frame's latest_event_emitted_at_ms against
-wall-clock arrival, and POSTs CanaryObservation to the admin endpoint.
-
-The producer must be running first so a canary session exists and
-~/.longhouse/canary-session-id is populated.
-
-Usage:
-    LONGHOUSE_CANARY_URL=https://your-instance.longhouse.ai \
-    LONGHOUSE_CANARY_TOKEN=<shared-secret-set-on-server> \
-    python3 scripts/canary/observer.py
-
-Exits non-zero if SSE is unreachable for > UNREACHABLE_TIMEOUT_S.
-"""
+"""Observe real canary runtime updates on the owner-scoped workspace stream."""
 
 from __future__ import annotations
 
@@ -23,21 +8,31 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime
-from datetime import timezone
+import uuid
 from pathlib import Path
 
 import httpx
 
-SESSION_ID_FILE = Path(os.environ.get("LONGHOUSE_CANARY_SESSION_FILE", str(Path.home() / ".longhouse" / "canary-session-id")))
+SESSION_ID_FILE = Path(
+    os.environ.get(
+        "LONGHOUSE_CANARY_SESSION_FILE",
+        str(Path.home() / ".longhouse" / "canary-session-id"),
+    )
+)
 UNREACHABLE_TIMEOUT_S = int(os.environ.get("LONGHOUSE_CANARY_UNREACHABLE_S", "300"))
+SESSION_READY_TIMEOUT_S = 60
+SSE_READ_TIMEOUT_S = 10.0
+
+
+class _FatalCanaryError(RuntimeError):
+    pass
 
 
 def _require_env(key: str) -> str:
     value = os.environ.get(key)
     if not value:
         print(f"FATAL: missing {key}", file=sys.stderr)
-        sys.exit(2)
+        raise _FatalCanaryError(f"missing {key}")
     return value
 
 
@@ -47,30 +42,42 @@ def _post_observation(
     canary_token: str,
     *,
     canary_seq: int,
-    hop: str,
-    surface: str,
     latency_ms: int,
 ) -> None:
-    try:
-        resp = client.post(
-            f"{base_url}/api/telemetry/canary-observation",
-            headers={"X-Canary-Token": canary_token, "Content-Type": "application/json"},
-            json={
-                "canary_seq": canary_seq,
-                "hop": hop,
-                "surface": surface,
-                "latency_ms": max(0, int(latency_ms)),
-            },
-            timeout=10.0,
+    if latency_ms < 0:
+        raise _FatalCanaryError(
+            f"negative SSE latency for canary sequence {canary_seq}"
         )
-        if resp.status_code >= 300:
-            print(f"obs post {hop} seq={canary_seq} -> {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
-    except Exception as exc:
-        print(f"obs post error: {exc}", file=sys.stderr)
+    response = client.post(
+        f"{base_url}/api/telemetry/canary-observation",
+        headers={"X-Canary-Token": canary_token, "Content-Type": "application/json"},
+        json={
+            "canary_seq": canary_seq,
+            "hop": "sse",
+            "surface": "observer",
+            "latency_ms": latency_ms,
+        },
+        timeout=10.0,
+    )
+    if response.status_code != 200:
+        raise _FatalCanaryError(
+            f"canary observation returned HTTP {response.status_code}"
+        )
+    try:
+        receipt = response.json()
+    except json.JSONDecodeError as exc:
+        raise _FatalCanaryError("canary observation returned invalid JSON") from exc
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("ok") is not True
+        or receipt.get("hop") != "sse"
+        or receipt.get("seq") != canary_seq
+    ):
+        raise _FatalCanaryError("canary observation returned an invalid receipt")
 
 
 def _iter_sse(response: httpx.Response):
-    """Yield (event, data) tuples from a text/event-stream response."""
+    """Yield complete server-sent event frames, ignoring comments and heartbeats."""
     event_name = ""
     data_lines: list[str] = []
     for raw_line in response.iter_lines():
@@ -94,17 +101,43 @@ def _iter_sse(response: httpx.Response):
             data_lines.append(value)
 
 
+def _canary_marker(payload: str) -> tuple[int, int, int, int, int]:
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise _FatalCanaryError("canary SSE event returned invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise _FatalCanaryError("canary SSE event is not an object")
+    canary_seq = data.get("canary_seq")
+    emitted_at_ms = data.get("canary_emitted_at_ms")
+    server_fanout_at_ms = data.get("server_fanout_at_ms")
+    server_now_ms = data.get("server_now_ms")
+    pubsub_seq = data.get("pubsub_seq")
+    if (
+        type(canary_seq) is not int
+        or canary_seq < 0
+        or type(emitted_at_ms) is not int
+        or emitted_at_ms <= 0
+        or type(server_fanout_at_ms) is not int
+        or server_fanout_at_ms <= 0
+        or type(server_now_ms) is not int
+        or server_now_ms <= 0
+        or type(pubsub_seq) is not int
+        or pubsub_seq <= 0
+    ):
+        raise _FatalCanaryError(
+            "canary SSE event is missing its producer sequence or timing coordinates"
+        )
+    return canary_seq, emitted_at_ms, server_fanout_at_ms, server_now_ms, pubsub_seq
+
+
 def main() -> int:
-    base_url = _require_env("LONGHOUSE_CANARY_URL").rstrip("/")
-    canary_token = _require_env("LONGHOUSE_CANARY_TOKEN")
-    if not SESSION_ID_FILE.exists():
-        print(f"FATAL: {SESSION_ID_FILE} not found — start the producer first", file=sys.stderr)
+    try:
+        base_url = _require_env("LONGHOUSE_CANARY_URL").rstrip("/")
+        canary_token = _require_env("LONGHOUSE_CANARY_TOKEN")
+        agents_token = _require_env("LONGHOUSE_AGENTS_TOKEN")
+    except _FatalCanaryError:
         return 2
-
-    session_id = SESSION_ID_FILE.read_text().strip()
-    stream_url = f"{base_url}/api/canary/sessions/{session_id}/workspace/stream"
-    print(f"canary observer: session_id={session_id} stream={stream_url}")
-
     stopping = False
 
     def _stop(_signum, _frame):
@@ -114,12 +147,41 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
+    ready_deadline = time.monotonic() + SESSION_READY_TIMEOUT_S
+    while not SESSION_ID_FILE.is_file() and not stopping:
+        if time.monotonic() >= ready_deadline:
+            print(
+                f"FATAL: {SESSION_ID_FILE} was not created by the canary producer",
+                file=sys.stderr,
+            )
+            return 3
+        time.sleep(0.25)
+    if stopping:
+        return 0
+    session_id = SESSION_ID_FILE.read_text().strip()
+    try:
+        if str(uuid.UUID(session_id)) != session_id:
+            raise ValueError("noncanonical UUID")
+    except ValueError:
+        print(
+            f"FATAL: {SESSION_ID_FILE} does not contain a canonical UUID",
+            file=sys.stderr,
+        )
+        return 3
+
+    stream_url = f"{base_url}/api/telemetry/canary-stream?session_id={session_id}"
+    print(f"canary observer: session_id={session_id} stream={stream_url}")
+    timeout = httpx.Timeout(
+        connect=10.0, read=SSE_READ_TIMEOUT_S, write=10.0, pool=10.0
+    )
     last_successful_read_at = time.monotonic()
     backoff_s = 1.0
+    last_canary_seq = -1
+    stream_established = False
 
-    while not stopping:
-        try:
-            with httpx.Client(http2=False, timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)) as client:
+    with httpx.Client(http2=False, timeout=timeout) as client:
+        while not stopping:
+            try:
                 with client.stream(
                     "GET",
                     stream_url,
@@ -127,55 +189,97 @@ def main() -> int:
                         "Accept": "text/event-stream",
                         "Cache-Control": "no-cache",
                         "X-Canary-Token": canary_token,
+                        "X-Agents-Token": agents_token,
                     },
                 ) as response:
                     if response.status_code != 200:
-                        raise RuntimeError(f"SSE HTTP {response.status_code}: {response.text[:200]}")
+                        message = f"canary stream returned HTTP {response.status_code}"
+                        # The producer reserves its stable ID before the server
+                        # commits bootstrap. Wait only during initial readiness.
+                        if (
+                            response.status_code == 404
+                            and not stream_established
+                            and time.monotonic() < ready_deadline
+                        ):
+                            raise RuntimeError(
+                                "canary producer session is not yet visible"
+                            )
+                        if 400 <= response.status_code < 500:
+                            raise _FatalCanaryError(message)
+                        raise RuntimeError(message)
+                    if (
+                        not response.headers.get("content-type", "")
+                        .lower()
+                        .startswith("text/event-stream")
+                    ):
+                        raise _FatalCanaryError(
+                            "canary stream returned a non-SSE content type"
+                        )
+                    stream_established = True
                     backoff_s = 1.0
                     for event_name, payload in _iter_sse(response):
-                        last_successful_read_at = time.monotonic()
                         if stopping:
                             break
-                        if event_name != "workspace_changed":
+                        last_successful_read_at = time.monotonic()
+                        if event_name in {"connected", "heartbeat"}:
                             continue
+                        if event_name == "error":
+                            raise _FatalCanaryError(
+                                f"canary stream error: {payload[:200]}"
+                            )
+                        if event_name != "canary_observation":
+                            raise _FatalCanaryError(
+                                f"unexpected canary stream event: {event_name!r}"
+                            )
+                        (
+                            canary_seq,
+                            emitted_at_ms,
+                            _fanout_ms,
+                            _server_now_ms,
+                            _pubsub_seq,
+                        ) = _canary_marker(payload)
+                        if canary_seq <= last_canary_seq:
+                            raise _FatalCanaryError(
+                                f"canary sequence did not advance: {canary_seq}"
+                            )
+                        latency_ms = int(time.time() * 1000) - emitted_at_ms
+                        if latency_ms < 0 or latency_ms > 600_000:
+                            raise _FatalCanaryError(
+                                f"invalid SSE latency for canary sequence {canary_seq}: {latency_ms}ms"
+                            )
                         try:
-                            data = json.loads(payload)
-                        except json.JSONDecodeError:
-                            continue
-                        # Prefer provider emitted_at when available (real user
-                        # surface). Canary sessions don't write AgentEvent rows,
-                        # so emitted_at is null; fall back to server_now_ms which
-                        # still captures the SSE-send + network path.
-                        emitted_ms = data.get("latest_event_emitted_at_ms") or data.get("server_now_ms")
-                        if not emitted_ms:
-                            continue
-                        canary_seq = data.get("pubsub_seq") or 0
-                        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-                        latency_ms = max(0, now_ms - int(emitted_ms))
-                        # Skip absurdly stale wakes — they mean the frame is a
-                        # resubscribe replay, not a realtime push.
-                        if latency_ms > 60_000:
-                            continue
-                        _post_observation(
-                            client,
-                            base_url,
-                            canary_token,
-                            canary_seq=int(canary_seq),
-                            hop="sse",
-                            surface="observer",
-                            latency_ms=latency_ms,
-                        )
-        except Exception as exc:
-            print(f"SSE error ({exc.__class__.__name__}): {exc}", file=sys.stderr)
-            if time.monotonic() - last_successful_read_at > UNREACHABLE_TIMEOUT_S:
-                print(f"SSE unreachable > {UNREACHABLE_TIMEOUT_S}s; exiting for supervisor restart", file=sys.stderr)
+                            _post_observation(
+                                client,
+                                base_url,
+                                canary_token,
+                                canary_seq=canary_seq,
+                                latency_ms=latency_ms,
+                            )
+                        except Exception as exc:
+                            raise _FatalCanaryError(
+                                f"could not record SSE observation: {exc}"
+                            ) from exc
+                        last_canary_seq = canary_seq
+                if stopping:
+                    break
+                raise RuntimeError("canary SSE stream closed")
+            except _FatalCanaryError as exc:
+                print(f"FATAL: {exc}", file=sys.stderr)
                 return 3
-            # Exponential backoff capped at 30s.
-            slept = 0.0
-            while slept < backoff_s and not stopping:
-                time.sleep(min(0.5, backoff_s - slept))
-                slept += 0.5
-            backoff_s = min(30.0, backoff_s * 2)
+            except Exception as exc:
+                print(f"SSE error ({exc.__class__.__name__}): {exc}", file=sys.stderr)
+                if time.monotonic() - last_successful_read_at > UNREACHABLE_TIMEOUT_S:
+                    print(
+                        f"SSE unreachable > {UNREACHABLE_TIMEOUT_S}s; exiting for supervisor restart",
+                        file=sys.stderr,
+                    )
+                    return 3
+                slept = 0.0
+                while slept < backoff_s and not stopping:
+                    duration = min(0.5, backoff_s - slept)
+                    time.sleep(duration)
+                    slept += duration
+                backoff_s = min(30.0, backoff_s * 2)
 
     print("canary observer stopping")
     return 0

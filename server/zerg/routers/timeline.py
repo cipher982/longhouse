@@ -1488,6 +1488,16 @@ async def _wait_for_session_change(subscription):
     return await subscription.next_message(timeout=WORKSPACE_STREAM_CHANGE_WAIT_SECONDS)
 
 
+def _canary_workspace_marker_fields(payload: dict | None) -> dict[str, int]:
+    if not isinstance(payload, dict) or payload.get("provider") != "canary" or payload.get("source") != "canary_producer":
+        return {}
+    canary_seq = payload.get("canary_seq")
+    emitted_at_ms = payload.get("canary_emitted_at_ms")
+    if type(canary_seq) is not int or canary_seq < 0 or type(emitted_at_ms) is not int or emitted_at_ms <= 0:
+        return {}
+    return {"canary_seq": canary_seq, "canary_emitted_at_ms": emitted_at_ms}
+
+
 async def _live_catalog_workspace_stream(
     request: Request,
     *,
@@ -1497,6 +1507,8 @@ async def _live_catalog_workspace_stream(
     owner_id: int | None = None,
     last_event_id: int | None = None,
     stream_epoch: str | None = None,
+    include_canary_markers: bool = False,
+    heartbeat_interval_seconds: float | None = None,
 ):
     """Live-only invalidation stream; archive detail is fetched via a child.
 
@@ -1563,10 +1575,13 @@ async def _live_catalog_workspace_stream(
                     }
                 ),
             }
+        last_heartbeat = monotonic()
         while not await request.is_disconnected():
             message = await _wait_for_session_change(subscription)
             if message is None:
-                yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}
+                if heartbeat_interval_seconds is None or monotonic() - last_heartbeat >= heartbeat_interval_seconds:
+                    yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}
+                    last_heartbeat = monotonic()
                 continue
             preview = _workspace_transcript_preview_from_payload(message.payload)
             preview_event_id = _workspace_preview_event_id(preview)
@@ -1600,6 +1615,7 @@ async def _live_catalog_workspace_stream(
                         "catalog_commit_seq": catalog_commit_seq,
                         "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),
                         "pubsub_seq": message.seq,
+                        **(_canary_workspace_marker_fields(message.payload) if include_canary_markers else {}),
                         "transcript_preview": preview,
                     }
                 ),

@@ -1,0 +1,18 @@
+[Unit]
+Description=Longhouse realtime canary producer
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=%h/.local/share/longhouse-canary
+EnvironmentFile=%h/.config/longhouse-canary/env
+ExecStart=%h/.local/share/longhouse-canary/venv/bin/python %h/.local/share/longhouse-canary/producer.py
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=default.target

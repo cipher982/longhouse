@@ -281,8 +281,14 @@ def publish_session_runtime_update(
     provider: str | None,
     source: str | None,
     catalog_commit_seq: str | int | None = None,
+    canary_seq: int | None = None,
+    canary_emitted_at_ms: int | None = None,
 ) -> None:
-    """Wake session and timeline subscribers after persisted runtime state changes."""
+    """Wake session and timeline subscribers after persisted runtime state changes.
+
+    The optional canary coordinates preserve the producer sequence separately
+    from this bus's transport sequence.
+    """
     payload = {
         "kind": "runtime",
         "session_id": session_id,
@@ -290,6 +296,9 @@ def publish_session_runtime_update(
         "source": source,
         "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
     }
+    if type(canary_seq) is int and canary_seq >= 0 and type(canary_emitted_at_ms) is int and canary_emitted_at_ms > 0:
+        payload["canary_seq"] = canary_seq
+        payload["canary_emitted_at_ms"] = canary_emitted_at_ms
     if catalog_commit_seq is not None:
         payload["catalog_commit_seq"] = int(catalog_commit_seq)
     bus = get_pubsub()
