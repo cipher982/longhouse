@@ -332,3 +332,37 @@ describe("session switcher preview fetching", () => {
     expect(previewed).not.toContain("c");
   });
 });
+
+describe("session switcher focus", () => {
+  const platform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+
+  beforeEach(() => {
+    Object.defineProperty(window.navigator, "platform", { value: "MacIntel", configurable: true });
+    fetchAgentSessionsMock.mockResolvedValue(list(["a", "b"]));
+    fetchWorkspaceMock.mockResolvedValue({ projection: { items: [] } });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    if (platform) Object.defineProperty(window.navigator, "platform", platform);
+    else delete (window.navigator as { platform?: string }).platform;
+  });
+
+  it("returns focus to where it was when the switcher closes", async () => {
+    const view = renderRail("a");
+    await screen.findAllByTestId("session-rail-row");
+    const composer = document.createElement("textarea");
+    view.container.appendChild(composer);
+    composer.focus();
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const field = screen.getByLabelText("Filter sessions");
+    expect(field).toHaveFocus();
+    fireEvent.keyDown(field, { key: "Escape" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("session-switcher")).not.toBeInTheDocument();
+    expect(composer).toHaveFocus();
+  });
+});

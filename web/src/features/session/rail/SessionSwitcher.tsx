@@ -87,7 +87,7 @@ function SwitcherPreview({ row }: { row: RailActiveSession }) {
         <blockquote className="session-switcher__reply">{reply}</blockquote>
       ) : loading ? (
         <p className="session-switcher__empty">Loading…</p>
-      ) : (
+      ) : askIsNewer ? null : (
         <p className="session-switcher__empty">No reply yet.</p>
       )}
       {askIsNewer ? null : askBlock}
@@ -114,12 +114,6 @@ export function SessionSwitcher({
   const selected = matches[Math.min(highlight, Math.max(0, matches.length - 1))] ?? null;
   const inputRef = useRef<HTMLInputElement>(null);
   useEscapeKey(onClose, true);
-
-  // Focus goes back where it was when the switcher closes.
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return () => previous?.focus();
-  }, []);
 
   // The keyboard selection never leaves the visible list.
   useEffect(() => {

@@ -3,7 +3,8 @@
  * presets plus four controls, kept per device. Terminal is the default: the
  * transcript fills the main column at terminal density. Comfortable is the
  * reading layout this view had before (a ~760px column, 15.5px prose, 1.6
- * leading), reproduced exactly by setting no overrides at all.
+ * leading) on desktop. Every preset emits its size and spacing, so phones
+ * (which have their own smaller base) order the presets the same way.
  */
 import type { CSSProperties } from "react";
 
@@ -86,8 +87,14 @@ const SPACING_VARS: Record<DisplaySpacing, Record<string, string>> = {
     "--tl-item-gap": "0.1em",
     "--tl-msg-pad": "10px",
   },
-  // Today's values; set nothing so the stylesheet's own defaults apply.
-  roomy: {},
+  // The previous desktop values.
+  roomy: {
+    "--tl-prose-leading": "1.6",
+    "--tl-para-gap": "0.6em",
+    "--tl-list-gap": "0.4em",
+    "--tl-item-gap": "0.15em",
+    "--tl-msg-pad": "var(--space-3)",
+  },
 };
 
 const WIDTH_VARS: Record<DisplayWidth, Record<string, string>> = {
@@ -107,17 +114,15 @@ const WIDTH_VARS: Record<DisplayWidth, Record<string, string>> = {
   },
 };
 
-/** Custom properties for the session route; the stylesheet reads them with
- * its old values as fallbacks, so an empty object is the old layout. */
+/** Custom properties for the session route. The stylesheet's fallbacks are
+ * the previous desktop values, which Comfortable sets explicitly. */
 export function displaySettingsStyle(settings: DisplaySettings): CSSProperties {
   const vars: Record<string, string> = {
     ...WIDTH_VARS[settings.width],
     ...SPACING_VARS[settings.spacing],
   };
-  if (settings.size !== 15.5) {
-    vars["--tl-prose-size"] = `${settings.size}px`;
-    vars["--tl-ask-size"] = `${settings.size + 0.5}px`;
-  }
+  vars["--tl-prose-size"] = `${settings.size}px`;
+  vars["--tl-ask-size"] = `${settings.size + 0.5}px`;
   if (settings.font === "mono") {
     vars["--tl-prose-font"] = "var(--font-family-mono)";
   }

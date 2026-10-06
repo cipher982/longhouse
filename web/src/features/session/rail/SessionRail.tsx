@@ -8,7 +8,7 @@
  * entry the unfiltered timeline uses), so the rail adds no endpoint, and no
  * extra fetch when the user arrives from an unfiltered timeline.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router";
 import type { AgentSession } from "@/shared/api/agents";
@@ -112,8 +112,26 @@ function SessionRail({
   const nowMs = useWallClock(true);
   const mac = useMemo(isMacPlatform, []);
   const { data } = useAgentSessions(RAIL_SESSION_FILTERS, { refetchInterval: 30_000 });
-  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpenState] = useState(false);
   const switcherLabel = mac ? "⌘K" : "Ctrl+K";
+  // Focus goes back where it was before the switcher opened (the composer,
+  // a rail row), read before the switcher's own field takes it.
+  const focusBeforeSwitcher = useRef<HTMLElement | null>(null);
+  const setSwitcherOpen = useCallback((next: boolean | ((open: boolean) => boolean)) => {
+    setSwitcherOpenState((open) => {
+      const value = typeof next === "function" ? next(open) : next;
+      if (value && !open) {
+        focusBeforeSwitcher.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      }
+      if (!value && open) {
+        const target = focusBeforeSwitcher.current;
+        focusBeforeSwitcher.current = null;
+        queueMicrotask(() => target?.isConnected && target.focus());
+      }
+      return value;
+    });
+  }, []);
 
   const rows = useMemo(() => {
     const listed = (data?.sessions ?? []).map((card) => rowFromSession(card.head, nowMs));
@@ -157,7 +175,7 @@ function SessionRail({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac, openSession, rows, switcherOpen]);
+  }, [mac, openSession, rows, setSwitcherOpen, switcherOpen]);
 
   return (
     <nav className="session-rail" aria-label="Sessions" data-testid="session-rail">

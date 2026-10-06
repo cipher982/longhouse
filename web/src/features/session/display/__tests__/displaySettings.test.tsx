@@ -32,9 +32,16 @@ describe("display settings", () => {
     window.localStorage.removeItem(DISPLAY_SETTINGS_STORAGE_KEY);
   });
 
-  it("defaults to Terminal and maps Comfortable to no overrides at all", () => {
+  it("defaults to Terminal; Comfortable keeps the old width and sets the old desktop type", () => {
     expect(DEFAULT_DISPLAY_SETTINGS).toEqual(DISPLAY_PRESETS.terminal);
-    expect(displaySettingsStyle(DISPLAY_PRESETS.comfortable)).toEqual({});
+    const comfortable = displaySettingsStyle(DISPLAY_PRESETS.comfortable) as Record<string, string>;
+    expect(comfortable["--tl-tool-max"]).toBeUndefined();
+    expect(comfortable).toMatchObject({
+      "--tl-prose-size": "15.5px",
+      "--tl-ask-size": "16px",
+      "--tl-prose-leading": "1.6",
+      "--tl-para-gap": "0.6em",
+    });
     expect(displaySettingsStyle(DISPLAY_PRESETS.terminal)).toMatchObject({
       "--tl-tool-max": "190ch",
       "--tl-prose-size": "14.5px",

@@ -3118,8 +3118,8 @@
     font-size: 10px;
   }
 
-  /* Phones keep their 13px type for both Terminal (14.5px) and Comfortable
-     (no override), and the size control still steps it from there. */
+  /* Phones run 1.5px under the chosen size: Terminal (14.5px) keeps the
+     13px phone type, and every step of the size control moves it. */
   .tl-msg__body {
     font-size: calc(var(--tl-prose-size, 14.5px) - 1.5px);
     line-height: var(--tl-prose-leading, 1.5);
