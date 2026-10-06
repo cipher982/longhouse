@@ -169,17 +169,13 @@ final class SessionChatUITests: XCTestCase {
         add(collapsed)
 
         command.tap()
-        let loadingNote = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "Loading the full output")).firstMatch
-        XCTAssertTrue(loadingNote.waitForExistence(timeout: Self.patient(5)))
-        let expanding = XCTAttachment(screenshot: app.screenshot())
-        expanding.name = "lite-row-loading"
-        expanding.lifetime = .keepAlways
-        add(expanding)
-
+        // The loading note is transient (the fixture answers in ~0.6 s), so the
+        // test asserts the end state: the whole body, and no note left behind.
         let tail = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "Full body loaded: 40 passed")).firstMatch
         XCTAssertTrue(tail.waitForExistence(timeout: Self.webTranscriptTimeout))
+        let loadingNote = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Loading the full output")).firstMatch
         XCTAssertFalse(loadingNote.exists)
         let loaded = XCTAttachment(screenshot: app.screenshot())
         loaded.name = "lite-row-loaded"
