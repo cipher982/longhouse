@@ -17,6 +17,7 @@ from zerg.catalogd.models import FactHead
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.routers.heartbeat import MachineEvidenceIn
+from tests_lite.live_catalog_harness import provision_live_catalog
 
 FAMILIES = ("run", "process", "activity", "control", "transcript", "readiness", "continuation")
 FACT_COUNT_PER_FAMILY = 32
@@ -221,11 +222,7 @@ def compact(evidence: dict[str, Any]) -> dict[str, Any]:
     compacted = copy.deepcopy(evidence)
     remapped: dict[str, dict[int, int]] = {}
     for family in FAMILIES:
-        referenced = {
-            identity["fact_index"]
-            for identity in evidence["identities"]
-            if identity["fact_family"] == family
-        }
+        referenced = {identity["fact_index"] for identity in evidence["identities"] if identity["fact_family"] == family}
         remapped[family] = {}
         rows = []
         for old_index, fact in enumerate(evidence[family]):
@@ -243,9 +240,33 @@ def _wire_sizes(evidence: dict[str, Any]) -> tuple[int, int]:
     return len(serialized), len(gzip.compress(serialized, compresslevel=5, mtime=0))
 
 
+_FACT_HEAD_FIELDS = (
+    "family",
+    "subject_key",
+    "source",
+    "source_epoch",
+    "session_id",
+    "ordering_mode",
+    "source_seq",
+    "evidence_hash",
+    "observed_at",
+    "valid_until",
+    "value_json",
+    "raw_locator",
+    "updated_commit_seq",
+)
+
+
 def _fact_heads() -> list[dict[str, Any]]:
     rows = _catalog_rows(FactHead.__table__)
-    return sorted(rows, key=lambda row: (row["family"], row["subject_key"]))
+    return sorted(
+        ({field: row[field] for field in _FACT_HEAD_FIELDS} for row in rows),
+        key=lambda row: (row["family"], row["subject_key"], row["source"], row["source_epoch"]),
+    )
+
+
+def _fact_head_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str, str, str, str]]:
+    return {(row["family"], row["subject_key"], row["source"], row["source_epoch"], row["evidence_hash"]) for row in rows}
 
 
 def test_compacted_machine_evidence_preserves_facts_and_heartbeat_heads(live_catalog, live_catalog_client):
@@ -253,14 +274,13 @@ def test_compacted_machine_evidence_preserves_facts_and_heartbeat_heads(live_cat
     compacted = compact(full)
 
     assert all(len(full[family]) == FACT_COUNT_PER_FAMILY for family in FAMILIES)
-    assert all(
-        len(full[family]) > sum(identity["fact_family"] == family for identity in full["identities"])
-        for family in FAMILIES
-    )
-    assert all(identity["fact_index"] == 0 or identity["fact_index"] == 1 for identity in compacted["identities"])
+    assert all(len(full[family]) > sum(identity["fact_family"] == family for identity in full["identities"]) for family in FAMILIES)
+    assert all(identity["fact_index"] in (0, 1) for identity in compacted["identities"])
     assert len(validate_machine_evidence_identities(full)) == len(full["identities"])
     assert len(validate_machine_evidence_identities(compacted)) == len(compacted["identities"])
-    assert reducer_facts_from_machine_evidence(full) == reducer_facts_from_machine_evidence(compacted)
+    full_facts = reducer_facts_from_machine_evidence(full)
+    compacted_facts = reducer_facts_from_machine_evidence(compacted)
+    assert full_facts == compacted_facts
     MachineEvidenceIn.model_validate(full)
     MachineEvidenceIn.model_validate(compacted)
 
@@ -269,6 +289,7 @@ def test_compacted_machine_evidence_preserves_facts_and_heartbeat_heads(live_cat
     assert full_raw_size > compact_raw_size
     assert full_gzip_size > compact_gzip_size
 
+    expected_head_keys = {(fact.family, fact.subject_key, fact.source, fact.source_epoch, fact.evidence_hash) for fact in full_facts}
     headers = _headers(live_catalog, "evidence-compaction-machine")
     full_response = live_catalog_client.post(
         "/agents/heartbeat",
@@ -279,12 +300,20 @@ def test_compacted_machine_evidence_preserves_facts_and_heartbeat_heads(live_cat
     full_disposition = full_response.headers["x-longhouse-machine-evidence"]
     assert full_disposition == "applied"
     full_heads = _fact_heads()
+    assert len(full_heads) == len(expected_head_keys)
+    assert _fact_head_keys(full_heads) == expected_head_keys
 
-    compact_response = live_catalog_client.post(
-        "/agents/heartbeat",
-        headers=headers,
-        json={"version": "evidence-compaction-compact", "daemon_pid": 42, "machine_evidence": compacted},
-    )
-    assert compact_response.status_code == 204, compact_response.text
-    assert compact_response.headers["x-longhouse-machine-evidence"] == full_disposition
-    assert _fact_heads() == full_heads
+    with provision_live_catalog() as compact_catalog:
+        compact_headers = _headers(compact_catalog, "evidence-compaction-machine")
+        with compact_catalog.http_client() as compact_client:
+            compact_response = compact_client.post(
+                "/agents/heartbeat",
+                headers=compact_headers,
+                json={"version": "evidence-compaction-compact", "daemon_pid": 42, "machine_evidence": compacted},
+            )
+        assert compact_response.status_code == 204, compact_response.text
+        assert compact_response.headers["x-longhouse-machine-evidence"] == full_disposition
+        compact_heads = _fact_heads()
+        assert len(compact_heads) == len(expected_head_keys)
+        assert _fact_head_keys(compact_heads) == expected_head_keys
+        assert compact_heads == full_heads
