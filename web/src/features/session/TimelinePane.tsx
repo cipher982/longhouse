@@ -1427,8 +1427,9 @@ export function TimelinePane({
       });
     });
   }, [items, eventFilter, debouncedSearch]);
-  // A lite page holds long tool output as its preview, so search can't see its
-  // elided middle; say so beside the match count rather than imply full coverage.
+  // A lite page holds long tool calls (input and output) as their previews, so
+  // search can't see what was cut; say so beside the match count rather than
+  // imply full coverage.
   const searchCoversPreviewsOnly = useMemo(
     () =>
       items.some((item) =>
@@ -1658,7 +1659,7 @@ export function TimelinePane({
               <div className="timeline-pane__match-count">
                 {filteredItems.length} match{filteredItems.length === 1 ? "" : "es"}
                 {searchCoversPreviewsOnly ? (
-                  <span data-testid="search-preview-note"> · long tool output searched by its preview</span>
+                  <span data-testid="search-preview-note"> · long tool calls searched by their preview</span>
                 ) : null}
               </div>
             ) : null}
