@@ -92,8 +92,12 @@ def _matches(value: object, expected: object, path: str, errors: list[str]) -> N
                 errors.append(f"{path}.{key} is required")
             else:
                 _matches(value[key], expected_value, f"{path}.{key}", errors)
+        unexpected_keys = value.keys() - expected.keys()
+        if unexpected_keys:
+            keys = ", ".join(sorted(map(str, unexpected_keys)))
+            errors.append(f"{path} has unexpected keys: {keys}")
         return
-    if value != expected:
+    if type(value) is not type(expected) or value != expected:
         errors.append(f"{path} must equal {expected!r}")
 
 
