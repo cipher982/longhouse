@@ -319,6 +319,52 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         }
     }
 
+    /// Scroll back through history the way a reader does: open the top
+    /// sessions and flick toward older messages repeatedly. The app logs how
+    /// long each flick sat at the top of what was loaded (`TranscriptScroll`
+    /// `history_wall`); `scripts/ops/ios_scroll_up.sh` summarizes those. The
+    /// times printed here include XCUITest's own waits and are ceilings.
+    func testLiveScrollUpHistory() throws {
+        guard ProcessInfo.processInfo.environment["LONGHOUSE_RUN_LIVE_SCROLL_UP"] == "1" else {
+            throw XCTSkip("The live scroll-up run is opt-in.")
+        }
+        let environment = ProcessInfo.processInfo.environment
+        let app = XCUIApplication()
+        for key in ["LONGHOUSE_HEADLESS_SERVER_URL", "LONGHOUSE_HEADLESS_AUTH_TOKEN"] {
+            if let value = environment[key], !value.isEmpty {
+                app.launchEnvironment[key] = value
+            }
+        }
+        addFailureScreenshot(app)
+        let sessions = Int(environment["LONGHOUSE_SCROLL_UP_SESSIONS"] ?? "") ?? 3
+        let flicks = Int(environment["LONGHOUSE_SCROLL_UP_FLICKS"] ?? "") ?? 16
+
+        app.launch()
+        let rows = app.buttons.matching(identifier: "timeline-session-row")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 30), "Signed-in timeline did not appear.")
+
+        var flickMs: [Int] = []
+        for index in 0..<min(sessions, rows.count) {
+            let row = rows.element(boundBy: index)
+            guard row.waitForExistence(timeout: 10), row.isHittable else { continue }
+            row.tap()
+            let transcript = app.descendants(matching: .any)["session-chat-transcript"]
+            XCTAssertTrue(transcript.waitForExistence(timeout: 20), "Transcript did not open.")
+            // Let the first frame and its older-page prefetch settle, as a
+            // reader glancing at the latest turn would.
+            Thread.sleep(forTimeInterval: 2)
+            for _ in 0..<flicks {
+                let startedAt = Date()
+                transcript.swipeDown(velocity: .fast)
+                flickMs.append(elapsedMs(since: startedAt))
+                Thread.sleep(forTimeInterval: 0.4)
+            }
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
+        }
+        print("IOS_LIVE_SCROLL_UP_METRIC flick_ms=\(flickMs)")
+    }
+
     /// Physical-device dogfood profiler. This is intentionally opt-in because
     /// it uses the installed app's real authenticated state and creates one real
     /// empty Console session. Run only with both environment variables set.
