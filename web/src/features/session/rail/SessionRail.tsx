@@ -18,6 +18,7 @@ import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import { getSessionCardText } from "@/shared/session/sessionLabels";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
+import { SearchIcon } from "@/shared/ui/icons";
 import { getSessionHeaderState } from "../sessionHeaderState";
 import {
   SessionRailContext,
@@ -25,6 +26,7 @@ import {
   type SessionRailContextValue,
 } from "./sessionRailContext";
 import { useRailPrefetch } from "./useRailPrefetch";
+import { SessionSwitcher } from "./SessionSwitcher";
 import "./session-rail.css";
 
 /** The timeline's default first page; sharing its filters shares its cache. */
@@ -53,6 +55,15 @@ export function railHotkeyIndex(
 
 export function railHotkeyLabel(index: number, mac: boolean): string {
   return mac ? `⌃${index + 1}` : `Alt+${index + 1}`;
+}
+
+/** ⌘K on a Mac, Ctrl+K elsewhere: pages may take this one. */
+export function isSwitcherHotkey(
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "altKey" | "metaKey" | "shiftKey">,
+  mac: boolean,
+): boolean {
+  if (event.key.toLowerCase() !== "k" || event.altKey || event.shiftKey) return false;
+  return mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
 type RailRow = {
@@ -91,6 +102,8 @@ function SessionRail({
   const nowMs = useWallClock(true);
   const mac = useMemo(isMacPlatform, []);
   const { data } = useAgentSessions(RAIL_SESSION_FILTERS, { refetchInterval: 30_000 });
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcherLabel = mac ? "⌘K" : "Ctrl+K";
 
   const rows = useMemo(() => {
     const listed = (data?.sessions ?? []).map((card) => rowFromSession(card.head, nowMs));
@@ -116,6 +129,11 @@ function SessionRail({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isSwitcherHotkey(event, mac)) {
+        event.preventDefault();
+        setSwitcherOpen((open) => !open);
+        return;
+      }
       const index = railHotkeyIndex(event, mac);
       if (index == null || index >= Math.min(rows.length, RAIL_HOTKEY_COUNT)) return;
       event.preventDefault();
@@ -129,10 +147,37 @@ function SessionRail({
     <nav className="session-rail" aria-label="Sessions" data-testid="session-rail">
       <div className="session-rail__head">
         <span>Sessions</span>
-        <Link to={returnTo} className="session-rail__all">
-          Timeline
-        </Link>
+        <span className="session-rail__head-actions">
+          <button
+            type="button"
+            className="session-rail__find"
+            onClick={() => setSwitcherOpen(true)}
+            title={`Switch session (${switcherLabel})`}
+            data-testid="session-switcher-open"
+          >
+            <SearchIcon width={12} height={12} />
+            {switcherLabel}
+          </button>
+          <Link to={returnTo} className="session-rail__all">
+            Timeline
+          </Link>
+        </span>
       </div>
+      {switcherOpen
+        ? createPortal(
+            <SessionSwitcher
+              rows={rows}
+              activeSessionId={activeSessionId}
+              shortcutLabel={switcherLabel}
+              onClose={() => setSwitcherOpen(false)}
+              onOpen={(sessionId) => {
+                setSwitcherOpen(false);
+                openSession(sessionId);
+              }}
+            />,
+            document.body,
+          )
+        : null}
       <ol className="session-rail__list">
         {rows.map((row, index) => {
           const active = row.id === activeSessionId;

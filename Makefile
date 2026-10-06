@@ -1274,8 +1274,8 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
-ui-capture: ## Render a web page to PNG (PAGE=, SCENE=); fixture scenes need nothing running, Vite is started and stopped for you
-	@bunx tsx scripts/ui/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),) $(if $(WHEEL_MAP),--wheel-map,) $(if $(CSS_VARIANT),--css-variant=$(CSS_VARIANT),)
+ui-capture: ## Render a web page to PNG (PAGE=, SCENE=, ACTION="click:<sel>;press:<key>"); fixture scenes need nothing running, Vite is started and stopped for you
+	@bunx tsx scripts/ui/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),) $(if $(WHEEL_MAP),--wheel-map,) $(if $(CSS_VARIANT),--css-variant=$(CSS_VARIANT),) $(if $(ACTION),--action="$(ACTION)",)
 
 ui-gallery: ## Render every fixture page/scene at desktop, wide and phone sizes into one HTML contact sheet (ONLY=substring, JOBS=n)
 	@bunx tsx scripts/ui/ui-gallery.ts $(if $(ONLY),--only=$(ONLY),) $(if $(JOBS),--jobs=$(JOBS),) $(if $(OUTPUT),--output=$(OUTPUT),)

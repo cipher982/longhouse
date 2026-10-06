@@ -14,7 +14,11 @@
  * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
  *
  * Usage:
- *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map] [--css-variant=X]
+ *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map] [--css-variant=X] [--action=step;step]
+ *
+ * --action runs steps after the page settles and before the screenshot, so a
+ * frame can show an opened popover or dialog: `click:<selector>` or
+ * `press:<key>` (Playwright key names, e.g. `press:Meta+k`), separated by ";".
  *
  * --css-variant injects scripts/ui/css-variants/<X>.css after the page loads:
  * a layout experiment to look at, never shipped CSS (e.g. terminal density).
@@ -229,6 +233,7 @@ interface Options {
   probe: string[];
   wheelMap: boolean;
   cssVariant: string | null;
+  actions: string[];
 }
 
 type A11yFormat = "json" | "yaml" | "none";
@@ -267,6 +272,7 @@ function parseArgs(): Options {
   const all = args.includes("--all");
   const wheelMap = args.includes("--wheel-map");
   const cssVariant = args.find((a) => a.startsWith("--css-variant="))?.slice("--css-variant=".length) || null;
+  const actionArg = args.find((a) => a.startsWith("--action="))?.slice("--action=".length) ?? "";
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const parsedViewport = parseViewport(viewportArg);
@@ -284,6 +290,7 @@ function parseArgs(): Options {
     probe: probeArg ? probeArg.split(",").map((s) => s.trim()).filter(Boolean) : [],
     wheelMap,
     cssVariant,
+    actions: actionArg.split(";").map((step) => step.trim()).filter(Boolean),
   };
 }
 
@@ -1205,6 +1212,7 @@ async function captureBundle(
   probe: string[] = [],
   wheelMap = false,
   cssVariant: string | null = null,
+  actions: string[] = [],
 ): Promise<CaptureResult> {
   const query = scene === "landing-search" ? `?query=${encodeURIComponent(LANDING_SEARCH_QUERY)}` : "";
   const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}${query}`;
@@ -1312,6 +1320,16 @@ async function captureBundle(
   if (scene === "session-resume" && pageName === "session-detail") {
     await page.getByRole("button", { name: /Show resume command/ }).click();
     await page.getByRole("dialog").waitFor();
+  }
+
+  for (const step of actions) {
+    const separator = step.indexOf(":");
+    const verb = step.slice(0, separator);
+    const target = step.slice(separator + 1);
+    if (verb === "click") await page.click(target);
+    else if (verb === "press") await page.keyboard.press(target);
+    else throw new Error(`Unknown --action step "${step}"; use click:<selector> or press:<key>`);
+    await page.waitForTimeout(150);
   }
 
   // Capture screenshot
@@ -1497,6 +1515,7 @@ async function main() {
           opts.probe,
           opts.wheelMap,
           opts.cssVariant,
+          opts.actions,
         );
       } catch (error) {
         const { message, detail } = formatError(error);

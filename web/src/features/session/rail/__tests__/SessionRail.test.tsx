@@ -4,7 +4,9 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, TimelineSessionsListResponse } from "@/shared/api/agents";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
-import { SessionRailFrame, railHotkeyIndex, railHotkeyLabel } from "../SessionRail";
+import { SessionRailFrame, isSwitcherHotkey, railHotkeyIndex, railHotkeyLabel } from "../SessionRail";
+import { filterSwitcherRows, previewFromWorkspace } from "../SessionSwitcher";
+import type { AgentSessionWorkspaceResponse } from "@/shared/api/agents";
 import { RAIL_PREFETCH_COUNT, railPrefetchAllowed } from "../useRailPrefetch";
 
 const fetchAgentSessionsMock = vi.hoisted(() => vi.fn());
@@ -180,5 +182,73 @@ describe("SessionRailFrame", () => {
     } finally {
       delete (window.navigator as { connection?: unknown }).connection;
     }
+  });
+});
+
+describe("session switcher", () => {
+  const platform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+
+  beforeEach(() => {
+    Object.defineProperty(window.navigator, "platform", { value: "MacIntel", configurable: true });
+    fetchAgentSessionsMock.mockResolvedValue(list(["a", "b", "c"]));
+    fetchWorkspaceMock.mockResolvedValue({
+      projection: {
+        items: [
+          { kind: "event", event: { role: "user", content_text: "Ship it?", tool_name: null } },
+          { kind: "event", event: { role: "assistant", content_text: "Shipped in abc123.", tool_name: null } },
+        ],
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    if (platform) Object.defineProperty(window.navigator, "platform", platform);
+    else delete (window.navigator as { platform?: string }).platform;
+  });
+
+  it("takes Command-K on a Mac and Control-K elsewhere", () => {
+    const key = (mods: Partial<KeyboardEvent>) => ({ key: "k", ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });
+    expect(isSwitcherHotkey(key({ metaKey: true }), true)).toBe(true);
+    expect(isSwitcherHotkey(key({ ctrlKey: true }), true)).toBe(false);
+    expect(isSwitcherHotkey(key({ ctrlKey: true }), false)).toBe(true);
+    expect(isSwitcherHotkey(key({ metaKey: true, shiftKey: true }), true)).toBe(false);
+  });
+
+  it("filters on every term across title, machine and provider", () => {
+    const rows = [
+      { title: "Fix the flaky reconnect test", host: "cinder", provider: "codex" },
+      { title: "OMP hang", host: "cube", provider: "omp" },
+    ];
+    expect(filterSwitcherRows(rows, "cube hang")).toEqual([rows[1]]);
+    expect(filterSwitcherRows(rows, "  ")).toEqual(rows);
+    expect(filterSwitcherRows(rows, "codex cube")).toEqual([]);
+  });
+
+  it("previews the newest ask and reply, skipping tool rows", () => {
+    const workspace = {
+      projection: {
+        items: [
+          { kind: "event", event: { role: "user", content_text: "first ask", tool_name: null } },
+          { kind: "event", event: { role: "assistant", content_text: "reply", tool_name: null } },
+          { kind: "event", event: { role: "assistant", content_text: "tool chatter", tool_name: "Bash" } },
+        ],
+      },
+    } as unknown as AgentSessionWorkspaceResponse;
+    expect(previewFromWorkspace(workspace)).toEqual({ ask: "first ask", reply: "reply" });
+    expect(previewFromWorkspace(undefined)).toEqual({ ask: null, reply: null });
+  });
+
+  it("opens on Command-K, filters, previews and opens the match on Enter", async () => {
+    renderRail("a");
+    await screen.findAllByTestId("session-rail-row");
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const input = screen.getByLabelText("Filter sessions");
+    fireEvent.change(input, { target: { value: "session b" } });
+    expect(screen.getAllByTestId("session-switcher-row")).toHaveLength(1);
+    expect(await screen.findByText("Shipped in abc123.")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(navigateMock).toHaveBeenCalledWith("/timeline/b", { state: { from: "/timeline" } });
+    expect(screen.queryByTestId("session-switcher")).not.toBeInTheDocument();
   });
 });
