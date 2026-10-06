@@ -390,20 +390,27 @@ impl ShipperClient {
         );
         Ok(())
     }
+    /// Wait out both the host-wide restart pause and this lane's cooldown.
+    /// Both are re-read after every sleep, so a pause or a longer cooldown
+    /// recorded by a concurrent request while this one waits still applies.
     async fn wait_for_retry_after(&self, lane: &str) {
-        self.wait_for_host_retry_after().await;
-        let until = self.lane_retry_after.lock().get(lane).copied();
-        if let Some(until) = until {
-            let remaining = until.saturating_duration_since(Instant::now());
-            if !remaining.is_zero() {
-                tokio::time::sleep(remaining.min(MAX_LANE_RETRY_AFTER)).await;
-            }
-            let mut windows = self.lane_retry_after.lock();
-            if windows
-                .get(lane)
-                .is_some_and(|until| *until <= Instant::now())
-            {
-                windows.remove(lane);
+        loop {
+            self.wait_for_host_retry_after().await;
+            let remaining = {
+                let now = Instant::now();
+                let mut windows = self.lane_retry_after.lock();
+                // Prune every expired window, not only this lane's, so keys of
+                // lanes that are never revisited cannot accumulate.
+                windows.retain(|_, until| *until > now);
+                windows
+                    .get(lane)
+                    .map(|until| until.saturating_duration_since(now))
+            };
+            match remaining {
+                Some(remaining) if !remaining.is_zero() => {
+                    tokio::time::sleep(remaining.min(MAX_LANE_RETRY_AFTER)).await;
+                }
+                _ => return,
             }
         }
     }
@@ -810,7 +817,15 @@ impl ShipperClient {
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> Result<()> {
-        self.wait_for_retry_after(path_suffix).await;
+        // Media objects have per-object URLs; pace them by route and storage
+        // lane, so a refusal slows every same-lane upload and only those.
+        let storage_lane = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(STORAGE_V2_LANE_HEADER))
+            .map(|(_, value)| value.as_str())
+            .unwrap_or("default");
+        let retry_lane = format!("media-put#{storage_lane}");
+        self.wait_for_retry_after(&retry_lane).await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let mut request = self
             .client
@@ -833,7 +848,7 @@ impl ShipperClient {
         self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            self.note_rejection(path_suffix, status.as_u16(), &response_headers, &body);
+            self.note_rejection(&retry_lane, status.as_u16(), &response_headers, &body);
             anyhow::bail!("PUT returned {status}: {body}");
         }
         self.host_link.observe_serving_evidence(runtime_epoch);
