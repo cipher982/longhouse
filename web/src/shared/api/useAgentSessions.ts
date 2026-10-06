@@ -9,6 +9,7 @@ import {
   useQuery,
   keepPreviousData,
   type InfiniteData,
+  type QueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query";
 import {
@@ -157,10 +158,124 @@ export function useAgentSessionProjectionInfinite(
     initialData: initialPage
       ? { pages: [initialPage], pageParams: [{ anchor: "tail" }] }
       : undefined,
-    refetchInterval,
+    // A built-in refetch restarts from the oldest loaded page and drops the
+    // rest (see refreshAgentSessionProjectionTail), so once the reader has
+    // scrolled up, only refreshAgentSessionProjectionTail may refresh it.
+    refetchInterval: (query) => (holdsOlderPages(query.state.data) ? false : (refetchInterval ?? false)),
+    refetchOnMount: (query) => !holdsOlderPages(query.state.data),
+    refetchOnWindowFocus: (query) => !holdsOlderPages(query.state.data),
+    refetchOnReconnect: (query) => !holdsOlderPages(query.state.data),
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });
+}
+
+type ProjectionInfiniteKey = [
+  "agent-session-projection-infinite",
+  string,
+  { limit: number; branch_mode: "head" | "all" },
+];
+
+export function holdsOlderPages(data: InfiniteData<AgentSessionProjectionResponse> | undefined): boolean {
+  return (data?.pages.length ?? 0) > 1;
+}
+
+function projectionItemKey(item: AgentSessionProjectionResponse["items"][number]): string {
+  if (item.kind === "event" && item.event) return `event:${item.event.id}`;
+  if (item.kind === "action" && item.action) return `action:${item.action.id}`;
+  return `seam:${item.session_id}:${item.timestamp}`;
+}
+
+/**
+ * Replaces the newest window of an already-paged transcript, keeping the older
+ * pages the reader scrolled up through. Returns null when the old pages can't
+ * be stitched to the new tail (another generation or head session, or the
+ * window moved past the old tail entirely), which means: start over from the
+ * tail.
+ */
+export function stitchProjectionTail(
+  data: InfiniteData<AgentSessionProjectionResponse>,
+  freshTail: AgentSessionProjectionResponse,
+): InfiniteData<AgentSessionProjectionResponse> | null {
+  const oldTail = data.pages[data.pages.length - 1];
+  if (
+    !oldTail ||
+    oldTail.generation_id !== freshTail.generation_id ||
+    oldTail.head_session_id !== freshTail.head_session_id
+  ) {
+    return null;
+  }
+  const firstFreshKey = freshTail.items[0] ? projectionItemKey(freshTail.items[0]) : null;
+  const overlapAt = firstFreshKey
+    ? oldTail.items.findIndex((item) => projectionItemKey(item) === firstFreshKey)
+    : -1;
+  if (overlapAt < 0) return null;
+
+  // Rows that slid out of the window stay as history; rows still in it come
+  // from the fresh page so their state (a tool call finishing) updates.
+  const slidOut = oldTail.items.slice(0, overlapAt);
+  const olderPages = data.pages.slice(0, -1);
+  const olderParams = data.pageParams.slice(0, -1);
+  return {
+    pages: slidOut.length
+      ? [...olderPages, { ...oldTail, items: slidOut }, freshTail]
+      : [...olderPages, freshTail],
+    pageParams: slidOut.length
+      ? [...olderParams, data.pageParams[data.pageParams.length - 1], { anchor: "tail" }]
+      : [...olderParams, { anchor: "tail" }],
+  };
+}
+
+function projectionInfiniteQueries(queryClient: QueryClient, sessionId: string) {
+  return queryClient
+    .getQueryCache()
+    .findAll({ queryKey: ["agent-session-projection-infinite", sessionId] });
+}
+
+export function sessionHoldsOlderProjectionPages(queryClient: QueryClient, sessionId: string): boolean {
+  return projectionInfiniteQueries(queryClient, sessionId).some((query) =>
+    holdsOlderPages(query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined),
+  );
+}
+
+/**
+ * Brings a session's transcript up to date after a wake or a send.
+ *
+ * A plain invalidation refetches an infinite query from its first stored page
+ * param, which here is the oldest page the reader scrolled up to, and then
+ * stops (there is no "next" page). So after scrolling up, a wake used to throw
+ * away the live tail and every other page. A query holding one page is still
+ * invalidated normally; one holding older pages refetches only the tail.
+ */
+export async function refreshAgentSessionProjectionTail(
+  queryClient: QueryClient,
+  sessionId: string,
+): Promise<void> {
+  await Promise.all(
+    projectionInfiniteQueries(queryClient, sessionId).map(async (query) => {
+      const queryKey = query.queryKey as ProjectionInfiniteKey;
+      const data = query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined;
+      if (!holdsOlderPages(data)) {
+        await queryClient.invalidateQueries({ queryKey, exact: true }, { cancelRefetch: false });
+        return;
+      }
+      const { limit, branch_mode } = queryKey[2];
+      const freshTail = await fetchAgentSessionProjection(sessionId, {
+        limit,
+        anchor: "tail",
+        branch_mode,
+      });
+      queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
+        if (!current) return current;
+        return (
+          stitchProjectionTail(current, freshTail) ?? {
+            pages: [freshTail],
+            pageParams: [{ anchor: "tail" }],
+          }
+        );
+      });
+    }),
+  );
 }
 
 /**

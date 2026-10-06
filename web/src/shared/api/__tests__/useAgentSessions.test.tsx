@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   agentSessionWorkspaceQueryOptions,
+  refreshAgentSessionProjectionTail,
   useAgentSessionProjectionInfinite,
   useAgentSessionWorkspace,
 } from "../useAgentSessions";
@@ -187,6 +188,97 @@ describe("useAgentSessionProjectionInfinite", () => {
         branch_mode: "head",
       });
     });
+  });
+});
+
+function makeCursorPage(
+  eventIds: number[],
+  { nextCursor, generationId = "gen-1" }: { nextCursor: string | null; generationId?: string },
+): AgentSessionProjectionResponse {
+  return {
+    ...makeProjectionPage({ total: 7, pageOffset: 0, startEventId: eventIds[0] ?? 0, count: eventIds.length }),
+    generation_id: generationId,
+    has_more: nextCursor !== null,
+    next_cursor: nextCursor,
+  };
+}
+
+describe("refreshAgentSessionProjectionTail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function scrolledUpTranscript() {
+    // Server: events 1-6 in pages of two, cursors walk backwards from the tail.
+    const server = {
+      tail: [5, 6],
+      generationId: "gen-1",
+    };
+    apiMocks.fetchAgentSessionProjection.mockImplementation(
+      async (_sessionId: string, options: { cursor?: string }) => {
+        if (options.cursor === "cursor-3") return makeCursorPage([3, 4], { nextCursor: "cursor-1" });
+        if (options.cursor === "cursor-1") return makeCursorPage([1, 2], { nextCursor: null });
+        return makeCursorPage(server.tail, {
+          nextCursor: "cursor-3",
+          generationId: server.generationId,
+        });
+      },
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(
+      () =>
+        useAgentSessionProjectionInfinite("session-1", {
+          limit: 2,
+          initialPage: makeCursorPage([5, 6], { nextCursor: "cursor-3" }),
+        }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    await act(async () => {
+      await result.current.fetchPreviousPage();
+    });
+    await act(async () => {
+      await result.current.fetchPreviousPage();
+    });
+    await waitFor(() => expect(result.current.data?.pages).toHaveLength(3));
+    apiMocks.fetchAgentSessionProjection.mockClear();
+    return { queryClient, result, server };
+  }
+
+  const eventIds = (pages: AgentSessionProjectionResponse[] | undefined) =>
+    pages?.flatMap((page) => page.items.map((item) => item.event?.id));
+
+  it("refreshes only the tail after the reader scrolled up, keeping older pages", async () => {
+    const { queryClient, result, server } = await scrolledUpTranscript();
+    server.tail = [6, 7];
+
+    await act(async () => {
+      await refreshAgentSessionProjectionTail(queryClient, "session-1");
+    });
+
+    // One request, for the tail. A plain invalidation re-ran the oldest page's
+    // cursor instead and left only events 1-2 on screen.
+    expect(apiMocks.fetchAgentSessionProjection).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchAgentSessionProjection).toHaveBeenCalledWith("session-1", {
+      limit: 2,
+      anchor: "tail",
+      branch_mode: "head",
+    });
+    await waitFor(() => expect(eventIds(result.current.data?.pages)).toEqual([1, 2, 3, 4, 5, 6, 7]));
+    // Event 6 comes from the fresh page, not the stale one.
+    expect(result.current.data?.pages.at(-1)?.items.map((item) => item.event?.id)).toEqual([6, 7]);
+  });
+
+  it("starts over from the tail when the projection generation changed", async () => {
+    const { queryClient, result, server } = await scrolledUpTranscript();
+    server.generationId = "gen-2";
+
+    await act(async () => {
+      await refreshAgentSessionProjectionTail(queryClient, "session-1");
+    });
+
+    expect(apiMocks.fetchAgentSessionProjection).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(eventIds(result.current.data?.pages)).toEqual([5, 6]));
   });
 });
 

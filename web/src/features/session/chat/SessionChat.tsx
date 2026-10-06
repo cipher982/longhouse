@@ -31,6 +31,7 @@ import {
   type SessionLockInfo,
 } from "@/shared/api/index";
 import type { AgentSession } from "@/shared/api/agents";
+import { refreshAgentSessionProjectionTail } from "@/shared/api/useAgentSessions";
 import type {
   ManagedLaunchSuggestion,
   TimelineItem,
@@ -776,9 +777,7 @@ export function SessionChat({
       queryClient.invalidateQueries({
         queryKey: ["agent-session-thread", session.id],
       }),
-      queryClient.invalidateQueries({
-        queryKey: ["agent-session-projection-infinite", session.id],
-      }),
+      refreshAgentSessionProjectionTail(queryClient, session.id),
       queryClient.invalidateQueries({
         queryKey: ["agent-session-events", session.id],
       }),

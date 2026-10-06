@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  holdsOlderPages,
+  refreshAgentSessionProjectionTail,
+  sessionHoldsOlderProjectionPages,
   useAgentSessionProjectionInfinite,
   useAgentSessionWorkspace,
 } from "@/shared/api/useAgentSessions";
@@ -267,8 +270,9 @@ export function useSessionWorkspace(
       ["agent-session-thread", sessionId],
       ["agent-sessions"],
     ] as const;
+    // The paged transcript is refreshed by refreshAgentSessionProjectionTail,
+    // not invalidated: an invalidation would drop the pages above the tail.
     const transcriptRefreshQueryKeys = [
-      ["agent-session-projection-infinite", sessionId],
       ["agent-session-events", sessionId],
       ["agent-session-events-infinite", sessionId],
       ["session-subagents", sessionId],
@@ -286,6 +290,7 @@ export function useSessionWorkspace(
       base: { keys: baseRefreshQueryKeys, inFlight: false, queued: false },
       transcript: {
         keys: transcriptRefreshQueryKeys,
+        refreshProjectionTail: true,
         inFlight: false,
         queued: false,
         retirePreview: false,
@@ -329,6 +334,7 @@ export function useSessionWorkspace(
     };
     const runLane = (lane: {
       keys: readonly (readonly unknown[])[];
+      refreshProjectionTail?: boolean;
       inFlight: boolean;
       queued: boolean;
       retirePreview?: boolean;
@@ -338,11 +344,14 @@ export function useSessionWorkspace(
         return;
       }
       lane.inFlight = true;
-      void Promise.all(
-        lane.keys.map((queryKey) =>
+      void Promise.all([
+        ...lane.keys.map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
         ),
-      ).finally(() => {
+        ...(lane.refreshProjectionTail
+          ? [refreshAgentSessionProjectionTail(queryClient, sessionId)]
+          : []),
+      ]).finally(() => {
         lane.inFlight = false;
         if (disposed) return;
         if (lane.queued) {
@@ -358,6 +367,12 @@ export function useSessionWorkspace(
       runLane(lanes.base);
       if (includeTranscript) runLane(lanes.transcript);
     };
+    // A transcript paged above its tail opts out of mount and focus refetches
+    // (they would drop those pages), so reopening or refocusing the session
+    // refreshes its tail here instead. Session open stays a durable refresh.
+    if (sessionHoldsOlderProjectionPages(queryClient, sessionId)) {
+      runLane(lanes.transcript);
+    }
 
     const cleanup = connectSessionWorkspaceStream(
       sessionId,
@@ -493,6 +508,12 @@ export function useSessionWorkspace(
       ),
     };
   }, [workspaceData?.thread, sessionId, streamTranscriptPreview]);
+  const projectionFallbackPollMs =
+    streamConnected ||
+    !documentVisible ||
+    !shouldRefreshWorkspaceSession(workspaceData?.session)
+      ? false
+      : WORKSPACE_FALLBACK_REFRESH_MS;
   const {
     data: projectionPagesData,
     isLoading: projectionLoading,
@@ -505,13 +526,20 @@ export function useSessionWorkspace(
     branch_mode: branchMode,
     enabled: Boolean(workspaceData),
     initialPage: workspaceData?.projection ?? null,
-    refetchInterval:
-      streamConnected ||
-      !documentVisible ||
-      !shouldRefreshWorkspaceSession(workspaceData?.session)
-        ? false
-        : WORKSPACE_FALLBACK_REFRESH_MS,
+    refetchInterval: projectionFallbackPollMs,
   });
+  // The query's own poll stands down once older pages are loaded; keep the
+  // same cadence for the tail alone.
+  const holdsOlderProjectionPages = holdsOlderPages(projectionPagesData);
+  useEffect(() => {
+    if (!sessionId || !projectionFallbackPollMs || !holdsOlderProjectionPages) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshAgentSessionProjectionTail(queryClient, sessionId);
+    }, projectionFallbackPollMs);
+    return () => window.clearInterval(timer);
+  }, [sessionId, projectionFallbackPollMs, holdsOlderProjectionPages, queryClient]);
 
   const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(
     null,

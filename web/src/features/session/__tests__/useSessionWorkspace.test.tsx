@@ -6,6 +6,9 @@ import { makeSessionStateFacts } from "@/shared/test/sessionState";
 const agentSessionMocks = vi.hoisted(() => ({
   useAgentSessionWorkspace: vi.fn(),
   useAgentSessionProjectionInfinite: vi.fn(),
+  holdsOlderPages: vi.fn(() => false),
+  refreshAgentSessionProjectionTail: vi.fn(() => Promise.resolve()),
+  sessionHoldsOlderProjectionPages: vi.fn(() => false),
 }));
 const visibilityMocks = vi.hoisted(() => ({
   useDocumentVisible: vi.fn(),
