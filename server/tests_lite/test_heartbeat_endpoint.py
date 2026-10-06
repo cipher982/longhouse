@@ -1245,7 +1245,9 @@ def test_heartbeat_budget_uses_normalized_size_not_raw_bytes(live_catalog, live_
     )
 
     assert response.status_code == 204, response.text
-    assert response.headers["x-longhouse-machine-evidence"] != "oversize_evidence"
+    # Schema v1 evidence reaches catalogd, which answers unsupported_schema; any
+    # pre-catalog refusal (oversize, rejected) would name itself instead.
+    assert response.headers["x-longhouse-machine-evidence"] == "unsupported_schema"
     assert _one_stamp(device_id)["version"] == "budget-boundary"
 
 
