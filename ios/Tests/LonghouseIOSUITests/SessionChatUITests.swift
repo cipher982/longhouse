@@ -153,6 +153,35 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
+    /// A lite page sends a tool's output as its collapsed preview; expanding
+    /// the row loads the whole body and keeps the row open.
+    func testLiteToolRowLoadsItsFullBodyWhenExpanded() {
+        let app = launchChatFixture(name: "lite-bodies", eventCount: 0)
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(5)))
+        let command = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "pytest -q tests/")).firstMatch
+        XCTAssertTrue(command.waitForExistence(timeout: Self.webTranscriptTimeout))
+
+        let collapsed = XCTAttachment(screenshot: app.screenshot())
+        collapsed.name = "lite-row-collapsed"
+        collapsed.lifetime = .keepAlways
+        add(collapsed)
+
+        command.tap()
+        XCTAssertTrue(app.staticTexts["Loading the full output…"].waitForExistence(timeout: Self.patient(5)))
+        let expanding = XCTAttachment(screenshot: app.screenshot())
+        expanding.name = "lite-row-loading"
+        expanding.lifetime = .keepAlways
+        add(expanding)
+
+        let tail = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Full body loaded: 40 passed")).firstMatch
+        XCTAssertTrue(tail.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertFalse(app.staticTexts["Loading the full output…"].exists)
+        let loaded = XCTAttachment(screenshot: app.screenshot())
+        loaded.name = "lite-row-loaded"
+        loaded.lifetime = .keepAlways
+        add(loaded)
+    }
+
     func testTranscriptStartsPinnedToLatestMessage() {
         let app = launchChatFixture(eventCount: 120)
         let latestMessage = app.staticTexts["Assistant fixture message 119: streaming-style response with enough body to exercise row layout."]

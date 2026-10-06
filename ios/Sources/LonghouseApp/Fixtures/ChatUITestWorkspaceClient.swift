@@ -60,6 +60,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             seedEvents = Self.providerNotificationFixtureEvents()
         } else if fixture.name == "marketing" {
             seedEvents = Self.marketingFixtureEvents()
+        } else if fixture.name == "lite-bodies" {
+            seedEvents = Self.liteBodiesFixtureEvents()
         } else {
             // Every assistant reply ends a turn, and the provider stamps each
             // one; the fixture carries that so the footer is part of what the
@@ -931,6 +933,53 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events.append(notice("Background command \"Run the checks\" completed (exit code 0)"))
         events.append(makeEvent(id: next(), role: "assistant", content: "None of the alerting jobs is broken: the registry is healthy and the factory deploy finished green.", timestamp: ts()))
         return events
+    }
+
+    /// The full output behind the `lite-bodies` fixture's preview; its last
+    /// line only appears once the expanded row has loaded the whole body.
+    static let liteBodiesFullOutput = "Chunk ID: 1\nWall time: 41.2 seconds\nProcess exited with code 0\nOutput:\n"
+        + (1...40).map { "tests/test_case_\($0).py::test_passes PASSED" }.joined(separator: "\n")
+        + "\nFull body loaded: 40 passed in 41.2s"
+
+    /// A lite page: the command and its output arrive as the collapsed row's
+    /// preview, and `/event-bodies` (below) answers with the whole body.
+    private static func liteBodiesFixtureEvents() -> [SessionEvent] {
+        let preview = "Chunk ID: 1\nWall time: 41.2 seconds\nProcess exited with code 0\nOutput:\n"
+            + "tests/test_case_1.py::test_passes PASSED\ntests/test_case_2.py::test_passes PASSED\n… 31 more lines …\n"
+            + (34...40).map { "tests/test_case_\($0).py::test_passes PASSED" }.joined(separator: "\n")
+        let callId = "call-lite-bash"
+        return [
+            makeEvent(id: 1, role: "user", content: "Run the whole test suite.", timestamp: fixedTimestamp(offset: 0)),
+            SessionEvent(
+                id: "2", role: "assistant", contentText: nil,
+                toolName: "Bash", toolInputJSON: ["command": .string("uv run pytest -q tests/")],
+                toolOutputText: nil, toolCallId: callId, toolCallState: .completed,
+                timestamp: fixedTimestamp(offset: 1), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                cursor: "lite-cursor-2"
+            ),
+            SessionEvent(
+                id: "3", role: "tool", contentText: nil,
+                toolName: "Bash", toolInputJSON: nil, toolOutputText: preview,
+                toolCallId: callId, toolCallState: .completed,
+                timestamp: fixedTimestamp(offset: 2), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                cursor: "lite-cursor-3",
+                toolOutputTruncated: true,
+                toolOutputOriginalChars: liteBodiesFullOutput.count
+            ),
+            makeEvent(id: 4, role: "assistant", content: "All 40 tests pass.", timestamp: fixedTimestamp(offset: 3)),
+        ]
+    }
+
+    func sessionEventBodies(id: String, cursors: [String]) async throws -> SessionEventBodiesResponse {
+        guard fixtureName == "lite-bodies" else { throw LonghouseAPIError.requestFailed }
+        // Long enough for the loading note to show in a capture.
+        try await Task.sleep(nanoseconds: 600_000_000)
+        return SessionEventBodiesResponse(
+            events: cursors.filter { $0 == "lite-cursor-3" }.map {
+                SessionEventBody(id: "3", cursor: $0, toolInputJson: nil, toolOutputText: Self.liteBodiesFullOutput, toolPresentation: nil)
+            },
+            missing: []
+        )
     }
 
     /// A realistic CODING session for marketing captures: a real-feeling task
