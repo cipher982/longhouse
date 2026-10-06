@@ -230,7 +230,8 @@ export function SessionRow({
       }}
       onMouseEnter={scheduleHover}
       onMouseLeave={clearHover}
-      onFocus={() => {
+      onFocus={(event) => {
+        if (event.target !== event.currentTarget) return;
         clearHover();
         onPrefetch?.();
         preloadSessionDetailPage();

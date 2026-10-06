@@ -41,11 +41,16 @@ export function SessionOpening({
   const queryClient = useQueryClient();
   // Subscribed, not read once: on a reload straight into a session the
   // Timeline list may land while this frame is still showing.
+  // Only Timeline-list updates matter here.
   const subscribe = useCallback(
-    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    (onChange: () => void) =>
+      queryClient.getQueryCache().subscribe((event) => {
+        if (event.query.queryKey[0] === "agent-sessions") onChange();
+      }),
     [queryClient],
   );
-  const listed = useSyncExternalStore(subscribe, () => findListedSession(queryClient, sessionId));
+  const snapshot = () => findListedSession(queryClient, sessionId);
+  const listed = useSyncExternalStore(subscribe, snapshot, snapshot);
   const title = listed ? getSessionCardText(listed, { titleMaxChars: 96 }).title : null;
   const meta = listed
     ? buildSessionMetaItems({

@@ -232,7 +232,7 @@ async function main(): Promise<void> {
   try {
     for (let i = 0; i < 60 && !(await isServing(BASE)); i++) await sleep(250);
     if (!(await isServing(BASE))) {
-      throw new Error(`vite preview never answered at ${BASE}; is web/dist built? (drop --no-build)`);
+      throw new Error(`vite preview never answered at ${BASE}${BUILD ? "" : "; is web/dist current? (drop --no-build)"}`);
     }
     const runs: { cold: Marks; warm: Marks }[] = [];
     for (let i = 0; i < RUNS; i++) {
