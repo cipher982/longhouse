@@ -160,7 +160,10 @@ def project_shadow_session_state_facts(
     """Project durable and observed axes from one coherent catalog snapshot."""
 
     normalized_now = _aware(now, "now")
+
     durable_run_id = _active_run_id(catalog_facts)
+    latest_run_id = _text(_mapping(catalog_facts.get("latest_run")).get("id"))
+    delegation_run_id = latest_run_id if _project_mode(catalog_facts) == "console" else durable_run_id
     activity_head, rejected_activity = _effective_head(
         heads,
         session_id=session_id,
@@ -185,7 +188,7 @@ def project_shadow_session_state_facts(
         session_id=session_id,
         family="delegation",
         now=normalized_now,
-        expected_run_id=durable_run_id,
+        expected_run_id=delegation_run_id,
         require_run_binding=True,
         retain_expired=True,
     )

@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 RuntimeEventKind = Literal[
     "phase_signal",
     "delegation_signal",
+    "wake_signal",
     "progress_signal",
     "terminal_signal",
     "binding_signal",
@@ -789,9 +790,8 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
     # lease vanish from the active list when the Live Store is configured.
     touch_live_sessions_from_runtime_events(
         db,
-        [e for e in events if e.kind in KNOWN_RUNTIME_EVENT_KINDS and e.kind != "delegation_signal"],
+        [e for e in events if e.kind in KNOWN_RUNTIME_EVENT_KINDS and e.kind not in {"delegation_signal", "wake_signal"}],
     )
-
     return RuntimeEventBatchResult(
         accepted=len(events),
         duplicates=0,
@@ -1146,10 +1146,9 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
             event.session_id,
         )
         return "ignored"
-    if event.kind == "delegation_signal":
-        # Registry/lifecycle evidence is reduced in its own catalog family.
-        # It wakes the served workspace without creating or refreshing parent
-        # activity, runtime liveness, or a pending interaction.
+    if event.kind in {"delegation_signal", "wake_signal"}:
+        # Registry and wake evidence are reduced independently of parent
+        # activity. They must not reopen or refresh a completed run.
         return "stored_live_overlay"
 
     if event.kind in {"pause_request", "pause_resolution"}:

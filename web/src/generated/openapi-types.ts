@@ -4231,6 +4231,12 @@ export interface components {
             run_id?: string | null;
             /** State */
             state: string;
+            /**
+             * Origin
+             * @default user
+             * @enum {string}
+             */
+            origin: "user" | "wake";
             /** Created */
             created: boolean;
         };
@@ -4244,6 +4250,11 @@ export interface components {
             run_id?: string | null;
             /** State */
             state: string;
+            /**
+             * Origin
+             * @default user
+             */
+            origin: string;
             /**
              * Is Fresh
              * @description Terminal turns are authoritative; for nonterminal turns, true means the last update is within the Runtime Host's current-work freshness horizon.

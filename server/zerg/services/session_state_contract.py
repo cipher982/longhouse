@@ -1165,6 +1165,8 @@ def _primary(
         )
     if activity.state == "quiescent":
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
+    if mode == "console" and run is not None and run.lifecycle == "ended" and run.end_reason in {"run_completed", "exit_0"}:
+        return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=run.ended_at)
     if run is not None and run.lifecycle == "ended":
         failed = run.end_reason in FAILED_RUN_END_REASONS
         return SessionPresentationLabel(

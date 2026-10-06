@@ -4,6 +4,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -1139,3 +1140,318 @@ def test_console_run_terminal_settles_turn_run_and_fifo_in_one_runtime_transacti
     with Session(engine) as db:
         assert db.get(LiveConsoleTurn, first["turn_id"]).state == "completed"
         assert db.get(LiveSessionRun, first["run_id"]).exit_status == "exit_0"
+
+
+def _seed_console_wake_target(engine, store, *, session_id, thread_id, provider_thread_id="provider-thread-1"):
+    now = datetime.now(UTC)
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="wake-console@example.com", is_active=True))
+        db.commit()
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "claude",
+            "device_id": "cinder",
+            "cwd": "/tmp/longhouse",
+            "project": "longhouse",
+            "provider_config": {},
+            "started_at": now,
+        }
+    )
+    with Session(engine) as db:
+        db.add(
+            LiveSessionThreadAlias(
+                thread_id=str(thread_id),
+                provider="claude",
+                alias_kind="provider_session_id",
+                alias_value=provider_thread_id,
+                first_seen_at=now,
+                last_seen_at=now,
+            )
+        )
+        db.commit()
+    return provider_thread_id
+
+
+def _console_runtime_terminal(*, session_id, thread_id, run_id, occurred_at, dedupe_key):
+    return RuntimeEventIngest(
+        runtime_key=f"claude:{session_id}",
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        provider="claude",
+        device_id="cinder",
+        source="claude_console",
+        kind="terminal_signal",
+        occurred_at=occurred_at,
+        dedupe_key=dedupe_key,
+        payload={"terminal_state": "run_completed", "exit_code": 0},
+    )
+
+
+def _wake_console_session_state(store, session_id):
+    read = store.read_shadow_session_state(session_id=str(session_id), owner_id=1)
+    return project_catalog_session_facts(
+        read["legacy_facts"],
+        observed_at=datetime.fromisoformat(read["observed_at"]),
+        canonical_heads=read["heads"],
+        commit_seq=int(read["commit_seq"]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_console_wake_signal_is_idempotent_fifo_and_dispatches_wake_payload(tmp_path):
+    from zerg.services.console_turns import dispatch_catalog_claimed_turn
+
+    engine = create_catalog_engine(tmp_path / "console-wake.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    session_id, thread_id = uuid4(), uuid4()
+    provider_thread_id = _seed_console_wake_target(engine, store, session_id=session_id, thread_id=thread_id)
+    now = datetime.now(UTC)
+    first = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "the user turn",
+            "client_request_id": "wake-test-user-1",
+            "created_at": now,
+        }
+    )["turn"]
+    store.update_console_turn(
+        data={
+            "owner_id": 1,
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "provider": "claude",
+            "device_id": "cinder",
+            "turn_id": first["turn_id"],
+            "run_id": first["run_id"],
+            "state": "active",
+            "expected_state": "starting",
+            "updated_at": now + timedelta(seconds=1),
+        }
+    )
+    invocation_id = str(uuid4())
+    wake_id = f"{invocation_id}:1"
+    wake = RuntimeEventIngest(
+        runtime_key=f"claude:{session_id}",
+        session_id=session_id,
+        thread_id=thread_id,
+        provider="claude",
+        device_id="cinder",
+        source="claude_console",
+        kind="wake_signal",
+        occurred_at=now + timedelta(seconds=2),
+        dedupe_key="claude-console-wake-1",
+        payload={
+            "invocation_id": invocation_id,
+            "wake_id": wake_id,
+            "provider_thread_id": provider_thread_id,
+            "trigger": {
+                "kind": "monitor_event",
+                "task_ids": ["monitor-1"],
+                "summary": "the branch is ready",
+            },
+        },
+    )
+
+    queued = store.apply_session_runtime(events=[wake])
+    assert queued["console_next_turns"] == []
+    duplicate = wake.model_copy(update={"occurred_at": now + timedelta(seconds=3), "dedupe_key": "claude-console-wake-duplicate"})
+    assert store.apply_session_runtime(events=[duplicate])["console_next_turns"] == []
+    with Session(engine) as db:
+        wake_turns = db.query(LiveConsoleTurn).filter_by(session_id=str(session_id), origin="wake").all()
+        assert len(wake_turns) == 1
+        assert wake_turns[0].state == "queued"
+        assert wake_turns[0].wake_id == wake_id
+        assert wake_turns[0].invocation_id == invocation_id
+        receipt = db.get(LiveSessionInputReceipt, wake_turns[0].receipt_id)
+        assert receipt.text == "Background wake · Monitor event: the branch is ready"
+
+    terminal = _console_runtime_terminal(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=UUID(first["run_id"]),
+        occurred_at=now + timedelta(seconds=4),
+        dedupe_key="claude-console-user-turn-terminal",
+    )
+    [claimed] = store.apply_session_runtime(events=[terminal])["console_next_turns"]
+    assert claimed["turn"]["origin"] == "wake"
+    assert claimed["turn"]["resume_provider_thread_id"] == provider_thread_id
+
+    class FakeCatalog:
+        async def call(self, method, params, **_kwargs):
+            assert method == "session.console.turn.update.v2"
+            return {
+                "found": True,
+                "applied": True,
+                "turn": {**claimed["turn"], "state": "active"},
+                "next_turn": None,
+            }
+
+    class FakeControl:
+        command = None
+
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
+
+    control = FakeControl()
+    await dispatch_catalog_claimed_turn(
+        owner_id=1,
+        turn=claimed["turn"],
+        client=FakeCatalog(),
+        registry=control,
+    )
+    assert control.command["command_type"] == "session.turn.start"
+    assert control.command["payload"]["origin"] == "wake"
+    assert control.command["payload"]["wake_id"] == wake_id
+    assert control.command["payload"]["invocation_id"] == invocation_id
+    assert control.command["payload"]["message"] == ""
+    assert control.command["payload"]["resume_provider_thread_id"] == provider_thread_id
+
+
+@pytest.mark.asyncio
+async def test_ended_console_run_serves_and_clears_delegation_then_accepts_user_turn(tmp_path, monkeypatch):
+    from zerg.services.console_turns import dispatch_catalog_claimed_turn
+
+    engine = create_catalog_engine(tmp_path / "console-parked.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    session_id, thread_id = uuid4(), uuid4()
+    provider_thread_id = _seed_console_wake_target(engine, store, session_id=session_id, thread_id=thread_id)
+
+    class OnlineRegistry:
+        def is_online(self, **_kwargs):
+            return True
+
+        def supports(self, **_kwargs):
+            return True
+
+    monkeypatch.setattr("zerg.services.live_catalog_timeline.get_machine_control_channel_registry", lambda: OnlineRegistry())
+
+    now = datetime.now(UTC)
+    first = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "start background work",
+            "client_request_id": "parked-user-1",
+            "created_at": now,
+        }
+    )["turn"]
+    store.update_console_turn(
+        data={
+            "owner_id": 1,
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "provider": "claude",
+            "device_id": "cinder",
+            "turn_id": first["turn_id"],
+            "run_id": first["run_id"],
+            "state": "active",
+            "expected_state": "starting",
+            "updated_at": now + timedelta(seconds=1),
+        }
+    )
+    terminal = _console_runtime_terminal(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=UUID(first["run_id"]),
+        occurred_at=now + timedelta(seconds=2),
+        dedupe_key="claude-console-parked-terminal",
+    )
+    delegation = RuntimeEventIngest(
+        runtime_key=f"claude:{session_id}",
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=UUID(first["run_id"]),
+        provider="claude",
+        device_id="cinder",
+        source="claude_console",
+        kind="delegation_signal",
+        occurred_at=now + timedelta(seconds=3),
+        dedupe_key="claude-console-parked-snapshot",
+        payload={
+            "delegation": {
+                "count": 1,
+                "kinds": {"monitor": 1},
+                "items": [{"id": "monitor-1", "kind": "monitor", "status": "running", "description": "watch the branch"}],
+                "recent_items": [],
+                "observed_at": (now + timedelta(seconds=3)).isoformat(),
+            }
+        },
+    )
+    store.apply_session_runtime(events=[terminal, delegation])
+    parked = _wake_console_session_state(store, session_id)
+    assert parked.session_state.run is not None and parked.session_state.run.lifecycle == "ended"
+    assert parked.session_state.activity.state != "thinking"
+    assert parked.session_state.delegation.state == "pending"
+    assert parked.session_state.delegation.count == 1
+    assert parked.session_state.presentation.primary.label.startswith("Background ·")
+    assert parked.runtime_display.headline.startswith("Background ·")
+    assert parked.capabilities.composer_enabled is True
+
+    empty = delegation.model_copy(
+        update={
+            "occurred_at": now + timedelta(seconds=4),
+            "dedupe_key": "claude-console-parked-empty",
+            "payload": {
+                "delegation": {
+                    "count": 0,
+                    "kinds": {},
+                    "items": [],
+                    "recent_items": [],
+                    "observed_at": (now + timedelta(seconds=4)).isoformat(),
+                }
+            },
+        }
+    )
+    store.apply_session_runtime(events=[empty])
+    cleared = _wake_console_session_state(store, session_id)
+    assert cleared.session_state.delegation.state == "none"
+    assert cleared.session_state.delegation.items == []
+    assert cleared.session_state.activity.state != "thinking"
+    assert cleared.session_state.presentation.primary.label == "Idle"
+    assert cleared.capabilities.composer_enabled is True
+
+    user_turn = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "continue while the monitor is parked",
+            "client_request_id": "parked-user-2",
+            "created_at": now + timedelta(seconds=5),
+        }
+    )["turn"]
+    assert user_turn["state"] == "starting"
+    assert user_turn["origin"] == "user"
+    assert user_turn["resume_provider_thread_id"] == provider_thread_id
+
+    class FakeCatalog:
+        async def call(self, method, params, **_kwargs):
+            assert method == "session.console.turn.update.v2"
+            return {"found": True, "applied": True, "turn": {**user_turn, "state": "active"}, "next_turn": None}
+
+    class FakeControl:
+        command = None
+
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
+
+    control = FakeControl()
+    await dispatch_catalog_claimed_turn(owner_id=1, turn=user_turn, client=FakeCatalog(), registry=control)
+    assert control.command["payload"]["origin"] == "user"
+    assert control.command["payload"]["message"] == "continue while the monitor is parked"
+    assert control.command["payload"]["resume_provider_thread_id"] == provider_thread_id
+    assert "wake_id" not in control.command["payload"]

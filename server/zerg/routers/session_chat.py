@@ -424,6 +424,7 @@ class ConsoleTurnReceiptResponse(BaseModel):
     receipt_id: str | None = None
     run_id: str | None = None
     state: str
+    origin: str = "user"
     is_fresh: bool | None = Field(
         None,
         description="Terminal turns are authoritative; for nonterminal turns, true means the last update is within the Runtime Host's current-work freshness horizon.",
@@ -1522,6 +1523,7 @@ def _console_turn_response(turn) -> ConsoleTurnReceiptResponse:
         receipt_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
         run_id=str(turn.run_id) if getattr(turn, "run_id", None) is not None else None,
         state=str(turn.state),
+        origin=str(getattr(turn, "origin", None) or "user"),
         is_fresh=bool(getattr(turn, "is_fresh", True)),
     )
 

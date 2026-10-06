@@ -111,6 +111,7 @@ class SessionTurnSnapshot:
     id: int
     session_id: UUID
     request_id: str | None
+    origin: str
     session_input_id: int | None
     state: str
     terminal_phase: str | None
@@ -148,6 +149,15 @@ def _normalize_turn_confidence(value: str | None) -> str:
     if normalized:
         logger.warning("Unknown session turn timing_confidence '%s'; defaulting to %s", normalized, SESSION_TURN_CONFIDENCE_EXACT)
     return SESSION_TURN_CONFIDENCE_EXACT
+
+
+def _normalize_turn_origin(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"user", "wake"}:
+        return normalized
+    if normalized:
+        logger.warning("Unknown session turn origin '%s'; defaulting to user", normalized)
+    return "user"
 
 
 def run_session_turn_write(
@@ -247,6 +257,7 @@ def create_session_turn(
     request_id: str | None,
     source_kind: str = SESSION_TURN_SOURCE_MANAGED_LIVE,
     timing_confidence: str = SESSION_TURN_CONFIDENCE_EXACT,
+    origin: str = "user",
     baseline_event_id: int | None = None,
     baseline_observation_cursor: int | None = None,
     user_submitted_at: datetime | None = None,
@@ -280,6 +291,7 @@ def create_session_turn(
         source_kind=_normalize_turn_source_kind(source_kind),
         timing_confidence=_normalize_turn_confidence(timing_confidence),
         expected_user_text_hash=hash_user_text(expected_user_text) if expected_user_text else None,
+        origin=_normalize_turn_origin(origin),
         state=initial_state,
         baseline_event_id=baseline_event_id if baseline_event_id and baseline_event_id > 0 else None,
         baseline_observation_cursor=baseline_observation_cursor
@@ -826,6 +838,7 @@ def get_session_turn_snapshot(
             id=int(turn.id),
             session_id=session_id,
             request_id=turn.request_id,
+            origin=str(getattr(turn, "origin", None) or "user"),
             session_input_id=turn.session_input_id,
             state=turn.state or "",
             terminal_phase=turn.terminal_phase,

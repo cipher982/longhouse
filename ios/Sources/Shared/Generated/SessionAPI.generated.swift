@@ -767,6 +767,7 @@ struct APIConsoleTurnReceiptResponse: Codable, Hashable, Sendable {
     let receiptId: String?
     let runId: String?
     let state: String
+    let origin: String?
     let isFresh: Bool?
 }
 

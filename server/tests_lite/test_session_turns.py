@@ -1002,3 +1002,23 @@ def test_execute_session_turn_write_uses_bound_database_when_serializer_is_confi
         assert primary_db.query(SessionTurn).filter(SessionTurn.request_id == "req-bound-db").count() == 1
     with SecondarySession() as secondary_db:
         assert secondary_db.query(SessionTurn).filter(SessionTurn.request_id == "req-bound-db").count() == 0
+
+
+def test_session_turn_origin_defaults_to_user_and_is_projected(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        user_turn = create_session_turn(db, session_id=session.id, request_id="origin-user")
+        wake_turn = create_session_turn(db, session_id=session.id, request_id="origin-wake", origin="wake")
+        db.commit()
+
+        assert user_turn.origin == "user"
+        assert wake_turn.origin == "wake"
+        wake_snapshot = get_session_turn_snapshot(
+            db_bind=db.get_bind(),
+            session_id=session.id,
+            request_id="origin-wake",
+        )
+        assert wake_snapshot is not None
+        assert wake_snapshot.origin == "wake"

@@ -134,6 +134,7 @@ class ConsoleTurnCreateResponse(UTCBaseModel):
     turn_id: int | UUID
     run_id: UUID | None = None
     state: str
+    origin: Literal["user", "wake"] = "user"
     created: bool
 
 
@@ -974,6 +975,7 @@ async def create_console_turn(
         run_id=turn.run_id,
         state=turn.state,
         created=turn.created,
+        origin=turn.origin,
     )
 
 

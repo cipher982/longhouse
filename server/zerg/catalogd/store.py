@@ -828,6 +828,9 @@ def _live_console_turn_dto(
         "cwd": turn.cwd,
         "message": message,
         "client_request_id": client_request_id,
+        "origin": str(getattr(turn, "origin", None) or "user"),
+        "wake_id": getattr(turn, "wake_id", None),
+        "invocation_id": getattr(turn, "invocation_id", None),
         "provider_config": config,
         "resume_provider_thread_id": turn.resume_provider_thread_id,
         "resume_session_file": resume_session_file,
@@ -903,6 +906,261 @@ def _starting_console_turn_dto(orm: Session, *, thread_id: str) -> dict[str, Any
         .first()
     )
     return _console_turn_dispatch_dto(orm, starting) if starting is not None else None
+
+
+def _create_console_turn_rows(
+    orm: Session,
+    *,
+    session: LiveSessionCatalog,
+    thread: LiveSessionThread,
+    owner_id: int,
+    message: str,
+    client_request_id: str | None,
+    created_at: datetime,
+    origin: str = "user",
+    wake_id: str | None = None,
+    invocation_id: str | None = None,
+    report_id: str | None = None,
+    attachments_json: str | None = None,
+    model: str | None = None,
+    receipt_id: str | None = None,
+) -> tuple[LiveConsoleTurn, LiveSessionInputReceipt, str | None]:
+    """Create a receipt and its FIFO turn, claiming it if the thread is idle."""
+
+    resume_alias = (
+        orm.query(LiveSessionThreadAlias)
+        .filter(
+            LiveSessionThreadAlias.thread_id == thread.id,
+            LiveSessionThreadAlias.provider == session.provider,
+            LiveSessionThreadAlias.alias_kind == "provider_session_id",
+        )
+        .order_by(
+            LiveSessionThreadAlias.last_seen_at.desc(),
+            LiveSessionThreadAlias.first_seen_at.desc(),
+            LiveSessionThreadAlias.id.desc(),
+        )
+        .first()
+    )
+    source_path = _live_thread_source_path(orm, thread_id=thread.id, provider=session.provider)
+    receipt_id = receipt_id or str(uuid4())
+    now = _as_aware_utc(created_at) or datetime.now(UTC)
+    receipt = LiveSessionInputReceipt(
+        id=receipt_id,
+        owner_id=owner_id,
+        session_id=session.session_id,
+        thread_id=thread.id,
+        provider=session.provider,
+        device_id=thread.device_id,
+        client_request_id=client_request_id,
+        intent="auto",
+        status="queued",
+        text=message,
+        created_at=now,
+        updated_at=now,
+    )
+    turn = LiveConsoleTurn(
+        id=str(uuid4()),
+        session_id=session.session_id,
+        thread_id=thread.id,
+        receipt_id=receipt_id,
+        origin=origin,
+        wake_id=wake_id,
+        invocation_id=invocation_id,
+        state="queued",
+        report_id=report_id,
+        attachments_json=attachments_json,
+        provider=session.provider,
+        device_id=thread.device_id,
+        cwd=thread.cwd,
+        model=model,
+        resume_provider_thread_id=resume_alias.alias_value if resume_alias is not None else None,
+        created_at=now,
+        updated_at=now,
+    )
+    orm.add_all([receipt, turn])
+    owner = (
+        orm.query(LiveConsoleTurn.id)
+        .filter(
+            LiveConsoleTurn.thread_id == thread.id,
+            LiveConsoleTurn.state.in_(("starting", "active", "draining")),
+        )
+        .first()
+    )
+    if owner is None:
+        run_id = str(uuid4())
+        turn.run_id = run_id
+        turn.state = "starting"
+        receipt.status = "delivering"
+        receipt.delivery_request_id = run_id
+        orm.add(
+            LiveSessionRun(
+                id=run_id,
+                thread_id=thread.id,
+                provider=session.provider,
+                host_id=thread.device_id,
+                cwd=thread.cwd,
+                launch_origin="longhouse_spawned",
+                started_at=now,
+            )
+        )
+    return turn, receipt, source_path
+
+
+def _wake_trigger_summary(trigger: Mapping[str, Any]) -> str:
+    labels = {
+        "monitor_event": "Monitor event",
+        "task_completed": "Background task completed",
+        "subagent_result": "Subagent result",
+        "scheduled": "Scheduled wake",
+    }
+    kind = str(trigger.get("kind") or "unknown").strip()
+    label = labels.get(kind, "Background work completed")
+    summary = str(trigger.get("summary") or "").strip()
+    if not summary:
+        task_ids = trigger.get("task_ids")
+        if isinstance(task_ids, list):
+            summary = ", ".join(str(task_id).strip() for task_id in task_ids[:8] if str(task_id).strip())
+    if not summary:
+        summary = "background work"
+    return f"Background wake · {label}: {summary[:512]}"
+
+
+def _enqueue_console_wake_turn(orm: Session, event: Any, *, observed_at: datetime) -> dict[str, Any] | None:
+    """Turn one provider wake into the same durable receipt/FIFO used by user input."""
+
+    payload = event.payload if isinstance(event.payload, Mapping) else {}
+    wake_id = str(payload.get("wake_id") or "").strip()
+    invocation_id = str(payload.get("invocation_id") or "").strip()
+    provider_thread_id = str(payload.get("provider_thread_id") or "").strip()
+    session_id = str(event.session_id or "")
+    reason = None
+    if not wake_id or len(wake_id) > 249 or not invocation_id or len(invocation_id) > 255:
+        reason = "invalid_wake_identity"
+    elif not provider_thread_id or len(provider_thread_id) > 1024:
+        reason = "provider_thread_missing"
+    session = orm.get(LiveSessionCatalog, session_id) if session_id else None
+    if reason is None and (session is None or str(session.origin_kind or "").strip().lower() != "console"):
+        reason = "session_not_console"
+    thread = orm.get(LiveSessionThread, str(session.primary_thread_id)) if session is not None and session.primary_thread_id else None
+    if reason is None and (
+        thread is None
+        or event.thread_id is None
+        or str(thread.id) != str(event.thread_id)
+        or str(thread.id) != str(session.primary_thread_id)
+    ):
+        reason = "console_thread_missing_or_mismatched"
+    provider = str(event.provider or "").strip().lower()
+    if reason is None and (
+        provider != str(session.provider or "").strip().lower()
+        or (event.device_id is not None and str(event.device_id) != str(thread.device_id))
+    ):
+        reason = "provider_or_device_mismatch"
+    alias = None
+    if reason is None:
+        alias = (
+            orm.query(LiveSessionThreadAlias)
+            .filter(
+                LiveSessionThreadAlias.provider == provider,
+                LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                LiveSessionThreadAlias.alias_value == provider_thread_id,
+            )
+            .one_or_none()
+        )
+        if alias is None or str(alias.thread_id) != str(thread.id):
+            reason = "provider_thread_mismatch"
+    if reason is not None:
+        logging.getLogger(__name__).warning(
+            "Ignoring Console wake signal reason=%s session=%s thread=%s provider=%s wake_id=%s",
+            reason,
+            session_id or None,
+            event.thread_id,
+            event.provider,
+            wake_id or None,
+        )
+        return None
+
+    owner_key = CatalogStore._resolve_session_owner_id(orm.connection(), session_id=session_id)
+    try:
+        owner_id = int(owner_key) if owner_key is not None else None
+    except (TypeError, ValueError):
+        owner_id = None
+    if owner_id is None or not CatalogStore._session_explicitly_belongs_to_owner(
+        orm.connection(),
+        session_id=session_id,
+        owner_id=owner_id,
+    ):
+        logging.getLogger(__name__).warning(
+            "Ignoring Console wake signal reason=owner_missing session=%s wake_id=%s",
+            session_id,
+            wake_id,
+        )
+        return None
+    client_request_id = f"wake:{wake_id}"
+    existing_receipt = (
+        orm.query(LiveSessionInputReceipt)
+        .filter(
+            LiveSessionInputReceipt.owner_id == owner_id,
+            LiveSessionInputReceipt.session_id == session_id,
+            LiveSessionInputReceipt.client_request_id == client_request_id,
+        )
+        .one_or_none()
+    )
+    if existing_receipt is not None:
+        return None
+    active_turn = (
+        orm.query(LiveConsoleTurn.id)
+        .filter(
+            LiveConsoleTurn.thread_id == thread.id,
+            LiveConsoleTurn.state.in_(("starting", "active", "draining")),
+        )
+        .first()
+    )
+    execution_owner = (
+        orm.query(LiveSessionRun.id)
+        .join(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
+        .filter(
+            LiveSessionRun.thread_id == thread.id,
+            LiveSessionRun.ended_at.is_(None),
+            LiveSessionConnection.acquisition_kind.in_(("spawned_control", "adopted_control")),
+            LiveSessionConnection.released_at.is_(None),
+        )
+        .first()
+    )
+    if execution_owner is not None and active_turn is None:
+        logging.getLogger(__name__).warning(
+            "Ignoring Console wake signal reason=execution_owner_conflict session=%s wake_id=%s",
+            session_id,
+            wake_id,
+        )
+        return None
+    trigger = payload.get("trigger") if isinstance(payload.get("trigger"), Mapping) else {}
+    turn, receipt, source_path = _create_console_turn_rows(
+        orm,
+        session=session,
+        thread=thread,
+        owner_id=owner_id,
+        message=_wake_trigger_summary(trigger),
+        client_request_id=client_request_id,
+        created_at=_as_aware_utc(event.occurred_at) or observed_at,
+        origin="wake",
+        wake_id=wake_id,
+        invocation_id=invocation_id,
+    )
+    return (
+        {
+            "owner_id": owner_id,
+            "turn": _live_console_turn_dto(
+                turn,
+                message=receipt.text,
+                client_request_id=receipt.client_request_id,
+                provider_config=thread.provider_config_json,
+                model=turn.model,
+                resume_session_file=source_path,
+            ),
+        }
+        if turn.state == "starting"
+        else None
+    )
 
 
 def _settle_console_turn(
@@ -1035,6 +1293,11 @@ def _settle_console_turns_from_runtime(orm: Session, events: list[Any], *, obser
 
     dispatch: list[dict[str, Any]] = []
     for event in events:
+        if event.kind == "wake_signal":
+            wake_turn = _enqueue_console_wake_turn(orm, event, observed_at=observed_at)
+            if wake_turn is not None:
+                dispatch.append(wake_turn)
+            continue
         outcome = CONSOLE_TURN_OUTCOME_BY_RUN_TERMINAL.get(str((event.payload or {}).get("terminal_state") or ""))
         if (
             event.kind != "terminal_signal"
@@ -5400,79 +5663,19 @@ class CatalogStore:
                 if execution_owner is not None:
                     orm.rollback()
                     return {"found": True, "unavailable": "execution_owner_conflict"}
-                receipt_id = requested_receipt_id or str(uuid4())
-                turn_id = str(uuid4())
-                resume_alias = (
-                    orm.query(LiveSessionThreadAlias)
-                    .filter(
-                        LiveSessionThreadAlias.thread_id == thread.id,
-                        LiveSessionThreadAlias.provider == session.provider,
-                        LiveSessionThreadAlias.alias_kind == "provider_session_id",
-                    )
-                    .order_by(
-                        LiveSessionThreadAlias.last_seen_at.desc(),
-                        LiveSessionThreadAlias.first_seen_at.desc(),
-                        LiveSessionThreadAlias.id.desc(),
-                    )
-                    .first()
-                )
-                source_path = _live_thread_source_path(orm, thread_id=thread.id, provider=session.provider)
-                receipt = LiveSessionInputReceipt(
-                    id=receipt_id,
-                    owner_id=data["owner_id"],
-                    session_id=data["session_id"],
-                    thread_id=thread.id,
-                    provider=session.provider,
-                    device_id=thread.device_id,
+                turn, receipt, source_path = _create_console_turn_rows(
+                    orm,
+                    session=session,
+                    thread=thread,
+                    owner_id=int(data["owner_id"]),
+                    message=data["message"],
                     client_request_id=data["client_request_id"],
-                    intent="auto",
-                    status="queued",
-                    text=data["message"],
                     created_at=now,
-                    updated_at=now,
-                )
-                turn = LiveConsoleTurn(
-                    id=turn_id,
-                    session_id=data["session_id"],
-                    thread_id=thread.id,
-                    receipt_id=receipt_id,
-                    state="queued",
                     report_id=report_id,
                     attachments_json=attachments_json,
-                    provider=session.provider,
-                    device_id=thread.device_id,
-                    cwd=thread.cwd,
                     model=turn_model,
-                    resume_provider_thread_id=resume_alias.alias_value if resume_alias is not None else None,
-                    created_at=now,
-                    updated_at=now,
+                    receipt_id=requested_receipt_id,
                 )
-                orm.add_all([receipt, turn])
-                owner = (
-                    orm.query(LiveConsoleTurn.id)
-                    .filter(
-                        LiveConsoleTurn.thread_id == thread.id,
-                        LiveConsoleTurn.state.in_(("starting", "active", "draining")),
-                    )
-                    .first()
-                )
-                if owner is None:
-                    run_id = str(uuid4())
-                    turn.run_id = run_id
-                    turn.state = "starting"
-                    receipt.status = "delivering"
-                    receipt.delivery_request_id = run_id
-                    orm.add(
-                        LiveSessionRun(
-                            id=run_id,
-                            thread_id=thread.id,
-                            provider=session.provider,
-                            host_id=thread.device_id,
-                            cwd=thread.cwd,
-                            launch_origin="longhouse_spawned",
-                            started_at=now,
-                        )
-                    )
                 orm.commit()
                 result = _live_console_turn_dto(
                     turn,
@@ -15460,7 +15663,7 @@ def _assemble_session_facts(
                 ],
                 "latest_console_turn": _row_dto(
                     console_turn_by_session.get(session_id),
-                    fields=frozenset({"id", "session_id", "thread_id", "run_id", "state", "created_at", "updated_at"}),
+                    fields=frozenset({"id", "session_id", "thread_id", "run_id", "state", "origin", "created_at", "updated_at"}),
                 ),
                 **(
                     {

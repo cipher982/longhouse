@@ -842,6 +842,9 @@ class LiveConsoleTurn(LiveBase):
     thread_id = Column(String(36), nullable=False, index=True)
     receipt_id = Column(String(36), nullable=False, unique=True)
     run_id = Column(String(36), nullable=True, unique=True, index=True)
+    origin = Column(String(16), nullable=True, default="user", server_default=text("'user'"))
+    wake_id = Column(String(255), nullable=True)
+    invocation_id = Column(String(255), nullable=True)
     state = Column(String(20), nullable=False, index=True)
     report_id = Column(String(36), nullable=True, index=True)
     # Image attachments for this turn, JSON `{"digest": sha256, "refs": [...]}`.

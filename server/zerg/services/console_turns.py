@@ -76,6 +76,7 @@ class CatalogConsoleTurn:
     #: catalogd's freshness verdict for the stored row. A newly written turn
     #: is fresh; an idempotent replay may return an old nonterminal one.
     is_fresh: bool = True
+    origin: str = "user"
 
 
 @dataclass(frozen=True)
@@ -427,6 +428,7 @@ async def enqueue_catalog_console_turn(
             error_code=error_code,
             error=(str(turn.get("error") or "") or None) if error_code else None,
             is_fresh=bool(turn.get("is_fresh", True)),
+            origin=str(turn.get("origin") or "user"),
         )
     control = registry or get_machine_control_channel_registry()
     provider = str(turn["provider"])
@@ -453,6 +455,12 @@ async def enqueue_catalog_console_turn(
             "server_dispatched_at_ms": dispatch_wall_ms,
             **dict(turn.get("provider_config") or {}),
         }
+        origin = str(turn.get("origin") or "user")
+        payload["origin"] = origin
+        if origin == "wake":
+            payload["wake_id"] = str(turn.get("wake_id") or "")
+            payload["invocation_id"] = str(turn.get("invocation_id") or "")
+            payload["message"] = ""
         if turn.get("report_id"):
             payload["report_id"] = str(turn["report_id"])
         if turn.get("attachments"):
@@ -614,6 +622,7 @@ async def enqueue_catalog_console_turn(
         receipt_id=receipt_id,
         error_code=error_code,
         error=error,
+        origin=str(turn.get("origin") or "user"),
     )
 
 
@@ -727,6 +736,7 @@ async def dispatch_catalog_claimed_turn(
     receipt_id = UUID(str(turn["receipt_id"])) if turn.get("receipt_id") else None
     provider = str(turn["provider"])
     device_id = str(turn["device_id"])
+    origin = str(turn.get("origin") or "user")
     control = registry or get_machine_control_channel_registry()
     catalog = client or get_catalogd_client()
     if catalog is None:
@@ -751,6 +761,11 @@ async def dispatch_catalog_claimed_turn(
             "launch_surface": "console",
             **dict(turn.get("provider_config") or {}),
         }
+        payload["origin"] = origin
+        if origin == "wake":
+            payload["wake_id"] = str(turn.get("wake_id") or "")
+            payload["invocation_id"] = str(turn.get("invocation_id") or "")
+            payload["message"] = ""
         if turn.get("report_id"):
             payload["report_id"] = str(turn["report_id"])
         if turn.get("attachments"):
@@ -795,6 +810,7 @@ async def dispatch_catalog_claimed_turn(
                     created=True,
                     receipt_id=receipt_id,
                     error=str(persisted_turn.get("error") or "") or None,
+                    origin=origin,
                 )
             return CatalogConsoleTurn(
                 turn_id=turn_id,
@@ -804,6 +820,7 @@ async def dispatch_catalog_claimed_turn(
                 receipt_id=receipt_id,
                 error_code="turn_start_outcome_unknown",
                 error=error,
+                origin=origin,
             )
         if message.get("ok") is not True:
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
@@ -837,6 +854,7 @@ async def dispatch_catalog_claimed_turn(
                     receipt_id=receipt_id,
                     error_code=error_code,
                     error=error,
+                    origin=origin,
                 )
         else:
             result_payload = message.get("result") if isinstance(message.get("result"), dict) else {}
@@ -881,6 +899,7 @@ async def dispatch_catalog_claimed_turn(
             created=True,
             receipt_id=receipt_id,
             error=str(persisted_turn.get("error") or "") or None,
+            origin=origin,
         )
     next_turn = update_result.get("next_turn")
     if isinstance(next_turn, dict):
@@ -898,6 +917,7 @@ async def dispatch_catalog_claimed_turn(
         receipt_id=receipt_id,
         error_code=error_code,
         error=error,
+        origin=origin,
     )
 
 
