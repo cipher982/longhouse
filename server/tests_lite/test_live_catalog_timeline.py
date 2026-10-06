@@ -274,9 +274,7 @@ def test_live_catalog_timeline_preserves_queued_lifecycle_when_coalescing(monkey
         def drain_nowait_messages(self):
             return [
                 SimpleNamespace(payload={"wake": "coalesced"}),
-                SimpleNamespace(
-                    payload={"kind": "runtime_lifecycle", "host_lifecycle": final, "drain_complete": True}
-                ),
+                SimpleNamespace(payload={"kind": "runtime_lifecycle", "host_lifecycle": final, "drain_complete": True}),
             ]
 
     subscription = Subscription()

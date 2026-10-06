@@ -598,6 +598,7 @@ async def test_refused_steer_retry_cannot_drain_another_writer(monkeypatch):
         await runtime.release()
     assert (await runtime.snapshot())["state"] == "drained"
 
+
 @pytest.mark.asyncio
 async def test_runtime_restarting_replay_refusal_remains_retryable(monkeypatch):
     from unittest.mock import AsyncMock
