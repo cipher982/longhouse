@@ -236,6 +236,7 @@ class CatalogDaemon:
         self._projector_read_executor: ThreadPoolExecutor | None = None
         self._store: CatalogStore | None = None
         self._checkpoint_task: asyncio.Task | None = None
+        self._projector_repair_task: asyncio.Task | None = None
         self._maintenance_executor: ThreadPoolExecutor | None = None
         self._timeline_reads: dict[tuple[tuple[str, object], ...], asyncio.Task[dict]] = {}
         self._session_detail_reads: dict[tuple[str, tuple[object, ...], tuple[tuple[str, object], ...]], asyncio.Task[dict]] = {}
@@ -254,15 +255,6 @@ class CatalogDaemon:
     async def start(self) -> CatalogMeta:
         startup_started = time.perf_counter()
 
-        def log_stage(stage: str, started: float, **dimensions) -> None:
-            suffix = " ".join(f"{key}={value}" for key, value in sorted(dimensions.items()))
-            logger.info(
-                "catalogd startup stage=%s elapsed_ms=%.2f%s",
-                stage,
-                (time.perf_counter() - started) * 1000.0,
-                f" {suffix}" if suffix else "",
-            )
-
         stage_started = time.perf_counter()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,12 +266,12 @@ class CatalogDaemon:
         if stat.S_IMODE(socket_parent.st_mode) & 0o077:
             raise CatalogDaemonError("catalog socket parent must not be group/world accessible")
         self._acquire_lock()
-        log_stage("prepare_paths_and_lock", stage_started)
+        _log_startup_stage("prepare_paths_and_lock", stage_started)
         try:
             stage_started = time.perf_counter()
             self._engine = create_catalog_engine(self.database_path)
             self._meta = initialize_catalog_schema(self._engine)
-            log_stage("initialize_schema", stage_started)
+            _log_startup_stage("initialize_schema", stage_started)
 
             stage_started = time.perf_counter()
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
@@ -299,28 +291,22 @@ class CatalogDaemon:
             # checkpoints from overlapping each other.
             self._maintenance_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-maintenance")
             self._store = CatalogStore(self._engine)
-            log_stage("initialize_executors", stage_started)
+            _log_startup_stage("initialize_executors", stage_started)
 
             stage_started = time.perf_counter()
             retired_outbox = self._store.retire_archive_outbox()
-            log_stage("retire_archive_outbox", stage_started, **retired_outbox)
+            _log_startup_stage("retire_archive_outbox", stage_started, **retired_outbox)
             # Reap before ensuring, so a generation retired by this build's
             # config is gone before its replacement's rows are created.
             stage_started = time.perf_counter()
             reaped = self._store.reap_retired_projector_states()
-            log_stage("reap_retired_projectors", stage_started, rows=reaped["reaped_rows"])
+            _log_startup_stage("reap_retired_projectors", stage_started, rows=reaped["reaped_rows"])
             if reaped["reaped_rows"]:
                 logger.info(
                     "Reaped retired projector generations projectors=%s rows=%d",
                     ",".join(reaped["reaped_projectors"]),
                     reaped["reaped_rows"],
                 )
-            stage_started = time.perf_counter()
-            ensured = self._store.ensure_known_projector_states()
-            log_stage("ensure_projector_states", stage_started, **ensured)
-            stage_started = time.perf_counter()
-            analyzed = self._store.refresh_projector_statistics()
-            log_stage("refresh_projector_statistics", stage_started, **analyzed)
             # A Runtime Host replacement cannot retain claim ownership, but a
             # child-only catalogd restart must preserve work still running in
             # the same host process. The shared boot id distinguishes them.
@@ -338,7 +324,7 @@ class CatalogDaemon:
                 active_worker_ids=active_workers,
                 observed_at=datetime.now(UTC),
             )
-            log_stage("release_stale_projector_claims", stage_started, released=released["released"])
+            _log_startup_stage("release_stale_projector_claims", stage_started, released=released["released"])
 
             stage_started = time.perf_counter()
             self._meta = read_catalog_meta(self._engine)
@@ -359,8 +345,12 @@ class CatalogDaemon:
                     self._checkpoint_loop(),
                     name="catalogd-checkpoint",
                 )
-            log_stage("publish_socket", stage_started)
-            log_stage("total", startup_started)
+            _log_startup_stage("publish_socket", stage_started)
+            self._projector_repair_task = asyncio.create_task(
+                self._repair_projector_states(),
+                name="catalogd-projector-repair",
+            )
+            _log_startup_stage("total", startup_started)
             return self._meta
         except BaseException:
             await self.close()
@@ -373,6 +363,11 @@ class CatalogDaemon:
             await self._server.serve_forever()
 
     async def close(self) -> None:
+        if self._projector_repair_task is not None:
+            self._projector_repair_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._projector_repair_task
+            self._projector_repair_task = None
         if self._checkpoint_task is not None:
             self._checkpoint_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -4556,6 +4551,57 @@ class CatalogDaemon:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._maintenance_executor, lambda: operation(*args, **kwargs))
 
+    async def _repair_projector_states(self) -> None:
+        """Repair the projector ledger once the socket is published.
+
+        Startup held readiness for this: 2.1 s of scans under the write lock on
+        a 39,300-session catalog. No served read needs it first -- coverage
+        reports whatever the ledger says, and the derived workers claim a
+        raised target whenever it lands -- so the scans run on a read snapshot
+        off the writer thread, and the writer only re-checks and writes the
+        rows they found. A failure waits for the next start, as a steady-state
+        drift always has.
+        """
+
+        assert self._store is not None
+        repair_started = time.perf_counter()
+        try:
+            stage_started = time.perf_counter()
+            plan = await self._run_maintenance(self._store.scan_projector_repairs)
+            scan_ms = (time.perf_counter() - stage_started) * 1000.0
+            write_started = time.perf_counter()
+            ensured = await self._run_startup_write(self._store.ensure_known_projector_states, plan)
+            write_ms = (time.perf_counter() - write_started) * 1000.0
+            _log_startup_stage(
+                "ensure_projector_states",
+                stage_started,
+                scan_ms=f"{scan_ms:.2f}",
+                write_ms=f"{write_ms:.2f}",
+                **ensured,
+            )
+            stage_started = time.perf_counter()
+            analyzed = await self._run_startup_write(self._store.refresh_projector_statistics)
+            _log_startup_stage("refresh_projector_statistics", stage_started, **analyzed)
+            _log_startup_stage("deferred_projector_repair", repair_started)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("catalogd deferred projector repair failed")
+
+    async def _run_startup_write(self, operation, *args):
+        # A pending deployment records its activation only on a closed, idle
+        # writer, and a drain waits for in-flight writes, so the repair writes
+        # only while admission is open: at runtime reopen on a cutover, at once
+        # on a plain restart. A full queue is load to wait out, not a reason to
+        # leave the ledger behind.
+        while True:
+            try:
+                return await self._run_store(operation, *args)
+            except CatalogWriterClosed:
+                await asyncio.sleep(0.25)
+            except CatalogWriterBusy:
+                await asyncio.sleep(0.05)
+
     async def _checkpoint_loop(self) -> None:
         assert self._store is not None
         while True:
@@ -4637,6 +4683,16 @@ class CatalogDaemon:
                 details=details or {},
             ),
         )
+
+
+def _log_startup_stage(stage: str, started: float, **dimensions) -> None:
+    suffix = " ".join(f"{key}={value}" for key, value in sorted(dimensions.items()))
+    logger.info(
+        "catalogd startup stage=%s elapsed_ms=%.2f%s",
+        stage,
+        (time.perf_counter() - started) * 1000.0,
+        f" {suffix}" if suffix else "",
+    )
 
 
 _STORAGE_PROVIDER_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")

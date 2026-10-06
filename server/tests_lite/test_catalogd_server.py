@@ -48,9 +48,13 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     metadata = await daemon.start()
+    # Startup's projector repair is the writer's only work before this ping.
+    await daemon._projector_repair_task
     client = CatalogClient(socket_path)
     try:
         ping = await client.call("ping.v2")
+        # Its per-label timings are the only nondeterministic field.
+        ping["writer_admission"].pop("labels")
         schema = await client.call("schema.v2")
         assert ping == {
             "catalog_id": str(metadata.catalog_id),
@@ -63,7 +67,7 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
                 "depth": 0,
                 "max_depth": 128,
                 "accepting": True,
-                "peak_depth": 0,
+                "peak_depth": 1,
                 "active_label": None,
                 "active_age_ms": 0.0,
                 "rejected_busy": 0,
@@ -1065,6 +1069,7 @@ async def test_writer_admission_close_fences_late_work(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
+    await daemon._projector_repair_task
     client = CatalogClient(socket_path)
     entered = threading.Event()
     release = threading.Event()

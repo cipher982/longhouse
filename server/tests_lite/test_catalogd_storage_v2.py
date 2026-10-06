@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -56,6 +57,11 @@ def daemon_paths():
     for path in root.iterdir():
         path.unlink(missing_ok=True)
     root.rmdir()
+
+
+def _repair_projector_ledger(engine) -> dict[str, int]:
+    store = CatalogStore(engine)
+    return store.ensure_known_projector_states(store.scan_projector_repairs())
 
 
 def _epoch_params(
@@ -3651,7 +3657,7 @@ async def test_startup_reaps_non_claude_semantic_debt_without_losing_claude_debt
         await daemon.close()
 
     engine = create_catalog_engine(database_path)
-    repaired = CatalogStore(engine).ensure_known_projector_states()
+    repaired = _repair_projector_ledger(engine)
     with engine.connect() as connection:
         rows = connection.exec_driver_sql("SELECT projector, session_id FROM projector_state ORDER BY projector, session_id").all()
     engine.dispose()
@@ -3789,7 +3795,7 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
                 "DELETE FROM projector_state WHERE projector = ? AND session_id = ?",
                 (EMBEDDING_PROJECTOR_ID, str(session_id)),
             )
-        assert CatalogStore(engine).ensure_known_projector_states()["inserted"] == 1
+        assert _repair_projector_ledger(engine)["inserted"] == 1
         with engine.connect() as connection:
             restored = connection.exec_driver_sql(
                 "SELECT desired_revision, completed_revision, status FROM projector_state WHERE projector = ? AND session_id = ?",
@@ -3815,7 +3821,7 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
                     str(session_id),
                 ),
             )
-        repaired = CatalogStore(engine).ensure_known_projector_states()
+        repaired = _repair_projector_ledger(engine)
         assert repaired["aligned_embeddings"] == 1
         with engine.connect() as connection:
             aligned = connection.exec_driver_sql(
@@ -3934,7 +3940,7 @@ async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths
                     str(old_session),
                 ),
             )
-        assert CatalogStore(engine).ensure_known_projector_states()["advanced_retired"] == 2
+        assert _repair_projector_ledger(engine)["advanced_retired"] == 2
         with engine.connect() as connection:
             repaired_states = connection.exec_driver_sql(
                 "SELECT desired_revision, claimed_revision, claim_token, worker_id, claim_expires_at, status, retry_at "
@@ -4805,8 +4811,12 @@ async def test_omp_parent_path_refuses_ambiguous_or_cross_scope_links(daemon_pat
 
 
 @pytest.mark.asyncio
-async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_paths):
-    """A generation newer than search's target made its frozen snapshot empty."""
+async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_paths, monkeypatch):
+    """A generation newer than search's target made its frozen snapshot empty.
+
+    The repair runs once catalogd is serving: reads and writes must not wait
+    for its catalog-wide scans, and the raised target must still be claimable.
+    """
 
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -4842,9 +4852,57 @@ async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_pa
                 "UPDATE projector_state SET completed_revision = desired_revision, status = 'idle' WHERE session_id = ?",
                 (str(session_id),),
             )
+    finally:
+        engine.dispose()
 
-        repaired = CatalogStore(engine).ensure_known_projector_states()
-        assert repaired["advanced_render_consumers"] == 1
+    scan_released = threading.Event()
+    scan = CatalogStore.scan_projector_repairs
+
+    def held_scan(store):
+        assert scan_released.wait(timeout=30)
+        return scan(store)
+
+    monkeypatch.setattr(CatalogStore, "scan_projector_repairs", held_scan)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = _catalog_client(socket_path)
+    try:
+        # Served while the scan is held: the stale target is still complete.
+        coverage = await client.call("projector.coverage.read.v2", {"projector": "search-v2"})
+        assert coverage["lag_count"] == 0
+        later = _raw_params(
+            epoch=uuid4(),
+            session_id=uuid4(),
+            start=0,
+            end=6,
+            records=(b"later\n",),
+            sealed_at=now,
+            opaque_source_id="later.jsonl",
+        )
+        await client.call("storage.raw_object.commit.v2", later)
+        assert not daemon._projector_repair_task.done()
+
+        scan_released.set()
+        await daemon._projector_repair_task
+        claimed = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": datetime.now(UTC).isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert {row["session_id"]: row["claimed_revision"] for row in claimed["claimed"]}[str(session_id)] == str(target + 900)
+    finally:
+        scan_released.set()
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    try:
         with engine.connect() as connection:
             rows = dict(
                 connection.exec_driver_sql(
@@ -4853,7 +4911,7 @@ async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_pa
             )
         assert rows["search-v2"] == target + 900
         assert rows[EMBEDDING_PROJECTOR_ID] == target + 900
-        assert CatalogStore(engine).ensure_known_projector_states()["advanced_render_consumers"] == 0
+        assert _repair_projector_ledger(engine)["advanced_render_consumers"] == 0
     finally:
         engine.dispose()
 

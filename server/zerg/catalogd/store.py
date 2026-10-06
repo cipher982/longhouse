@@ -11,6 +11,7 @@ import re
 import time
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -2332,7 +2333,44 @@ class CatalogStore:
             rows = connection.execute(select(func.count()).select_from(ProjectorState.__table__)).scalar_one()
         return {"rows": int(rows)}
 
-    def ensure_known_projector_states(self) -> dict[str, int]:
+    def scan_projector_repairs(self) -> ProjectorRepairPlan:
+        """Find the sessions ``ensure_known_projector_states`` must repair.
+
+        These scans visit every eligible session and every search-v2 row: 2.1 s
+        on the 39,300-session owner catalog, all of it once held under
+        catalogd's write lock before the socket was published. A read snapshot
+        does not block the WAL writer, so catalogd runs this while serving.
+        """
+
+        p = _projector_repair_predicates()
+        sessions, states = p.sessions, p.states
+        with _read_snapshot(self.engine) as connection:
+
+            def session_ids(statement) -> tuple[str, ...]:
+                return tuple(str(session_id) for session_id in connection.execute(statement).scalars())
+
+            def lacks(projector: str, session_id):
+                return ~select(states.c.session_id).where(states.c.projector == projector, states.c.session_id == session_id).exists()
+
+            return ProjectorRepairPlan(
+                eligible_sessions=int(connection.execute(select(func.count()).select_from(sessions).where(*p.eligible)).scalar_one()),
+                irrelevant_semantic=session_ids(select(states.c.session_id).where(*p.irrelevant_semantic)),
+                missing_semantic=session_ids(
+                    select(sessions.c.session_id).where(*p.semantic_candidates, lacks(SEMANTIC_PROJECTOR_ID, sessions.c.session_id))
+                ),
+                missing_search=session_ids(select(sessions.c.session_id).where(*p.eligible, lacks("search-v2", sessions.c.session_id))),
+                missing_embeddings=session_ids(
+                    select(p.search_rows.c.session_id).where(
+                        *p.embedding_seed,
+                        lacks(EMBEDDING_PROJECTOR_ID, p.search_rows.c.session_id),
+                    )
+                ),
+                stale_render=session_ids(select(states.c.session_id).where(*p.stale_render)),
+                misaligned_embeddings=session_ids(select(states.c.session_id).where(*p.alignment)),
+                retired=session_ids(select(states.c.session_id).where(*p.retired).distinct()),
+            )
+
+    def ensure_known_projector_states(self, plan: ProjectorRepairPlan) -> dict[str, int]:
         """Backfill projector identities and preserve the search-derived chain.
 
         Embeddings consume searchd's published render, so every search-v2
@@ -2340,57 +2378,57 @@ class CatalogStore:
         session has since moved from ``ready`` to ``pending`` for semantic
         repair. Restricting a newly bumped embedding identity to currently
         ready sessions left already-served search rows outside dense coverage.
+
+        Only the sessions ``plan`` names are touched, and every statement
+        re-checks the predicate that found them, so a session repaired or
+        changed since the scan is left as its writer committed it. The write
+        lasts as long as the repair is large, not as long as the catalog.
         """
 
-        sessions = StorageSession.__table__
-        states = ProjectorState.__table__
+        p = _projector_repair_predicates()
+        sessions, states, search_rows = p.sessions, p.states, p.search_rows
+        counts = {
+            "inserted": 0,
+            "eligible_sessions": plan.eligible_sessions,
+            "reaped_irrelevant_semantic": 0,
+            "aligned_embeddings": 0,
+            "advanced_retired": 0,
+            "advanced_render_consumers": 0,
+        }
+        if plan.is_empty():
+            return counts
+        insert_columns = (
+            "projector",
+            "session_id",
+            "desired_revision",
+            "desired_at",
+            "completed_revision",
+            "status",
+            "failure_count",
+            "commit_seq",
+            "created_at",
+            "updated_at",
+        )
+        # Raising a search target must realign its embedding row, and a newly
+        # inserted search row can meet an embedding row seeded at another
+        # revision; the alignment scan saw neither.
+        search_touched = {*plan.stale_render, *plan.missing_search}
         with _write_transaction(self.engine) as connection:
-            irrelevant_semantic = int(
-                connection.execute(
-                    delete(states).where(
-                        states.c.projector == SEMANTIC_PROJECTOR_ID,
-                        states.c.session_id.in_(select(sessions.c.session_id).where(func.lower(sessions.c.provider) != "claude")),
-                    )
-                ).rowcount
-                or 0
-            )
             now = datetime.now(UTC)
             commit_seq = _current_commit_seq(connection)
-            eligible_filter = (
-                sessions.c.user_state != "deleted",
-                sessions.c.current_render_generation.is_not(None),
-                sessions.c.render_state == "ready",
-            )
-            eligible_sessions = int(connection.execute(select(func.count()).select_from(sessions).where(*eligible_filter)).scalar_one())
 
-            insert_columns = (
-                "projector",
-                "session_id",
-                "desired_revision",
-                "desired_at",
-                "completed_revision",
-                "status",
-                "failure_count",
-                "commit_seq",
-                "created_at",
-                "updated_at",
-            )
+            def per_batch(session_ids, statement_for) -> int:
+                ordered = sorted(set(session_ids))
+                changed = 0
+                for start in range(0, len(ordered), _PROJECTOR_REPAIR_BATCH):
+                    changed += int(connection.execute(statement_for(ordered[start : start + _PROJECTOR_REPAIR_BATCH])).rowcount or 0)
+                return changed
 
-            def insert_missing(statement):
-                return int(
-                    connection.execute(
-                        sqlite_insert(states)
-                        .from_select(insert_columns, statement)
-                        .on_conflict_do_nothing(index_elements=[states.c.projector, states.c.session_id])
-                    ).rowcount
-                    or 0
-                )
-
-            inserted = insert_missing(
-                select(
-                    literal(SEMANTIC_PROJECTOR_ID),
-                    sessions.c.session_id,
-                    sessions.c.commit_seq,
+            def insert_missing(projector, session_id, desired_revision, *where):
+                seed = select(
+                    literal(projector),
+                    session_id,
+                    desired_revision,
                     literal(now),
                     literal(0),
                     literal("idle"),
@@ -2398,180 +2436,81 @@ class CatalogStore:
                     literal(commit_seq),
                     literal(now),
                     literal(now),
-                ).where(
-                    *eligible_filter,
-                    func.lower(sessions.c.provider) == "claude",
-                    sessions.c.semantic_projection_version < 1,
+                ).where(*where)
+                return (
+                    sqlite_insert(states)
+                    .from_select(insert_columns, seed)
+                    .on_conflict_do_nothing(index_elements=[states.c.projector, states.c.session_id])
                 )
+
+            released_claim = {
+                "desired_at": now,
+                "claimed_revision": None,
+                "claim_token": None,
+                "worker_id": None,
+                "claim_expires_at": None,
+                "status": "idle",
+                "retry_at": None,
+                "commit_seq": commit_seq,
+                "updated_at": now,
+            }
+            cleared_failure = {"failure_count": 0, "last_error_code": None, "last_error_message": None}
+            counts["reaped_irrelevant_semantic"] = per_batch(
+                plan.irrelevant_semantic,
+                lambda batch: delete(states).where(*p.irrelevant_semantic, states.c.session_id.in_(batch)),
             )
-            inserted += insert_missing(
-                select(
-                    literal("search-v2"),
+            counts["inserted"] = per_batch(
+                plan.missing_semantic,
+                lambda batch: insert_missing(
+                    SEMANTIC_PROJECTOR_ID,
                     sessions.c.session_id,
                     sessions.c.commit_seq,
-                    literal(now),
-                    literal(0),
-                    literal("idle"),
-                    literal(0),
-                    literal(commit_seq),
-                    literal(now),
-                    literal(now),
-                ).where(*eligible_filter)
+                    *p.semantic_candidates,
+                    sessions.c.session_id.in_(batch),
+                ),
+            )
+            counts["inserted"] += per_batch(
+                plan.missing_search,
+                lambda batch: insert_missing(
+                    "search-v2",
+                    sessions.c.session_id,
+                    sessions.c.commit_seq,
+                    *p.eligible,
+                    sessions.c.session_id.in_(batch),
+                ),
             )
             # A search row is the durable certificate that this session has
             # entered the served corpus. Mirror that ledger directly instead
             # of materializing both whole tables into Python dictionaries.
-            search_rows = states.alias("embedding_seed_search")
-            inserted += insert_missing(
-                select(
-                    literal(EMBEDDING_PROJECTOR_ID),
+            counts["inserted"] += per_batch(
+                {*plan.missing_embeddings, *plan.missing_search},
+                lambda batch: insert_missing(
+                    EMBEDDING_PROJECTOR_ID,
                     search_rows.c.session_id,
                     search_rows.c.desired_revision,
-                    literal(now),
-                    literal(0),
-                    literal("idle"),
-                    literal(0),
-                    literal(commit_seq),
-                    literal(now),
-                    literal(now),
-                ).where(search_rows.c.projector == "search-v2")
-            )
-            # search-v2 reads render objects frozen at its claimed revision. A
-            # re-render that committed a newer current generation without
-            # raising this target left the snapshot empty: the projector
-            # published zero objects and recorded the session complete. On the
-            # 2026-09-24 owner catalog 15,442 of 40,222 sessions were behind
-            # their generation, served only from a search.db built before the
-            # re-render, and a rebuild dropped them silently. Raise the target
-            # to the newest revision of the session's current render; embeddings
-            # follow via the alignment below.
-            # The render objects themselves were rewritten too, past both the
-            # session and generation revisions, so the target is the newest of
-            # the three: the first fix (session revision) still froze one
-            # 2,373-object session at 168 visible objects.
-            render_objects = RenderObject.__table__
-            current_generation_revision = func.max(
-                sessions.c.commit_seq,
-                func.coalesce(
-                    select(RenderGeneration.__table__.c.commit_seq)
-                    .where(RenderGeneration.__table__.c.generation_id == sessions.c.current_render_generation)
-                    .scalar_subquery(),
-                    0,
-                ),
-                func.coalesce(
-                    select(func.max(render_objects.c.commit_seq))
-                    .where(render_objects.c.generation_id == sessions.c.current_render_generation)
-                    .scalar_subquery(),
-                    0,
+                    *p.embedding_seed,
+                    search_rows.c.session_id.in_(batch),
                 ),
             )
-            session_revision = (
-                select(current_generation_revision)
-                .where(
-                    sessions.c.session_id == states.c.session_id,
-                    *eligible_filter,
-                    current_generation_revision > states.c.desired_revision,
-                )
-                .scalar_subquery()
+            counts["advanced_render_consumers"] = per_batch(
+                plan.stale_render,
+                lambda batch: update(states)
+                .where(*p.stale_render, states.c.session_id.in_(batch))
+                .values(desired_revision=p.session_revision, **released_claim, **cleared_failure),
             )
-            stale_render_filter = (
-                states.c.projector == "search-v2",
-                session_revision.is_not(None),
+            counts["aligned_embeddings"] = per_batch(
+                {*plan.misaligned_embeddings, *search_touched},
+                lambda batch: update(states)
+                .where(*p.alignment, states.c.session_id.in_(batch))
+                .values(desired_revision=p.search_revision, **released_claim, **cleared_failure),
             )
-            advanced_render_consumers = int(
-                connection.execute(select(func.count()).select_from(states).where(*stale_render_filter)).scalar_one()
+            counts["advanced_retired"] = per_batch(
+                plan.retired,
+                lambda batch: update(states)
+                .where(*p.retired, states.c.session_id.in_(batch))
+                .values(desired_revision=p.retired_revision, **released_claim),
             )
-            if advanced_render_consumers:
-                connection.execute(
-                    update(states)
-                    .where(*stale_render_filter)
-                    .values(
-                        desired_revision=session_revision,
-                        desired_at=now,
-                        claimed_revision=None,
-                        claim_token=None,
-                        worker_id=None,
-                        claim_expires_at=None,
-                        status="idle",
-                        failure_count=0,
-                        last_error_code=None,
-                        last_error_message=None,
-                        retry_at=None,
-                        commit_seq=commit_seq,
-                        updated_at=now,
-                    )
-                )
-            search_alignment = states.alias("search_alignment")
-            search_revision = (
-                select(search_alignment.c.desired_revision)
-                .where(
-                    search_alignment.c.projector == "search-v2",
-                    search_alignment.c.session_id == states.c.session_id,
-                )
-                .scalar_subquery()
-            )
-            alignment_filter = (
-                states.c.projector == EMBEDDING_PROJECTOR_ID,
-                search_revision.is_not(None),
-                states.c.desired_revision != search_revision,
-            )
-            aligned_embeddings = int(connection.execute(select(func.count()).select_from(states).where(*alignment_filter)).scalar_one())
-            if aligned_embeddings:
-                connection.execute(
-                    update(states)
-                    .where(*alignment_filter)
-                    .values(
-                        desired_revision=search_revision,
-                        desired_at=now,
-                        claimed_revision=None,
-                        claim_token=None,
-                        worker_id=None,
-                        claim_expires_at=None,
-                        status="idle",
-                        failure_count=0,
-                        last_error_code=None,
-                        last_error_message=None,
-                        retry_at=None,
-                        commit_seq=commit_seq,
-                        updated_at=now,
-                    )
-                )
-            retired_revision = (
-                select(sessions.c.commit_seq)
-                .where(sessions.c.session_id == states.c.session_id, sessions.c.render_state == "retired")
-                .scalar_subquery()
-            )
-            retired_filter = (
-                states.c.projector.in_(KNOWN_PROJECTORS),
-                retired_revision.is_not(None),
-                states.c.desired_revision < retired_revision,
-            )
-            advanced_retired = int(connection.execute(select(func.count()).select_from(states).where(*retired_filter)).scalar_one())
-            if advanced_retired:
-                connection.execute(
-                    update(states)
-                    .where(*retired_filter)
-                    .values(
-                        desired_revision=retired_revision,
-                        desired_at=now,
-                        claimed_revision=None,
-                        claim_token=None,
-                        worker_id=None,
-                        claim_expires_at=None,
-                        status="idle",
-                        retry_at=None,
-                        commit_seq=commit_seq,
-                        updated_at=now,
-                    )
-                )
-            return {
-                "inserted": inserted,
-                "eligible_sessions": eligible_sessions,
-                "reaped_irrelevant_semantic": irrelevant_semantic,
-                "aligned_embeddings": aligned_embeddings,
-                "advanced_retired": advanced_retired,
-                "advanced_render_consumers": advanced_render_consumers,
-            }
+        return counts
 
     def retire_archive_outbox(self) -> dict[str, int | str]:
         """Remove dead monolith projections and retain launch rows only as completed receipts."""
@@ -18233,6 +18172,131 @@ def _as_aware_utc(value: datetime | None) -> datetime | None:
 def _encode_datetime(value: datetime | None) -> str | None:
     normalized = _as_aware_utc(value)
     return normalized.isoformat() if normalized is not None else None
+
+
+# A repair statement names at most this many sessions, well under SQLite's
+# bound-parameter limit, so a whole-corpus backfill (a bumped embedding
+# identity) still runs as primary-key probes instead of one oversized IN.
+_PROJECTOR_REPAIR_BATCH = 500
+
+
+@dataclass(frozen=True)
+class ProjectorRepairPlan:
+    """Sessions a read-snapshot scan found needing projector-ledger repair."""
+
+    eligible_sessions: int
+    irrelevant_semantic: tuple[str, ...]
+    missing_semantic: tuple[str, ...]
+    missing_search: tuple[str, ...]
+    missing_embeddings: tuple[str, ...]
+    stale_render: tuple[str, ...]
+    misaligned_embeddings: tuple[str, ...]
+    retired: tuple[str, ...]
+
+    def is_empty(self) -> bool:
+        return not (
+            self.irrelevant_semantic
+            or self.missing_semantic
+            or self.missing_search
+            or self.missing_embeddings
+            or self.stale_render
+            or self.misaligned_embeddings
+            or self.retired
+        )
+
+
+def _projector_repair_predicates() -> SimpleNamespace:
+    """The predicates shared by the repair scan and the write that re-checks it."""
+
+    sessions = StorageSession.__table__
+    states = ProjectorState.__table__
+    eligible = (
+        sessions.c.user_state != "deleted",
+        sessions.c.current_render_generation.is_not(None),
+        sessions.c.render_state == "ready",
+    )
+    # search-v2 reads render objects frozen at its claimed revision. A
+    # re-render that committed a newer current generation without raising
+    # this target left the snapshot empty: the projector published zero
+    # objects and recorded the session complete. On the 2026-09-24 owner
+    # catalog 15,442 of 40,222 sessions were behind their generation, served
+    # only from a search.db built before the re-render, and a rebuild dropped
+    # them silently. Raise the target to the newest revision of the session's
+    # current render; embeddings follow via the alignment below.
+    # The render objects themselves were rewritten too, past both the session
+    # and generation revisions, so the target is the newest of the three: the
+    # first fix (session revision) still froze one 2,373-object session at 168
+    # visible objects.
+    render_objects = RenderObject.__table__
+    current_generation_revision = func.max(
+        sessions.c.commit_seq,
+        func.coalesce(
+            select(RenderGeneration.__table__.c.commit_seq)
+            .where(RenderGeneration.__table__.c.generation_id == sessions.c.current_render_generation)
+            .scalar_subquery(),
+            0,
+        ),
+        func.coalesce(
+            select(func.max(render_objects.c.commit_seq))
+            .where(render_objects.c.generation_id == sessions.c.current_render_generation)
+            .scalar_subquery(),
+            0,
+        ),
+    )
+    session_revision = (
+        select(current_generation_revision)
+        .where(
+            sessions.c.session_id == states.c.session_id,
+            *eligible,
+            current_generation_revision > states.c.desired_revision,
+        )
+        .scalar_subquery()
+    )
+    search_alignment = states.alias("search_alignment")
+    search_revision = (
+        select(search_alignment.c.desired_revision)
+        .where(
+            search_alignment.c.projector == "search-v2",
+            search_alignment.c.session_id == states.c.session_id,
+        )
+        .scalar_subquery()
+    )
+    retired_revision = (
+        select(sessions.c.commit_seq)
+        .where(sessions.c.session_id == states.c.session_id, sessions.c.render_state == "retired")
+        .scalar_subquery()
+    )
+    search_rows = states.alias("embedding_seed_search")
+    return SimpleNamespace(
+        sessions=sessions,
+        states=states,
+        search_rows=search_rows,
+        eligible=eligible,
+        irrelevant_semantic=(
+            states.c.projector == SEMANTIC_PROJECTOR_ID,
+            states.c.session_id.in_(select(sessions.c.session_id).where(func.lower(sessions.c.provider) != "claude")),
+        ),
+        semantic_candidates=(
+            *eligible,
+            func.lower(sessions.c.provider) == "claude",
+            sessions.c.semantic_projection_version < 1,
+        ),
+        embedding_seed=(search_rows.c.projector == "search-v2",),
+        session_revision=session_revision,
+        stale_render=(states.c.projector == "search-v2", session_revision.is_not(None)),
+        search_revision=search_revision,
+        alignment=(
+            states.c.projector == EMBEDDING_PROJECTOR_ID,
+            search_revision.is_not(None),
+            states.c.desired_revision != search_revision,
+        ),
+        retired_revision=retired_revision,
+        retired=(
+            states.c.projector.in_(KNOWN_PROJECTORS),
+            retired_revision.is_not(None),
+            states.c.desired_revision < retired_revision,
+        ),
+    )
 
 
 __all__ = ["CatalogStore", "DEVICE_TOKEN_LIMIT_PER_OWNER"]
