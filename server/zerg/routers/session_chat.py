@@ -402,6 +402,7 @@ class QueuedInputSummary(BaseModel):
     live_input_id: str | None = None
     client_request_id: str | None = None
     durable_event_id: str | None = None
+    text: str
     origin: str = "user"
     intent: InputIntent
     status: InputStatus

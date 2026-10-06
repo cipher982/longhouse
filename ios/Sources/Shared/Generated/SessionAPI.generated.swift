@@ -789,6 +789,7 @@ struct APIQueuedInputSummary: Codable, Hashable, Sendable {
     let liveInputId: String?
     let clientRequestId: String?
     let durableEventId: String?
+    let text: String
     let origin: String?
     let intent: String
     let status: String
