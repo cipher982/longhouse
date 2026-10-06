@@ -376,7 +376,17 @@ describe("trimPreviewMarkdown", () => {
   });
 
   it("never leaves a code fence open", () => {
-    const text = `Intro line here.\n\n\`\`\`sh\necho one\n\necho two\n${"z".repeat(80)}\n\`\`\``;
+    const fence = "`".repeat(3);
+    const text = `Intro line here.\n\n${fence}sh\necho one\n\necho two\n${"z".repeat(80)}\n${fence}`;
     expect(trimPreviewMarkdown(text, 50)).toBe("Intro line here.…");
+    // An inline triple-backtick after the opener does not fool the cut.
+    const inline = `Intro line here.\n\n${fence}sh\nrun ${fence}x${fence} now\n\necho two\n${"z".repeat(80)}`;
+    expect(trimPreviewMarkdown(inline, 60)).toBe("Intro line here.…");
+    // Indented and tilde fences count too.
+    const tilde = `Intro line here.\n\n  ~~~\necho one\n\necho two\n${"z".repeat(80)}`;
+    expect(trimPreviewMarkdown(tilde, 50)).toBe("Intro line here.…");
+    // A fence on the first line is closed, not cut to nothing.
+    const first = `${fence}sh\necho one\n\necho two\n${"z".repeat(80)}`;
+    expect(trimPreviewMarkdown(first, 40)).toBe(`${fence}sh\necho one\n…\n${fence}`);
   });
 });

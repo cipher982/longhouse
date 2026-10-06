@@ -25,18 +25,26 @@ import type { RailActiveSession } from "./sessionRailContext";
 
 const PREVIEW_CHARS = 600;
 
+const FENCE_LINE = /^\s*(```|~~~)/;
+
 /** Cut long markdown at a paragraph, else a line, else a hard cut, and mark
- * the cut with "…". A cut that leaves a code fence open is moved back to
- * before that fence, so the preview never renders a runaway code block. */
+ * the cut with "…". If the kept lines leave a code fence open (same fence
+ * test as the transcript's truncateMarkdown), the cut moves back to before
+ * that fence; when the fence is the first line, it is closed instead so the
+ * preview keeps its text without rendering a runaway code block. */
 export function trimPreviewMarkdown(text: string, max = PREVIEW_CHARS): string {
   if (text.length <= max) return text;
   const head = text.slice(0, max);
   const block = head.lastIndexOf("\n\n");
   const line = head.lastIndexOf("\n");
-  let cut = block > max / 3 ? head.slice(0, block) : line > max / 3 ? head.slice(0, line) : head;
-  if ((cut.match(/^```/gm) ?? []).length % 2 === 1) {
-    cut = cut.slice(0, cut.lastIndexOf("```"));
-  }
+  const cut = block > max / 3 ? head.slice(0, block) : line > max / 3 ? head.slice(0, line) : head;
+  const lines = cut.split("\n");
+  let openFence = -1;
+  lines.forEach((candidate, index) => {
+    if (FENCE_LINE.test(candidate)) openFence = openFence === -1 ? index : -1;
+  });
+  if (openFence > 0) return `${lines.slice(0, openFence).join("\n").trimEnd()}…`;
+  if (openFence === 0) return `${cut.trimEnd()}\n…\n${lines[0].trim().slice(0, 3)}`;
   return `${cut.trimEnd()}…`;
 }
 
