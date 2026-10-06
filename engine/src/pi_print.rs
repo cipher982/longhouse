@@ -406,7 +406,7 @@ pub async fn recover_pi_print_turns(
     Ok(recovered)
 }
 
-pub fn interrupt_pi_print_turn(
+pub async fn interrupt_pi_print_turn(
     run_id: &str,
     session_id: &str,
     thread_id: &str,
@@ -446,6 +446,12 @@ pub fn interrupt_pi_print_turn(
         anyhow::bail!("Pi Console provider process-group identity changed");
     }
     registry.mark_cancel_requested(run_id)?;
+    let stdout_path = claim
+        .stdout_path
+        .as_deref()
+        .context("Pi Console turn has no stdout path")?;
+    let fifo = Path::new(stdout_path).with_file_name(crate::console_rpc::RPC_STDIN);
+    crate::console_rpc::abort(&fifo).await?;
     let result = unsafe { libc::killpg(pgid, libc::SIGINT) };
     if result != 0 {
         let error = std::io::Error::last_os_error();
@@ -2130,7 +2136,9 @@ if args[:2] == ["--mode", "rpc"]:
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        interrupt_pi_print_turn(&run_id, &session_id, &thread_id, &turn_id).unwrap();
+        interrupt_pi_print_turn(&run_id, &session_id, &thread_id, &turn_id)
+            .await
+            .unwrap();
 
         // A healthy settle takes a fraction of a second; the wait below is the
         // fake's own turn length, so a run that never settles fails at the

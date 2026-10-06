@@ -138,6 +138,7 @@ struct State {
     phase: InvocationState,
     current_turn: Option<TurnBinding>,
     latest_turn: TurnBinding,
+    queued_turn: Option<TurnBinding>,
     pending: BTreeMap<String, PendingItem>,
     recent_items: Vec<PendingItem>,
     wake_seq: u64,
@@ -178,6 +179,7 @@ impl ConsoleInvocation {
                 phase: InvocationState::Responding,
                 current_turn: Some(binding.clone()),
                 latest_turn: binding,
+                queued_turn: None,
                 pending: BTreeMap::new(),
                 recent_items: Vec::new(),
                 wake_seq: 0,
@@ -252,6 +254,52 @@ impl ConsoleInvocation {
         }
         self.write_input(text, images).await
     }
+    pub async fn queue_user_input(
+        &self,
+        binding: TurnBinding,
+        text: &str,
+        images: &[PathBuf],
+    ) -> Result<()> {
+        {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.phase != InvocationState::Responding
+                || state.current_turn.is_none()
+                || state.pending_wake_id.is_some()
+                || state.queued_turn.is_some()
+            {
+                bail!("Console invocation cannot queue another user turn");
+            }
+            if binding.origin != TurnOrigin::User {
+                bail!("only a user turn can be queued during a response");
+            }
+            state.queued_turn = Some(binding.clone());
+        }
+        if let Err(error) = self.write_input(text, images).await {
+            self.cancel_queued_user_turn(&binding.run_id);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn cancel_queued_user_turn(&self, run_id: &str) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !state
+            .queued_turn
+            .as_ref()
+            .is_some_and(|binding| binding.run_id == run_id)
+        {
+            return false;
+        }
+        state.queued_turn = None;
+        if state.phase == InvocationState::Responding && state.current_turn.is_none() {
+            state.phase = if state.pending.is_empty() {
+                InvocationState::Closed
+            } else {
+                InvocationState::Parked
+            };
+        }
+        true
+    }
     pub async fn write_input(&self, text: &str, images: &[PathBuf]) -> Result<()> {
         let input = self
             .input
@@ -284,6 +332,16 @@ impl ConsoleInvocation {
 
     pub fn response_started(&self, trigger: Value) -> Option<WakeRequest> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.phase == InvocationState::Responding && state.current_turn.is_none() {
+            if let Some(binding) = state.queued_turn.take() {
+                state.latest_turn = binding.clone();
+                state.current_turn = Some(binding);
+                state.pending_wake_id = None;
+                state.buffered_events.clear();
+                state.deferred_idle = None;
+                return None;
+            }
+        }
         if state.phase != InvocationState::Parked || state.pending.is_empty() {
             return None;
         }
@@ -423,6 +481,8 @@ impl ConsoleInvocation {
                 .buffered_events
                 .push(BufferedEvent { sequence, value });
             None
+        } else if state.queued_turn.is_some() {
+            None
         } else {
             Some((state.latest_turn.clone(), value))
         }
@@ -441,6 +501,18 @@ impl ConsoleInvocation {
         let changed = pending != state.pending || recent_items != state.recent_items;
         state.pending = pending;
         state.recent_items = recent_items;
+        let close = state.phase == InvocationState::Parked && state.pending.is_empty();
+        if close {
+            state.phase = InvocationState::Closed;
+        }
+        (changed, close)
+    }
+    pub fn remove_pending_item(&self, id: &str) -> (bool, bool) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let changed = state.pending.remove(id).is_some();
+        if changed {
+            state.recent_items.retain(|item| item.id != id);
+        }
         let close = state.phase == InvocationState::Parked && state.pending.is_empty();
         if close {
             state.phase = InvocationState::Closed;
@@ -514,6 +586,21 @@ impl ConsoleInvocation {
             state.deferred_idle = Some(signal);
             return None;
         }
+        if state.queued_turn.is_some() && state.current_turn.is_some() {
+            let binding = state.current_turn.take().unwrap();
+            state.latest_turn = binding.clone();
+            state.phase = InvocationState::Responding;
+            state.pending_wake_id = None;
+            state.buffered_events.clear();
+            state.deferred_idle = None;
+            return Some(IdleOutcome {
+                binding,
+                signal,
+                invocation_state: InvocationState::Responding,
+                pending_count: state.pending.len(),
+                has_active_turn: true,
+            });
+        }
         let retained = if state.current_turn.is_none() {
             state.pending_wake_id.take().map(|wake_id| RetainedWake {
                 invocation: self.clone(),
@@ -544,12 +631,12 @@ impl ConsoleInvocation {
     pub fn take_active_turn(&self) -> Option<TurnBinding> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.phase = InvocationState::Closed;
-        let active = state.current_turn.take();
+        state.queued_turn = None;
         state.pending_wake_id = None;
         state.buffered_events.clear();
         state.deferred_idle = None;
         state.input_pending = false;
-        active
+        state.current_turn.take()
     }
 
     pub fn process_exited(&self) {

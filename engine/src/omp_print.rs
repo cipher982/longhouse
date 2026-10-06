@@ -31,6 +31,7 @@ use crate::managed_identity_contract::ManagedProvider;
 
 pub const OMP_PRINT_ADAPTER: &str = "omp_print";
 const OMP_RUNTIME_SOURCE: &str = "omp_console";
+const OMP_ASYNC_WORK_PLACEHOLDER_ID: &str = "omp:async-work";
 pub const DEFAULT_OMP_BIN: &str = "omp";
 const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
@@ -145,6 +146,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
                             .await
                             .context("binding OMP Console user input to wake response");
                     }
+                    return queue_responding_turn(&config, invocation).await;
                 }
             }
         }
@@ -392,12 +394,12 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         binding,
         input,
     ));
-    if state
+    let async_work_placeholder = state
         .pointer("/data/hasPendingAsyncWork")
         .and_then(Value::as_bool)
-        == Some(true)
-    {
-        invocation.replace_pending(vec![async_work_placeholder()], vec![]);
+        == Some(true);
+    if async_work_placeholder {
+        invocation.replace_pending(vec![async_work_placeholder_item()], vec![]);
     }
     if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
         let _ = cleanup_owned_child(&mut child, &config.run_id).await;
@@ -423,7 +425,14 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     let monitor_stderr_path = stderr_path.clone();
     let monitored_invocation = invocation.clone();
     tokio::spawn(async move {
-        monitor_omp_print(&mut child, &monitor_stderr_path, sink, monitored_invocation).await;
+        monitor_omp_print(
+            &mut child,
+            &monitor_stderr_path,
+            sink,
+            monitored_invocation,
+            async_work_placeholder,
+        )
+        .await;
         drop(monitor);
     });
 
@@ -481,13 +490,41 @@ fn turn_binding(config: &OmpPrintRunConfig, origin: TurnOrigin) -> TurnBinding {
     }
 }
 
-fn async_work_placeholder() -> PendingItem {
+fn async_work_placeholder_item() -> PendingItem {
     PendingItem {
-        id: "omp:async-work".to_string(),
+        id: OMP_ASYNC_WORK_PLACEHOLDER_ID.to_string(),
         kind: "other".to_string(),
         status: "running".to_string(),
         description: Some("OMP reports pending asynchronous work".to_string()),
     }
+}
+fn async_placeholder_replacement_snapshot(
+    state: InvocationState,
+    placeholder_pending: bool,
+    updates: &[(PendingItem, bool)],
+) -> Option<(Vec<PendingItem>, Vec<PendingItem>)> {
+    if !placeholder_pending
+        || !updates
+            .iter()
+            .any(|(item, _)| item.id != OMP_ASYNC_WORK_PLACEHOLDER_ID)
+    {
+        return None;
+    }
+    let parked = state == InvocationState::Parked;
+    if parked && updates.iter().all(|(_, is_pending)| !is_pending) {
+        return None;
+    }
+    let pending = updates
+        .iter()
+        .filter(|(_, is_pending)| *is_pending || parked)
+        .map(|(item, _)| item.clone())
+        .collect();
+    let recent = updates
+        .iter()
+        .filter(|(_, is_pending)| !*is_pending && !parked)
+        .map(|(item, _)| item.clone())
+        .collect();
+    Some((pending, recent))
 }
 
 async fn wait_for_rpc_response(
@@ -697,6 +734,54 @@ fn persist_rebound_claim(
         Some(&run.session_file.to_string_lossy()),
     )?;
     Ok(())
+}
+
+async fn queue_responding_turn(
+    config: &OmpPrintRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+) -> Result<OmpPrintRunSummary> {
+    let run = existing_run(&invocation)?;
+    let claims = crate::turn_claims::default_registry()?;
+    let sink = sink_for_existing_run(config, &invocation, &run)?;
+    claims.mark_spawned_invocation(
+        &config.run_id,
+        run.pid,
+        run.process_group_id,
+        crate::turn_claims::process_start_time_for_pid(Some(run.pid)),
+        OMP_PRINT_ADAPTER,
+        &invocation.launch_id,
+        Some(&invocation.provider_thread_id),
+        &run.stdout_path.to_string_lossy(),
+        &run.stderr_path.to_string_lossy(),
+        invocation_spawn_result(config, &invocation, &run),
+    )?;
+    claims.record_invocation_turn(&config.run_id, "user", false)?;
+    claims.mark_provider_binding(
+        &config.run_id,
+        &invocation.provider_thread_id,
+        Some(&run.session_file.to_string_lossy()),
+    )?;
+    sink.post_phase("thinking", None, 0).await;
+    if let Err(error) = invocation
+        .queue_user_input(
+            turn_binding(config, TurnOrigin::User),
+            &config.prompt,
+            &config.image_paths,
+        )
+        .await
+    {
+        sink.post_terminal_with_lifecycle(
+            "run_failed",
+            None,
+            Some(error.to_string()),
+            Some(invocation.state().as_str()),
+            Some(invocation.pending_count()),
+        )
+        .await;
+        return Err(error).context("queueing user input in a responding OMP invocation");
+    }
+    hold_turn_monitor(&config.run_id, invocation.clone());
+    Ok(existing_summary(config, &invocation, &run, true))
 }
 
 async fn adopt_parked_turn(
@@ -1094,6 +1179,12 @@ pub async fn interrupt_omp_print_turn(
         anyhow::bail!("OMP Console provider process-group identity changed");
     }
     registry.mark_cancel_requested(run_id)?;
+    let stdout_path = claim
+        .stdout_path
+        .as_deref()
+        .context("OMP Console turn has no stdout path")?;
+    let fifo = Path::new(stdout_path).with_file_name(crate::console_rpc::RPC_STDIN);
+    crate::console_rpc::abort(&fifo).await?;
     let result = unsafe { libc::killpg(pgid, libc::SIGINT) };
     if result != 0 {
         let error = std::io::Error::last_os_error();
@@ -1113,6 +1204,7 @@ async fn monitor_omp_print(
     stderr_path: &Path,
     mut sink: OmpPrintSink,
     invocation: Arc<ConsoleInvocation>,
+    mut async_work_placeholder: bool,
 ) {
     let mut projection = OmpStreamProjection::default();
     let mut offset = 0_u64;
@@ -1141,9 +1233,6 @@ async fn monitor_omp_print(
         let current_binding = invocation.latest_turn();
         if current_binding.run_id != observed_run {
             sink = sink.for_binding(&current_binding);
-            sink.source_start_len = std::fs::metadata(&sink.session_file)
-                .map(|metadata| metadata.len())
-                .unwrap_or_default();
             sink.binding_emitted = true;
             observed_run = current_binding.run_id.clone();
             projection.begin_turn();
@@ -1220,6 +1309,14 @@ async fn monitor_omp_print(
             if let Some(trigger) = omp_async_trigger(&event, &updates) {
                 last_trigger = trigger;
             }
+            if let Some((pending, recent)) = async_placeholder_replacement_snapshot(
+                invocation.state(),
+                async_work_placeholder,
+                &updates,
+            ) {
+                apply_pending_snapshot(&invocation, &sink, pending, recent).await;
+                async_work_placeholder = false;
+            }
             let mut should_close = false;
             for (item, is_pending) in updates {
                 if !is_pending && invocation.state() == InvocationState::Parked {
@@ -1239,17 +1336,27 @@ async fn monitor_omp_print(
             {
                 match projection.has_pending_async_work {
                     Some(true) if invocation.pending_count() == 0 => {
-                        if apply_pending_update(&invocation, &sink, async_work_placeholder(), true)
+                        if !async_work_placeholder
+                            && apply_pending_update(
+                                &invocation,
+                                &sink,
+                                async_work_placeholder_item(),
+                                true,
+                            )
                             .await
                         {
                             break;
+                        } else {
+                            async_work_placeholder = true;
                         }
                     }
                     Some(false) => {
                         if apply_pending_snapshot(&invocation, &sink, Vec::new(), Vec::new()).await
                         {
+                            async_work_placeholder = false;
                             break;
                         }
+                        async_work_placeholder = false;
                     }
                     _ => {}
                 }
@@ -1260,11 +1367,26 @@ async fn monitor_omp_print(
                     sink.for_binding(&invocation.latest_turn())
                         .post_wake_signal(&wake)
                         .await;
+                    let has_real_deferred = deferred_updates
+                        .iter()
+                        .any(|(item, _)| item.id != OMP_ASYNC_WORK_PLACEHOLDER_ID);
                     for (item, is_pending) in std::mem::take(&mut deferred_updates) {
                         if apply_pending_update(&invocation, &sink, item, is_pending).await {
                             break;
                         }
                     }
+                    if async_work_placeholder && has_real_deferred {
+                        remove_async_work_placeholder(&invocation, &sink).await;
+                        async_work_placeholder = false;
+                    }
+                }
+                let current_binding = invocation.latest_turn();
+                if current_binding.run_id != observed_run {
+                    sink = sink.for_binding(&current_binding);
+                    sink.binding_emitted = true;
+                    observed_run = current_binding.run_id.clone();
+                    prompt_written_at = Instant::now();
+                    sink.post_phase("thinking", None, seq).await;
                 }
             }
 
@@ -1281,50 +1403,18 @@ async fn monitor_omp_print(
                     .and_then(|claims| claims.read(&invocation.latest_turn().run_id))
                     .ok()
                     .is_some_and(|claim| claim.cancel_requested_at.is_some());
-                if invocation.pending_count() == 0 {
-                    let state_id = format!("longhouse-async-state-{}", Uuid::new_v4());
-                    let state_start = std::fs::metadata(&sink.stdout_path)
-                        .map(|metadata| metadata.len())
-                        .unwrap_or_default();
-                    let fifo = sink
-                        .stdout_path
-                        .with_file_name(crate::console_rpc::RPC_STDIN);
-                    if crate::console_rpc::write_command(
-                        &fifo,
-                        &json!({"id": state_id, "type": "get_state"}),
+                // Reconcile an unknown sentinel and empty registries from OMP's
+                // authoritative bit. Once real job IDs are known, updates own
+                // the inventory; a query here can observe a later wake turn.
+                if invocation.pending_count() == 0 || async_work_placeholder {
+                    reconcile_omp_async_work_state(
+                        child,
+                        stderr_path,
+                        &sink,
+                        &invocation,
+                        &mut async_work_placeholder,
                     )
-                    .await
-                    .is_ok()
-                    {
-                        if let Ok(state) = wait_for_rpc_response(
-                            child,
-                            &sink.stdout_path,
-                            stderr_path,
-                            state_start,
-                            &state_id,
-                        )
-                        .await
-                        {
-                            let pending = state
-                                .pointer("/data/hasPendingAsyncWork")
-                                .and_then(Value::as_bool)
-                                == Some(true)
-                                || state.pointer("/data/isSettled").and_then(Value::as_bool)
-                                    == Some(false);
-                            if pending {
-                                apply_pending_update(
-                                    &invocation,
-                                    &sink,
-                                    async_work_placeholder(),
-                                    true,
-                                )
-                                .await;
-                            } else {
-                                apply_pending_snapshot(&invocation, &sink, Vec::new(), Vec::new())
-                                    .await;
-                            }
-                        }
-                    }
+                    .await;
                 }
                 let source_bound = sink.ensure_transcript_binding().await.unwrap_or(false);
                 let source_drained = sink.source_is_drained(&projection).unwrap_or(false);
@@ -1359,9 +1449,8 @@ async fn monitor_omp_print(
                         break;
                     }
                 }
-                if invocation.state() == InvocationState::Parked {
-                    apply_pending_snapshot(&invocation, &sink, Vec::new(), Vec::new()).await;
-                }
+                apply_pending_snapshot(&invocation, &sink, Vec::new(), Vec::new()).await;
+                async_work_placeholder = false;
                 if invocation.state() == InvocationState::Closed {
                     break;
                 }
@@ -1423,6 +1512,79 @@ async fn monitor_omp_print(
     }
 }
 
+fn record_invocation_claim_state(invocation: &ConsoleInvocation) {
+    let binding = invocation.latest_turn();
+    if let Ok(claims) = crate::turn_claims::default_registry() {
+        let _ = claims.record_invocation_state(
+            &binding.run_id,
+            invocation.state().as_str(),
+            invocation.pending_count(),
+        );
+    }
+}
+
+async fn remove_async_work_placeholder(
+    invocation: &ConsoleInvocation,
+    sink: &OmpPrintSink,
+) -> bool {
+    let (changed, close) = invocation.remove_pending_item(OMP_ASYNC_WORK_PLACEHOLDER_ID);
+    if changed || close {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            sink.for_binding(&binding)
+                .post_delegation_snapshot(snapshot)
+                .await;
+        }
+        record_invocation_claim_state(invocation);
+    }
+    close
+}
+async fn reconcile_omp_async_work_state(
+    child: &mut Child,
+    stderr_path: &Path,
+    sink: &OmpPrintSink,
+    invocation: &ConsoleInvocation,
+    async_work_placeholder: &mut bool,
+) {
+    let state_id = format!("longhouse-async-state-{}", Uuid::new_v4());
+    let state_start = std::fs::metadata(&sink.stdout_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
+    let fifo = sink
+        .stdout_path
+        .with_file_name(crate::console_rpc::RPC_STDIN);
+    if crate::console_rpc::write_command(&fifo, &json!({"id": state_id, "type": "get_state"}))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let Ok(state) = wait_for_rpc_response(
+        child,
+        &sink.stdout_path,
+        stderr_path,
+        state_start,
+        &state_id,
+    )
+    .await
+    else {
+        return;
+    };
+    let has_pending = state
+        .pointer("/data/hasPendingAsyncWork")
+        .and_then(Value::as_bool);
+    let is_settled = state.pointer("/data/isSettled").and_then(Value::as_bool);
+    if has_pending == Some(false) || (has_pending.is_none() && is_settled == Some(true)) {
+        apply_pending_snapshot(invocation, sink, Vec::new(), Vec::new()).await;
+        *async_work_placeholder = false;
+    } else if (has_pending == Some(true) || is_settled == Some(false))
+        && invocation.pending_count() == 0
+        && !*async_work_placeholder
+    {
+        apply_pending_update(invocation, sink, async_work_placeholder_item(), true).await;
+        *async_work_placeholder = true;
+    }
+}
+
 async fn apply_pending_update(
     invocation: &ConsoleInvocation,
     sink: &OmpPrintSink,
@@ -1436,6 +1598,7 @@ async fn apply_pending_update(
                 .post_delegation_snapshot(snapshot)
                 .await;
         }
+        record_invocation_claim_state(invocation);
     }
     close
 }
@@ -1453,6 +1616,7 @@ async fn apply_pending_snapshot(
                 .post_delegation_snapshot(snapshot)
                 .await;
         }
+        record_invocation_claim_state(invocation);
     }
     close
 }
@@ -3101,6 +3265,91 @@ mod tests {
         assert!(refused.rpc_rejected);
         assert_eq!(refused.native_error.as_deref(), Some("no model"));
     }
+    #[test]
+    fn async_placeholder_snapshot_uses_the_real_job_id() {
+        let launch_id = Uuid::new_v4().to_string();
+        let provider_thread_id = Uuid::new_v4().to_string();
+        let invocation = Arc::new(ConsoleInvocation::new(
+            "omp",
+            provider_thread_id,
+            launch_id.clone(),
+            1,
+            1,
+            TurnBinding {
+                run_id: "run-1".to_string(),
+                turn_id: None,
+                client_request_id: None,
+                origin: TurnOrigin::User,
+            },
+            Arc::new(crate::console_rpc::ConsoleRpcInput::new(PathBuf::new())),
+        ));
+        invocation.replace_pending(vec![async_work_placeholder_item()], vec![]);
+
+        let job = PendingItem {
+            id: "job-1".to_string(),
+            kind: "shell".to_string(),
+            status: "running".to_string(),
+            description: Some("background command".to_string()),
+        };
+        let (pending, recent) = async_placeholder_replacement_snapshot(
+            InvocationState::Responding,
+            true,
+            &[(job.clone(), true)],
+        )
+        .unwrap();
+        let (changed, close) = invocation.replace_pending(pending, recent);
+        assert!(changed);
+        assert!(!close);
+        assert_eq!(invocation.pending_count(), 1);
+        assert_eq!(
+            invocation.remove_pending_item(OMP_ASYNC_WORK_PLACEHOLDER_ID),
+            (false, false)
+        );
+
+        let first_idle = invocation
+            .idle(IdleSignal {
+                terminal_state: "run_completed".to_string(),
+                exit_code: Some(0),
+                stderr: None,
+            })
+            .unwrap();
+        assert_eq!(first_idle.invocation_state, InvocationState::Parked);
+        let wake = invocation
+            .response_started(json!({"kind": "async_job_completed"}))
+            .unwrap();
+        invocation
+            .bind_wake(
+                &wake.invocation_id,
+                &wake.wake_id,
+                TurnBinding {
+                    run_id: "run-2".to_string(),
+                    turn_id: None,
+                    client_request_id: None,
+                    origin: TurnOrigin::Wake,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        let (changed, close) = invocation.update_pending_item(
+            PendingItem {
+                status: "completed".to_string(),
+                ..job
+            },
+            false,
+        );
+        assert!(changed);
+        assert!(!close);
+
+        let wake_idle = invocation
+            .idle(IdleSignal {
+                terminal_state: "run_completed".to_string(),
+                exit_code: Some(0),
+                stderr: None,
+            })
+            .unwrap();
+        assert_eq!(wake_idle.invocation_state, InvocationState::Closed);
+        assert_eq!(wake_idle.pending_count, 0);
+    }
 
     #[test]
     fn ordinary_agent_end_is_terminal_but_explicit_continuation_is_not() {
@@ -3179,9 +3428,11 @@ args = sys.argv[1:]
 source = args[args.index("--resume") + 1]
 if os.path.exists(source) and os.path.getsize(source) > 0:
     with open(source, "r", encoding="utf-8") as stream:
-        native_id = json.loads(stream.readline())["id"]
+        session_header = json.loads(stream.readline())
+    native_id = session_header["id"]
 else:
     native_id = str(uuid.uuid4())
+    session_header = {}
 header = {
     "type": "session",
     "version": 3,
@@ -3191,6 +3442,9 @@ header = {
 }
 write_lock = threading.Lock()
 pending_jobs = set()
+if session_header.get("longhouse_test_pending"):
+    pending_jobs.add("job-0")
+active_response = None
 def out(event):
     with write_lock:
         print(json.dumps(event, separators=(",", ":")), flush=True)
@@ -3234,8 +3488,8 @@ def start_job(job_id):
 def finish_job(job_id):
     pending_jobs.discard(job_id)
     out({"type": "custom_message", "customType": "async-result", "content": "background command finished", "details": {"jobs": [{"jobId": job_id, "type": "bash", "label": "background command"}]}})
-def finish_in_background(job_id, keep_pending):
-    time.sleep(0.2)
+def finish_in_background(job_id, keep_pending, delay=0.2):
+    time.sleep(delay)
     finish_job(job_id)
     out({"type": "agent_start"})
     if keep_pending:
@@ -3262,12 +3516,41 @@ for line in sys.stdin:
     elif kind == "prompt":
         prompt = command["message"]
         out({"id":command.get("id"),"type":"response","command":"prompt","success":True})
-        if pending_jobs:
+        if prompt == "scenario=sentinel":
+            user_message(prompt)
+            pending_jobs.discard("job-0")
+            out({"type":"agent_start"})
+            start_job("job-1")
+            assistant_message(prompt, start=False)
+            threading.Thread(target=finish_in_background, args=("job-1", False, 1.0), daemon=True).start()
+        elif active_response is not None:
+            first_message = {
+                "id": active_response["id"],
+                "role": "assistant",
+                "content": [{"type": "text", "text": active_response["text"]}],
+                "stopReason": "stop",
+            }
+            append_native(first_message)
+            out({"type":"message_end","message":first_message})
+            out({"type":"agent_end","isTerminal":True,"willContinue":False})
+            user_message(prompt)
+            assistant_message(prompt)
+            out({"type":"session_settled"})
+            active_response = None
+        elif pending_jobs:
             for job_id in list(pending_jobs):
                 finish_job(job_id)
             user_message(prompt)
             assistant_message(prompt)
             out({"type":"session_settled"})
+        elif prompt == "scenario=responding":
+            user_message(prompt)
+            active_response = {"id": str(uuid.uuid4()), "text": "first response"}
+            with open(source + ".active", "w", encoding="utf-8") as stream:
+                stream.write("active")
+            out({"type":"agent_start"})
+            out({"type":"message_start","message":{"role":"assistant","content":[]}})
+            out({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"first response"}})
         elif prompt.startswith(("scenario=background", "scenario=user", "scenario=wake", "scenario=drain", "scenario=restart")):
             user_message(prompt)
             out({"type":"agent_start"})
@@ -3619,12 +3902,35 @@ for line in sys.stdin:
         let session_id = Uuid::new_v4().to_string();
         let thread_id = Uuid::new_v4().to_string();
         let first_run_id = Uuid::new_v4().to_string();
+        let session_dir = temp.path().join("omp-sessions");
+        let (resume_provider_thread_id, resume_session_file) =
+            if scenario == LifecycleScenario::WakeDrained {
+                std::fs::create_dir_all(&session_dir).unwrap();
+                let provider_thread_id = Uuid::new_v4().to_string();
+                let session_file = session_dir.join("sentinel.jsonl");
+                let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .to_path_buf();
+                let header = json!({
+                    "type": "session",
+                    "version": 3,
+                    "id": provider_thread_id,
+                    "timestamp": "2026-09-09T22:43:51.533Z",
+                    "cwd": cwd,
+                    "longhouse_test_pending": true,
+                });
+                std::fs::write(&session_file, format!("{header}\n")).unwrap();
+                (Some(provider_thread_id), Some(session_file))
+            } else {
+                (None, None)
+            };
         let first_prompt = match scenario {
             LifecycleScenario::Plain => "plain",
             LifecycleScenario::Background => "scenario=background",
             LifecycleScenario::WakePending => "scenario=wake",
             LifecycleScenario::UserSend => "scenario=user",
-            LifecycleScenario::WakeDrained => "scenario=drain",
+            LifecycleScenario::WakeDrained => "scenario=sentinel",
             LifecycleScenario::Restart => "scenario=restart",
             _ => unreachable!(),
         };
@@ -3639,8 +3945,8 @@ for line in sys.stdin:
             &thread_id,
             &first_run_id,
             first_prompt,
-            None,
-            None,
+            resume_provider_thread_id.clone(),
+            resume_session_file.clone(),
             "user",
             None,
             None,
@@ -3713,6 +4019,28 @@ for line in sys.stdin:
             }
             LifecycleScenario::WakePending | LifecycleScenario::WakeDrained => {
                 assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                if matches!(scenario, LifecycleScenario::WakeDrained) {
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                    loop {
+                        let real_job = runtime_events().into_iter().find(|event| {
+                            event["session_id"] == session_id
+                                && event["kind"] == "delegation_signal"
+                                && event["payload"]["delegation"]["items"]
+                                    .as_array()
+                                    .is_some_and(|items| {
+                                        items.iter().any(|item| item["id"] == "job-1")
+                                    })
+                        });
+                        if real_job.is_some() {
+                            break;
+                        }
+                        assert!(
+                            tokio::time::Instant::now() < deadline,
+                            "OMP did not replace its async-work placeholder with job-1"
+                        );
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                }
                 let wake = wait_for_runtime_event(&session_id, "wake_signal").await;
                 assert_eq!(wake["source"], OMP_RUNTIME_SOURCE);
                 assert_eq!(wake["payload"]["invocation_id"], first.launch_id);
@@ -3846,6 +4174,92 @@ for line in sys.stdin:
     async fn console_lifecycle_conformance_runs_phase_one_scenarios() {
         let adapters: [(&str, ScenarioRunner); 1] = [("omp", run_omp_scenario)];
         conformance::run_phase_one(&adapters).await;
+    }
+    #[tokio::test]
+    async fn async_work_placeholder_is_replaced_by_real_job_then_drains() {
+        run_omp_scenario_inner(LifecycleScenario::WakeDrained).await;
+    }
+    #[tokio::test]
+    async fn user_turn_while_responding_queues_in_same_omp_invocation() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
+        let fake_omp = temp.path().join("omp");
+        write_fake_omp(&fake_omp);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let first_run_id = Uuid::new_v4().to_string();
+        let second_run_id = Uuid::new_v4().to_string();
+        let claims = crate::turn_claims::default_registry().unwrap();
+        claims
+            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+
+        let first = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &first_run_id,
+            "scenario=responding",
+            None,
+            None,
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        let active_marker = PathBuf::from(format!("{}.active", first.session_file));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !active_marker.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fake OMP did not start its in-flight response"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        claims
+            .claim(&second_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let second = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &second_run_id,
+            "second queued prompt",
+            first.provider_thread_id.clone(),
+            Some(PathBuf::from(&first.session_file)),
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(second.pid, first.pid);
+        assert_eq!(second.launch_id, first.launch_id);
+        let first_claim = wait_for_terminal(&first_run_id).await;
+        assert_eq!(
+            first_claim.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        assert_eq!(first_claim.invocation_state.as_deref(), Some("responding"));
+        let second_claim = wait_for_terminal(&second_run_id).await;
+        assert_eq!(second_claim.origin.as_deref(), Some("user"));
+        assert!(!second_claim.adopted_parked_invocation);
+        assert_eq!(
+            second_claim.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        assert_eq!(second_claim.invocation_state.as_deref(), Some("closed"));
+        let transcript = std::fs::read_to_string(&first.session_file).unwrap();
+        assert!(transcript.contains("scenario=responding"));
+        assert!(transcript.contains("second queued prompt"));
+        wait_for_process_group_exit(first.process_group_id.unwrap()).await;
+        restore_test_longhouse_home(previous_home);
     }
 
     #[tokio::test]

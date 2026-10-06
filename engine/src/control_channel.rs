@@ -1447,6 +1447,7 @@ async fn execute_command(
                         &thread_id,
                         &turn_id,
                     )
+                    .await
                     .map_err(CommandError::command_failed)?;
                     PI_PRINT_ADAPTER
                 }
@@ -3992,6 +3993,25 @@ mod tests {
                     let run_id = Uuid::new_v4().to_string();
                     let session_id = Uuid::new_v4().to_string();
                     let thread_id = Uuid::new_v4().to_string();
+                    use std::os::unix::fs::OpenOptionsExt;
+                    let rpc_dir = temp.path().join(format!("{provider}-{run_id}"));
+                    std::fs::create_dir_all(&rpc_dir).unwrap();
+                    let stdout_path = rpc_dir.join("stdout.log");
+                    let stderr_path = rpc_dir.join("stderr.log");
+                    let _rpc_reader = if matches!(provider, "pi" | "omp") {
+                        let fifo = rpc_dir.join(crate::console_rpc::RPC_STDIN);
+                        crate::console_rpc::create_fifo(&fifo).unwrap();
+                        Some(
+                            std::fs::OpenOptions::new()
+                                .read(true)
+                                .write(true)
+                                .custom_flags(libc::O_NONBLOCK)
+                                .open(fifo)
+                                .unwrap(),
+                        )
+                    } else {
+                        None
+                    };
                     let registry = crate::turn_claims::default_registry().unwrap();
                     registry
                         .claim(
@@ -4012,8 +4032,8 @@ mod tests {
                             adapter,
                             "launch",
                             None,
-                            "/unused/stdout",
-                            "/unused/stderr",
+                            &stdout_path.to_string_lossy(),
+                            &stderr_path.to_string_lossy(),
                             json!({}),
                         )
                         .unwrap();
@@ -4051,8 +4071,8 @@ mod tests {
                             adapter,
                             "launch",
                             None,
-                            "/unused/stdout",
-                            "/unused/stderr",
+                            &stdout_path.to_string_lossy(),
+                            &stderr_path.to_string_lossy(),
                             json!({}),
                         )
                         .unwrap();

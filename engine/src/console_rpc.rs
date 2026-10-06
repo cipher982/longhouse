@@ -45,12 +45,19 @@ impl ConsoleInput for ConsoleRpcInput {
 
     fn close_input(&self) -> InputFuture<'_> {
         Box::pin(async move {
-            if self.fifo.exists() {
-                write_command(&self.fifo, &json!({"type": "abort"})).await?;
+            match std::fs::remove_file(&self.fifo) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error).context("closing the Console RPC stdin FIFO"),
             }
-            Ok(())
         })
     }
+}
+
+/// Abort the provider's active response. Closing the FIFO is deliberately
+/// separate: it prevents future prompts but must not cancel a running turn.
+pub async fn abort(fifo: &Path) -> Result<()> {
+    write_command(fifo, &json!({"type": "abort"})).await
 }
 
 pub fn create_fifo(path: &Path) -> Result<()> {
@@ -436,6 +443,32 @@ mod tests {
             error.to_string().contains("no provider process"),
             "{error:#}"
         );
+    }
+    #[tokio::test]
+    async fn close_input_unlinks_fifo_without_sending_abort() {
+        let temp = tempfile::tempdir().unwrap();
+        let (fifo, mut reader) = fifo_with_reader(temp.path());
+        let input = ConsoleRpcInput::new(fifo.clone());
+
+        input.close_input().await.unwrap();
+
+        assert!(!fifo.exists());
+        let mut bytes = [0_u8; 128];
+        let error = reader.read(&mut bytes).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::WouldBlock);
+    }
+
+    #[tokio::test]
+    async fn abort_sends_an_explicit_abort_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let (fifo, mut reader) = fifo_with_reader(temp.path());
+
+        abort(&fifo).await.unwrap();
+
+        let mut bytes = [0_u8; 128];
+        let count = reader.read(&mut bytes).unwrap();
+        let command: Value = serde_json::from_slice(&bytes[..count - 1]).unwrap();
+        assert_eq!(command, json!({"type": "abort"}));
     }
 
     #[test]
