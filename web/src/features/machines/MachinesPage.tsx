@@ -154,7 +154,7 @@ function DirectoryRow({ machine }: { machine: MachineDirectoryEntry }) {
 
 export default function MachinesPage() {
   const { data, isLoading, error, isError, refetch, isRefetchError } = useMachineSummaries();
-  const directory = useMachineDirectory({ enabled: isError && !data });
+  const directory = useMachineDirectory({ enabled: !data, refetchInterval: false });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const [showConnect, setShowConnect] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
@@ -180,7 +180,14 @@ export default function MachinesPage() {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
+    body = machines?.length ? (
+      <>
+        <p className="machine-meta" role="status">Loading activity and sync…</p>
+        <ul className="machine-list" data-testid="machine-list">
+          {machines.map((machine) => <DirectoryRow key={machine.device_id} machine={machine} />)}
+        </ul>
+      </>
+    ) : (
       <div className="machines-loading">
         <Spinner size="md" label="Loading machines" />
       </div>

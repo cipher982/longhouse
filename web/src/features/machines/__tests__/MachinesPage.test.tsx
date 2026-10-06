@@ -71,6 +71,23 @@ describe("MachinesPage", () => {
     api.fetchRunners.mockReset().mockResolvedValue([]);
   });
 
+  it("shows known machines while activity and sync are loading", async () => {
+    let resolveSummary!: (value: MachinesSummaryResponse) => void;
+    api.listMachineSummaries.mockImplementation(
+      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
+    );
+    api.listMachines.mockResolvedValue({ machines: [summary("cinder").machine] });
+    renderPage();
+
+    const row = await screen.findByTestId("machine-row-cinder");
+    expect(row).toHaveTextContent("cinder");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
+    expect(within(row).queryByText("No recent sessions")).toBeNull();
+
+    await act(async () => resolveSummary(response([summary("cinder")])));
+    expect(await screen.findByText("No recent sessions")).toBeInTheDocument();
+  });
+
   it("lists active machines with their live work and folds quiet ones into one line", async () => {
     api.listMachineSummaries.mockResolvedValue(
       response([
@@ -153,10 +170,12 @@ describe("MachinesPage", () => {
     ]);
     renderPage();
 
+    expect(await screen.findByRole("button", { name: "Try again" }, { timeout: 5000 })).toBeInTheDocument();
     const row = await screen.findByTestId("machine-row-cinder", {}, { timeout: 5000 });
     expect(within(row).getByRole("link")).toHaveAttribute("href", "/machines/cinder");
-    expect(screen.getByTestId("machines-unmatched-runners")).not.toHaveTextContent("cinder");
-    expect(screen.getByTestId("machines-unmatched-runners")).toHaveTextContent("clifford");
+    const unmatched = await screen.findByTestId("machines-unmatched-runners");
+    expect(unmatched).not.toHaveTextContent("cinder");
+    expect(unmatched).toHaveTextContent("clifford");
     expect(screen.queryByTestId("machines-summary")).toBeNull();
     expect(screen.queryByTestId("machines-connect-first-button")).toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
