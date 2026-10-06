@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{Sink, SinkExt, StreamExt};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -20,6 +21,7 @@ use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::antigravity_print::{
@@ -104,6 +106,8 @@ const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 /// Only a change is sent, so a quiet machine costs one probe pass a minute.
 const READINESS_REFRESH_SECS: u64 = 60;
 const CONTROL_CONNECT_TIMEOUT_SECS: u64 = 15;
+const CONTROL_UPDATE_CONNECT_TIMEOUT_SECS: u64 = 3;
+const CONTROL_UPDATE_RETRY_MILLIS: u64 = 500;
 const CONTROL_WRITE_TIMEOUT_SECS: u64 = 5;
 const CONTROL_HEARTBEAT_LATE_WARN_MS: u128 = 500;
 const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
@@ -649,6 +653,7 @@ fn control_supports() -> Vec<String> {
 pub fn spawn_control_channel(
     config: ShipperConfig,
     status: ControlChannelStatus,
+    host_link: crate::host_link::HostLink,
 ) -> Option<JoinHandle<()>> {
     if config.api_token.as_deref().unwrap_or("").trim().is_empty() {
         status.set_disabled();
@@ -743,11 +748,15 @@ pub fn spawn_control_channel(
                 tracing::warn!(%error, "Failed to reconcile Antigravity Console turn claims")
             }
         }
-        run_reconnect_loop(config, status).await;
+        run_reconnect_loop(config, status, host_link).await;
     }))
 }
 
-async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus) {
+async fn run_reconnect_loop(
+    config: ShipperConfig,
+    status: ControlChannelStatus,
+    host_link: crate::host_link::HostLink,
+) {
     let mut backoff = Duration::from_secs(1);
     let mut last_error: Option<String> = None;
     let mut outage_started: Option<Instant> = None;
@@ -767,11 +776,28 @@ async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus)
         Duration::from_secs(COMPLETED_COMMAND_CACHE_TTL_SECS),
     )
     .with_durable_receipts(receipt_store);
+    let mut host_link_changed = host_link.subscribe();
     loop {
+        let _ = host_link_changed.borrow_and_update().clone();
+        let serving_generation_before = host_link.serving_generation();
+        let runtime_epoch_before = host_link.snapshot().runtime_epoch;
         let connected_before = status.snapshot().last_connected_at;
-        let result = run_once(&config, &mut completed_commands, &status).await;
+        let result = run_once(&config, &mut completed_commands, &status, &host_link).await;
         let connected_during_attempt = status.snapshot().last_connected_at != connected_before;
-        let reconnect_delay = if connected_during_attempt {
+        let runtime_epoch_changed = host_link.snapshot().runtime_epoch != runtime_epoch_before;
+        if runtime_epoch_changed {
+            backoff = Duration::from_secs(1);
+            outage_started = None;
+        }
+        let serving_evidence = host_link.serving_generation() > serving_generation_before;
+        let reconnect_delay = if serving_evidence {
+            outage_started = None;
+            Duration::ZERO
+        } else if host_link.is_updating() {
+            Duration::from_millis(
+                CONTROL_UPDATE_RETRY_MILLIS.saturating_sub(100) + rand::rng().random_range(0..=200),
+            )
+        } else if connected_during_attempt {
             outage_started = Some(Instant::now());
             backoff = Duration::from_secs(1);
             backoff
@@ -794,7 +820,7 @@ async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus)
                     Some(error_chain.as_str()),
                     Some(reconnect_delay.as_secs()),
                 );
-                if last_error.as_deref() == Some(error_chain.as_str()) {
+                if host_link.is_updating() || last_error.as_deref() == Some(error_chain.as_str()) {
                     tracing::debug!(error = %error_chain, "Machine control channel connection failed");
                 } else {
                     tracing::warn!(error = %error_chain, "Machine control channel connection failed");
@@ -802,11 +828,32 @@ async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus)
                 }
             }
         }
-        tokio::time::sleep(reconnect_delay).await;
+
+        tokio::select! {
+            _ = tokio::time::sleep(reconnect_delay) => {}
+            _ = async {
+                loop {
+                    if host_link.serving_generation() > serving_generation_before {
+                        break;
+                    }
+                    if host_link_changed.changed().await.is_err() {
+                        break;
+                    }
+                }
+            } => {
+                backoff = Duration::from_secs(1);
+                outage_started = None;
+                continue;
+            }
+        }
         let outage_elapsed = outage_started
             .map(|started| started.elapsed())
             .unwrap_or(Duration::ZERO);
-        backoff = next_reconnect_backoff(reconnect_delay, outage_elapsed);
+        backoff = if serving_evidence {
+            Duration::from_secs(1)
+        } else {
+            next_reconnect_backoff(reconnect_delay, outage_elapsed)
+        };
     }
 }
 
@@ -830,6 +877,7 @@ async fn run_once(
     config: &ShipperConfig,
     completed_commands: &mut CompletedCommandCache,
     status: &ControlChannelStatus,
+    host_link: &crate::host_link::HostLink,
 ) -> Result<()> {
     let ws_url = control_ws_url(
         &config.api_url,
@@ -848,7 +896,11 @@ async fn run_once(
     }
 
     let (mut stream, _) = tokio::time::timeout(
-        Duration::from_secs(CONTROL_CONNECT_TIMEOUT_SECS),
+        Duration::from_secs(if host_link.is_updating() {
+            CONTROL_UPDATE_CONNECT_TIMEOUT_SECS
+        } else {
+            CONTROL_CONNECT_TIMEOUT_SECS
+        }),
         connect_async(request),
     )
     .await
@@ -891,6 +943,8 @@ async fn run_once(
     readiness_refresh.tick().await;
     let (capabilities_tx, mut capabilities_rx) = mpsc::unbounded_channel::<Value>();
     let mut capabilities_probe_in_flight = false;
+    let mut host_link_changed = host_link.subscribe();
+    let mut last_serving_generation = host_link.serving_generation();
 
     loop {
         tokio::select! {
@@ -950,6 +1004,15 @@ async fn run_once(
                 )
                 .await?;
             }
+            changed = host_link_changed.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let serving_generation = host_link.serving_generation();
+                if serving_generation > last_serving_generation {
+                    break;
+                }
+            }
             message = stream.next() => {
                 let Some(message) = message else {
                     break;
@@ -958,6 +1021,11 @@ async fn run_once(
                 let text = match message {
                     Message::Text(text) => text,
                     Message::Close(frame) => {
+                        if frame.as_ref().is_some_and(|frame| frame.code == CloseCode::Restart)
+                            && !host_link.has_valid_claim()
+                        {
+                            host_link.observe_default_restart_claim();
+                        }
                         tracing::info!(?frame, "Machine control channel received close frame");
                         break;
                     }
@@ -976,12 +1044,19 @@ async fn run_once(
                     }
                 };
                 let frame: Value = serde_json::from_str(&text).context("parsing machine control frame")?;
-                if frame.get("type").and_then(Value::as_str) != Some("command") {
-                    tracing::debug!(
-                        "Ignoring machine control frame type={:?}",
-                        frame.get("type")
-                    );
-                    continue;
+                match frame.get("type").and_then(Value::as_str) {
+                    Some("host.lifecycle") => {
+                        host_link.observe_lifecycle_value(&frame);
+                        continue;
+                    }
+                    Some("command") => {}
+                    _ => {
+                        tracing::debug!(
+                            "Ignoring machine control frame type={:?}",
+                            frame.get("type")
+                        );
+                        continue;
+                    }
                 }
                 let command_id = frame
                     .get("command_id")
@@ -3844,7 +3919,10 @@ impl CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
     use uuid::Uuid;
 
     const COMMAND_LAUNCH: &str = "session.launch";
@@ -4092,6 +4170,386 @@ mod tests {
 
     type RecordedHttpRequestRx = tokio::sync::oneshot::Receiver<RecordedHttpRequest>;
 
+    struct FakeRuntimeHost {
+        api_url: String,
+        open_at: Arc<Mutex<Option<Instant>>>,
+        reconnect_at_rx: tokio::sync::oneshot::Receiver<Instant>,
+        outbox_event_rx: tokio::sync::oneshot::Receiver<Value>,
+        tasks: Vec<tokio::task::JoinHandle<()>>,
+    }
+
+    async fn read_fake_http_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 8192];
+        let header_end = loop {
+            let read = stream.read(&mut chunk).await.unwrap();
+            assert!(read > 0, "fake Runtime Host received an incomplete request");
+            bytes.extend_from_slice(&chunk[..read]);
+            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end;
+            }
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]).to_ascii_lowercase();
+        let request_line = headers.lines().next().unwrap_or_default().to_string();
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.trim() == "content-length")
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .unwrap_or_default();
+        let body_start = header_end + 4;
+        let mut body = bytes.get(body_start..).unwrap_or_default().to_vec();
+        body.truncate(content_length);
+        while body.len() < content_length {
+            let remaining = content_length - body.len();
+            let limit = remaining.min(chunk.len());
+            let read = stream.read(&mut chunk[..limit]).await.unwrap();
+            assert!(read > 0, "fake Runtime Host received a truncated body");
+            body.extend_from_slice(&chunk[..read]);
+        }
+        (request_line, body)
+    }
+
+    async fn write_fake_http_response(stream: &mut TcpStream, status: u16, body: &[u8]) {
+        let reason = match status {
+            200 => "OK",
+            204 => "No Content",
+            404 => "Not Found",
+            _ => "Test Response",
+        };
+        let headers = format!(
+            "HTTP/1.1 {status} {reason}\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(headers.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
+    }
+
+    async fn spawn_fake_runtime_host() -> FakeRuntimeHost {
+        let http_listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let http_addr = http_listener.local_addr().unwrap();
+        let websocket_listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let websocket_addr = websocket_listener.local_addr().unwrap();
+        let front_listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let front_addr = front_listener.local_addr().unwrap();
+        let open_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+        let (reconnect_at_tx, reconnect_at_rx) = tokio::sync::oneshot::channel();
+        let (outbox_event_tx, outbox_event_rx) = tokio::sync::oneshot::channel();
+
+        let http_open_at = open_at.clone();
+        let http_task = tokio::spawn(async move {
+            let mut outbox_event_tx = Some(outbox_event_tx);
+            loop {
+                let (mut stream, _) = http_listener.accept().await.unwrap();
+                let (request, body) = read_fake_http_request(&mut stream).await;
+                let path = request.split_whitespace().nth(1).unwrap_or_default();
+                if path == "/api/health" {
+                    let is_open = match *http_open_at.lock() {
+                        Some(opens_at) => Instant::now() >= opens_at,
+                        None => false,
+                    };
+                    let response = if is_open {
+                        json!({"runtime":{"epoch":"runtime-new","admission":"open"}})
+                    } else {
+                        json!({"runtime":{"epoch":"runtime-old","admission":"draining"}})
+                    };
+                    write_fake_http_response(
+                        &mut stream,
+                        200,
+                        &serde_json::to_vec(&response).unwrap(),
+                    )
+                    .await;
+                } else if path == "/api/agents/runtime/events/batch" {
+                    if let (Some(sender), Ok(payload)) = (
+                        outbox_event_tx.take(),
+                        serde_json::from_slice::<Value>(&body),
+                    ) {
+                        let _ = sender.send(payload);
+                    }
+                    write_fake_http_response(&mut stream, 204, &[]).await;
+                } else {
+                    write_fake_http_response(&mut stream, 404, b"{}").await;
+                }
+            }
+        });
+
+        let websocket_open_at = open_at.clone();
+        let websocket_task = tokio::spawn(async move {
+            let mut first_connection = true;
+            let mut reconnect_at_tx = Some(reconnect_at_tx);
+            loop {
+                let (stream, _) = websocket_listener.accept().await.unwrap();
+                if first_connection {
+                    first_connection = false;
+                    let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    let hello = websocket.next().await.unwrap().unwrap();
+                    let Message::Text(hello) = hello else {
+                        panic!("expected the engine hello frame");
+                    };
+                    assert_eq!(
+                        serde_json::from_str::<Value>(hello.as_ref()).unwrap()["type"],
+                        "hello"
+                    );
+                    let now = chrono::Utc::now();
+                    let open_time = Instant::now() + Duration::from_secs(3);
+                    *websocket_open_at.lock() = Some(open_time);
+                    let timestamp =
+                        |seconds| (now + chrono::Duration::seconds(seconds)).to_rfc3339();
+                    let lifecycle = json!({
+                        "type": "host.lifecycle",
+                        "state": "updating",
+                        "runtime_epoch": "runtime-old",
+                        "attempt_id": "fake-attempt",
+                        "phase": "drain",
+                        "expected_back_by": timestamp(30),
+                        "deadline": timestamp(360),
+                        "cutoff": timestamp(960)
+                    });
+                    websocket
+                        .send(Message::Text(lifecycle.to_string().into()))
+                        .await
+                        .unwrap();
+                    websocket
+                        .send(Message::Close(Some(
+                            tokio_tungstenite::tungstenite::protocol::frame::CloseFrame {
+                                code: CloseCode::Restart,
+                                reason: "host.lifecycle".into(),
+                            },
+                        )))
+                        .await
+                        .unwrap();
+                    continue;
+                }
+
+                let opens_at = *websocket_open_at.lock();
+                if opens_at.is_none_or(|opens_at| Instant::now() < opens_at) {
+                    drop(stream);
+                    continue;
+                }
+                let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let hello = websocket.next().await.unwrap().unwrap();
+                let Message::Text(hello) = hello else {
+                    panic!("expected the engine reconnect hello frame");
+                };
+                assert_eq!(
+                    serde_json::from_str::<Value>(hello.as_ref()).unwrap()["type"],
+                    "hello"
+                );
+                if let Some(sender) = reconnect_at_tx.take() {
+                    let _ = sender.send(Instant::now());
+                }
+                let serving = json!({
+                    "type": "host.lifecycle",
+                    "state": "serving",
+                    "runtime_epoch": "runtime-new",
+                    "attempt_id": null,
+                    "phase": null,
+                    "expected_back_by": null,
+                    "deadline": null,
+                    "cutoff": null
+                });
+                websocket
+                    .send(Message::Text(serving.to_string().into()))
+                    .await
+                    .unwrap();
+                while let Some(message) = websocket.next().await {
+                    if matches!(message, Ok(Message::Close(_)) | Err(_)) {
+                        break;
+                    }
+                }
+            }
+        });
+
+        let proxy_http_addr = http_addr;
+        let proxy_websocket_addr = websocket_addr;
+        let proxy_task = tokio::spawn(async move {
+            loop {
+                let (mut incoming, _) = front_listener.accept().await.unwrap();
+                let http_addr = proxy_http_addr;
+                let websocket_addr = proxy_websocket_addr;
+                tokio::spawn(async move {
+                    let mut request_line = Vec::new();
+                    loop {
+                        let mut byte = [0_u8; 1];
+                        let Ok(read) = incoming.read(&mut byte).await else {
+                            return;
+                        };
+                        if read == 0 {
+                            return;
+                        }
+                        request_line.push(byte[0]);
+                        if request_line.ends_with(b"\r\n") {
+                            break;
+                        }
+                    }
+                    let target = String::from_utf8_lossy(&request_line);
+                    let backend_addr = if target.contains("/api/agents/control/ws") {
+                        websocket_addr
+                    } else {
+                        http_addr
+                    };
+                    let Ok(mut backend) = TcpStream::connect(backend_addr).await else {
+                        return;
+                    };
+                    if backend.write_all(&request_line).await.is_ok() {
+                        let _ = tokio::io::copy_bidirectional(&mut incoming, &mut backend).await;
+                    }
+                });
+            }
+        });
+
+        FakeRuntimeHost {
+            api_url: format!("http://{front_addr}"),
+            open_at,
+            reconnect_at_rx,
+            outbox_event_rx,
+            tasks: vec![http_task, websocket_task, proxy_task],
+        }
+    }
+
+    #[test]
+    fn fake_runtime_host_reconnects_within_one_second_and_flushes_the_outbox() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let empty_path = tempfile::tempdir().unwrap();
+        let vars = [
+            ("HOME", Some(temp.path().as_os_str())),
+            ("LONGHOUSE_HOME", Some(temp.path().as_os_str())),
+            ("PATH", Some(empty_path.path().as_os_str())),
+            ("LONGHOUSE_CODEX_BIN", None::<&std::ffi::OsStr>),
+            ("LONGHOUSE_CLAUDE_BIN", None::<&std::ffi::OsStr>),
+            ("LONGHOUSE_OPENCODE_BIN", None::<&std::ffi::OsStr>),
+            ("LONGHOUSE_ANTIGRAVITY_BIN", None::<&std::ffi::OsStr>),
+            ("LONGHOUSE_CURSOR_BIN", None::<&std::ffi::OsStr>),
+            ("LONGHOUSE_PI_BIN", None::<&std::ffi::OsStr>),
+            ("LONGHOUSE_OMP_BIN", None::<&std::ffi::OsStr>),
+        ];
+        temp_env::with_vars(vars, || {
+            runtime.block_on(async {
+                let mut fake_host = spawn_fake_runtime_host().await;
+                let db_path = temp.path().join("runtime-host-test.sqlite");
+                let config = ShipperConfig {
+                    api_url: fake_host.api_url.clone(),
+                    api_token: Some("fake-device-token".to_string()),
+                    machine_name: "fake-machine".to_string(),
+                    db_path: Some(db_path),
+                    ..ShipperConfig::default()
+                };
+                let client = crate::shipping::client::ShipperClient::with_compression(
+                    &config,
+                    crate::pipeline::compressor::CompressionAlgo::Gzip,
+                )
+                .unwrap();
+                let host_link = client.host_link().clone();
+                let status = new_control_channel_status();
+                let reconnect_task =
+                    tokio::spawn(run_reconnect_loop(config, status, host_link.clone()));
+
+                let outbox_dir = temp.path().join("runtime-event-outbox");
+                let queued_event = json!({
+                    "runtime_key": "claude:fake-session",
+                    "session_id": "fake-session",
+                    "provider": "claude",
+                    "device_id": "fake-machine",
+                    "source": "claude_channel_wrapper",
+                    "kind": "terminal_signal",
+                    "occurred_at": chrono::Utc::now().to_rfc3339(),
+                    "dedupe_key": "fake-terminal-signal",
+                    "payload": {
+                        "terminal_state": "session_ended",
+                        "terminal_reason": "provider_exit",
+                        "terminal_source": "claude_channel_wrapper",
+                        "provider_session_id": "fake-session",
+                        "exit_code": 0
+                    }
+                });
+                crate::outbox::enqueue_runtime_event(&outbox_dir, &queued_event).unwrap();
+
+                let polling_client = client.clone();
+                let polling_link = host_link.clone();
+                let poll_task = tokio::spawn(async move {
+                    loop {
+                        if polling_link.is_updating() {
+                            let _ = polling_client.poll_runtime_admission().await;
+                            if polling_link.snapshot().state == "serving" {
+                                return;
+                            }
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        } else if polling_link.snapshot().state == "serving" {
+                            return;
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                        }
+                    }
+                });
+
+                let flush_link = host_link.clone();
+                let flush_client = client.clone();
+                let flush_dir = outbox_dir.clone();
+                let flush_task = tokio::spawn(async move {
+                    let mut changed = flush_link.subscribe();
+                    loop {
+                        if flush_link.serving_generation() > 0
+                            && flush_link.snapshot().state == "serving"
+                        {
+                            return crate::outbox::drain_runtime_event_outbox(
+                                &flush_dir,
+                                &flush_client,
+                            )
+                            .await;
+                        }
+                        if changed.changed().await.is_err() {
+                            return (0, 1);
+                        }
+                    }
+                });
+
+                let reconnect_at =
+                    tokio::time::timeout(Duration::from_secs(8), &mut fake_host.reconnect_at_rx)
+                        .await
+                        .expect("engine did not reconnect after Runtime Host opened")
+                        .expect("fake Runtime Host reconnect observer stopped");
+                let opened_at = (*fake_host.open_at.lock())
+                    .expect("fake Runtime Host did not schedule its open");
+                let reconnect_latency = reconnect_at.duration_since(opened_at);
+                println!(
+                    "fake Runtime Host reconnect latency: {} ms",
+                    reconnect_latency.as_millis()
+                );
+                assert!(
+                    reconnect_latency <= Duration::from_secs(1),
+                    "engine reconnect took {:?} after admission opened",
+                    reconnect_latency
+                );
+
+                let (sent, kept) = tokio::time::timeout(Duration::from_secs(3), flush_task)
+                    .await
+                    .expect("queued runtime-event outbox item was not flushed")
+                    .unwrap();
+                assert_eq!((sent, kept), (1, 0));
+                let posted =
+                    tokio::time::timeout(Duration::from_secs(2), &mut fake_host.outbox_event_rx)
+                        .await
+                        .expect("fake Runtime Host did not receive the queued event")
+                        .expect("outbox receiver stopped");
+                assert_eq!(posted["events"][0]["session_id"], "fake-session");
+
+                reconnect_task.abort();
+                poll_task.abort();
+                for task in fake_host.tasks.drain(..) {
+                    task.abort();
+                }
+            });
+        });
+    }
     async fn spawn_single_http_request_server() -> (String, RecordedHttpRequestRx) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await

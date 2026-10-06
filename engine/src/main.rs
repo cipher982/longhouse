@@ -42,6 +42,7 @@ mod fault_injection;
 mod flight;
 mod heartbeat;
 mod hook_outbox;
+mod host_link;
 mod import_scope;
 mod input_attachments;
 mod machine_presence;

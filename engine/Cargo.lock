@@ -938,6 +938,7 @@ dependencies = [
  "image",
  "libc",
  "notify",
+ "parking_lot",
  "pretty_assertions",
  "rand 0.9.5",
  "reqwest",

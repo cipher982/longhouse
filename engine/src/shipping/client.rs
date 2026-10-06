@@ -5,16 +5,21 @@
 //! `/api/agents/ingest` suffix as the string every other path is derived from;
 //! the route itself no longer exists on either side.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use std::io::Write;
 
 use crate::config::ShipperConfig;
+use crate::host_link::HostLink;
 use crate::scheduler::SHIPPING_IN_FLIGHT_CAP;
 
 /// Attempts and spacing for the startup capability negotiation.
@@ -184,10 +189,58 @@ const RETRYABLE_CLIENT_STATUS: &[u16] = &[
 #[derive(Debug)]
 pub enum JsonPostError {
     Transport(String),
-    Http { status: u16, body: String },
+    Http {
+        status: u16,
+        body: String,
+        retry_after: Option<Duration>,
+    },
+}
+
+#[derive(Debug)]
+pub struct HeartbeatPostResponse {
+    pub headers: HeaderMap,
+    pub raw_bytes: usize,
+    pub wire_bytes: usize,
+}
+
+const HEARTBEAT_ENCODING_HEADER: &str = "X-Longhouse-Request-Encodings";
+const MACHINE_FRESH_HORIZON_HEADER: &str = "X-Longhouse-Machine-Fresh-Horizon";
+
+#[derive(Debug)]
+struct JsonPostResponse {
+    headers: HeaderMap,
+    wire_bytes: usize,
+}
+#[derive(Debug)]
+pub struct HeartbeatPostFailure {
+    pub error: JsonPostError,
+    pub raw_bytes: usize,
+    pub wire_bytes: usize,
+}
+
+impl std::fmt::Display for HeartbeatPostFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for HeartbeatPostFailure {}
+
+#[derive(Clone, Copy)]
+struct RetryAfterWindow {
+    until: Instant,
+    release_on_serving: bool,
+    serving_generation: u64,
 }
 
 impl JsonPostError {
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Http { retry_after, .. } => *retry_after,
+            Self::Transport(_) => None,
+        }
+    }
+
     /// A rejection is permanent only when retrying cannot change the outcome.
     ///
     /// Rate limits, auth refreshes, and request timeouts are 4xx but transient:
@@ -214,7 +267,7 @@ impl std::fmt::Display for JsonPostError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Transport(error) => write!(formatter, "POST failed: {error}"),
-            Self::Http { status, body } => write!(formatter, "POST returned {status}: {body}"),
+            Self::Http { status, body, .. } => write!(formatter, "POST returned {status}: {body}"),
         }
     }
 }
@@ -233,6 +286,12 @@ pub struct ShipperClient {
     /// `runtime_clock_ms()` of the last refused zstd batch; 0 when none was.
     /// Shared by every clone, since they all talk to the same Runtime Host.
     runtime_batch_zstd_refused_at: Arc<AtomicU64>,
+    /// Whether the Runtime Host explicitly advertised gzip for heartbeat requests.
+    heartbeat_gzip_negotiated: Arc<AtomicBool>,
+    /// A gzip 400, 413 or 415 permanently disables heartbeat gzip for this process.
+    heartbeat_gzip_disabled: Arc<AtomicBool>,
+    host_link: HostLink,
+    retry_after: Arc<Mutex<Option<RetryAfterWindow>>>,
 }
 
 impl ShipperClient {
@@ -279,7 +338,89 @@ impl ShipperClient {
             ingest_url,
             runtime_batch_zstd: matches!(compression, CompressionAlgo::Zstd),
             runtime_batch_zstd_refused_at: Arc::new(AtomicU64::new(0)),
+            heartbeat_gzip_negotiated: Arc::new(AtomicBool::new(false)),
+            heartbeat_gzip_disabled: Arc::new(AtomicBool::new(false)),
+            host_link: HostLink::new(),
+            retry_after: Arc::new(Mutex::new(None)),
         })
+    }
+
+    pub fn host_link(&self) -> &HostLink {
+        &self.host_link
+    }
+
+    pub async fn poll_runtime_admission(&self) -> Result<()> {
+        let url = self.ingest_url.replace("/api/agents/ingest", "/api/health");
+        let response = self
+            .client
+            .get(url)
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .context("Runtime Host health poll failed")?;
+        if !response.status().is_success() {
+            anyhow::bail!("Runtime Host health poll returned {}", response.status());
+        }
+        let value = response
+            .json::<serde_json::Value>()
+            .await
+            .context("Runtime Host health response is invalid JSON")?;
+        let runtime = value.get("runtime");
+        self.host_link.observe_runtime_admission(
+            runtime
+                .and_then(|runtime| runtime.get("epoch"))
+                .and_then(serde_json::Value::as_str),
+            runtime
+                .and_then(|runtime| runtime.get("admission"))
+                .and_then(serde_json::Value::as_str),
+        );
+        Ok(())
+    }
+    async fn wait_for_retry_after(&self) {
+        let mut host_link_changed = self.host_link.subscribe();
+        loop {
+            let window = *self.retry_after.lock();
+            let Some(window) = window else {
+                return;
+            };
+            if window.release_on_serving
+                && self.host_link.serving_generation() > window.serving_generation
+            {
+                *self.retry_after.lock() = None;
+                return;
+            }
+            let remaining = window.until.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let mut current = self.retry_after.lock();
+                if current.is_some_and(|current| current.until <= Instant::now()) {
+                    *current = None;
+                }
+                return;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(remaining) => {}
+                changed = host_link_changed.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn record_retry_after(&self, retry_after: Option<Duration>) {
+        let Some(retry_after) = retry_after else {
+            return;
+        };
+        let window = RetryAfterWindow {
+            until: Instant::now() + retry_after,
+            release_on_serving: self.host_link.has_valid_claim(),
+            serving_generation: self.host_link.serving_generation(),
+        };
+        let mut current = self.retry_after.lock();
+        if current.is_none_or(|current| window.until > current.until) {
+            *current = Some(window);
+        }
     }
 
     /// POST a small JSON payload with an optional request-level timeout.
@@ -294,46 +435,186 @@ impl ShipperClient {
             .map(|_| ())
     }
 
-    /// POST a small JSON payload and retain response headers from a successful
-    /// request. Heartbeat uses this for the machine-evidence acknowledgement;
-    /// callers that do not consume headers should use
-    /// [`Self::post_json_with_timeout`].
+    /// POST a small JSON payload and retain response headers from a successful request.
     pub async fn post_json_with_timeout_headers(
         &self,
         path_suffix: &str,
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> Result<HeaderMap> {
+        self.post_json_response(path_suffix, body, "identity", request_timeout)
+            .await
+            .map(|response| response.headers)
+            .map_err(anyhow::Error::new)
+    }
+
+    /// Heartbeats use gzip only after this Runtime Host explicitly advertises it.
+    pub async fn post_heartbeat_json(
+        &self,
+        body: Vec<u8>,
+        request_timeout: Option<Duration>,
+    ) -> std::result::Result<HeartbeatPostResponse, HeartbeatPostFailure> {
+        let raw_bytes = body.len();
+        let path = "/api/agents/heartbeat";
+        if self.heartbeat_gzip_negotiated.load(Ordering::Relaxed)
+            && !self.heartbeat_gzip_disabled.load(Ordering::Relaxed)
+        {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            if let Err(error) = encoder.write_all(&body) {
+                return Err(HeartbeatPostFailure {
+                    error: JsonPostError::Transport(format!("gzip encoding failed: {error}")),
+                    raw_bytes,
+                    wire_bytes: 0,
+                });
+            }
+            let encoded = match encoder.finish() {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    return Err(HeartbeatPostFailure {
+                        error: JsonPostError::Transport(format!("gzip encoding failed: {error}")),
+                        raw_bytes,
+                        wire_bytes: 0,
+                    });
+                }
+            };
+            let compressed_bytes = encoded.len();
+            match self
+                .post_json_response(path, encoded, "gzip", request_timeout)
+                .await
+            {
+                Ok(response) => {
+                    return Ok(HeartbeatPostResponse {
+                        headers: response.headers,
+                        raw_bytes,
+                        wire_bytes: response.wire_bytes,
+                    });
+                }
+                Err(JsonPostError::Http {
+                    status: 400 | 413 | 415,
+                    ..
+                }) => {
+                    self.heartbeat_gzip_negotiated
+                        .store(false, Ordering::Relaxed);
+                    self.heartbeat_gzip_disabled.store(true, Ordering::Relaxed);
+                    match self
+                        .post_json_response(path, body, "identity", request_timeout)
+                        .await
+                    {
+                        Ok(response) => {
+                            return Ok(HeartbeatPostResponse {
+                                headers: response.headers,
+                                raw_bytes,
+                                wire_bytes: compressed_bytes + response.wire_bytes,
+                            });
+                        }
+                        Err(error) => {
+                            return Err(HeartbeatPostFailure {
+                                error,
+                                raw_bytes,
+                                wire_bytes: compressed_bytes + raw_bytes,
+                            });
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(HeartbeatPostFailure {
+                        error,
+                        raw_bytes,
+                        wire_bytes: compressed_bytes,
+                    });
+                }
+            }
+        }
+
+        match self
+            .post_json_response(path, body, "identity", request_timeout)
+            .await
+        {
+            Ok(response) => Ok(HeartbeatPostResponse {
+                headers: response.headers,
+                raw_bytes,
+                wire_bytes: response.wire_bytes,
+            }),
+            Err(error) => Err(HeartbeatPostFailure {
+                error,
+                raw_bytes,
+                wire_bytes: raw_bytes,
+            }),
+        }
+    }
+
+    fn update_gzip_negotiation(&self, headers: &HeaderMap) {
+        if self.heartbeat_gzip_disabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let advertised = headers
+            .get(HEARTBEAT_ENCODING_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(',')
+                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("gzip"))
+            });
+        self.heartbeat_gzip_negotiated
+            .store(advertised, Ordering::Relaxed);
+    }
+    async fn post_json_response(
+        &self,
+        path_suffix: &str,
+        body: Vec<u8>,
+        content_encoding: &'static str,
+        request_timeout: Option<Duration>,
+    ) -> std::result::Result<JsonPostResponse, JsonPostError> {
+        self.wait_for_retry_after().await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
+        let wire_bytes = body.len();
         let mut request = self
             .client
             .post(&url)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            // Remove Content-Encoding for uncompressed requests
-            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_ENCODING, content_encoding)
             .body(body);
         if let Some(request_timeout) = request_timeout {
             request = request.timeout(request_timeout);
         }
-        let mut resp = request.send().await.context("POST failed")?;
-        let status = resp.status();
-        let headers = std::mem::take(resp.headers_mut());
-        if status.is_success() {
-            return Ok(headers);
-        }
-        let body = resp.text().await.unwrap_or_default();
-        if let Some(detail) =
-            parse_server_write_backpressure(status.as_u16(), &headers, body.clone())
-        {
-            anyhow::bail!(
-                "POST returned Runtime Host write backpressure: kind={} lane={} retry_after_seconds={:?}: {}",
-                detail.kind,
-                detail.lane.as_deref().unwrap_or("unknown"),
-                detail.retry_after_seconds,
-                detail.body
+        let response = request
+            .send()
+            .await
+            .map_err(|error| JsonPostError::Transport(error.to_string()))?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let runtime_epoch = headers
+            .get("X-Longhouse-Runtime-Epoch")
+            .and_then(|value| value.to_str().ok());
+        self.host_link.note_runtime_epoch(runtime_epoch);
+        if path_suffix == "/api/agents/heartbeat" {
+            self.update_gzip_negotiation(&headers);
+            self.host_link.observe_fresh_horizon(
+                headers
+                    .get(MACHINE_FRESH_HORIZON_HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.trim().parse::<u64>().ok()),
             );
         }
-        anyhow::bail!("POST returned {status}: {body}");
+        if status.is_success() {
+            self.host_link.observe_serving_evidence(runtime_epoch);
+            return Ok(JsonPostResponse {
+                headers,
+                wire_bytes,
+            });
+        }
+        let body = response.text().await.unwrap_or_default();
+        self.host_link
+            .observe_http_rejection(status.as_u16(), &body);
+        let retry_after = parse_retry_after_seconds(&headers).map(Duration::from_secs_f64);
+        if matches!(status.as_u16(), 429 | 503) {
+            self.record_retry_after(retry_after);
+        }
+        Err(JsonPostError::Http {
+            status: status.as_u16(),
+            body,
+            retry_after,
+        })
     }
 
     /// POST JSON while preserving whether a failure came from HTTP or the
@@ -425,29 +706,9 @@ impl ShipperClient {
         content_encoding: &'static str,
         request_timeout: Option<Duration>,
     ) -> std::result::Result<(), JsonPostError> {
-        let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
-        let mut request = self
-            .client
-            .post(&url)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::CONTENT_ENCODING, content_encoding)
-            .body(body);
-        if let Some(request_timeout) = request_timeout {
-            request = request.timeout(request_timeout);
-        }
-        let response = request
-            .send()
+        self.post_json_response(path_suffix, body, content_encoding, request_timeout)
             .await
-            .map_err(|error| JsonPostError::Transport(error.to_string()))?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(());
-        }
-        let body = response.text().await.unwrap_or_default();
-        Err(JsonPostError::Http {
-            status: status.as_u16(),
-            body,
-        })
+            .map(|_| ())
     }
 
     /// POST JSON and decode a JSON response with an optional request timeout.
@@ -457,6 +718,7 @@ impl ShipperClient {
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> Result<T> {
+        self.wait_for_retry_after().await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let mut request = self
             .client
@@ -467,13 +729,28 @@ impl ShipperClient {
         if let Some(request_timeout) = request_timeout {
             request = request.timeout(request_timeout);
         }
-        let resp = request.send().await.context("POST failed")?;
-        let status = resp.status();
+        let response = request.send().await.context("POST failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let runtime_epoch = headers
+            .get("X-Longhouse-Runtime-Epoch")
+            .and_then(|value| value.to_str().ok());
+        self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
+            self.host_link
+                .observe_http_rejection(status.as_u16(), &body);
+            let retry_after = parse_retry_after_seconds(&headers).map(Duration::from_secs_f64);
+            if matches!(status.as_u16(), 429 | 503) {
+                self.record_retry_after(retry_after);
+            }
             anyhow::bail!("POST returned {status}: {body}");
         }
-        resp.json::<T>().await.context("POST returned invalid JSON")
+        self.host_link.observe_serving_evidence(runtime_epoch);
+        response
+            .json::<T>()
+            .await
+            .context("POST returned invalid JSON")
     }
 
     /// PUT raw bytes to a machine-authenticated route.
@@ -485,6 +762,7 @@ impl ShipperClient {
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> Result<()> {
+        self.wait_for_retry_after().await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let mut request = self
             .client
@@ -498,12 +776,25 @@ impl ShipperClient {
         if let Some(request_timeout) = request_timeout {
             request = request.timeout(request_timeout);
         }
-        let resp = request.send().await.context("PUT failed")?;
-        let status = resp.status();
+        let response = request.send().await.context("PUT failed")?;
+        let status = response.status();
+        let response_headers = response.headers().clone();
+        let runtime_epoch = response_headers
+            .get("X-Longhouse-Runtime-Epoch")
+            .and_then(|value| value.to_str().ok());
+        self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
+            self.host_link
+                .observe_http_rejection(status.as_u16(), &body);
+            let retry_after =
+                parse_retry_after_seconds(&response_headers).map(Duration::from_secs_f64);
+            if matches!(status.as_u16(), 429 | 503) {
+                self.record_retry_after(retry_after);
+            }
             anyhow::bail!("PUT returned {status}: {body}");
         }
+        self.host_link.observe_serving_evidence(runtime_epoch);
         Ok(())
     }
 
@@ -637,6 +928,7 @@ impl ShipperClient {
         if lane != "live" && lane != "repair" {
             anyhow::bail!("storage-v2 lane must be live or repair");
         }
+        self.wait_for_retry_after().await;
         let url = self.ingest_url.replace("/api/agents/ingest", ingest_path);
         let mut request = self
             .client
@@ -653,9 +945,19 @@ impl ShipperClient {
             .await
             .context("storage-v2 envelope POST failed")?;
         let status = response.status();
+        let headers = response.headers().clone();
+        let runtime_epoch = headers
+            .get("X-Longhouse-Runtime-Epoch")
+            .and_then(|value| value.to_str().ok());
+        self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
-            let headers = response.headers().clone();
             let body = response.text().await.unwrap_or_default();
+            self.host_link
+                .observe_http_rejection(status.as_u16(), &body);
+            let retry_after = parse_retry_after_seconds(&headers).map(Duration::from_secs_f64);
+            if matches!(status.as_u16(), 429 | 503) {
+                self.record_retry_after(retry_after);
+            }
             if let Some(backpressure) =
                 parse_storage_v2_backpressure(status.as_u16(), &headers, &body, lane)
             {
@@ -669,6 +971,7 @@ impl ShipperClient {
             }
             anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
         }
+        self.host_link.observe_serving_evidence(runtime_epoch);
         let receipt = response
             .json::<StorageV2Receipt>()
             .await
@@ -765,6 +1068,15 @@ fn parse_storage_v2_backpressure(
     body: &str,
     lane: &str,
 ) -> Option<StorageV2Backpressure> {
+    let typed_runtime_unavailable = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("code")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .is_some_and(|code| code == "runtime_restarting" || code == "runtime_unreachable");
     let typed_busy = parse_header_string(headers, STORAGE_BACKPRESSURE_HEADER)
         .is_some_and(|kind| kind == "storage_lane_busy");
     // A catalogd deadline expiry reaches the shipper as `catalog_unavailable`.
@@ -787,7 +1099,10 @@ fn parse_storage_v2_backpressure(
         });
     }
     if status_code != 503
-        || (!typed_busy && !body.contains("storage_lane_busy") && !catalog_backpressure)
+        || (!typed_busy
+            && !body.contains("storage_lane_busy")
+            && !catalog_backpressure
+            && !typed_runtime_unavailable)
     {
         return None;
     }
@@ -856,12 +1171,159 @@ mod tests {
     use std::time::Duration;
 
     use reqwest::header::{HeaderMap, HeaderValue};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::{
         is_connect_error, parse_server_write_backpressure, parse_storage_v2_backpressure,
-        parse_storage_v2_conflict,
+        parse_storage_v2_conflict, ShipperClient,
     };
 
+    async fn spawn_heartbeat_server(
+        statuses: Vec<u16>,
+    ) -> (String, tokio::task::JoinHandle<Vec<(String, usize)>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::with_capacity(statuses.len());
+            for status in statuses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0_u8; 8192];
+                let header_end = loop {
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    assert!(read > 0, "client closed before sending HTTP headers");
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                        break index;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&bytes[..header_end]).to_ascii_lowercase();
+                let content_length = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.trim() == "content-length")
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or_default();
+                let body_start = header_end + 4;
+                let mut remaining =
+                    content_length.saturating_sub(bytes.len().saturating_sub(body_start));
+                while remaining > 0 {
+                    let chunk_len = remaining.min(chunk.len());
+                    let read = stream.read(&mut chunk[..chunk_len]).await.unwrap();
+                    assert!(read > 0, "client closed before sending the HTTP body");
+                    remaining -= read;
+                }
+                let encoding = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.trim() == "content-encoding")
+                    .map(|(_, value)| value.trim().to_string())
+                    .unwrap_or_default();
+                requests.push((encoding, content_length));
+
+                let reason = match status {
+                    204 => "No Content",
+                    400 => "Bad Request",
+                    413 => "Payload Too Large",
+                    415 => "Unsupported Media Type",
+                    _ => "Test Response",
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\n\
+                     Content-Length: 0\r\n\
+                     X-Longhouse-Request-Encodings: gzip\r\n\
+                     X-Longhouse-Machine-Fresh-Horizon: 120\r\n\
+                     Connection: close\r\n\r\n"
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn heartbeat_client(api_url: String) -> ShipperClient {
+        let config = crate::config::ShipperConfig {
+            api_url,
+            ..Default::default()
+        };
+        ShipperClient::with_compression(&config, crate::pipeline::compressor::CompressionAlgo::Gzip)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn heartbeat_negotiates_gzip_then_disables_it_after_413_and_retries_identity() {
+        let (api_url, server) = spawn_heartbeat_server(vec![204, 413, 204, 204]).await;
+        let client = heartbeat_client(api_url);
+        client
+            .post_heartbeat_json(b"{}".to_vec(), None)
+            .await
+            .unwrap();
+
+        const DECODED_LIMIT_EXCEEDED_BYTES: usize = 9 * 1024 * 1024;
+        let mut oversized = Vec::with_capacity(DECODED_LIMIT_EXCEEDED_BYTES + 2);
+        oversized.push(b'"');
+        oversized.resize(DECODED_LIMIT_EXCEEDED_BYTES + 1, b' ');
+        oversized.push(b'"');
+        let raw_bytes = oversized.len();
+        let fallback = client
+            .post_heartbeat_json(oversized, Some(Duration::from_secs(10)))
+            .await
+            .unwrap();
+        assert_eq!(fallback.raw_bytes, raw_bytes);
+        assert!(fallback.wire_bytes > raw_bytes);
+        assert!(client
+            .heartbeat_gzip_disabled
+            .load(std::sync::atomic::Ordering::Relaxed));
+
+        client
+            .post_heartbeat_json(b"{}".to_vec(), None)
+            .await
+            .unwrap();
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(encoding, _)| encoding.as_str())
+                .collect::<Vec<_>>(),
+            ["identity", "gzip", "identity", "identity"]
+        );
+        assert_eq!(requests[2].1, raw_bytes);
+        assert_eq!(requests[3].1, 2);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_retries_400_and_415_gzip_refusals_as_identity_and_disables_gzip() {
+        for refusal in [400, 415] {
+            let (api_url, server) = spawn_heartbeat_server(vec![204, refusal, 204, 204]).await;
+            let client = heartbeat_client(api_url);
+            client
+                .post_heartbeat_json(b"{}".to_vec(), None)
+                .await
+                .unwrap();
+            client
+                .post_heartbeat_json(b"{\"refresh\":true}".to_vec(), None)
+                .await
+                .unwrap();
+            client
+                .post_heartbeat_json(b"{}".to_vec(), None)
+                .await
+                .unwrap();
+            assert!(client
+                .heartbeat_gzip_disabled
+                .load(std::sync::atomic::Ordering::Relaxed));
+
+            let requests = server.await.unwrap();
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|(encoding, _)| encoding.as_str())
+                    .collect::<Vec<_>>(),
+                ["identity", "gzip", "identity", "identity"]
+            );
+        }
+    }
     #[tokio::test]
     async fn context_wrapped_storage_transport_error_reaches_offline_classifier() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

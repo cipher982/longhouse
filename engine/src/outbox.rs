@@ -1532,7 +1532,15 @@ async fn post_runtime_event_batch(
             outcome = isolate_permanent_runtime_event_rejection(client, batch).await;
         }
         Err(error) => {
-            tracing::warn!(error = %error, event_count = batch.len(), "Runtime event batch kept for retry");
+            if client.host_link().is_updating() {
+                tracing::debug!(
+                    error = %error,
+                    event_count = batch.len(),
+                    "Runtime event batch deferred during Runtime Host update"
+                );
+            } else {
+                tracing::warn!(error = %error, event_count = batch.len(), "Runtime event batch kept for retry");
+            }
             outcome.kept += batch.len();
         }
     }
@@ -1616,11 +1624,19 @@ async fn isolate_permanent_runtime_event_rejection(
                 }
             }
             Err(error) => {
-                tracing::warn!(
-                    path = %post_path_display(post),
-                    error = %error,
-                    "Runtime event rejection isolation hit a transient failure; halting isolation"
-                );
+                if client.host_link().is_updating() {
+                    tracing::debug!(
+                        path = %post_path_display(post),
+                        error = %error,
+                        "Runtime event retry deferred during Runtime Host update"
+                    );
+                } else {
+                    tracing::warn!(
+                        path = %post_path_display(post),
+                        error = %error,
+                        "Runtime event rejection isolation hit a transient failure; halting isolation"
+                    );
+                }
                 outcome.kept += 1;
                 let remaining = chunk.len().saturating_sub(index + 1);
                 outcome.kept += remaining;

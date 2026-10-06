@@ -5,8 +5,7 @@
 //! - frequent local status-file writes for ambient UX / debugging
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(target_os = "linux")]
 use std::fs;
 use std::path::Path;
@@ -182,6 +181,86 @@ pub struct HeartbeatPayload {
     pub update: Option<crate::update::UpdateStatus>,
 }
 
+const HEARTBEAT_LATENCY_SAMPLE_CAPACITY: usize = 128;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HeartbeatSendMetrics {
+    pub window_start: Option<String>,
+    pub sends_per_minute_by_reason: BTreeMap<String, u64>,
+    pub last_send_raw_bytes: Option<u64>,
+    pub last_send_wire_bytes: Option<u64>,
+    pub post_latency_p50_ms: Option<u64>,
+    pub post_latency_p95_ms: Option<u64>,
+    pub post_latency_sample_count: usize,
+    #[serde(skip)]
+    latency_samples_ms: [u64; HEARTBEAT_LATENCY_SAMPLE_CAPACITY],
+    #[serde(skip)]
+    latency_sample_count: usize,
+    #[serde(skip)]
+    latency_sample_cursor: usize,
+}
+
+impl Default for HeartbeatSendMetrics {
+    fn default() -> Self {
+        Self {
+            window_start: None,
+            sends_per_minute_by_reason: BTreeMap::new(),
+            last_send_raw_bytes: None,
+            last_send_wire_bytes: None,
+            post_latency_p50_ms: None,
+            post_latency_p95_ms: None,
+            post_latency_sample_count: 0,
+            latency_samples_ms: [0; HEARTBEAT_LATENCY_SAMPLE_CAPACITY],
+            latency_sample_count: 0,
+            latency_sample_cursor: 0,
+        }
+    }
+}
+
+impl HeartbeatSendMetrics {
+    pub fn record_send(
+        &mut self,
+        reason: &str,
+        raw_bytes: usize,
+        wire_bytes: usize,
+        latency_ms: u64,
+    ) {
+        let now = Utc::now();
+        let minute = now.format("%Y-%m-%dT%H:%M").to_string();
+        let current_minute = self
+            .window_start
+            .as_deref()
+            .map(|value| value.get(..16).unwrap_or(value));
+        if current_minute != Some(minute.as_str()) {
+            self.window_start = Some(format!("{minute}:00Z"));
+            self.sends_per_minute_by_reason.clear();
+        }
+        *self
+            .sends_per_minute_by_reason
+            .entry(reason.to_string())
+            .or_default() += 1;
+        self.last_send_raw_bytes = Some(raw_bytes as u64);
+        self.last_send_wire_bytes = Some(wire_bytes as u64);
+        self.latency_samples_ms[self.latency_sample_cursor] = latency_ms;
+        self.latency_sample_cursor =
+            (self.latency_sample_cursor + 1) % HEARTBEAT_LATENCY_SAMPLE_CAPACITY;
+        self.latency_sample_count = self
+            .latency_sample_count
+            .saturating_add(1)
+            .min(HEARTBEAT_LATENCY_SAMPLE_CAPACITY);
+        let mut ordered = self.latency_samples_ms;
+        ordered[..self.latency_sample_count].sort_unstable();
+        self.post_latency_sample_count = self.latency_sample_count;
+        self.post_latency_p50_ms = Some(percentile(&ordered[..self.latency_sample_count], 50));
+        self.post_latency_p95_ms = Some(percentile(&ordered[..self.latency_sample_count], 95));
+    }
+}
+
+fn percentile(sorted: &[u64], percentile: usize) -> u64 {
+    let rank = (sorted.len() * percentile).div_ceil(100);
+    sorted[rank.saturating_sub(1)]
+}
+
 /// Local-only diagnostics for the daemon's heartbeat POST. This is deliberately
 /// outside `HeartbeatPayload`: Runtime Host heartbeats must not gain a field
 /// whose only consumer is the machine that sent it.
@@ -200,6 +279,7 @@ pub struct HeartbeatTransportStatus {
     pub last_failure_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    pub send_metrics: HeartbeatSendMetrics,
 }
 
 const MAX_HEARTBEAT_ERROR_CHARS: usize = 256;
@@ -222,6 +302,7 @@ impl Default for HeartbeatTransportStatus {
             last_success_at: None,
             last_failure_at: None,
             last_error: None,
+            send_metrics: HeartbeatSendMetrics::default(),
         }
     }
 }
@@ -229,6 +310,16 @@ impl Default for HeartbeatTransportStatus {
 impl HeartbeatTransportStatus {
     pub fn record_attempt(&mut self, at: String) {
         self.last_attempt_at = Some(at);
+    }
+    pub fn record_send_metrics(
+        &mut self,
+        reason: &str,
+        raw_bytes: usize,
+        wire_bytes: usize,
+        latency_ms: u64,
+    ) {
+        self.send_metrics
+            .record_send(reason, raw_bytes, wire_bytes, latency_ms);
     }
 
     /// Record the acknowledgement independently of HTTP transport health.
@@ -1069,13 +1160,12 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
         .flat_map(|evidence| evidence.activity.iter())
         .map(|fact| {
             format!(
-                "{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}",
                 fact.provider,
                 fact.session_id,
                 fact.run_id.as_deref().unwrap_or(""),
                 fact.kind,
                 fact.tool_name.as_deref().unwrap_or(""),
-                fact.observed_at,
             )
         })
         .collect();
@@ -2264,8 +2354,20 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 run_id: obs.run_id.clone(),
                 granted_operations: granted_control_operations("omp", control_ready),
                 ownership: "managed".to_string(),
-                state: if control_ready { "attached" } else { "detached" }.to_string(),
-                bridge_status: Some(if control_ready { "ready" } else { "unavailable" }.to_string()),
+                state: if control_ready {
+                    "attached"
+                } else {
+                    "detached"
+                }
+                .to_string(),
+                bridge_status: Some(
+                    if control_ready {
+                        "ready"
+                    } else {
+                        "unavailable"
+                    }
+                    .to_string(),
+                ),
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "omp_helm_scan".to_string(),
@@ -3851,6 +3953,25 @@ impl EmptyStringFallback for String {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct HeartbeatPostAck {
+    pub evidence_ack: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HeartbeatPostMetrics {
+    pub raw_bytes: usize,
+    pub wire_bytes: usize,
+    pub latency_ms: u64,
+    pub retry_after: Option<Duration>,
+}
+
+#[derive(Debug)]
+pub struct HeartbeatSendAttempt {
+    pub result: std::result::Result<HeartbeatPostAck, String>,
+    pub metrics: HeartbeatPostMetrics,
+}
+
 /// Send heartbeat to server via the existing authenticated client and return
 /// the machine-evidence acknowledgement. A successful HTTP response without
 /// the acknowledgement is represented as `None` (unknown), never as applied.
@@ -3869,16 +3990,59 @@ impl EmptyStringFallback for String {
 pub async fn send_heartbeat(
     client: &ShipperClient,
     payload: &HeartbeatPayload,
-) -> Result<Option<String>> {
+) -> HeartbeatSendAttempt {
     const MACHINE_EVIDENCE_ACK_HEADER: &str = "X-Longhouse-Machine-Evidence";
-    let json = serde_json::to_vec(payload)?;
-    let headers = client
-        .post_json_with_timeout_headers("/api/agents/heartbeat", json, Some(HEARTBEAT_POST_TIMEOUT))
-        .await?;
-    Ok(headers
-        .get(MACHINE_EVIDENCE_ACK_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string))
+    const MACHINE_FRESH_HORIZON_HEADER: &str = "X-Longhouse-Machine-Fresh-Horizon";
+    let started = Instant::now();
+    let json = match serde_json::to_vec(payload) {
+        Ok(json) => json,
+        Err(error) => {
+            return HeartbeatSendAttempt {
+                result: Err(error.to_string()),
+                metrics: HeartbeatPostMetrics {
+                    latency_ms: started.elapsed().as_millis() as u64,
+                    ..HeartbeatPostMetrics::default()
+                },
+            };
+        }
+    };
+    match client
+        .post_heartbeat_json(json, Some(HEARTBEAT_POST_TIMEOUT))
+        .await
+    {
+        Ok(response) => {
+            let evidence_ack = response
+                .headers
+                .get(MACHINE_EVIDENCE_ACK_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let fresh_horizon_secs = response
+                .headers
+                .get(MACHINE_FRESH_HORIZON_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|value| *value > 0);
+            client.host_link().record_heartbeat_ack(fresh_horizon_secs);
+            HeartbeatSendAttempt {
+                result: Ok(HeartbeatPostAck { evidence_ack }),
+                metrics: HeartbeatPostMetrics {
+                    raw_bytes: response.raw_bytes,
+                    wire_bytes: response.wire_bytes,
+                    latency_ms: started.elapsed().as_millis() as u64,
+                    retry_after: None,
+                },
+            }
+        }
+        Err(error) => HeartbeatSendAttempt {
+            result: Err(error.to_string()),
+            metrics: HeartbeatPostMetrics {
+                raw_bytes: error.raw_bytes,
+                wire_bytes: error.wire_bytes,
+                latency_ms: started.elapsed().as_millis() as u64,
+                retry_after: error.error.retry_after(),
+            },
+        },
+    }
 }
 
 /// Result of the caller's attempt to read fresh phase-ledger rows. Serializes
@@ -3942,6 +4106,7 @@ pub struct StatusFileProjection {
     /// status-file write carries the latest daemon-local transport state,
     /// including when an older projection build completes after the POST.
     pub heartbeat_transport: HeartbeatTransportStatus,
+    pub host_link: Option<crate::host_link::HostLinkStatus>,
     recent_dead_letters: Vec<StatusDeadLetter>,
     phase_ledger: Vec<PhaseLedgerRow>,
     phase_ledger_status: PhaseLedgerStatus,
@@ -3966,6 +4131,7 @@ pub fn build_status_file_projection(
     StatusFileProjection {
         payload,
         heartbeat_transport: HeartbeatTransportStatus::default(),
+        host_link: None,
         recent_dead_letters,
         phase_ledger,
         phase_ledger_status,
@@ -3980,6 +4146,9 @@ pub fn build_status_file_projection(
 impl StatusFileProjection {
     pub fn set_heartbeat_transport(&mut self, value: HeartbeatTransportStatus) {
         self.heartbeat_transport = value;
+    }
+    pub fn set_host_link(&mut self, value: crate::host_link::HostLinkStatus) {
+        self.host_link = Some(value);
     }
     pub fn set_runtime_event_outbox(&mut self, value: RuntimeEventOutboxSnapshot) {
         self.payload.runtime_event_outbox = value;
@@ -4033,6 +4202,8 @@ pub fn write_status_file(
         #[serde(flatten)]
         payload: &'a HeartbeatPayload,
         heartbeat_transport: &'a HeartbeatTransportStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        host_link: Option<&'a crate::host_link::HostLinkStatus>,
         local_projection: LocalProjectionFile<'a>,
         /// Build identity compiled into the currently-running engine binary.
         /// Compare this against the on-disk engine binary via `binary_mtime`
@@ -4092,6 +4263,7 @@ pub fn write_status_file(
     let status = StatusFile {
         payload: &projection.payload,
         heartbeat_transport: &projection.heartbeat_transport,
+        host_link: projection.host_link.as_ref(),
         local_projection: LocalProjectionFile {
             version: projection.payload.sessions_sequence,
             generated_at: &projection.generated_at,
@@ -4135,6 +4307,7 @@ pub fn refresh_existing_status_pulse(
     is_offline: bool,
     status_path: &std::path::Path,
     heartbeat_transport: &HeartbeatTransportStatus,
+    host_link: Option<&crate::host_link::HostLinkStatus>,
 ) {
     let Ok(bytes) = std::fs::read(status_path) else {
         return;
@@ -4144,6 +4317,9 @@ pub fn refresh_existing_status_pulse(
     };
     status["heartbeat_transport"] =
         serde_json::to_value(heartbeat_transport).unwrap_or(serde_json::Value::Null);
+    if let Some(host_link) = host_link {
+        status["host_link"] = serde_json::to_value(host_link).unwrap_or(serde_json::Value::Null);
+    }
     let now = chrono::Utc::now().to_rfc3339();
     let monotonic_now = Instant::now();
     let pending_work = progress_observation.has_pending_work();
@@ -4257,6 +4433,31 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn heartbeat_send_metrics_report_per_minute_counts_bytes_and_percentiles() {
+        let mut metrics = HeartbeatSendMetrics::default();
+        for latency_ms in [100, 200, 300, 400] {
+            metrics.record_send("runtime_truth_change", 1_000, 200, latency_ms);
+        }
+        metrics.record_send("periodic_heartbeat", 2_000, 500, 100);
+
+        assert_eq!(
+            metrics
+                .sends_per_minute_by_reason
+                .get("runtime_truth_change"),
+            Some(&4)
+        );
+        assert_eq!(
+            metrics.sends_per_minute_by_reason.get("periodic_heartbeat"),
+            Some(&1)
+        );
+        assert_eq!(metrics.last_send_raw_bytes, Some(2_000));
+        assert_eq!(metrics.last_send_wire_bytes, Some(500));
+        assert_eq!(metrics.post_latency_p50_ms, Some(200));
+        assert_eq!(metrics.post_latency_p95_ms, Some(400));
+        assert_eq!(metrics.post_latency_sample_count, 5);
+    }
+
+    #[test]
     fn omp_process_liveness_does_not_create_a_lease_without_control_readiness() {
         let observation = OmpHelmObservation {
             session_id: "omp-session".into(),
@@ -4292,8 +4493,7 @@ mod tests {
         let mut ready = observation;
         ready.status = "ready".into();
         ready.control_ready = true;
-        let leases =
-            leases_from_omp_helm_observations("cinder", &[ready], Utc::now());
+        let leases = leases_from_omp_helm_observations("cinder", &[ready], Utc::now());
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "attached");
     }
@@ -4554,6 +4754,7 @@ mod tests {
             false,
             &path,
             &HeartbeatTransportStatus::default(),
+            None,
         );
         let status: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -4586,6 +4787,7 @@ mod tests {
             false,
             &path,
             &HeartbeatTransportStatus::default(),
+            None,
         );
         let status: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -6114,6 +6316,7 @@ mod tests {
             false,
             &status_path,
             &HeartbeatTransportStatus::default(),
+            None,
         );
         let pulsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&status_path).unwrap()).unwrap();

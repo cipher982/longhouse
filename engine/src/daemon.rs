@@ -338,9 +338,15 @@ struct DeferredRetry {
 struct HeartbeatPostResult {
     signature: String,
     reason: &'static str,
-    result: Result<Option<String>, String>,
+    result: Result<heartbeat::HeartbeatPostAck, String>,
+    metrics: heartbeat::HeartbeatPostMetrics,
     join_elapsed_ms: u64,
     task_elapsed_ms: u64,
+}
+
+struct PendingTruthHeartbeat {
+    payload: heartbeat::HeartbeatPayload,
+    signature: String,
 }
 
 struct MachinePresencePostResult {
@@ -1121,6 +1127,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // refusal, not a shipping loop that would drop the user's history in
     // silence.
     let client = ShipperClient::with_compression(&config.shipper_config, config.algo)?;
+    let host_link = client.host_link().clone();
     tracing::info!("Shipping to: {}", config.shipper_config.api_url);
     // A host that is briefly unreachable used to end the daemon before it
     // captured anything, so a restart during a deploy or a short network drop
@@ -1409,6 +1416,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_ship_at: Option<String> = None;
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut session_snapshot_state = SessionSnapshotState::default();
+    let mut last_truth_heartbeat_at: Option<Instant> = None;
+    let mut pending_truth_heartbeat: Option<PendingTruthHeartbeat> = None;
     let mut last_status_projection: Option<heartbeat::StatusFileProjection> = None;
     let mut heartbeat_transport = heartbeat::HeartbeatTransportStatus::default();
     let mut managed_reconciliation =
@@ -1460,6 +1469,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_outbox_consecutive_failures: u32 = 0;
     let mut runtime_outbox_retry_after: Option<Instant> = None;
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
+    let mut host_link_changed = host_link.subscribe();
+    let mut last_serving_generation = 0_u64;
+    let mut host_link_poll_tasks: JoinSet<Result<()>> = JoinSet::new();
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
         JoinSet::new();
@@ -1481,6 +1493,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let control_channel_task = crate::control_channel::spawn_control_channel(
         config.shipper_config.clone(),
         control_channel_status.clone(),
+        host_link.clone(),
     );
     // Anonymous, machine-global Console warmth: one initialized stock Codex
     // app-server regardless of how many durable sessions exist. Failure is a
@@ -2070,22 +2083,43 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
                         let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
                         if kept > 0 {
-                            tracing::warn!(
-                                sent,
-                                kept,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                local_join_delay_ms,
-                                "Outbox presence POST kept files for retry"
-                            );
+                            if host_link.is_updating() {
+                                tracing::debug!(
+                                    sent,
+                                    kept,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Outbox presence POST deferred during Runtime Host update"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    sent,
+                                    kept,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Outbox presence POST kept files for retry"
+                                );
+                            }
                         } else if join_elapsed_ms > 1_000 {
-                            tracing::warn!(
-                                sent,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                local_join_delay_ms,
-                                "Outbox presence POST was slow"
-                            );
+                            if host_link.is_updating() {
+                                tracing::debug!(
+                                    sent,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Outbox presence POST was delayed during Runtime Host update"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    sent,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Outbox presence POST was slow"
+                                );
+                            }
                         } else if sent > 0 {
                             tracing::debug!(
                                 sent,
@@ -2096,7 +2130,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
-                        tracing::warn!("Outbox presence POST task failed: {}", err);
+                        if host_link.is_updating() {
+                            tracing::debug!("Outbox presence POST task deferred during Runtime Host update: {}", err);
+                        } else {
+                            tracing::warn!("Outbox presence POST task failed: {}", err);
+                        }
                     }
                     None => {}
                 }
@@ -2119,15 +2157,27 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 .saturating_mul(backoff_multiplier as u32)
                                 .min(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
                             runtime_outbox_retry_after = Some(Instant::now() + delay);
-                            tracing::warn!(
-                                sent,
-                                kept,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                local_join_delay_ms,
-                                retry_delay_ms = delay.as_millis() as u64,
-                                "Outbox runtime-event POST kept all files for retry"
-                            );
+                            if host_link.is_updating() {
+                                tracing::debug!(
+                                    sent,
+                                    kept,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    retry_delay_ms = delay.as_millis() as u64,
+                                    "Runtime-event outbox deferred during Runtime Host update"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    sent,
+                                    kept,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    retry_delay_ms = delay.as_millis() as u64,
+                                    "Outbox runtime-event POST kept all files for retry"
+                                );
+                            }
                         } else {
                             runtime_outbox_consecutive_failures = 0;
                             runtime_outbox_retry_after = None;
@@ -2148,13 +2198,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     "Outbox runtime-event POST kept some files while other files progressed"
                                 );
                             } else if join_elapsed_ms > 1_000 {
-                                tracing::warn!(
-                                    sent,
-                                    task_elapsed_ms,
-                                    join_elapsed_ms,
-                                    local_join_delay_ms,
-                                    "Outbox runtime-event POST was slow"
-                                );
+                                if host_link.is_updating() {
+                                    tracing::debug!(
+                                        sent,
+                                        task_elapsed_ms,
+                                        join_elapsed_ms,
+                                        local_join_delay_ms,
+                                        "Runtime-event outbox POST was delayed during Runtime Host update"
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        sent,
+                                        task_elapsed_ms,
+                                        join_elapsed_ms,
+                                        local_join_delay_ms,
+                                        "Outbox runtime-event POST was slow"
+                                    );
+                                }
                             } else if sent > 0 {
                                 tracing::debug!(
                                     sent,
@@ -2170,31 +2230,52 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             runtime_outbox_consecutive_failures.saturating_add(1);
                         runtime_outbox_retry_after =
                             Some(Instant::now() + LIVE_LOCAL_RETRY_DELAY);
-                        tracing::warn!("Outbox runtime-event POST task failed: {}", err);
+                        if host_link.is_updating() {
+                            tracing::debug!("Runtime-event outbox task deferred during Runtime Host update: {}", err);
+                        } else {
+                            tracing::warn!("Outbox runtime-event POST task failed: {}", err);
+                        }
                     }
                     None => {}
                 }
             }
 
+
             heartbeat_post_result = heartbeat_post_tasks.join_next(), if !heartbeat_post_tasks.is_empty() => {
                 match heartbeat_post_result {
                     Some(Ok(result)) => {
+                        heartbeat_transport.record_send_metrics(
+                            result.reason,
+                            result.metrics.raw_bytes,
+                            result.metrics.wire_bytes,
+                            result.metrics.latency_ms,
+                        );
                         let local_join_delay_ms =
                             result.join_elapsed_ms.saturating_sub(result.task_elapsed_ms);
                         if result.task_elapsed_ms > 1_000 || local_join_delay_ms > 1_000 {
-                            tracing::warn!(
-                                reason = result.reason,
-                                task_elapsed_ms = result.task_elapsed_ms,
-                                join_elapsed_ms = result.join_elapsed_ms,
-                                local_join_delay_ms,
-                                "Heartbeat POST was slow"
-                            );
+                            if host_link.is_updating() {
+                                tracing::debug!(
+                                    reason = result.reason,
+                                    task_elapsed_ms = result.task_elapsed_ms,
+                                    join_elapsed_ms = result.join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Heartbeat POST was delayed during Runtime Host update"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    reason = result.reason,
+                                    task_elapsed_ms = result.task_elapsed_ms,
+                                    join_elapsed_ms = result.join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Heartbeat POST was slow"
+                                );
+                            }
                         }
                         match result.result {
-                            Ok(evidence_ack) => {
+                            Ok(ack) => {
                                 let evidence_was_refused = heartbeat_transport.evidence_refused();
-                                let evidence_changed =
-                                    heartbeat_transport.record_evidence_ack(evidence_ack.as_deref());
+                                let evidence_changed = heartbeat_transport
+                                    .record_evidence_ack(ack.evidence_ack.as_deref());
                                 let evidence_refused = heartbeat_transport.evidence_refused();
                                 let recovered = heartbeat_transport
                                     .record_success(chrono::Utc::now().to_rfc3339());
@@ -2217,16 +2298,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 if recovered {
                                     tracing::info!("Heartbeat POST recovered");
                                 }
-                                last_runtime_truth_signature = Some(result.signature);
+                                last_runtime_truth_signature = Some(result.signature.clone());
+                                if pending_truth_heartbeat
+                                    .as_ref()
+                                    .is_some_and(|pending| pending.signature == result.signature)
+                                {
+                                    pending_truth_heartbeat = None;
+                                }
                             }
                             Err(err) => {
-                                last_runtime_truth_signature = None;
                                 let error = heartbeat::bounded_heartbeat_error(&err);
                                 let transitioned = heartbeat_transport.record_failure(
                                     chrono::Utc::now().to_rfc3339(),
                                     &error,
                                 );
-                                if transitioned {
+                                if pending_truth_heartbeat
+                                    .as_ref()
+                                    .is_some_and(|pending| pending.signature == result.signature)
+                                {
+                                    pending_truth_heartbeat = None;
+                                }
+                                if host_link.is_updating() {
+                                    tracing::debug!(
+                                        reason = result.reason,
+                                        error = %error,
+                                        retry_after_secs = result.metrics.retry_after
+                                            .map(|delay| delay.as_secs_f64()),
+                                        "Heartbeat POST deferred during Runtime Host update"
+                                    );
+                                } else if transitioned {
                                     tracing::warn!(
                                         reason = result.reason,
                                         error = %error,
@@ -2248,17 +2348,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &managed_reconciliation,
                             &mut shipping_progress,
                             offline.is_offline,
+                            &host_link,
                             &status_path,
                         );
                     }
                     Some(Err(err)) => {
-                        last_runtime_truth_signature = None;
                         let error = heartbeat::bounded_heartbeat_error(&err.to_string());
                         let transitioned = heartbeat_transport.record_failure(
                             chrono::Utc::now().to_rfc3339(),
                             &error,
                         );
-                        if transitioned {
+                        if host_link.is_updating() {
+                            tracing::debug!(error = %error, "Heartbeat POST task deferred during Runtime Host update");
+                        } else if transitioned {
                             tracing::warn!(error = %error, "Heartbeat POST task failed");
                         } else {
                             tracing::debug!(error = %error, "Heartbeat POST task remains degraded");
@@ -2270,6 +2372,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &managed_reconciliation,
                             &mut shipping_progress,
                             offline.is_offline,
+                            &host_link,
                             &status_path,
                         );
                     }
@@ -2296,6 +2399,36 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         tracing::warn!("Machine presence POST task failed: {}", err);
                     }
                     None => {}
+                }
+            }
+            host_link_poll_result = host_link_poll_tasks.join_next(), if !host_link_poll_tasks.is_empty() => {
+                match host_link_poll_result {
+                    Some(Ok(Ok(()))) | None => {}
+                    Some(Ok(Err(error))) => {
+                        tracing::debug!(%error, "Runtime Host admission poll failed");
+                    }
+                    Some(Err(error)) => {
+                        tracing::debug!(%error, "Runtime Host admission poll task failed");
+                    }
+                }
+            }
+            host_link_event = host_link_changed.changed() => {
+                if host_link_event.is_ok() {
+                    let serving_generation = host_link.serving_generation();
+                    if serving_generation > last_serving_generation {
+                        last_serving_generation = serving_generation;
+                        let now = Instant::now();
+                        for retry in deferred_retries.values_mut() {
+                            retry.due_at = now;
+                        }
+                        runtime_outbox_consecutive_failures = 0;
+                        runtime_outbox_retry_after = None;
+                        adaptive_limiter.reset_backpressure_cooldown();
+                        outbox_timer.reset_immediately();
+                        failed_ship_retry_timer.reset_immediately();
+                        heartbeat_timer.reset_immediately();
+                        pending_truth_heartbeat = None;
+                    }
                 }
             }
             _ = storage_maintenance_tasks.join_next(), if !storage_maintenance_tasks.is_empty() => {}
@@ -2458,6 +2591,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 offline.is_offline,
                                 &status_path,
                                 &heartbeat_transport,
+                                Some(&host_link.snapshot()),
                             );
                             tracing::warn!("Unmanaged binding refresh task failed: {}", err);
                         } else {
@@ -2600,6 +2734,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 offline.is_offline,
                                 &status_path,
                                 &heartbeat_transport,
+                                Some(&host_link.snapshot()),
                             );
                             if pending_wake_reconciliation {
                                 if maybe_start_managed_observation_scan(
@@ -2830,6 +2965,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             offline.is_offline,
                             &status_path,
                             &heartbeat_transport,
+                            Some(&host_link.snapshot()),
                         );
                     }
                     None => {}
@@ -2918,6 +3054,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 Instant::now(),
                             );
                             projection.set_heartbeat_transport(heartbeat_transport.clone());
+                            projection.set_host_link(host_link.snapshot());
                             projection
                                 .set_runtime_event_outbox(latest_runtime_event_outbox.clone());
                             heartbeat::write_status_file(
@@ -2931,44 +3068,48 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             let payload = projection.payload.clone();
                             last_status_projection = Some(projection);
                             let signature = runtime_truth_signature(&payload);
-                            if !offline.is_offline
-                                && runtime_truth_changed(
+                            if !offline.is_offline {
+                                if runtime_truth_changed(
                                     last_runtime_truth_signature.as_deref(),
                                     &signature,
-                                )
-                            {
-                                if heartbeat_post_tasks.is_empty() {
-                                    heartbeat_transport.record_attempt(
-                                        chrono::Utc::now().to_rfc3339(),
-                                    );
-                                    publish_heartbeat_transport_status(
-                                        &heartbeat_transport,
-                                        &mut last_status_projection,
-                                        serde_json::to_value(control_channel_status.snapshot()).ok(),
-                                        &managed_reconciliation,
-                                        &mut shipping_progress,
-                                        offline.is_offline,
-                                        &status_path,
-                                    );
-                                    spawn_heartbeat_post(
-                                        &mut heartbeat_post_tasks,
-                                        client.clone(),
-                                        payload,
-                                        signature,
-                                        "runtime_truth_change",
-                                    );
+                                ) {
+                                    let now = Instant::now();
+                                    let due = truth_heartbeat_due_at(last_truth_heartbeat_at, now);
+                                    if heartbeat_post_tasks.is_empty() && due <= now {
+                                        heartbeat_transport.record_attempt(
+                                            chrono::Utc::now().to_rfc3339(),
+                                        );
+                                        publish_heartbeat_transport_status(
+                                            &heartbeat_transport,
+                                            &mut last_status_projection,
+                                            serde_json::to_value(control_channel_status.snapshot()).ok(),
+                                            &managed_reconciliation,
+                                            &mut shipping_progress,
+                                            offline.is_offline,
+                                            &host_link,
+                                            &status_path,
+                                        );
+                                        spawn_heartbeat_post(
+                                            &mut heartbeat_post_tasks,
+                                            client.clone(),
+                                            payload,
+                                            signature.clone(),
+                                            "runtime_truth_change",
+                                        );
+                                        last_truth_heartbeat_at = Some(now);
+                                        last_runtime_truth_signature = Some(signature);
+                                        pending_truth_heartbeat = None;
+                                    } else {
+                                        pending_truth_heartbeat = Some(PendingTruthHeartbeat {
+                                            payload,
+                                            signature,
+                                        });
+                                    }
                                 } else {
-                                    // A POST is already in flight, so this
-                                    // change cannot ship yet. Clearing the
-                                    // signature guarantees the next projection
-                                    // ships it, but only if another projection
-                                    // actually runs — otherwise the change sits
-                                    // until the 60s reconciliation. Queue one.
-                                    last_runtime_truth_signature = None;
-                                    projection_build_pending = true;
+                                    pending_truth_heartbeat = None;
                                 }
                             }
-                            }
+                        }
                         }
                         Err(error) => {
                             tracing::warn!(error = %error, "Local status projection build failed");
@@ -3503,8 +3644,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     }
                 }
+                let host_link_status = host_link.snapshot();
+                if matches!(host_link_status.state.as_str(), "updating" | "slow_update")
+                    && host_link_poll_tasks.len() < 3
+                {
+                    let client = client.clone();
+                    host_link_poll_tasks.spawn_local(async move {
+                        client.poll_runtime_admission().await
+                    });
+                }
                 if let Some(projection) = last_status_projection.as_mut() {
                     projection.set_heartbeat_transport(heartbeat_transport.clone());
+                    projection.set_host_link(host_link_status.clone());
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -3520,8 +3671,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         offline.is_offline,
                         &status_path,
                         &heartbeat_transport,
+                        Some(&host_link_status),
                     );
-                }
+            }
             }
 
             _ = managed_full_reconciliation_timer.tick() => {
@@ -3602,10 +3754,45 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                truth_heartbeat_due_at(last_truth_heartbeat_at, Instant::now()),
+            )), if pending_truth_heartbeat.is_some() && heartbeat_post_tasks.is_empty() => {
+                if let Some(pending) = pending_truth_heartbeat.take() {
+                    if !offline.is_offline
+                        && runtime_truth_changed(
+                            last_runtime_truth_signature.as_deref(),
+                            &pending.signature,
+                        )
+                    {
+                        let now = Instant::now();
+                        heartbeat_transport.record_attempt(chrono::Utc::now().to_rfc3339());
+                        publish_heartbeat_transport_status(
+                            &heartbeat_transport,
+                            &mut last_status_projection,
+                            serde_json::to_value(control_channel_status.snapshot()).ok(),
+                            &managed_reconciliation,
+                            &mut shipping_progress,
+                            offline.is_offline,
+                            &host_link,
+                            &status_path,
+                        );
+                        spawn_heartbeat_post(
+                            &mut heartbeat_post_tasks,
+                            client.clone(),
+                            pending.payload,
+                            pending.signature.clone(),
+                            "runtime_truth_change",
+                        );
+                        last_truth_heartbeat_at = Some(now);
+                        last_runtime_truth_signature = Some(pending.signature);
+                    }
+                }
+            }
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
                 if let Some(projection) = last_status_projection.as_mut() {
                     projection.set_heartbeat_transport(heartbeat_transport.clone());
+                    projection.set_host_link(host_link.snapshot());
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -3620,6 +3807,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 chrono::Utc::now().to_rfc3339(),
                             );
                             projection.set_heartbeat_transport(heartbeat_transport.clone());
+                            projection.set_host_link(host_link.snapshot());
                             heartbeat::write_status_file(
                                 projection,
                                 serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -3630,6 +3818,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                             let payload = projection.payload.clone();
                             let signature = runtime_truth_signature(&payload);
+                            last_runtime_truth_signature = Some(signature.clone());
+                            pending_truth_heartbeat = None;
                             spawn_heartbeat_post(
                                 &mut heartbeat_post_tasks,
                                 client.clone(),
@@ -3638,7 +3828,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 "periodic_heartbeat",
                             );
                         } else {
-                            last_runtime_truth_signature = None;
                             tracing::debug!("Skipping periodic heartbeat while a heartbeat POST is still in flight");
                         }
                     }
@@ -4311,6 +4500,13 @@ fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
 fn runtime_truth_changed(previous: Option<&str>, current: &str) -> bool {
     previous != Some(current)
 }
+const TRUTH_HEARTBEAT_COALESCE_WINDOW: Duration = Duration::from_secs(1);
+
+fn truth_heartbeat_due_at(last_sent: Option<Instant>, now: Instant) -> Instant {
+    last_sent
+        .map(|last_sent| (last_sent + TRUTH_HEARTBEAT_COALESCE_WINDOW).max(now))
+        .unwrap_or(now)
+}
 
 fn inventory_change_requires_projection(
     previous_generation: Option<u64>,
@@ -4346,11 +4542,15 @@ fn local_retry_delay(priority: WorkPriority) -> Duration {
     }
 }
 
-fn storage_v2_backpressure_retry_delay(priority: WorkPriority, retry_after: Duration) -> Duration {
-    if priority == WorkPriority::Live {
-        retry_after.min(Duration::from_secs(1))
-    } else {
+fn storage_v2_backpressure_retry_delay(
+    priority: WorkPriority,
+    retry_after: Duration,
+    host_updating: bool,
+) -> Duration {
+    if host_updating || priority != WorkPriority::Live {
         retry_after
+    } else {
+        retry_after.min(Duration::from_secs(1))
     }
 }
 
@@ -5333,10 +5533,13 @@ fn publish_heartbeat_transport_status(
     managed_reconciliation: &heartbeat::ProjectionReconciliation,
     shipping_progress: &mut heartbeat::ShippingProgressObservation,
     is_offline: bool,
+    host_link: &crate::host_link::HostLink,
     status_path: &Path,
 ) {
+    let host_link_status = host_link.snapshot();
     if let Some(projection) = last_status_projection.as_mut() {
         projection.set_heartbeat_transport(heartbeat_transport.clone());
+        projection.set_host_link(host_link_status);
         heartbeat::write_status_file(
             projection,
             control_channel,
@@ -5352,6 +5555,7 @@ fn publish_heartbeat_transport_status(
             is_offline,
             status_path,
             heartbeat_transport,
+            Some(&host_link_status),
         );
     }
 }
@@ -5370,17 +5574,21 @@ fn spawn_heartbeat_post(
         let join_started = Instant::now();
         let heartbeat_task = tokio::spawn(async move {
             let task_started = Instant::now();
-            let result = heartbeat::send_heartbeat(&client, &payload)
-                .await
-                .map_err(|err| err.to_string());
-            (result, task_started.elapsed().as_millis() as u64)
+            let attempt = heartbeat::send_heartbeat(&client, &payload).await;
+            (attempt, task_started.elapsed().as_millis() as u64)
         });
-        let (result, task_elapsed_ms) = match heartbeat_task.await {
-            Ok((result, task_elapsed_ms)) => (result, task_elapsed_ms),
+        let (attempt, task_elapsed_ms) = match heartbeat_task.await {
+            Ok((attempt, task_elapsed_ms)) => (attempt, task_elapsed_ms),
             Err(err) => {
                 let elapsed_ms = join_started.elapsed().as_millis() as u64;
                 (
-                    Err(format!("heartbeat POST worker task failed: {err}")),
+                    heartbeat::HeartbeatSendAttempt {
+                        result: Err(format!("heartbeat POST worker task failed: {err}")),
+                        metrics: heartbeat::HeartbeatPostMetrics {
+                            latency_ms: elapsed_ms,
+                            ..heartbeat::HeartbeatPostMetrics::default()
+                        },
+                    },
                     elapsed_ms,
                 )
             }
@@ -5388,7 +5596,8 @@ fn spawn_heartbeat_post(
         HeartbeatPostResult {
             signature,
             reason,
-            result,
+            result: attempt.result,
+            metrics: attempt.metrics,
             join_elapsed_ms: join_started.elapsed().as_millis() as u64,
             task_elapsed_ms,
         }
@@ -6446,7 +6655,16 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             if crate::shipping::client::is_connect_error(&error) {
                 result.had_connect_error = true;
             }
-            if task_context.tracker.record_error() {
+            if task_context.client.host_link().is_updating() {
+                tracing::debug!(
+                    path = %result.job.path.display(),
+                    provider = result.job.provider,
+                    lane,
+                    error = %error,
+                    retry_after_secs = backpressure.map(|value| value.retry_after.as_secs_f64()),
+                    "Storage-v2 POST deferred during Runtime Host update"
+                );
+            } else if task_context.tracker.record_error() {
                 tracing::warn!(
                     path = %result.job.path.display(),
                     provider = result.job.provider,
@@ -6458,7 +6676,11 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             result.local_retry_after = Some(
                 backpressure
                     .map(|value| {
-                        storage_v2_backpressure_retry_delay(result.job.priority, value.retry_after)
+                        storage_v2_backpressure_retry_delay(
+                            result.job.priority,
+                            value.retry_after,
+                            task_context.client.host_link().is_updating(),
+                        )
                     })
                     .unwrap_or_else(|| local_retry_delay(result.job.priority)),
             );
@@ -7783,6 +8005,26 @@ mod tests {
     }
 
     #[test]
+    fn truth_change_heartbeat_coalescing_caps_immediate_sends_at_one_per_second() {
+        let first_send = Instant::now();
+        let burst_due = truth_heartbeat_due_at(None, first_send);
+        assert_eq!(burst_due, first_send);
+
+        let second_change = first_send + Duration::from_millis(100);
+        let third_change = first_send + Duration::from_millis(900);
+        let second_due = truth_heartbeat_due_at(Some(first_send), second_change);
+        let third_due = truth_heartbeat_due_at(Some(first_send), third_change);
+        assert_eq!(second_due, first_send + Duration::from_secs(1));
+        assert_eq!(third_due, second_due);
+
+        let next_change = first_send + Duration::from_millis(1_100);
+        assert_eq!(
+            truth_heartbeat_due_at(Some(second_due), next_change),
+            first_send + Duration::from_secs(2)
+        );
+    }
+
+    #[test]
     fn test_runtime_truth_signature_ignores_observation_timestamps() {
         let mut first = empty_heartbeat_payload();
         first.sessions.push(resolved_session(
@@ -7793,14 +8035,66 @@ mod tests {
             "unmanaged",
             Some(42),
         ));
+        first.machine_evidence = Some(heartbeat::MachineEvidence {
+            schema_version: 3,
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            identities: Vec::new(),
+            run: Vec::new(),
+            process: Vec::new(),
+            activity: vec![heartbeat::ActivityEvidence {
+                authority_class: "provider_runtime".to_string(),
+                provider: "claude".to_string(),
+                session_id: "sess-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                kind: "running".to_string(),
+                raw_kind: "running".to_string(),
+                tool_name: Some("shell".to_string()),
+                detail: None,
+                source: "hook".to_string(),
+                observed_at: "2026-05-05T12:00:00Z".to_string(),
+                valid_until: "2026-05-05T12:00:30Z".to_string(),
+                raw_locator: None,
+                reason_codes: Vec::new(),
+            }],
+            control: Vec::new(),
+            transcript: Vec::new(),
+            process_snapshot_scopes: Vec::new(),
+            readiness: Vec::new(),
+            continuation: Vec::new(),
+        });
         let mut second = first.clone();
         second.sessions[0].phase_observed_at = Some("2026-05-05T12:00:10Z".to_string());
         second.sessions[0].last_activity_at = Some("2026-05-05T12:00:11Z".to_string());
         second.sessions[0].evidence.hook_seen_at = Some("2026-05-05T12:00:11Z".to_string());
+        let second_evidence = second.machine_evidence.as_mut().unwrap();
+        second_evidence.observed_at = "2026-05-05T12:00:05Z".to_string();
+        second_evidence.activity[0].observed_at = "2026-05-05T12:00:05Z".to_string();
+        second_evidence.activity[0].valid_until = "2026-05-05T12:00:35Z".to_string();
 
         assert_eq!(
             runtime_truth_signature(&first),
             runtime_truth_signature(&second)
+        );
+        let mut tool_changed = first.clone();
+        tool_changed.sessions[0].tool_name = Some("shell".to_string());
+        assert_ne!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&tool_changed)
+        );
+
+        let mut phase_changed = first.clone();
+        phase_changed.sessions[0].phase = Some("working".to_string());
+        assert_ne!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&phase_changed)
+        );
+
+        let mut activity_changed = first.clone();
+        activity_changed.machine_evidence.as_mut().unwrap().activity[0].kind =
+            "needs_user".to_string();
+        assert_ne!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&activity_changed)
         );
     }
 
@@ -9337,11 +9631,15 @@ mod tests {
             Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
         );
         assert_eq!(
-            storage_v2_backpressure_retry_delay(WorkPriority::Live, Duration::from_secs(5),),
+            storage_v2_backpressure_retry_delay(WorkPriority::Live, Duration::from_secs(5), false,),
             Duration::from_secs(1)
         );
         assert_eq!(
-            storage_v2_backpressure_retry_delay(WorkPriority::Scan, Duration::from_secs(5),),
+            storage_v2_backpressure_retry_delay(WorkPriority::Scan, Duration::from_secs(5), false,),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            storage_v2_backpressure_retry_delay(WorkPriority::Live, Duration::from_secs(5), true,),
             Duration::from_secs(5)
         );
     }

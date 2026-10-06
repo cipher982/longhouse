@@ -67,6 +67,12 @@ class RuntimeFixture(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if self.path == "/api/agents/heartbeat":
+            self.send_header("X-Longhouse-Request-Encodings", "gzip")
+            self.send_header(
+                "X-Longhouse-Machine-Fresh-Horizon",
+                str(self.server.machine_fresh_horizon),
+            )
         self.end_headers()
         self.wfile.write(body)
 
@@ -128,6 +134,7 @@ def exercise(engine):
         status_path = longhouse / "agent" / "engine-status.json"
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RuntimeFixture)
         server.heartbeat_status = 503
+        server.machine_fresh_horizon = 1
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         child = None
@@ -264,9 +271,14 @@ def exercise(engine):
                 lambda transport: transport.get("state") == "degraded",
                 field="heartbeat_transport",
             )
-            failed_health = native_health()
-            assert_fresh_native_health(failed_health)
-            assert "heartbeat_post_failed" in failed_health["reasons"], failed_health
+            health_deadline = time.monotonic() + 10
+            while True:
+                failed_health = native_health()
+                assert_fresh_native_health(failed_health)
+                if "heartbeat_post_failed" in failed_health["reasons"]:
+                    break
+                assert time.monotonic() < health_deadline, failed_health
+                time.sleep(0.05)
             assert failed_health["heartbeat_transport"]["state"] == "degraded", (
                 failed_health
             )

@@ -17,7 +17,7 @@ same backend-owned truth instead of reconstructing it differently.
 | Timeline card status | Can I trust this session at a glance? | `session_state.presentation.primary` and independent access/transcript labels | state contract truth table plus client presentation tests | Add only orthogonal fact combinations, never combined statuses. |
 | Action availability | Can this exact operation run now, and why not? | `session_state.control.actions`; legacy capability booleans are deprecated facts-only aliases | state contract and command-time exact-grant tests | Carry catalog lease generation through every command audit. |
 | Session input lifecycle | What state is a submitted user input in after send, retry, crash, or cancel? | `SessionInput.status` plus typed intent/disposition/outcome and request identity | server input API/idempotency/boot-recovery tests plus `HTTPOutboxUITests/testRealHTTPOutboxRetriesSamePhotoOperationAndSurvivesRelaunch` and web/iOS row reconciliation tests | Add end-to-end queue replay proof if recovered queued rows ever gain a separate dispatcher. |
-| Host and transport health | Is the host reachable, is the control transport alive, and are those different? | independent `session_state.host` and `session_state.control` facts | `server/tests_lite/test_session_liveness_facts.py` and state-contract tests | Add reason codes only from new raw evidence. |
+| Host and transport health | Is the host reachable, is the control transport alive, and are those different? | Remote `session_state.host` and `session_state.control`; local `engine-status.json.host_link` for Runtime Host update claims | `server/tests_lite/test_session_liveness_facts.py`, state-contract tests, and engine `host_link` / `device` tests | Add reason codes only from new raw evidence. |
 | Console turn lifecycle | Did a turn start, stream, finish, fail, or get interrupted? | durable Console turn/run facts projected through `session_state` and the turn APIs | Console session/turn route tests plus web/iOS composer fixtures | Extend the shared fixtures when a new turn outcome becomes user-visible. |
 | Provisional vs durable transcript | Is this text live preview, durable archive, stale preview, or superseded? | `SessionTranscriptPreview` and durable events | preview freshness tests plus shared web/iOS rendering fixtures | Keep stale/superseded render decisions backend-owned as bridge behavior changes. |
 | Clock and freshness | When does a signal expire, and which clock owns that decision? | backend freshness windows near runtime/provisional projections | `server/tests_lite/test_session_freshness_contract.py` pins backend-clock boundaries for runtime sync and provisional previews | Add cases here when a launch-critical projection introduces a new freshness window. |
@@ -124,6 +124,19 @@ Its phase signal is fresh provider evidence even when the sampled phase is uncha
 The Machine Agent's five-second `status_assertion` says only that it can still report
 the previously observed state: it renews machine liveness without changing the
 provider observation, phase, or runtime revision. It cannot replace provider samples.
+
+The Machine Agent's heartbeat is a liveness exchange, separate from the semantic
+session snapshot. It keeps the periodic 60-second heartbeat; meaning changes
+trigger at most one immediate heartbeat per second, while observation timestamps
+do not. Gzip is used only after the host advertises it; a 400/415/413 refusal is
+retried once as identity and disables gzip until the engine process restarts.
+`engine-status.json.host_link` records the host's planned-update claim. The
+engine derives `updating` before `expected_back_by`, `slow_update` until the
+lease `deadline` or attempt `cutoff`, and `unreachable` after expiry without a
+renewal. The `host_updating` and `host_update_slow` local-health reasons are
+informational and have no suggested action. `heartbeat_post_failed` appears
+only when no acknowledged heartbeat falls within the host's freshness horizon
+(120 seconds if unknown) and no valid claim remains.
 
 ## Realtime canary
 

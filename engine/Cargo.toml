@@ -26,6 +26,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 
 # Compression (zlib-rs backend is fastest per flate2 docs; default miniz_oxide is pure Rust but slower)
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+parking_lot = "0.12"
 # Only level-1 frames the engine writes itself: no legacy (v0.1-0.7) decoders,
 # dictionary builder, or array helpers.
 zstd = { version = "0.13", default-features = false }

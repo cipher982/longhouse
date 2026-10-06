@@ -4,9 +4,10 @@
 //! bounded concurrency across unrelated files. Ready work is weighted so live
 //! watcher events get more slots without starving retry/scan work.
 
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Ready-work priority, ordered from highest urgency to lowest.
@@ -156,7 +157,7 @@ impl AdaptiveLimiter {
             .unwrap_or(BACKPRESSURE_DEFAULT_COOLDOWN)
             .min(BACKPRESSURE_MAX_COOLDOWN);
         let retry_after_ms = retry_after.as_millis().min(u128::from(u64::MAX)) as u64;
-        let mut state = self.state.lock().expect("limiter state poisoned");
+        let mut state = self.state.lock();
         state.total_backpressure = state.total_backpressure.saturating_add(1);
         state.last_backpressure_retry_after_ms = Some(retry_after_ms);
         state.backpressure_cooldown_until = now.checked_add(retry_after);
@@ -165,6 +166,9 @@ impl AdaptiveLimiter {
             retry_after_ms,
             "archive backpressure observed; archive requests cooled down"
         );
+    }
+    pub fn reset_backpressure_cooldown(&self) {
+        self.state.lock().backpressure_cooldown_until = None;
     }
 
     /// Feed the live-lane SLA guard. Archive work should consume only leftover
@@ -180,7 +184,7 @@ impl AdaptiveLimiter {
         }
 
         let now = Instant::now();
-        let mut state = self.state.lock().expect("limiter state poisoned");
+        let mut state = self.state.lock();
         state.last_live_latency_p95_ms = latency_p95_ms;
         state.last_live_enqueue_to_job_p95_ms = enqueue_to_job_p95_ms;
 
@@ -239,7 +243,7 @@ impl AdaptiveLimiter {
     }
 
     pub fn huge_range_eligible(&self) -> bool {
-        let state = self.state.lock().expect("limiter state poisoned");
+        let state = self.state.lock();
         let (eligible, _, _) = Self::huge_range_policy(&state, Instant::now());
         eligible
     }
@@ -263,12 +267,12 @@ impl AdaptiveLimiter {
     }
 
     pub fn archive_target_batch_bytes(&self) -> u64 {
-        let state = self.state.lock().expect("limiter state poisoned");
+        let state = self.state.lock();
         Self::archive_target_batch_bytes_for_state(&state, Instant::now())
     }
 
     pub fn snapshot(&self) -> LimiterSnapshot {
-        let state = self.state.lock().expect("limiter state poisoned");
+        let state = self.state.lock();
         let now = Instant::now();
         let (huge_range_eligible, pressure_state, huge_range_suppressed_reason) =
             Self::huge_range_policy(&state, now);
@@ -1893,6 +1897,28 @@ mod tests {
             snap.archive_target_batch_bytes,
             ARCHIVE_BATCH_TARGET_MIN_BYTES
         );
+    }
+
+    #[test]
+    fn serving_host_clears_backpressure_cooldown_without_losing_history() {
+        let limiter = AdaptiveLimiter::new();
+        limiter.observe_backpressure(Some(Duration::from_secs(30)));
+        assert_eq!(
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_MIN_BYTES
+        );
+
+        limiter.reset_backpressure_cooldown();
+
+        let snapshot = limiter.snapshot();
+        assert_eq!(
+            snapshot.archive_target_batch_bytes,
+            ARCHIVE_BATCH_TARGET_BASE_BYTES
+        );
+        assert!(snapshot.huge_range_eligible);
+        assert_eq!(snapshot.total_backpressure, 1);
+        assert_eq!(snapshot.last_backpressure_retry_after_ms, Some(30_000));
+        assert_eq!(snapshot.backpressure_cooldown_remaining_ms, None);
     }
 
     /// The old EWMA branch had no way back: one backpressure event pushed the

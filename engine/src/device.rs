@@ -113,6 +113,8 @@ struct NativeLocalHealth {
     engine_status: NativeEngineStatus,
     transport: NativeTransportStatus,
     heartbeat_transport: NativeHeartbeatTransportStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_link: Option<Value>,
     spool: NativeSpoolStatus,
     managed_sessions: NativeManagedSessionsStatus,
     managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
@@ -245,6 +247,8 @@ struct NativeDesktopHealth {
     engine_status: NativeDesktopEngineStatus,
     transport: NativeTransportStatus,
     heartbeat_transport: NativeHeartbeatTransportStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_link: Option<Value>,
     spool: NativeSpoolStatus,
     runtime_event_outbox: NativeRuntimeEventOutboxStatus,
     /// Absent when session evidence could not be read at all. An empty array
@@ -1971,6 +1975,31 @@ fn native_health_from_parts(
     });
     let mut transport = native_transport_status(object);
     let heartbeat_transport = native_heartbeat_transport_status(object);
+    let host_link = object.and_then(|value| value.get("host_link")).cloned();
+    let host_link_status = host_link.as_ref().and_then(|value| {
+        serde_json::from_value::<crate::host_link::HostLinkStatus>(value.clone()).ok()
+    });
+    let host_claim_is_valid = host_link_status
+        .as_ref()
+        .is_some_and(|link| link.has_valid_claim_at(chrono::Utc::now()));
+    let host_link_state = host_link_status.as_ref().map(|link| link.state_now());
+    let fresh_horizon_secs = host_link_status
+        .as_ref()
+        .and_then(|link| link.fresh_horizon_secs)
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(120);
+    let heartbeat_ack_at = host_link_status
+        .as_ref()
+        .and_then(|link| link.last_acknowledged_at.as_deref())
+        .or(heartbeat_transport.last_success_at.as_deref())
+        .or_else(|| {
+            object
+                .and_then(|value| value.get("daemon_started_at"))
+                .and_then(Value::as_str)
+        });
+    let heartbeat_is_stale = heartbeat_ack_at
+        .and_then(rfc3339_age_seconds)
+        .is_some_and(|age| age >= fresh_horizon_secs);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
         .and_then(Value::as_array)
@@ -1996,7 +2025,13 @@ fn native_health_from_parts(
         .and_then(Value::as_str)
         .map(str::to_string);
     let mut reasons = Vec::new();
-    if heartbeat_transport.state == "degraded" {
+    if host_claim_is_valid {
+        match host_link_state.as_deref() {
+            Some("updating") => reasons.push("host_updating".to_string()),
+            Some("slow_update") => reasons.push("host_update_slow".to_string()),
+            _ => {}
+        }
+    } else if heartbeat_is_stale {
         reasons.push("heartbeat_post_failed".to_string());
     }
     if matches!(
@@ -2201,6 +2236,10 @@ fn native_health_from_parts(
         .any(|reason| reason == "engine_projection_stale")
     {
         "Local status collection stopped making progress"
+    } else if reasons.iter().any(|reason| reason == "host_update_slow") {
+        "Update is taking longer than usual"
+    } else if reasons.iter().any(|reason| reason == "host_updating") {
+        "Longhouse is updating"
     } else if reasons.iter().any(|reason| reason == "engine_status_stale") {
         "The local Machine Agent stopped reporting"
     } else if reasons.iter().any(|reason| reason == "ship_stalled") {
@@ -2252,6 +2291,7 @@ fn native_health_from_parts(
         },
         transport,
         heartbeat_transport,
+        host_link,
         spool: NativeSpoolStatus {
             pending_count,
             dead_count,
@@ -2303,10 +2343,14 @@ fn native_desktop_health_from_parts(
     let detached_count = count_with_state("detached");
     let degraded_count = count_with_state("degraded");
 
-    let severity = match health.health_state.as_str() {
-        "healthy" => "green",
-        "degraded" | "setup_required" => "yellow",
-        _ => "red",
+    let severity = if native_health_is_host_update_only(&health.reasons) {
+        "info"
+    } else {
+        match health.health_state.as_str() {
+            "healthy" => "green",
+            "degraded" | "setup_required" => "yellow",
+            _ => "red",
+        }
     }
     .to_string();
 
@@ -2338,6 +2382,7 @@ fn native_desktop_health_from_parts(
         headline: health.headline,
         reasons: health.reasons,
         heartbeat_transport: health.heartbeat_transport,
+        host_link: health.host_link,
         suggested_actions,
         suggested_action_ids,
         engine_status: NativeDesktopEngineStatus {
@@ -2561,6 +2606,13 @@ fn native_desktop_suggested_actions(
         .collect()
 }
 
+fn native_health_is_host_update_only(reasons: &[String]) -> bool {
+    !reasons.is_empty()
+        && reasons
+            .iter()
+            .all(|reason| matches!(reason.as_str(), "host_updating" | "host_update_slow"))
+}
+
 fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
     let mut action_ids = Vec::new();
     for reason in reasons {
@@ -2628,7 +2680,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             action_ids.push(action_id.to_string());
         }
     }
-    if !reasons.is_empty() && action_ids.is_empty() {
+    if !reasons.is_empty() && action_ids.is_empty() && !native_health_is_host_update_only(reasons) {
         action_ids.push("inspect_local_health".to_string());
     }
     action_ids
@@ -5935,12 +5987,13 @@ mod tests {
     }
 
     #[test]
-    fn native_health_surfaces_heartbeat_post_failure_and_recovery() {
+    fn native_health_waits_for_the_host_freshness_horizon_after_a_failed_post() {
         let now = chrono::Utc::now().to_rfc3339();
         let mut payload = json!({
             "spool_pending_count": 0,
             "spool_dead_count": 0,
             "ship_attempts_10m": 1,
+            "daemon_started_at": now.clone(),
             "shipping_progress": {
                 "pending_work": false,
                 "stalled": false,
@@ -5950,13 +6003,13 @@ mod tests {
             "local_projection": {
                 "engine_pulse_at": now.clone(),
                 "generated_at": now.clone(),
-                "last_reconciled_at": now,
+                "last_reconciled_at": now.clone(),
                 "reconciliation": {"state": "idle"}
             },
             "heartbeat_transport": {
                 "state": "degraded",
-                "last_attempt_at": "2026-09-18T12:00:00Z",
-                "last_failure_at": "2026-09-18T12:00:01Z",
+                "last_attempt_at": now.clone(),
+                "last_failure_at": now.clone(),
                 "last_error": "POST returned 503: rejected"
             }
         });
@@ -5968,33 +6021,118 @@ mod tests {
             None,
         );
         assert_eq!(failure.heartbeat_transport.state, "degraded");
-        assert!(failure
+        assert!(!failure
             .reasons
             .iter()
             .any(|reason| reason == "heartbeat_post_failed"));
-        assert_eq!(failure.health_state, "degraded");
         assert_eq!(
             failure.heartbeat_transport.last_error.as_deref(),
             Some("POST returned 503: rejected")
         );
 
+        let old = (chrono::Utc::now() - chrono::Duration::seconds(121)).to_rfc3339();
+        payload["daemon_started_at"] = json!(old.clone());
         payload["heartbeat_transport"] = json!({
-            "state": "healthy",
-            "last_attempt_at": "2026-09-18T12:00:02Z",
-            "last_success_at": "2026-09-18T12:00:02Z"
+            "state": "degraded",
+            "last_failure_at": now.clone(),
+            "last_error": "POST returned 503: rejected"
         });
-        let recovery = native_health_from_parts(
+        payload["host_link"] = json!({
+            "state": "unreachable",
+            "since": old.clone(),
+            "claim": null,
+            "claim_started_at": null,
+            "last_acknowledged_at": old.clone(),
+            "fresh_horizon_secs": 120,
+            "runtime_epoch": "runtime-a"
+        });
+        let stale = native_health_from_parts(
             Path::new("/tmp/engine-status.json"),
             true,
             Some(0),
-            Some(payload),
+            Some(payload.clone()),
             None,
         );
-        assert_eq!(recovery.heartbeat_transport.state, "healthy");
-        assert!(!recovery
+        assert!(stale
             .reasons
             .iter()
             .any(|reason| reason == "heartbeat_post_failed"));
+
+        let claim_expected = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+        let claim_deadline = (chrono::Utc::now() + chrono::Duration::seconds(120)).to_rfc3339();
+        let claim_cutoff = (chrono::Utc::now() + chrono::Duration::seconds(300)).to_rfc3339();
+        payload["host_link"] = json!({
+            "state": "updating",
+            "since": now.clone(),
+            "claim": {
+                "type": "host.lifecycle",
+                "state": "updating",
+                "runtime_epoch": "runtime-b",
+                "attempt_id": "attempt",
+                "phase": "drain",
+                "expected_back_by": claim_expected,
+                "deadline": claim_deadline,
+                "cutoff": claim_cutoff
+            },
+            "claim_started_at": now.clone(),
+            "last_acknowledged_at": old.clone(),
+            "fresh_horizon_secs": 120,
+            "runtime_epoch": "runtime-b"
+        });
+        let updating = native_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(payload.clone()),
+            None,
+        );
+        assert!(updating
+            .reasons
+            .iter()
+            .any(|reason| reason == "host_updating"));
+        assert!(!updating
+            .reasons
+            .iter()
+            .any(|reason| reason == "heartbeat_post_failed"));
+        assert!(native_desktop_suggested_action_ids(&updating.reasons).is_empty());
+        assert_eq!(updating.host_link, Some(payload["host_link"].clone()));
+        let updating_desktop = native_desktop_health_from_parts(
+            updating,
+            None,
+            None,
+            None,
+            chrono::Utc::now().to_rfc3339(),
+        );
+        assert_eq!(updating_desktop.severity, "info");
+        assert!(updating_desktop.suggested_action_ids.is_empty());
+        payload["host_link"]["claim"]["expected_back_by"] =
+            json!((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+        let slow = native_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(payload.clone()),
+            None,
+        );
+        assert!(slow
+            .reasons
+            .iter()
+            .any(|reason| reason == "host_update_slow"));
+        assert!(!slow
+            .reasons
+            .iter()
+            .any(|reason| reason == "heartbeat_post_failed"));
+        assert!(native_desktop_suggested_action_ids(&slow.reasons).is_empty());
+        assert_eq!(slow.host_link, Some(payload["host_link"].clone()));
+        let slow_desktop = native_desktop_health_from_parts(
+            slow,
+            None,
+            None,
+            None,
+            chrono::Utc::now().to_rfc3339(),
+        );
+        assert_eq!(slow_desktop.severity, "info");
+        assert!(slow_desktop.suggested_action_ids.is_empty());
     }
 
     #[test]
