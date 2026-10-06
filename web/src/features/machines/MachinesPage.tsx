@@ -194,7 +194,22 @@ export default function MachinesPage() {
   );
 
   let body: ReactNode;
-  if (directoryIsEmpty && !isError) {
+  if (directoryIsEmpty && isError) {
+    body = (
+      <>
+        <p className="machines-stale" role="status">
+          Activity and sync are unavailable. {error instanceof Error ? error.message : ""}{" "}
+          <button type="button" className="machines-link-button" onClick={() => { void refetch(); void directory.refetch(); }}>
+            Try again
+          </button>
+        </p>
+        {directory.isError && directory.data && (
+          <p className="machines-stale" role="status">Connection information is also last known; it could not be refreshed.</p>
+        )}
+        {firstMachineEmptyState}
+      </>
+    );
+  } else if (directoryIsEmpty) {
     body = firstMachineEmptyState;
   } else if (isLoading || waitingForDirectory) {
     body = machines?.length ? (

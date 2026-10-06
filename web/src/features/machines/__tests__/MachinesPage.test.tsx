@@ -128,7 +128,10 @@ describe("MachinesPage", () => {
     expect(await screen.findByTestId("machines-connect-first-button")).toBeInTheDocument();
     await act(async () => rejectSummary(new Error("The session catalog is restarting.")));
     expect(await screen.findByRole("button", { name: "Try again" }, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.queryByTestId("machines-connect-first-button")).toBeNull();
+    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Activity and sync are unavailable");
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    await waitFor(() => expect(document.body).toHaveAttribute("data-screenshot-ready", "true"));
   });
 
 
