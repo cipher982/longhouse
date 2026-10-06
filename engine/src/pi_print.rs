@@ -1804,6 +1804,18 @@ if args[:2] == ["--mode", "rpc"]:
             }
         })
     }
+    async fn wait_for_pi_invocation_close(summary: &PiPrintRunSummary) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        while crate::process_group::group_is_alive(summary.process_group_id)
+            || crate::console_lifecycle::lookup("pi", &summary.provider_thread_id).is_some()
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Pi Console invocation did not close"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
 
     async fn run_pi_closed_scenario(scenario: LifecycleScenario) {
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
@@ -1855,6 +1867,7 @@ if args[:2] == ["--mode", "rpc"]:
             );
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
+        wait_for_pi_invocation_close(&summary).await;
         assert_eq!(
             claim.result.as_ref().unwrap()["terminal_state"],
             "run_completed"

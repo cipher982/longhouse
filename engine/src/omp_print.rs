@@ -2390,7 +2390,11 @@ impl OmpPrintSink {
             return Ok(false);
         }
         let start = (self.source_start_len as usize).min(bytes.len());
-        let mut last_assistant: Option<Value> = None;
+        // An async completion can append a wake response before this monitor
+        // drains the earlier response's `agent_end`. Match the stream message
+        // id so a later native transcript entry cannot invalidate this turn.
+        let expected_id = projection.final_assistant_id.as_deref();
+        let mut matching_assistant: Option<Value> = None;
         for line in bytes[start..]
             .split(|byte| *byte == b'\n')
             .filter(|line| !line.is_empty())
@@ -2398,12 +2402,15 @@ impl OmpPrintSink {
             let record: Value = serde_json::from_slice(line)?;
             if record.get("type").and_then(Value::as_str) != Some("message")
                 || record.pointer("/message/role").and_then(Value::as_str) != Some("assistant")
+                || expected_id.is_some_and(|expected| {
+                    record.get("id").and_then(Value::as_str) != Some(expected)
+                })
             {
                 continue;
             }
-            last_assistant = Some(record);
+            matching_assistant = Some(record);
         }
-        let Some(last_assistant) = last_assistant else {
+        let Some(last_assistant) = matching_assistant else {
             return Ok(false);
         };
         let native_id = last_assistant.get("id").and_then(Value::as_str);
@@ -3199,6 +3206,7 @@ def append_native(message):
         }, separators=(",", ":")) + "\n")
 def user_message(text):
     append_native({
+        "id": str(uuid.uuid4()),
         "role": "user",
         "content": [{"type": "text", "text": text}],
     })
@@ -3501,6 +3509,16 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
+    async fn wait_for_process_group_exit(process_group_id: i32) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        while crate::process_group::group_is_alive(process_group_id) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "OMP Console process group {process_group_id} did not exit"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
 
     fn lifecycle_config(
         temp: &Path,
@@ -3642,6 +3660,7 @@ for line in sys.stdin:
             LifecycleScenario::Plain => {
                 assert_eq!(first_claim.invocation_state.as_deref(), Some("closed"));
                 assert_eq!(first_claim.pending_count, 0);
+                wait_for_process_group_exit(first_pgid).await;
                 assert!(!crate::process_group::group_is_alive(first_pgid));
                 let terminal = runtime_events()
                     .into_iter()
@@ -3689,6 +3708,7 @@ for line in sys.stdin:
                 assert!(std::fs::read_to_string(&first.session_file)
                     .unwrap()
                     .contains("cleanup pending work"));
+                wait_for_process_group_exit(first_pgid).await;
                 assert!(!crate::process_group::group_is_alive(first_pgid));
             }
             LifecycleScenario::WakePending | LifecycleScenario::WakeDrained => {
@@ -3756,9 +3776,11 @@ for line in sys.stdin:
                             .as_deref(),
                         Some("closed")
                     );
+                    wait_for_process_group_exit(first_pgid).await;
                 } else {
                     assert_eq!(wake_claim.invocation_state.as_deref(), Some("closed"));
-                    assert_eq!(wake_turn.pid, None);
+                    assert_eq!(wake_turn.launch_id, first.launch_id);
+                    wait_for_process_group_exit(first_pgid).await;
                     assert!(!crate::process_group::group_is_alive(first_pgid));
                     let resumed_run_id = Uuid::new_v4().to_string();
                     claims
@@ -3875,6 +3897,7 @@ for line in sys.stdin:
         .await
         .unwrap();
         let first_claim = wait_for_terminal(&first_run).await;
+        wait_for_process_group_exit(first.process_group_id.unwrap()).await;
         assert_eq!(
             first_claim.result.as_ref().unwrap()["terminal_state"],
             "run_completed"
@@ -3970,11 +3993,12 @@ import os
 import select
 import sys
 import time
+import uuid
 
 MODE = "{mode}"
 args = sys.argv[1:]
 source = args[args.index("--resume") + 1]
-native_id = "01a08857-826d-72f6-b816-672b54116504"
+native_id = str(uuid.uuid4())
 def out(event):
     print(json.dumps(event, separators=(",", ":")), flush=True)
 time.sleep(1.0)
@@ -4090,6 +4114,7 @@ for line in sys.stdin:
 
         let started = start_omp_print_turn(config).await.unwrap();
         let claim = wait_for_terminal(&run_id).await;
+        wait_for_process_group_exit(started.process_group_id.unwrap()).await;
 
         assert_eq!(
             claim.result.as_ref().unwrap()["terminal_state"],
@@ -4097,10 +4122,7 @@ for line in sys.stdin:
             "{:?}",
             claim.error
         );
-        assert_eq!(
-            started.provider_thread_id.as_deref(),
-            Some("01a08857-826d-72f6-b816-672b54116504")
-        );
+        assert!(Uuid::parse_str(started.provider_thread_id.as_deref().unwrap()).is_ok());
         restore_test_longhouse_home(previous);
     }
 
@@ -4116,6 +4138,7 @@ for line in sys.stdin:
 
         let started = start_omp_print_turn(config).await.unwrap();
         let claim = wait_for_terminal(&run_id).await;
+        wait_for_process_group_exit(started.process_group_id.unwrap()).await;
 
         assert_eq!(
             claim.result.as_ref().unwrap()["terminal_state"],
