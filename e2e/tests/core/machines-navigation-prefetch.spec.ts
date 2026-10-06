@@ -1,6 +1,7 @@
 import { expect, test } from "../fixtures";
+import type { Page } from "../fixtures";
 
-test("preloads the Machines route on hover without fetching activity early", async ({ page }) => {
+async function assertMachinesPrefetch(page: Page, trigger: "hover" | "keyboard"): Promise<void> {
   await page.goto("/timeline");
   await expect(page.getByRole("heading", { name: "Connect your first machine" })).toBeVisible();
 
@@ -30,7 +31,13 @@ test("preloads the Machines route on hover without fetching activity early", asy
   });
 
   const machinesTab = page.getByTestId("global-machines-tab");
-  await machinesTab.hover();
+  if (trigger === "hover") {
+    await machinesTab.hover();
+  } else {
+    await page.getByTestId("global-timeline-tab").focus();
+    await page.keyboard.press("Tab");
+    await expect(machinesTab).toBeFocused();
+  }
   await expect.poll(() => routeScriptFinished, { timeout: 5000 }).toBe(true);
   await expect(page).toHaveURL(/\/timeline(?:\?.*)?$/);
   expect(summaryRequests).toBe(0);
@@ -39,4 +46,12 @@ test("preloads the Machines route on hover without fetching activity early", asy
   await expect(page).toHaveURL(/\/machines(?:\?.*)?$/);
   await expect(page.getByRole("heading", { name: "Machines" })).toBeVisible();
   await expect.poll(() => summaryRequests).toBeGreaterThan(0);
+}
+
+test("preloads Machines code on pointer hover without fetching activity early", async ({ page }) => {
+  await assertMachinesPrefetch(page, "hover");
+});
+
+test("preloads Machines code on keyboard focus without fetching activity early", async ({ page }) => {
+  await assertMachinesPrefetch(page, "keyboard");
 });
