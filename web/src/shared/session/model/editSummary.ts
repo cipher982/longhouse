@@ -116,6 +116,11 @@ function computeEditStat(interaction: ToolInteraction): EditStat {
   if (!input) return NO_STAT;
 
   const filePath = editFilePath(input);
+  // A cut input would count a fragment: name the file, show no count, until
+  // the expanded row loads the whole input.
+  if (interaction.callEvent?.tool_input_truncated) {
+    return filePath ? { ...NO_STAT, filePath, fileName: basename(filePath) } : NO_STAT;
+  }
   const patch = editPatchFromInput(input);
   if (!patch) {
     // Known file, unknown shape: still worth naming the file, without a stat.

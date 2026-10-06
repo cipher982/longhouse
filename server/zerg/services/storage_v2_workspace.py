@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -31,6 +32,12 @@ from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.session_provider_facts import usage_latest
 from zerg.services.tool_presentation import project_tool_presentation
+from zerg.services.transcript_lite import DETAIL_FULL
+from zerg.services.transcript_lite import DETAIL_LITE
+from zerg.services.transcript_lite import DETAIL_MODES
+from zerg.services.transcript_lite import lite_workspace
+from zerg.storage_v2.contracts import decode_render_detail_cursor_token
+from zerg.storage_v2.contracts import render_detail_cursor_token
 from zerg.utils.server_timing import ServerTimingRecorder
 
 _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
@@ -234,7 +241,13 @@ def _workspace_envelope(
     total = int(page.get("total") or 0) if page is not None else 0
     # Only the newest page can vouch that a fact later than all of its events
     # belongs to the turn that ended on its last reply.
-    page_is_tail = (anchor == "tail" and cursor is None) or (page is not None and len(events) >= total)
+    # A start-anchored page that reached the newest event (a delta read) is the
+    # tail too.
+    page_is_tail = (
+        (anchor == "tail" and cursor is None)
+        or (page is not None and len(events) >= total)
+        or (anchor == "start" and page is not None and page.get("has_more") is False)
+    )
     turn_ends = turn_ends_by_event(facts, events, page_is_tail=page_is_tail)
     items = [
         _event_projection(
@@ -314,8 +327,12 @@ async def build_storage_v2_workspace(
     cursor: str | None = None,
     anchor: str = "tail",
     timing: ServerTimingRecorder | None = None,
+    detail: str = DETAIL_FULL,
 ) -> dict[str, object] | None:
     """Return a storage-v2 workspace, including live control-only sessions.
+
+    ``detail="lite"`` returns tool bodies as their collapsed previews (see
+    ``transcript_lite``); ``read_storage_v2_event_bodies`` returns them in full.
 
     A managed control lease is useful only if the session remains openable.  A
     provider may not yet have a transcript source, however, so its first
@@ -326,6 +343,32 @@ async def build_storage_v2_workspace(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="branch_mode must be one of: head, all")
     if anchor not in {"start", "tail"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="anchor must be one of: start, tail")
+    if detail not in DETAIL_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="detail must be one of: full, lite")
+    workspace = await _build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=owner_id,
+        branch_mode=branch_mode,
+        limit=limit,
+        cursor=cursor,
+        anchor=anchor,
+        timing=timing,
+    )
+    if workspace is None or detail == DETAIL_FULL:
+        return workspace
+    return lite_workspace(workspace)
+
+
+async def _build_storage_v2_workspace(
+    *,
+    session_id: UUID,
+    owner_id: int,
+    branch_mode: str,
+    limit: int,
+    cursor: str | None,
+    anchor: str,
+    timing: ServerTimingRecorder | None,
+) -> dict[str, object] | None:
     catalogd = get_catalogd_client()
     if catalogd is None:
         if get_settings().testing:
@@ -443,4 +486,78 @@ async def build_storage_v2_workspace(
     )
 
 
-__all__ = ["build_storage_v2_workspace"]
+# Enough for one tool interaction (its call and its result) plus neighbours.
+EVENT_BODIES_MAX = 20
+
+
+async def read_storage_v2_event_bodies(
+    *,
+    session_id: UUID,
+    owner_id: int,
+    cursors: list[str],
+) -> dict[str, object]:
+    """Return full tool bodies for events named by their transcript cursors.
+
+    Each cursor is the event's own ``cursor`` from a transcript page. The read
+    pages backwards from just past that event (the same order key with the next
+    subordinal), so the newest event before the bound is the event itself, and
+    the catalog needs no single-event lookup.
+    """
+
+    if not cursors:
+        return {"events": [], "missing": []}
+    if len(cursors) > EVENT_BODIES_MAX:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"At most {EVENT_BODIES_MAX} cursors per request.")
+    try:
+        session, _alias, _seq = await asyncio.to_thread(read_live_catalog_session, session_id, owner_id=owner_id)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
+    provider = getattr(session, "provider", None)
+
+    async def read_one(token: str) -> dict[str, object] | None:
+        try:
+            decoded = decode_render_detail_cursor_token(token)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid event cursor.") from exc
+        if decoded.session_id != session_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cursor belongs to a different session.")
+        if decoded.event_subordinal >= (1 << 32) - 1:
+            return None
+        bound = render_detail_cursor_token(replace(decoded, event_subordinal=decoded.event_subordinal + 1))
+        page = await read_storage_v2_session_events_page(
+            session_id=session_id,
+            owner_id=str(owner_id),
+            cursor=bound,
+            anchor="tail",
+            limit=1,
+            branch_mode="all",
+        )
+        events = page.get("events") if isinstance(page, dict) else None
+        event = events[-1] if isinstance(events, list) and events else None
+        if not isinstance(event, dict) or event.get("cursor") != token:
+            return None
+        return {
+            "id": str(event["event_id"]),
+            "cursor": token,
+            "content_text": event.get("content_text"),
+            "tool_name": event.get("tool_name"),
+            "tool_input_json": event.get("tool_input_json"),
+            "tool_output_text": event.get("tool_output_text"),
+            "tool_presentation": project_tool_presentation(
+                event.get("tool_name"),
+                event.get("tool_input_json"),
+                provider=provider,
+            ),
+        }
+
+    unique = list(dict.fromkeys(cursors))
+    results = await asyncio.gather(*(read_one(token) for token in unique))
+    return {
+        "events": [result for result in results if result is not None],
+        "missing": [token for token, result in zip(unique, results, strict=True) if result is None],
+    }
+
+
+__all__ = ["DETAIL_LITE", "EVENT_BODIES_MAX", "build_storage_v2_workspace", "read_storage_v2_event_bodies"]

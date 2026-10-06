@@ -67,7 +67,7 @@ describe("live session fetches", () => {
     });
 
     expect(baseMocks.request).toHaveBeenCalledWith(
-      "/timeline/sessions/session-1/workspace?limit=200&branch_mode=head",
+      "/timeline/sessions/session-1/workspace?detail=lite&limit=200&branch_mode=head",
       { method: "GET", cache: "no-store" },
     );
   });
@@ -81,7 +81,7 @@ describe("live session fetches", () => {
     });
 
     expect(baseMocks.request).toHaveBeenCalledWith(
-      "/timeline/sessions/session-1/workspace?limit=200&branch_mode=head&shared_by=7&share_token=lhshr_abc.def",
+      "/timeline/sessions/session-1/workspace?detail=lite&limit=200&branch_mode=head&shared_by=7&share_token=lhshr_abc.def",
       { method: "GET", cache: "no-store" },
     );
   });
@@ -94,7 +94,7 @@ describe("live session fetches", () => {
     });
 
     expect(baseMocks.request).toHaveBeenCalledWith(
-      "/timeline/sessions/session-1/projection?limit=200&offset=20&branch_mode=head",
+      "/timeline/sessions/session-1/projection?detail=lite&limit=200&offset=20&branch_mode=head",
       { method: "GET", cache: "no-store" },
     );
   });

@@ -74,6 +74,7 @@ from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionActionResponse
+from zerg.services.session_views import SessionEventBodiesResponse
 from zerg.services.session_views import SessionMobileTailResponse
 from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.session_views import SessionNotificationWatchResponse
@@ -90,6 +91,7 @@ from zerg.services.session_views import SessionTimelineVisibilityResponse
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
+from zerg.services.storage_v2_workspace import read_storage_v2_event_bodies
 from zerg.services.timeline_session_listing import TimelineHistoryImportResponse
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
@@ -984,7 +986,14 @@ async def get_timeline_session_projection(
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
-    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
+    cursor: Optional[str] = Query(
+        None,
+        description="Exclusive storage-v2 cursor: older events with anchor=tail, newer events (a delta) with anchor=start",
+    ),
+    detail: str = Query(
+        "full",
+        description="full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies)",
+    ),
     current_user=Depends(get_current_browser_caller),
 ):
     storage_workspace = await build_storage_v2_workspace(
@@ -994,6 +1003,7 @@ async def get_timeline_session_projection(
         limit=limit,
         cursor=cursor,
         anchor=anchor,
+        detail=detail,
     )
     if storage_workspace is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
@@ -1020,6 +1030,10 @@ async def get_timeline_session_workspace(
         None,
         description="Signed share token. When valid, this supersedes unsigned shared_by attribution.",
     ),
+    detail: str = Query(
+        "full",
+        description="full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies)",
+    ),
     current_user=Depends(get_current_browser_caller),
 ):
     # ``shared_by``/``share_token`` are accepted and currently unused: sharer
@@ -1035,11 +1049,26 @@ async def get_timeline_session_workspace(
         limit=limit,
         cursor=cursor,
         timing=timing,
+        detail=detail,
     )
     if storage_workspace is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     timing.apply(response)
     return storage_workspace
+
+
+@router.get("/sessions/{session_id}/event-bodies", response_model=SessionEventBodiesResponse)
+async def get_timeline_session_event_bodies(
+    session_id: UUID,
+    cursor: list[str] = Query(..., description="Transcript cursors of the events to return in full (repeatable, at most 20)"),
+    current_user=Depends(get_current_browser_caller),
+):
+    """Full tool bodies for rows a lite transcript page sent as previews."""
+    return await read_storage_v2_event_bodies(
+        session_id=session_id,
+        owner_id=int(current_user.owner_id),
+        cursors=cursor,
+    )
 
 
 # Documented, not validated: the storage-v2 branch returns an already-serialized
@@ -1058,6 +1087,10 @@ async def get_timeline_session_mobile_tail(
         description="Previous snapshot marker for older-page drift detection",
     ),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
+    detail: str = Query(
+        "full",
+        description="full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies)",
+    ),
     current_user=Depends(get_current_browser_caller),
 ):
     timing = ServerTimingRecorder(surface="session_detail")
@@ -1069,6 +1102,7 @@ async def get_timeline_session_mobile_tail(
         limit=limit,
         cursor=cursor,
         timing=timing,
+        detail=detail,
     )
     if storage_workspace is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")

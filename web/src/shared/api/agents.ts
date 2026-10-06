@@ -6,6 +6,7 @@
  */
 
 import { buildUrl, request } from "./base";
+import { hydrateLiteProjection, hydrateLiteWorkspace } from "./liteTranscript";
 import type { components } from "@/generated/openapi-types";
 
 const TIMELINE_API_PREFIX = "/timeline";
@@ -610,6 +611,31 @@ export interface AgentEvent {
   branch_id?: number | null;
   is_head_branch?: boolean;
   media_refs?: AgentEventMediaRef[];
+  /** Lite pages: the tool input was cut to what its collapsed row needs. */
+  tool_input_truncated?: boolean;
+  /** Lite pages: the output is the collapsed row's preview of a longer body. */
+  tool_output_truncated?: boolean;
+  tool_output_original_chars?: number | null;
+  /** Lite pages: the full output (not sent) reads as a structured failure. */
+  tool_output_failed?: boolean;
+  /** Set by lite hydration on a cut event: where to fetch its full body. */
+  lite_body?: { session_id: string; cursor: string };
+}
+
+/** Full tool bodies for events a lite page sent as previews. */
+export interface SessionEventBody {
+  id: string;
+  cursor: string;
+  content_text: string | null;
+  tool_name: string | null;
+  tool_input_json: unknown;
+  tool_output_text: string | null;
+  tool_presentation: AgentToolPresentation | null;
+}
+
+export interface SessionEventBodiesResponse {
+  events: SessionEventBody[];
+  missing: string[];
 }
 
 export interface AgentSessionFilters {
@@ -1132,10 +1158,12 @@ export async function fetchAgentSessionProjection(
     offset?: number;
     anchor?: "start" | "tail";
     branch_mode?: "head" | "all";
+    /** With anchor "tail": older than this event. With anchor "start": newer (a delta). */
     cursor?: string | null;
   } = {},
 ): Promise<AgentSessionProjectionResponse> {
   const params = new URLSearchParams();
+  params.set("detail", "lite");
 
   if (options.limit) params.set("limit", String(options.limit));
   if (options.offset) params.set("offset", String(options.offset));
@@ -1147,10 +1175,12 @@ export async function fetchAgentSessionProjection(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/projection${queryString ? `?${queryString}` : ""}`;
 
-  return request<AgentSessionProjectionResponse>(path, {
-    method: "GET",
-    cache: "no-store",
-  });
+  return hydrateLiteProjection(
+    await request<AgentSessionProjectionResponse>(path, {
+      method: "GET",
+      cache: "no-store",
+    }),
+  );
 }
 
 export async function fetchAgentSessionWorkspace(
@@ -1163,6 +1193,7 @@ export async function fetchAgentSessionWorkspace(
   } = {},
 ): Promise<AgentSessionWorkspaceResponse> {
   const params = new URLSearchParams();
+  params.set("detail", "lite");
 
   if (options.limit) params.set("limit", String(options.limit));
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);
@@ -1176,10 +1207,25 @@ export async function fetchAgentSessionWorkspace(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace${queryString ? `?${queryString}` : ""}`;
 
-  return request<AgentSessionWorkspaceResponse>(path, {
-    method: "GET",
-    cache: "no-store",
-  });
+  return hydrateLiteWorkspace(
+    await request<AgentSessionWorkspaceResponse>(path, {
+      method: "GET",
+      cache: "no-store",
+    }),
+  );
+}
+
+/** Full tool bodies for events a lite page sent as previews, by their cursors. */
+export async function fetchSessionEventBodies(
+  sessionId: string,
+  cursors: string[],
+): Promise<SessionEventBodiesResponse> {
+  const params = new URLSearchParams();
+  for (const cursor of cursors) params.append("cursor", cursor);
+  return request<SessionEventBodiesResponse>(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/event-bodies?${params.toString()}`,
+    { method: "GET" },
+  );
 }
 
 export async function createSessionShare(

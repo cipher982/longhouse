@@ -198,6 +198,8 @@ export function isToolInteractionFailed(interaction: ToolInteraction): boolean {
   if (state === "failed" || state === "error") return true;
   const exitCode = getToolExitCode(interaction);
   if (exitCode != null && exitCode !== 0) return true;
+  // A lite page cuts a long output to its preview; the server judged the whole.
+  if (interaction.resultEvent?.tool_output_failed) return true;
   return hasStructuredFailure(interaction.resultEvent?.tool_output_text);
 }
 

@@ -1673,6 +1673,28 @@ class SessionMobileTailResponse(BaseModel):
     workspace_revision: SessionWorkspaceRevisionResponse = Field(..., description="Durable viewport freshness revision")
 
 
+class SessionEventBody(BaseModel):
+    """One event's full tool body, for a row a lite transcript page sent as a preview."""
+
+    id: str = Field(..., description="Event id")
+    cursor: str = Field(..., description="The event's transcript cursor, as requested")
+    content_text: str | None = None
+    tool_name: str | None = None
+    tool_input_json: Any = None
+    tool_output_text: str | None = None
+    tool_presentation: dict[str, Any] | None = None
+
+
+class SessionEventBodiesResponse(BaseModel):
+    """Full tool bodies for events named by their transcript cursors."""
+
+    events: list[SessionEventBody] = Field(default_factory=list)
+    missing: list[str] = Field(
+        default_factory=list,
+        description="Requested cursors that no longer name an event in the current render generation",
+    )
+
+
 class IngestResponse(BaseModel):
     """Response for ingest endpoint."""
 

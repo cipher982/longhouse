@@ -238,14 +238,100 @@ export function sessionHoldsOlderProjectionPages(queryClient: QueryClient, sessi
   );
 }
 
+/** Events re-read before the newest held one, so rows whose state can still change update. */
+const DELTA_OVERLAP_EVENTS = 20;
+/** A delta never re-reads older rows; one full tail read per this window corrects any drift. */
+const FULL_TAIL_REFRESH_MS = 60_000;
+const lastFullTailRefreshAt = new Map<string, number>();
+
+/**
+ * Where a delta read starts: the cursor before the oldest row that may still
+ * change (the last few rows, and any tool call still running). Null when that
+ * reaches the start of the held tail, which means read the whole tail.
+ */
+export function projectionDeltaAnchor(
+  tail: AgentSessionProjectionResponse,
+): { index: number; cursor: string } | null {
+  const items = tail.items;
+  let index = Math.max(0, items.length - DELTA_OVERLAP_EVENTS);
+  const firstRunning = items.findIndex((item) => item.event?.tool_call_state === "running");
+  if (firstRunning >= 0) index = Math.min(index, firstRunning);
+  if (index === 0) return null;
+  const cursor = items[index - 1]?.event?.cursor;
+  return cursor ? { index, cursor } : null;
+}
+
+/**
+ * Applies a delta (events after the anchor) to the held pages. Returns null
+ * when the delta can't be trusted to continue them: another generation or
+ * head session, or more new events than one page, which means start over
+ * from the tail.
+ */
+export function applyProjectionDelta(
+  data: InfiniteData<AgentSessionProjectionResponse>,
+  delta: AgentSessionProjectionResponse,
+  index: number,
+): InfiniteData<AgentSessionProjectionResponse> | null {
+  const tail = data.pages[data.pages.length - 1];
+  if (
+    !tail ||
+    !delta.generation_id ||
+    tail.generation_id !== delta.generation_id ||
+    tail.head_session_id !== delta.head_session_id ||
+    delta.has_more
+  ) {
+    return null;
+  }
+  // The tail page keeps its own older-direction cursor; the delta's points newer.
+  const freshTail: AgentSessionProjectionResponse = {
+    ...tail,
+    items: [...tail.items.slice(0, index), ...delta.items],
+    total: delta.total,
+    abandoned_events: delta.abandoned_events,
+  };
+  return { pages: [...data.pages.slice(0, -1), freshTail], pageParams: data.pageParams };
+}
+
+async function refreshTailInFull(
+  queryClient: QueryClient,
+  sessionId: string,
+  queryKey: ProjectionInfiniteKey,
+  data: InfiniteData<AgentSessionProjectionResponse> | undefined,
+): Promise<void> {
+  lastFullTailRefreshAt.set(sessionId, Date.now());
+  if (!holdsOlderPages(data)) {
+    await queryClient.invalidateQueries({ queryKey, exact: true }, { cancelRefetch: false });
+    return;
+  }
+  const { limit, branch_mode } = queryKey[2];
+  let freshTail: AgentSessionProjectionResponse;
+  try {
+    freshTail = await fetchAgentSessionProjection(sessionId, { limit, anchor: "tail", branch_mode });
+  } catch {
+    // Like a failed invalidation: keep what is on screen; the next wake
+    // or fallback poll asks again.
+    return;
+  }
+  queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
+    if (!current) return current;
+    return (
+      stitchProjectionTail(current, freshTail) ?? {
+        pages: [freshTail],
+        pageParams: [{ anchor: "tail" }],
+      }
+    );
+  });
+}
+
 /**
  * Brings a session's transcript up to date after a wake or a send.
  *
- * A plain invalidation refetches an infinite query from its first stored page
- * param, which here is the oldest page the reader scrolled up to, and then
- * stops (there is no "next" page). So after scrolling up, a wake used to throw
- * away the live tail and every other page. A query holding one page is still
- * invalidated normally; one holding older pages refetches only the tail.
+ * It reads only events after the newest settled row it already holds (a
+ * delta) and splices them onto the tail, keeping every page the reader
+ * scrolled up through. A plain invalidation would refetch an infinite query
+ * from its oldest stored page and then stop, dropping the live tail. The
+ * whole tail is read instead when there is nothing to anchor on, when the
+ * delta can't continue the held pages, or once a minute as a correction.
  */
 export async function refreshAgentSessionProjectionTail(
   queryClient: QueryClient,
@@ -255,32 +341,35 @@ export async function refreshAgentSessionProjectionTail(
     projectionInfiniteQueries(queryClient, sessionId).map(async (query) => {
       const queryKey = query.queryKey as ProjectionInfiniteKey;
       const data = query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined;
-      if (!holdsOlderPages(data)) {
-        await queryClient.invalidateQueries({ queryKey, exact: true }, { cancelRefetch: false });
+      const tail = data?.pages[data.pages.length - 1];
+      const anchor = tail?.generation_id ? projectionDeltaAnchor(tail) : null;
+      const fullDue = Date.now() - (lastFullTailRefreshAt.get(sessionId) ?? 0) >= FULL_TAIL_REFRESH_MS;
+      if (!data || !anchor || fullDue) {
+        await refreshTailInFull(queryClient, sessionId, queryKey, data);
         return;
       }
       const { limit, branch_mode } = queryKey[2];
-      let freshTail: AgentSessionProjectionResponse;
+      let delta: AgentSessionProjectionResponse;
       try {
-        freshTail = await fetchAgentSessionProjection(sessionId, {
+        delta = await fetchAgentSessionProjection(sessionId, {
           limit,
-          anchor: "tail",
+          anchor: "start",
+          cursor: anchor.cursor,
           branch_mode,
         });
       } catch {
-        // Like a failed invalidation: keep what is on screen; the next wake
-        // or fallback poll asks again.
+        // A stale generation (409) or an outage: read the whole tail instead.
+        await refreshTailInFull(queryClient, sessionId, queryKey, data);
         return;
       }
+      let applied = false;
       queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
         if (!current) return current;
-        return (
-          stitchProjectionTail(current, freshTail) ?? {
-            pages: [freshTail],
-            pageParams: [{ anchor: "tail" }],
-          }
-        );
+        const next = applyProjectionDelta(current, delta, anchor.index);
+        applied = next !== null;
+        return next ?? current;
       });
+      if (!applied) await refreshTailInFull(queryClient, sessionId, queryKey, data);
     }),
   );
 }

@@ -55,6 +55,7 @@ import { collapseUnchanged, lineDiff, type DiffLine } from "@/shared/session/mod
 import type { EditStat } from "@/shared/session/model/editSummary";
 import { SyntaxHighlighter, oneDark } from "./syntaxHighlighter";
 import { OutboxRow, type OutboxEntry } from "./OutboxRow";
+import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./liteBodies";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
 
 type EventFilter = "all" | "messages" | "tools";
@@ -616,7 +617,32 @@ function ToolOutputPreview({ text, failed = false }: { text: string; failed?: bo
 }
 
 /** Inline metadata row rendered underneath an expanded tool row. */
-function ToolDetail({
+function ToolDetail({ interaction, renderMedia }: { interaction: ToolInteraction; renderMedia: boolean }) {
+  // Rows from a lite page carry previews; only those mount the body loader.
+  return hasLiteBodies(interaction) ? (
+    <LiteToolDetail interaction={interaction} renderMedia={renderMedia} />
+  ) : (
+    <ToolDetailView interaction={interaction} renderMedia={renderMedia} />
+  );
+}
+
+function LiteToolDetail({ interaction, renderMedia }: { interaction: ToolInteraction; renderMedia: boolean }) {
+  const full = useFullToolInteraction(interaction);
+  return (
+    <>
+      {full.loading ? (
+        <div className="tl-detail__empty" data-testid="tool-body-loading">Loading the full output…</div>
+      ) : full.failed ? (
+        <div className="tl-detail__empty" data-testid="tool-body-failed">
+          The full output didn't load; this is the preview.
+        </div>
+      ) : null}
+      <ToolDetailView interaction={full.interaction} renderMedia={renderMedia} />
+    </>
+  );
+}
+
+function ToolDetailView({
   interaction,
   renderMedia,
 }: {
@@ -754,6 +780,7 @@ function ActionCard({
         : "";
 
   const detailId = `${rowId}-detail`;
+  const bodyPrefetch = useToolBodyPrefetch(interaction);
 
   return (
     <div
@@ -767,6 +794,7 @@ function ActionCard({
       <button
         type="button"
         className="tl-action__head"
+        {...bodyPrefetch}
         onClick={() => {
           onSelect();
           onToggleExpand();
@@ -875,6 +903,7 @@ function ContextLine({
       : "";
 
   const detailId = `${rowId}-detail`;
+  const bodyPrefetch = useToolBodyPrefetch(interaction);
   return (
     <div
       id={rowId}
@@ -887,6 +916,7 @@ function ContextLine({
       <button
         type="button"
         className="tl-context__head"
+        {...bodyPrefetch}
         onClick={() => {
           onSelect();
           onToggleExpand();

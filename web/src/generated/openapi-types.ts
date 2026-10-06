@@ -2062,6 +2062,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/event-bodies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Timeline Session Event Bodies
+         * @description Full tool bodies for rows a lite transcript page sent as previews.
+         */
+        get: operations["get_timeline_session_event_bodies_timeline_sessions__session_id__event_bodies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/mobile-tail": {
         parameters: {
             query?: never;
@@ -2857,6 +2877,26 @@ export interface paths {
          * @description Get the focused session, its thread, and the first projection page in one round trip.
          */
         get: operations["get_session_workspace_agents_sessions__session_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/event-bodies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Event Bodies
+         * @description Full tool bodies for rows a lite transcript page sent as previews.
+         */
+        get: operations["get_session_event_bodies_agents_sessions__session_id__event_bodies_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7935,6 +7975,47 @@ export interface components {
             closed_at?: string | null;
             /** Close Reason */
             close_reason?: string | null;
+        };
+        /**
+         * SessionEventBodiesResponse
+         * @description Full tool bodies for events named by their transcript cursors.
+         */
+        SessionEventBodiesResponse: {
+            /** Events */
+            events?: components["schemas"]["SessionEventBody"][];
+            /**
+             * Missing
+             * @description Requested cursors that no longer name an event in the current render generation
+             */
+            missing?: string[];
+        };
+        /**
+         * SessionEventBody
+         * @description One event's full tool body, for a row a lite transcript page sent as a preview.
+         */
+        SessionEventBody: {
+            /**
+             * Id
+             * @description Event id
+             */
+            id: string;
+            /**
+             * Cursor
+             * @description The event's transcript cursor, as requested
+             */
+            cursor: string;
+            /** Content Text */
+            content_text?: string | null;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Tool Input Json */
+            tool_input_json?: unknown;
+            /** Tool Output Text */
+            tool_output_text?: string | null;
+            /** Tool Presentation */
+            tool_presentation?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * SessionExecutionHome
@@ -14156,8 +14237,10 @@ export interface operations {
                 limit?: number;
                 /** @description Offset within the stitched projection */
                 offset?: number;
-                /** @description Exclusive storage-v2 cursor for the next older page */
+                /** @description Exclusive storage-v2 cursor: older events with anchor=tail, newer events (a delta) with anchor=start */
                 cursor?: string | null;
+                /** @description full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies) */
+                detail?: string;
             };
             header?: never;
             path: {
@@ -14200,6 +14283,8 @@ export interface operations {
                 shared_by?: number | null;
                 /** @description Signed share token. When valid, this supersedes unsigned shared_by attribution. */
                 share_token?: string | null;
+                /** @description full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies) */
+                detail?: string;
             };
             header?: never;
             path: {
@@ -14229,6 +14314,40 @@ export interface operations {
             };
         };
     };
+    get_timeline_session_event_bodies_timeline_sessions__session_id__event_bodies_get: {
+        parameters: {
+            query: {
+                /** @description Transcript cursors of the events to return in full (repeatable, at most 20) */
+                cursor: string[];
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionEventBodiesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_mobile_tail_timeline_sessions__session_id__mobile_tail_get: {
         parameters: {
             query?: {
@@ -14242,6 +14361,8 @@ export interface operations {
                 snapshot_event_id?: string | null;
                 /** @description Exclusive storage-v2 cursor for the next older page */
                 cursor?: string | null;
+                /** @description full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies) */
+                detail?: string;
             };
             header?: never;
             path: {
@@ -15675,6 +15796,8 @@ export interface operations {
                 limit?: number;
                 /** @description Exclusive storage-v2 cursor for the next older page */
                 cursor?: string | null;
+                /** @description full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies) */
+                detail?: string;
             };
             header?: never;
             path: {
@@ -15693,6 +15816,40 @@ export interface operations {
                     "application/json": components["schemas"]["SessionWorkspaceResponse"] | {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_event_bodies_agents_sessions__session_id__event_bodies_get: {
+        parameters: {
+            query: {
+                /** @description Transcript cursors of the events to return in full (repeatable, at most 20) */
+                cursor: string[];
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionEventBodiesResponse"];
                 };
             };
             /** @description Validation Error */
