@@ -260,11 +260,18 @@ export async function refreshAgentSessionProjectionTail(
         return;
       }
       const { limit, branch_mode } = queryKey[2];
-      const freshTail = await fetchAgentSessionProjection(sessionId, {
-        limit,
-        anchor: "tail",
-        branch_mode,
-      });
+      let freshTail: AgentSessionProjectionResponse;
+      try {
+        freshTail = await fetchAgentSessionProjection(sessionId, {
+          limit,
+          anchor: "tail",
+          branch_mode,
+        });
+      } catch {
+        // Like a failed invalidation: keep what is on screen; the next wake
+        // or fallback poll asks again.
+        return;
+      }
       queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
         if (!current) return current;
         return (

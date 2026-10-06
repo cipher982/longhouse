@@ -1216,6 +1216,36 @@ describe("useSessionWorkspace", () => {
     ).toEqual([1, 2, 3, 4]);
   });
 
+  it("reads transcript counts from the live tail page, not an older page", () => {
+    const events = makeEvents(4);
+    const page = (slice: typeof events, total: number, abandoned: number) => ({
+      generation_id: "gen-1",
+      items: slice.map((event) => ({
+        kind: "event",
+        session_id: baseSession.id,
+        timestamp: event.timestamp,
+        event,
+      })),
+      total,
+      abandoned_events: abandoned,
+    });
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+      // Scrolled up: the older page loaded when the session had 3 entries;
+      // the tail has been refreshed since.
+      data: { pages: [page(events.slice(0, 2), 3, 0), page(events.slice(2), 4, 1)] },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(result.current.totalEntries).toBe(4);
+    expect(result.current.abandonedEvents).toBe(1);
+  });
+
   it("preserves evicted tail items when the live window shifts forward", () => {
     const events = makeEvents(5);
     const olderPage = {

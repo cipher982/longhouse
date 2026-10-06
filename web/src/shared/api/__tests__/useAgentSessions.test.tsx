@@ -269,6 +269,15 @@ describe("refreshAgentSessionProjectionTail", () => {
     expect(result.current.data?.pages.at(-1)?.items.map((item) => item.event?.id)).toEqual([6, 7]);
   });
 
+  it("keeps the loaded pages and does not reject when the tail fetch fails", async () => {
+    const { queryClient, result } = await scrolledUpTranscript();
+    apiMocks.fetchAgentSessionProjection.mockRejectedValueOnce(new Error("offline"));
+
+    await expect(refreshAgentSessionProjectionTail(queryClient, "session-1")).resolves.toBeUndefined();
+
+    expect(eventIds(result.current.data?.pages)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
   it("starts over from the tail when the projection generation changed", async () => {
     const { queryClient, result, server } = await scrolledUpTranscript();
     server.generationId = "gen-2";

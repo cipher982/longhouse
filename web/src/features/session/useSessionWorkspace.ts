@@ -626,13 +626,15 @@ export function useSessionWorkspace(
   );
 
   const totalEntries = useMemo(
-    () => projectionPagesData?.pages[0]?.total ?? projectionItems.length,
-    [projectionItems.length, projectionPagesData],
+    // The tail page is the one every refresh replaces, so it carries the
+    // current counts; older pages keep the counts from when they loaded.
+    () => sortedProjectionPages.at(-1)?.total ?? projectionItems.length,
+    [projectionItems.length, sortedProjectionPages],
   );
 
   const abandonedEvents = useMemo(
-    () => projectionPagesData?.pages[0]?.abandoned_events ?? 0,
-    [projectionPagesData],
+    () => sortedProjectionPages.at(-1)?.abandoned_events ?? 0,
+    [sortedProjectionPages],
   );
 
   const visibleProjectionItems = useMemo(
