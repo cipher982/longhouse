@@ -8,7 +8,8 @@
  * call from Playwright routes, so nothing else needs to be running.
  *
  * The newest iOS renders already downloaded under artifacts/ (ios-previews,
- * ios-ui-shot, sim-shot) are linked at the end. Nothing is dispatched.
+ * ios-ui-shot, and sim-shot's artifacts/sim) are linked at the end. Nothing is
+ * dispatched.
  *
  * Usage:
  *   bunx tsx scripts/ui/ui-gallery.ts [--jobs=4] [--only=session] [--output=DIR]
@@ -102,6 +103,8 @@ function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl
       cwd: REPO_ROOT,
       env: { ...process.env, FRONTEND_URL: frontendUrl },
       stdio: ["ignore", "pipe", "pipe"],
+      // Its own process group, so stopping it also stops its Chromium.
+      detached: true,
     });
     children.add(child);
     child.stdout?.pipe(log);
@@ -261,6 +264,7 @@ ${sections.join("\n")}
   const zoom = document.getElementById("zoom");
   const zoomImg = zoom.querySelector("img");
   document.addEventListener("click", (event) => {
+    if (event.target === zoom) { zoom.close(); return; }
     const img = event.target.closest("img");
     if (!img) return;
     if (zoom.open) { zoom.close(); return; }
@@ -277,6 +281,9 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const outDir = path.resolve(arg("output") ?? path.join("/tmp/agents/ui-gallery", stamp));
   const jobsLimit = Number(arg("jobs") ?? Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2))));
+  if (!Number.isInteger(jobsLimit) || jobsLimit < 1) {
+    throw new Error(`--jobs must be a positive integer, got ${arg("jobs")}`);
+  }
   const only = arg("only");
   const frontendUrl = process.env.GALLERY_FRONTEND_URL ?? "http://localhost:47291";
   mkdirSync(outDir, { recursive: true });
@@ -289,10 +296,20 @@ async function main() {
 
   const stopFrontend = await ensureFrontend(frontendUrl);
   const killChildren = () => {
-    for (const child of children) child.kill("SIGTERM");
+    for (const child of children) {
+      try {
+        process.kill(-child.pid!, "SIGTERM");
+      } catch {
+        /* already gone */
+      }
+    }
   };
-  process.once("SIGINT", killChildren);
-  process.once("SIGTERM", killChildren);
+  const onSignal = () => {
+    killChildren();
+    void stopFrontend().finally(() => process.exit(130));
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 
   let captures: Capture[] = [];
   try {
