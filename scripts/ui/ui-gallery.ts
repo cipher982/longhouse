@@ -113,12 +113,6 @@ function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl
     child.stderr?.pipe(log);
     child.on("close", (code) => {
       children.delete(child);
-      // Anything the capture left in its group (a Chromium) goes with it.
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {
-        /* group already empty */
-      }
       const seconds = (Date.now() - started) / 1000;
       const frames: Frame[] = [];
       let error = code === 0 ? undefined : `exit ${code}`;
@@ -322,10 +316,11 @@ async function main() {
     }
     signalChildren("SIGKILL");
   };
+  // One shutdown, whether Ctrl-C or the sweep finishing gets there first.
+  let shutdown: Promise<void> | null = null;
+  const shutdownOnce = () => (shutdown ??= killChildren().then(stopFrontend));
   const onSignal = () => {
-    void killChildren()
-      .then(stopFrontend)
-      .finally(() => process.exit(130));
+    void shutdownOnce().finally(() => process.exit(130));
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
@@ -345,8 +340,7 @@ async function main() {
       jobsLimit,
     )).filter(Boolean);
   } finally {
-    await killChildren();
-    await stopFrontend();
+    await shutdownOnce();
   }
 
   const iosSets = newestIosSets();

@@ -24,7 +24,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * host is local, start Vite in web/ on that port and return a function that
  * stops it. If something already serves it, return a no-op: it is not ours.
  */
-/** handleSignals: false when the caller owns Ctrl-C and calls the returned stop itself. */
+/**
+ * handleSignals: false when the caller owns Ctrl-C once this returns; Ctrl-C
+ * during startup still stops the Vite this started.
+ */
 export async function ensureFrontend(
   baseUrl: string,
   { handleSignals = true }: { handleSignals?: boolean } = {},
@@ -73,10 +76,13 @@ export async function ensureFrontend(
   const onSignal = () => {
     void stop().finally(() => process.exit(130));
   };
-  if (handleSignals) {
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
-  }
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  const releaseSignals = () => {
+    if (handleSignals) return;
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  };
 
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
@@ -85,6 +91,7 @@ export async function ensureFrontend(
     }
     if (await isServing(baseUrl)) {
       console.log(`Vite ready at ${baseUrl}`);
+      releaseSignals();
       return stop;
     }
     await sleep(250);
