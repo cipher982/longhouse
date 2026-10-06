@@ -177,6 +177,202 @@ private func watchingAttentionSnapshot() -> HealthSnapshot {
 }
 
 struct LonghouseMenuBarCoreTests {
+
+    @Test
+    func localHealthDecodesHostLinkClaimAndUnknownStartupState() throws {
+        let data = Data("""
+        {
+          "schema_version": 1,
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "host_link": {
+            "state": "updating",
+            "since": "2026-10-06T12:00:00Z",
+            "claim": {
+              "type": "host.lifecycle",
+              "state": "updating",
+              "runtime_epoch": "runtime-a",
+              "attempt_id": "attempt-a",
+              "phase": "drain",
+              "expected_back_by": "2026-10-06T12:00:30Z",
+              "deadline": "2026-10-06T12:06:00Z",
+              "cutoff": "2026-10-06T12:16:00Z"
+            },
+            "claim_started_at": "2026-10-06T12:00:00Z",
+            "last_acknowledged_at": null,
+            "fresh_horizon_secs": 120,
+            "last_serving_at": "2026-10-06T11:59:59Z",
+            "runtime_epoch": "runtime-a"
+          }
+        }
+        """.utf8)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let updating = try decoder.decode(HealthSnapshot.self, from: data)
+
+        #expect(updating.hostLink?.state == "updating")
+        #expect(updating.hostLink?.claim?.state == "updating")
+        #expect(updating.hostLink?.claim?.expectedBackBy == "2026-10-06T12:00:30Z")
+        #expect(updating.hostLink?.claimStartedAt == "2026-10-06T12:00:00Z")
+        #expect(updating.hostLink?.lastServingAt == "2026-10-06T11:59:59Z")
+
+        let unknownData = Data("""
+        {
+          "schema_version": 1,
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "host_link": {
+            "state": "unknown",
+            "since": "2026-10-06T12:00:00Z",
+            "last_serving_at": "2026-10-06T11:59:59Z"
+          }
+        }
+        """.utf8)
+        let unknown = try decoder.decode(HealthSnapshot.self, from: unknownData)
+        #expect(unknown.hostLink?.state == "unknown")
+        #expect(unknown.hostLink?.lastServingAt == "2026-10-06T11:59:59Z")
+    }
+
+    @Test
+    func servingAndUnknownHostLinkStatesKeepTheExistingPresentation() {
+        let expected = presentationSnapshot(sessions: [])
+            .menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100))
+
+        for state in ["serving", "unknown"] {
+            let snapshot = presentationSnapshot(
+                sessions: [],
+                hostLink: presentationHostLink(state: state)
+            )
+            #expect(snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100)) == expected)
+        }
+    }
+
+    @Test
+    @MainActor
+    func updatingUnderTwoSecondsIsUnchangedAndHidesStaleHeartbeatTrouble() {
+        let expected = presentationSnapshot(sessions: [])
+            .menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100))
+        let snapshot = presentationSnapshot(
+            reasons: ["heartbeat_post_failed", "host_updating"],
+            sessions: [],
+            heartbeatTransport: presentationHeartbeatFailure(),
+            severity: "red",
+            suggestedActionIds: ["inspect_shipping"],
+            hostLink: presentationHostLink(
+                state: "updating",
+                claimStartedAt: "1970-01-01T00:01:39Z"
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100))
+        let status = presentation.facts.first { $0.id == "heartbeat" }
+
+        #expect(presentation.headline == expected.headline)
+        #expect(presentation.promotion == expected.promotion)
+        #expect(presentation.systemPromotion == expected.systemPromotion)
+        #expect(status?.value != "POST failed")
+        #expect(!panel(snapshot).showsTroubleCard)
+    }
+
+    @Test
+    @MainActor
+    func updatingAfterTwoSecondsIsNeutralAndHasNoActionCard() {
+        let snapshot = presentationSnapshot(
+            reasons: ["heartbeat_post_failed", "host_updating"],
+            sessions: [],
+            severity: "red",
+            heartbeatTransport: presentationHeartbeatFailure(),
+            suggestedActionIds: ["inspect_shipping"],
+            hostLink: presentationHostLink(
+                state: "updating",
+                claimStartedAt: "1970-01-01T00:01:37Z"
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100))
+        let status = presentation.facts.first { $0.id == "heartbeat" }
+
+        #expect(presentation.headline == "Longhouse is updating")
+        #expect(presentation.promotion == .unavailable)
+        #expect(presentation.promotion.iconSeverity == .gray)
+        #expect(presentation.systemPromotion == .unavailable)
+        #expect(presentation.detail == "Your agents keep running on this Mac. Nothing is lost; updates resume in a few seconds.")
+        #expect(status?.value == "Paused · updating")
+        #expect(status?.promotion == .unavailable)
+        #expect(!panel(snapshot).showsTroubleCard)
+    }
+
+    @Test
+    @MainActor
+    func slowUpdateShowsElapsedTimeInAmberWithoutAnActionCard() {
+        let snapshot = presentationSnapshot(
+            reasons: ["host_update_slow"],
+            sessions: [],
+            heartbeatTransport: presentationHeartbeatFailure(),
+            suggestedActionIds: ["inspect_transport"],
+            hostLink: presentationHostLink(
+                state: "slow_update",
+                claimStartedAt: "1970-01-01T00:05:20Z"
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 500))
+        let status = presentation.facts.first { $0.id == "heartbeat" }
+
+        #expect(presentation.headline == "Update is taking longer than usual · 3m")
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.promotion.iconSeverity == .yellow)
+        #expect(status?.value == "Paused · updating")
+        #expect(status?.promotion == .inspect)
+        #expect(!panel(snapshot).showsTroubleCard)
+    }
+
+    @Test
+    func unreachableHostLinkKeepsTheExistingPresentation() {
+        let referenceDate = Date(timeIntervalSince1970: 100)
+        let expected = presentationSnapshot(
+            reasons: ["heartbeat_post_failed"],
+            sessions: []
+        ).menuBarPresentation(relativeTo: referenceDate)
+        let snapshot = presentationSnapshot(
+            reasons: ["heartbeat_post_failed"],
+            sessions: [],
+            hostLink: presentationHostLink(state: "unreachable")
+        )
+
+        #expect(snapshot.menuBarPresentation(relativeTo: referenceDate) == expected)
+    }
+
+    @Test
+    func hostLinkPresentationCopyMatchesSchema() throws {
+        let updating = presentationSnapshot(
+            sessions: [],
+            hostLink: presentationHostLink(
+                state: "updating",
+                claimStartedAt: "1970-01-01T00:00:00Z"
+            )
+        ).menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 2))
+        let slowUpdate = presentationSnapshot(
+            sessions: [],
+            hostLink: presentationHostLink(
+                state: "slow_update",
+                claimStartedAt: "1970-01-01T00:00:00Z"
+            )
+        ).menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 180))
+
+        #expect(updating.headline == (try hostLinkSchemaCopy("updating.headline")))
+        #expect(updating.detail == (try hostLinkSchemaCopy("updating.detail")))
+        #expect(slowUpdate.headline == "\(try hostLinkSchemaCopy("slow_update.headline")) · 3m")
+        #expect(slowUpdate.detail == (try hostLinkSchemaCopy("updating.detail")))
+    }
+
     @Test
     func archiveScanningStaysBackgroundAndDoesNotPromoteAttention() {
         let snapshot = presentationSnapshot(
@@ -4098,6 +4294,7 @@ private func presentationSession(
 private func presentationSnapshot(
     reasons: [String] = [],
     sessions: [ManagedSessionSnapshot],
+    severity: String = "green",
     archive: ArchiveBacklogStatus? = nil,
     storageBlocked: Int = 0,
     storageBlockKind: String? = nil,
@@ -4108,7 +4305,9 @@ private func presentationSnapshot(
     isOffline: Bool = false,
     engineFresh: Bool = true,
     localProjection: LocalProjectionStatus? = nil,
-    serviceStatus: String? = "running"
+    serviceStatus: String? = "running",
+    heartbeatTransport: NativeHeartbeatTransportSnapshot? = nil,
+    hostLink: HostLinkSnapshot? = nil
 ) -> HealthSnapshot {
     let resolvedStorageUnresolved = storageUnresolved ?? (
         storageBlockKind == "source_epoch_conflict" || storageBlockKind == "render_generation_revision_conflict"
@@ -4118,12 +4317,13 @@ private func presentationSnapshot(
 
     return HealthSnapshot(
         schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
-        healthState: "healthy", severity: "green", headline: "Healthy",
+        healthState: "healthy", severity: severity, headline: "Healthy",
         reasons: reasons, suggestedActions: [], suggestedActionIds: suggestedActionIds,
         service: serviceStatus.map { status in ServiceSnapshot(
             platform: "macos", status: status, serviceName: "com.longhouse.shipper",
             serviceFile: nil, logPath: nil
         ) },
+        heartbeatTransport: heartbeatTransport,
         engineStatus: EngineStatusSnapshot(
             path: nil, exists: true, fresh: engineFresh, ageSeconds: engineFresh ? 1 : 600,
             payload: EngineStatusPayload(
@@ -4142,6 +4342,50 @@ private func presentationSnapshot(
             error: nil
         ),
         outbox: OutboxSnapshot(path: nil, fileCount: 0, oldestAgeSeconds: nil),
-        activitySummary: nil, managedSessions: sessions, launchReadiness: nil
+        activitySummary: nil, managedSessions: sessions, launchReadiness: nil,
+        hostLink: hostLink
     )
+}
+private func presentationHostLink(
+    state: String,
+    claimStartedAt: String? = nil
+) -> HostLinkSnapshot {
+    let claim = state == "updating" || state == "slow_update"
+        ? HostLifecycleSnapshot(type: "host.lifecycle", state: "updating")
+        : nil
+    return HostLinkSnapshot(
+        state: state,
+        since: claimStartedAt ?? "1970-01-01T00:00:00Z",
+        claim: claim,
+        claimStartedAt: claimStartedAt,
+        freshHorizonSecs: 120,
+        runtimeEpoch: "runtime-test"
+    )
+}
+
+private func presentationHeartbeatFailure() -> NativeHeartbeatTransportSnapshot {
+    NativeHeartbeatTransportSnapshot(
+        state: "degraded",
+        evidenceState: "applied",
+        lastAttemptAt: "1970-01-01T00:00:04Z",
+        lastSuccessAt: "1970-01-01T00:00:02Z",
+        lastFailureAt: "1970-01-01T00:00:04Z",
+        lastError: "POST timed out"
+    )
+}
+
+private func hostLinkSchemaCopy(_ key: String) throws -> String {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let schemaURL = repositoryRoot.appendingPathComponent("schemas/host_link.yml")
+    let contents = try String(contentsOf: schemaURL, encoding: .utf8)
+    let prefix = "  \(key): "
+    guard let line = contents.split(separator: "\n").first(where: { $0.hasPrefix(prefix) }) else {
+        throw NSError(domain: "HostLinkSchema", code: 1)
+    }
+    return String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
 }

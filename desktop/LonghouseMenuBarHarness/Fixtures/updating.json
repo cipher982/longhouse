@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-10-06T18:00:05Z",
+  "health_state": "healthy",
+  "severity": "info",
+  "headline": "Longhouse is updating",
+  "reasons": ["host_updating"],
+  "suggested_actions": [],
+  "suggested_action_ids": [],
+  "service": {
+    "platform": "macos",
+    "status": "running",
+    "service_name": "com.longhouse.shipper"
+  },
+  "engine_status": {
+    "path": "/Users/example/.longhouse/agent/engine-status.json",
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 4,
+    "payload": {
+      "version": "0.1.0",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-10-06T18:00:02Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "parse_error_count_1h": 0,
+      "disk_free_bytes": 37299638272,
+      "is_offline": false,
+      "last_updated": "2026-10-06T18:00:05Z"
+    },
+    "error": null
+  },
+  "outbox": {
+    "path": "/Users/example/.longhouse/agent/outbox",
+    "file_count": 0,
+    "oldest_age_seconds": null
+  },
+  "managed_sessions": [],
+  "transport": {
+    "status": "healthy",
+    "status_reason": "healthy",
+    "status_summary": "Shipping healthy."
+  },
+  "heartbeat_transport": {
+    "state": "degraded",
+    "evidence_state": "applied",
+    "last_attempt_at": "2026-10-06T18:00:04Z",
+    "last_success_at": "2026-10-06T18:00:02Z",
+    "last_failure_at": "2026-10-06T18:00:04Z",
+    "last_error": "POST timed out"
+  },
+  "host_link": {
+    "state": "updating",
+    "since": "2026-10-06T18:00:00Z",
+    "claim": {
+      "type": "host.lifecycle",
+      "state": "updating",
+      "runtime_epoch": "runtime-a",
+      "attempt_id": "attempt-a",
+      "phase": "drain",
+      "expected_back_by": "2026-10-06T18:00:30Z",
+      "deadline": "2026-10-06T18:06:00Z",
+      "cutoff": "2026-10-06T18:16:00Z"
+    },
+    "claim_started_at": "2026-10-06T18:00:00Z",
+    "last_acknowledged_at": "2026-10-06T18:00:02Z",
+    "fresh_horizon_secs": 120,
+    "last_serving_at": "2026-10-06T18:00:02Z",
+    "runtime_epoch": "runtime-a"
+  }
+}
