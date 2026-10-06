@@ -1,10 +1,12 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * A per-device preference kept in localStorage. Storage can be missing or
  * throw (private windows, blocked site data), so every read and write is
  * guarded and the in-memory value still works without it. `parse` validates
- * what was stored; anything it rejects falls back to `initial`.
+ * what was stored; anything it rejects falls back to `initial`. Nothing is
+ * written until the user changes the value, so a later change to `initial`
+ * still reaches people who never chose.
  */
 export function useStoredState<T>(
   key: string,
@@ -12,21 +14,21 @@ export function useStoredState<T>(
   parse: (raw: unknown) => T | null = (raw) => raw as T,
 ): [T, (next: T | ((previous: T) => T)) => void] {
   const [value, setValue] = useState<T>(() => readStored(key, initial, parse));
+  const changedRef = useRef(false);
 
-  const update = useCallback(
-    (next: T | ((previous: T) => T)) => {
-      setValue((previous) => {
-        const resolved = typeof next === "function" ? (next as (previous: T) => T)(previous) : next;
-        try {
-          window.localStorage.setItem(key, JSON.stringify(resolved));
-        } catch {
-          // Storage unavailable: keep the in-memory value for this tab.
-        }
-        return resolved;
-      });
-    },
-    [key],
-  );
+  const update = useCallback((next: T | ((previous: T) => T)) => {
+    changedRef.current = true;
+    setValue(next);
+  }, []);
+
+  useEffect(() => {
+    if (!changedRef.current) return;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Storage unavailable: keep the in-memory value for this tab.
+    }
+  }, [key, value]);
 
   return [value, update];
 }

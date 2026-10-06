@@ -93,10 +93,6 @@ interface TimelinePaneProps {
   /** Live/idle state readout (dot + sentence), rendered before the filter
    *  and overflow icons at the far right of the header bar. */
   headerState?: ReactNode;
-  /** Activity sparkline, rendered just left of headerState (Phase 4
-   *  Instruments). Sparkline itself renders nothing when there's too little
-   *  data to draw, so this can always be passed unconditionally. */
-  headerSparkline?: ReactNode;
   /** Actions rendered at the far right of the header bar. */
   headerRight?: ReactNode;
   /** The app bar's page slot. When set, the header bar renders there (one
@@ -1160,7 +1156,6 @@ export function TimelinePane({
   onVisibleSelectionChange,
   headerLeft,
   headerState,
-  headerSparkline,
   headerRight,
   headerTarget = null,
   rail = null,
@@ -1565,7 +1560,6 @@ export function TimelinePane({
         </div>
       </div>
       <div className="timeline-pane__header-right">
-        {headerSparkline}
         {headerState}
         <button
           type="button"
