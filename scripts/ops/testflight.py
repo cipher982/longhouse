@@ -10,8 +10,10 @@
     testflight.py publish --build N           make build N reachable through the public link
                                               and the internal group
     testflight.py dev-certs                   ids of the API-created development certificates
-    testflight.py revoke-dev-certs --keep F   revoke the API-created development certificates
-                                              not listed in F (one id per line)
+    testflight.py revoke-dev-certs --keep F --held H
+                                              revoke the API-created development certificates
+                                              this machine holds the key for (SHA-1s in H) and
+                                              that were not listed before the run (ids in F)
 
 `publish` is idempotent: it upserts the tester-facing text and review details from
 ios/testflight/beta.toml, attaches the build to the public beta group, submits it for
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -67,7 +70,9 @@ PAST_SUBMISSION = {
 # first, so every machine without a usable identity gets a fresh certificate with this name.
 # A hosted runner's private key dies with the VM: each run leaks one unusable certificate
 # until Apple's cap fails every later archive ("Your account has reached the maximum number
-# of certificates"). The build snapshots these before archiving and revokes only its own.
+# of certificates"). The build snapshots these before archiving and revokes only its own:
+# new since the snapshot and held by this machine's keychain, so a concurrent build
+# elsewhere keeps its certificate.
 API_DEV_CERT_NAME = "Apple Development: Created via API"
 
 
@@ -257,12 +262,18 @@ def cmd_dev_certs(_: argparse.Namespace) -> None:
 
 def cmd_revoke_dev_certs(args: argparse.Namespace) -> None:
     keep = set(Path(args.keep).read_text().split())
-    revoked = 0
+    held = {fingerprint.upper() for fingerprint in Path(args.held).read_text().split()}
+    revoked = new_not_held = 0
     for cert in _api_dev_certs():
-        if cert["id"] not in keep:
+        if cert["id"] in keep:
+            continue
+        content = cert["attributes"].get("certificateContent") or ""
+        if hashlib.sha1(base64.b64decode(content)).hexdigest().upper() in held:
             call("DELETE", f"/v1/certificates/{cert['id']}")
             revoked += 1
-    print(json.dumps({"revoked_dev_certs": revoked, "kept": len(keep)}))
+        else:
+            new_not_held += 1  # another machine's, created during this run
+    print(json.dumps({"revoked_dev_certs": revoked, "new_not_held": new_not_held, "kept": len(keep)}))
 
 
 def cmd_wait_build(args: argparse.Namespace) -> None:
@@ -609,7 +620,8 @@ def main() -> None:
 
     sub.add_parser("dev-certs").set_defaults(func=cmd_dev_certs)
     revoke = sub.add_parser("revoke-dev-certs")
-    revoke.add_argument("--keep", required=True, help="file of certificate ids to keep, one per line")
+    revoke.add_argument("--keep", required=True, help="file of certificate ids listed before the run, one per line")
+    revoke.add_argument("--held", required=True, help="file of SHA-1 fingerprints this keychain holds keys for")
     revoke.set_defaults(func=cmd_revoke_dev_certs)
 
     args = parser.parse_args()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -31,6 +32,16 @@ spec.loader.exec_module(testflight)
 
 def envelope(kind: str, id_: str, attributes: dict) -> dict:
     return {"type": kind, "id": id_, "attributes": attributes}
+
+
+def certificate(id_: str, kind: str, name: str) -> dict:
+    """A certificate whose DER content is its id, so its SHA-1 fingerprint is predictable."""
+    content = base64.b64encode(id_.encode()).decode()
+    return envelope("certificates", id_, {"certificateType": kind, "name": name, "certificateContent": content})
+
+
+def fingerprint(id_: str) -> str:
+    return hashlib.sha1(id_.encode()).hexdigest().upper()
 
 
 class Fake:
@@ -63,9 +74,9 @@ class Fake:
         self.tester_lookup_fails = False
         # the owner's own identity, an API certificate from before the run, and a distribution certificate
         self.certificates = [
-            envelope("certificates", "C-OWNER", {"certificateType": "DEVELOPMENT", "name": "Apple Development: Ada Owner"}),
-            envelope("certificates", "C-OLD", {"certificateType": "DEVELOPMENT", "name": "Apple Development: Created via API"}),
-            envelope("certificates", "C-DIST", {"certificateType": "DISTRIBUTION", "name": "Apple Distribution: Created via API"}),
+            certificate("C-OWNER", "DEVELOPMENT", "Apple Development: Ada Owner"),
+            certificate("C-OLD", "DEVELOPMENT", "Apple Development: Created via API"),
+            certificate("C-DIST", "DISTRIBUTION", "Apple Distribution: Created via API"),
         ]
         self.revoked: list[str] = []
 
@@ -408,7 +419,8 @@ def main() -> None:
             raise AssertionError("missing app record must stop with instructions")
 
         # 7. the build revokes only the development certificate its own archive created: never the
-        # owner's identity, a distribution certificate, or an API certificate that existed before it
+        # owner's identity, a distribution certificate, an API certificate that existed before the
+        # run, or one a concurrent build on another machine created meanwhile (its key is not here)
         import io
         from contextlib import redirect_stdout
 
@@ -416,16 +428,17 @@ def main() -> None:
         with redirect_stdout(snapshot):
             testflight.cmd_dev_certs(argparse.Namespace())
         assert snapshot.getvalue().split() == ["C-OLD"], snapshot.getvalue()
-        FAKE.certificates.append(
-            envelope("certificates", "C-RUN", {"certificateType": "DEVELOPMENT", "name": "Apple Development: Created via API"})
-        )
-        with tempfile.NamedTemporaryFile("w", suffix=".txt") as keep:
-            keep.write(snapshot.getvalue())
-            keep.flush()
+        FAKE.certificates.append(certificate("C-RUN", "DEVELOPMENT", "Apple Development: Created via API"))
+        FAKE.certificates.append(certificate("C-ELSEWHERE", "DEVELOPMENT", "Apple Development: Created via API"))
+        with tempfile.TemporaryDirectory() as directory:
+            keep = Path(directory) / "keep"
+            keep.write_text(snapshot.getvalue())
+            held = Path(directory) / "held"
+            held.write_text("\n".join(fingerprint(i).lower() for i in ("C-OWNER", "C-OLD", "C-RUN")) + "\n")
             with redirect_stdout(io.StringIO()):
-                testflight.cmd_revoke_dev_certs(argparse.Namespace(keep=keep.name))
+                testflight.cmd_revoke_dev_certs(argparse.Namespace(keep=str(keep), held=str(held)))
         assert FAKE.revoked == ["C-RUN"], FAKE.revoked
-        assert {c["id"] for c in FAKE.certificates} == {"C-OWNER", "C-OLD", "C-DIST"}, FAKE.certificates
+        assert {c["id"] for c in FAKE.certificates} == {"C-OWNER", "C-OLD", "C-DIST", "C-ELSEWHERE"}, FAKE.certificates
         print("testflight.test: ok")
     finally:
         server.shutdown()

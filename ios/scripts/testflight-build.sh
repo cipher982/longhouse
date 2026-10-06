@@ -44,12 +44,17 @@ out="${OUT_DIR:-$work/out}"
 mkdir -p "$out"
 # With an API key, archiving creates an "Apple Development: Created via API" certificate
 # whose private key lives only on this machine; on a hosted runner it dies with the VM.
-# Revoke what this run created (never anything listed before it started) so runs do not
-# accumulate certificates up to Apple's cap, which fails every later archive.
+# Revoke what this run created: new since the snapshot taken before archiving, and held by
+# this keychain, so a concurrent build on another machine keeps its certificate. Leaked
+# certificates accumulate up to Apple's cap, which fails every later archive.
 certs_before=""
+revoke_own_dev_certs() {
+  security find-identity -p codesigning | awk '$1 ~ /^[0-9]+\)$/ { print $2 }' > "$work/held-identities" \
+    && scripts/ops/testflight.py revoke-dev-certs --keep "$certs_before" --held "$work/held-identities" >&2
+}
 cleanup() {
   local status=$?
-  if [ -n "$certs_before" ] && ! scripts/ops/testflight.py revoke-dev-certs --keep "$certs_before" >&2; then
+  if [ -n "$certs_before" ] && ! revoke_own_dev_certs; then
     echo "testflight-build: could not revoke this run's development certificate; each leaked one counts toward Apple's cap" >&2
     [ "$status" -ne 0 ] || status=1
   fi
