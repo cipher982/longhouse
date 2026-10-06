@@ -704,12 +704,22 @@ def analyze_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     evidence_floor = restart_start if epoch_change is None else None
     evidence_candidates: list[tuple[float, str, dict[str, Any]]] = []
 
-    def offer_evidence(source: str, row: dict[str, Any], source_epoch: Any = None) -> None:
+    def offer_evidence(
+        source: str,
+        row: dict[str, Any],
+        source_epoch: Any = None,
+        *,
+        epoch_independent: bool = False,
+    ) -> None:
         at = _mono(row)
         if at is None:
             return
         if epoch_change is not None:
-            if source_epoch is not None:
+            if epoch_independent:
+                write_floor = restart_start if restart_start is not None else change_at
+                if write_floor is None or at < write_floor:
+                    return
+            elif source_epoch is not None:
                 if source_epoch != epoch_change.get("to_epoch"):
                     return
             elif change_at is None or at < change_at:
@@ -737,7 +747,7 @@ def analyze_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         except (TypeError, ValueError):
             status_code = None
         if status_code is not None and 200 <= status_code < 300:
-            offer_evidence("accepted_write", row)
+            offer_evidence("accepted_write", row, epoch_independent=True)
     serving_evidence = None
     if evidence_candidates:
         evidence_at, evidence_source, evidence_row = min(evidence_candidates, key=lambda candidate: candidate[0])

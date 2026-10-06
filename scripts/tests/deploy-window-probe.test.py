@@ -61,6 +61,7 @@ def restart_records() -> list[dict[str, object]]:
         observation("sse", 12.6, event="disconnect", reason="transport_error"),
         observation("health", 12.9, event="response", status=200, latency_s=0.02, runtime={"epoch": "epoch-1", "admission": "open"}, build_commit="old-build"),
         observation("write", 13.0, event="response", status=502, latency_s=0.03, content_type="text/html", is_json=False, code=None, retryable=None, retry_after=None, is_html=True, transport_error_class=None),
+        observation("write", 13.05, event="response", status=200, latency_s=0.04, content_type="application/json", is_json=True, code=None, retryable=None, retry_after=None, is_html=False, transport_error_class=None),
         observation("health", 13.2, event="response", status=200, latency_s=0.02, runtime={"epoch": "epoch-2", "admission": "pending"}, build_commit="new-build"),
         observation("sse", 13.1, event="message", name="connected", data={"runtime_epoch": "epoch-2", "admission": "open"}),
         observation("health", 13.5, event="response", status=200, latency_s=0.02, runtime={"epoch": "epoch-2", "admission": "open"}, build_commit="new-build"),
@@ -84,13 +85,13 @@ class AnalyzeRestartTests(unittest.TestCase):
             summary = PROBE.analyze(path)
 
         expected = {
-            "observation_count": 25,
+            "observation_count": 26,
             "writes": {
                 "first_failure_monotonic": 11.5,
                 "first_failure_wall_time": "2026-10-06T18:00:11.500Z",
-                "first_success_after_failure_monotonic": 16.0,
-                "first_success_after_failure_wall_time": "2026-10-06T18:00:16.000Z",
-                "closed_writes_s": 4.5,
+                "first_success_after_failure_monotonic": 13.05,
+                "first_success_after_failure_wall_time": "2026-10-06T18:00:13.050Z",
+                "closed_writes_s": 1.55,
                 "failed_by_class": {
                     "typed": 2,
                     "untyped_json": 1,
@@ -113,10 +114,10 @@ class AnalyzeRestartTests(unittest.TestCase):
                     "after_epoch_change_s": 0.3,
                 },
                 "first_serving_evidence": {
-                    "source": "sse_connected_admission_open",
-                    "at_monotonic": 13.1,
-                    "wall_time": "2026-10-06T18:00:13.100Z",
-                    "after_restart_start_s": 1.6,
+                    "source": "accepted_write",
+                    "at_monotonic": 13.05,
+                    "wall_time": "2026-10-06T18:00:13.050Z",
+                    "after_restart_start_s": 1.55,
                 },
             },
             "control": {
@@ -125,8 +126,8 @@ class AnalyzeRestartTests(unittest.TestCase):
                 "close_reason": "host.lifecycle",
                 "reconnect_monotonic": 14.0,
                 "reconnect_after_disconnect_s": 1.5,
-                "reconnect_after_open_s": 0.9,
-                "reconnect_reference": "sse_connected_admission_open",
+                "reconnect_after_open_s": 0.95,
+                "reconnect_reference": "accepted_write",
                 "host_lifecycle_states": ["updating", "serving"],
             },
             "sse": {
@@ -135,13 +136,13 @@ class AnalyzeRestartTests(unittest.TestCase):
                 "close_reason": None,
                 "reconnect_monotonic": 14.1,
                 "reconnect_after_disconnect_s": 1.5,
-                "reconnect_after_open_s": 1.0,
-                "reconnect_reference": "sse_connected_admission_open",
+                "reconnect_after_open_s": 1.05,
+                "reconnect_reference": "accepted_write",
                 "host_lifecycle_states": ["updating", "serving"],
             },
             "verdict": {
                 "no_untyped_5xx": False,
-                "closed_writes_s": 4.5,
+                "closed_writes_s": 1.55,
                 "control_reconnect_after_open_within_1s": True,
             },
         }
