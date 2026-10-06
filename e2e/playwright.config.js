@@ -9,6 +9,7 @@ import {
   safeChildEnvironment,
   stripAmbientSecrets,
 } from "./test-runtime.js";
+const VISUAL_BASELINE_PATH = "{testDir}/{testFilePath}-snapshots/{arg}-chromium-linux{ext}";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const suppliedIsolatedRuntime = process.env.LONGHOUSE_TEST_ISOLATED === "1";
@@ -103,10 +104,13 @@ const config = {
     actionTimeout: 10_000,
   },
 
+  // Visual baselines are Linux renders made on the crunch VM (see the
+  // qa-ui-baseline targets). Both screenshot APIs share one honest name; only
+  // the single-worker visual-baseline project writes them.
+  snapshotPathTemplate: VISUAL_BASELINE_PATH,
   expect: {
     toHaveScreenshot: {
-      pathTemplate:
-        "{testDir}/{testFilePath}-snapshots/{arg}{-projectName}-darwin{ext}",
+      pathTemplate: VISUAL_BASELINE_PATH,
     },
   },
 
@@ -128,7 +132,16 @@ const config = {
     {
       name: "chromium",
       testDir: "./tests",
-      testIgnore: ["**/core/**", "**/*.test.ts"],
+      testIgnore: ["**/core/**", "**/*.test.ts", "**/ui_baseline_*.spec.ts"],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // One worker: every worker mints its own device token, so a parallel run
+      // changes what the Devices page lists and in which order.
+      name: "visual-baseline",
+      testDir: "./tests",
+      testMatch: ["**/ui_baseline_*.spec.ts"],
+      workers: 1,
       use: { ...devices["Desktop Chrome"] },
     },
   ],

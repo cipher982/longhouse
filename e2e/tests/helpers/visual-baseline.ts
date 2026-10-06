@@ -62,8 +62,62 @@ export function getPlatformScopedSnapshotName(name: string): string {
   return name;
 }
 
+/**
+ * Baselines are Linux renders (playwright.config.js pins the suffix), made on
+ * the crunch VM so they match the environment CI runs in. A macOS run renders
+ * fonts differently and should not be compared against them.
+ */
 export function getPlatformScopedDesktopSnapshotFile(
   name: string,
 ): string {
-  return `${getPlatformScopedSnapshotName(name)}-chromium-darwin.png`;
+  return `${getPlatformScopedSnapshotName(name)}-chromium-linux.png`;
+}
+
+/**
+ * The Devices page lists every device token on the backend, and each test's
+ * request fixture mints one that a database reset does not clear, so the real
+ * list grows with however many tests ran first. Baselines read this fixed list.
+ * Dates sit more than a week back, where the page prints absolute dates.
+ */
+const BASELINE_DEVICE_TOKENS = {
+  tokens: [
+    {
+      id: '00000000-0000-4000-8000-000000000001',
+      device_id: 'studio-mac',
+      created_at: '2026-01-05T15:00:00Z',
+      last_used_at: '2026-01-09T15:00:00Z',
+      revoked_at: null,
+      is_valid: true,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000002',
+      device_id: 'build-server',
+      created_at: '2026-01-02T15:00:00Z',
+      last_used_at: null,
+      revoked_at: null,
+      is_valid: true,
+    },
+  ],
+  total: 2,
+};
+
+export async function stubBaselineDeviceTokens(page: Page): Promise<void> {
+  await page.route('**/api/devices/tokens*', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({ json: BASELINE_DEVICE_TOKENS });
+  });
+}
+
+/**
+ * Content that legitimately differs between runs: the connect command embeds
+ * this host's origin, and E2E backends listen on a random port.
+ */
+export function volatileRegions(page: Page) {
+  return [
+    page.locator('[data-testid="connect-machine-command"]'),
+    page.locator('.cli-instructions code'),
+  ];
 }

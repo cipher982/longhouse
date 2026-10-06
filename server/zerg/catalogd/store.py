@@ -55,6 +55,7 @@ from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import ReducerResult
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
+from zerg.catalogd.fact_reducer import read_registry_lifecycle_heads
 from zerg.catalogd.fact_reducer import read_session_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch_setwise
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
@@ -7390,9 +7391,10 @@ class CatalogStore:
                 _head_commit_seq, grouped_heads, truncated_sessions = read_bounded_sessions_fact_heads(
                     connection,
                     session_ids=session_ids,
-                    families=("activity", "control", "continuation", "delegation", "delegation_lifecycle"),
+                    families=_STATE_HEAD_FAMILIES,
                     limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
                 )
+                _merge_registry_lifecycle_heads(connection, grouped_heads)
                 heads_by_session = {session_id: (heads, session_id in truncated_sessions) for session_id, heads in grouped_heads.items()}
                 _attach_delegation_children(
                     connection, facts=facts, heads_by_session={key: value[0] for key, value in heads_by_session.items()}
@@ -7504,9 +7506,10 @@ class CatalogStore:
             commit_seq, heads, heads_truncated = read_bounded_session_fact_heads(
                 connection,
                 session_id=session_id,
-                families=("activity", "control", "continuation", "delegation", "delegation_lifecycle"),
+                families=_STATE_HEAD_FAMILIES,
                 limit=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
+            heads = _merge_registry_lifecycle_heads(connection, {session_id: heads})[session_id]
             _attach_delegation_children(connection, facts=session_facts, heads_by_session={session_id: heads})
             return {
                 "commit_seq": str(commit_seq),
@@ -7566,9 +7569,10 @@ class CatalogStore:
             commit_seq, heads_by_session, truncated = read_bounded_sessions_fact_heads(
                 connection,
                 session_ids=owned_ids,
-                families=("activity", "control", "continuation", "delegation", "delegation_lifecycle"),
+                families=_STATE_HEAD_FAMILIES,
                 limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
+            _merge_registry_lifecycle_heads(connection, heads_by_session)
             _attach_delegation_children(connection, facts=facts, heads_by_session=heads_by_session)
             sessions = []
             for session_id in session_ids:
@@ -16946,6 +16950,19 @@ def _runtime_activity_facts(
 _DELEGATION_DEFAULT_FRESHNESS_MS = 30 * 60 * 1000
 _DELEGATION_KIND_LIMIT = 8
 _DELEGATION_COUNT_LIMIT = 256
+
+
+#: Families bounded by SHADOW_STATE_FACT_HEAD_LIMIT. delegation_lifecycle is
+#: read separately, only for subagents a delegation registry names: it keeps
+#: one head per subagent ever started, so a long session outgrows any cap.
+_STATE_HEAD_FAMILIES = ("activity", "control", "continuation", "delegation")
+
+
+def _merge_registry_lifecycle_heads(connection, heads_by_session: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """Append each session's registry-matched lifecycle heads in place."""
+    for session_id, lifecycle in read_registry_lifecycle_heads(connection, heads_by_session=heads_by_session).items():
+        heads_by_session.setdefault(session_id, []).extend(lifecycle)
+    return heads_by_session
 
 
 def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], heads_by_session: Mapping[str, Any]) -> None:

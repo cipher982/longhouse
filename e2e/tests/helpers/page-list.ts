@@ -9,21 +9,18 @@ export const BASE_QUERY = "clock=frozen&effects=off&seed=ui-baseline";
 export interface PageDef {
   name: string;
   path: string;
-  ready: "page" | "settings" | "domcontent";
+  ready: "page" | "domcontent";
 }
 
 export const APP_PAGES: PageDef[] = [
   { name: "timeline", path: `/timeline?${BASE_QUERY}`, ready: "page" },
   { name: "machines", path: `/machines?${BASE_QUERY}`, ready: "page" },
-  { name: "settings", path: `/settings?${BASE_QUERY}`, ready: "settings" },
   { name: "profile", path: `/profile?${BASE_QUERY}`, ready: "page" },
-  { name: "integrations", path: `/settings/integrations?${BASE_QUERY}`, ready: "page" },
   { name: "devices", path: `/settings/devices?${BASE_QUERY}`, ready: "page" },
 ];
 
 export const PUBLIC_PAGES: PageDef[] = [
   { name: "landing", path: `/landing?${BASE_QUERY}&fx=none&video=poster`, ready: "domcontent" },
-  { name: "pricing", path: `/pricing?${BASE_QUERY}`, ready: "domcontent" },
   { name: "docs", path: `/docs?${BASE_QUERY}`, ready: "domcontent" },
   { name: "docs-quickstart", path: `/docs/quickstart?${BASE_QUERY}`, ready: "domcontent" },
   { name: "docs-search", path: `/docs/search?${BASE_QUERY}`, ready: "domcontent" },

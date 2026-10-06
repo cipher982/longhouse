@@ -307,7 +307,6 @@ async function main() {
   const args = process.argv.slice(2);
   const jsonMode = args.includes("--json");
   const skipLlm = args.includes("--skip-llm") || process.env.SKIP_LLM === "1";
-  const useLinuxBaselines = process.platform === "linux";
 
   const outputDirIdx = args.indexOf("--output-dir");
   const outputDir = outputDirIdx >= 0 ? args[outputDirIdx + 1] : "./visual-compare-results";
@@ -334,17 +333,13 @@ async function main() {
       process.exit(2);
     }
 
+    // Baselines are Linux renders named <page>-chromium-linux.png (e2e/playwright.config.js).
     const baselineFiles = pageFilter
-      ? pageFilter.map((name) => `${name}${useLinuxBaselines ? "-linux" : ""}-chromium-darwin.png`)
-      : fs.readdirSync(baselineDir)
-          .filter((f) => f.endsWith(".png"))
-          .filter((f) => (useLinuxBaselines ? f.includes("-linux-chromium-darwin.png") : !f.includes("-linux-chromium-darwin.png")));
+      ? pageFilter.map((name) => `${name}-chromium-linux.png`)
+      : fs.readdirSync(baselineDir).filter((f) => f.endsWith("-chromium-linux.png"));
 
     for (const file of baselineFiles) {
-      const logicalName = file
-        .replace(/-linux(?=-chromium-darwin\.png$)/, "")
-        .replace(/-chromium-darwin\.png$/, "")
-        .replace(/\.png$/, "");
+      const logicalName = file.replace(/-chromium-linux\.png$/, "");
 
       if (pageFilter && !pageFilter.includes(logicalName)) continue;
 

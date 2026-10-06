@@ -17,6 +17,8 @@ import { APP_PAGES, type PageDef } from './helpers/page-list';
 import {
   getPlatformScopedDesktopSnapshotFile,
   installDeterministicVisualFonts,
+  stubBaselineDeviceTokens,
+  volatileRegions,
 } from './helpers/visual-baseline';
 import { resetDatabase } from './test-utils';
 import { execSync } from 'child_process';
@@ -34,10 +36,6 @@ async function waitForAppReady(page: Page, mode: PageDef['ready']) {
   if (mode === 'page') {
     await waitForPageReady(page, { timeout: 20000 });
     return;
-  }
-  if (mode === 'settings') {
-    await waitForPageReady(page, { timeout: 20000 });
-    await expect(page.locator('.settings-page-container')).toBeVisible();
   }
   if (mode === 'domcontent') {
     await page.waitForLoadState('domcontentloaded');
@@ -61,11 +59,17 @@ test.describe('Visual comparison: LLM-triaged', () => {
     fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
     fs.mkdirSync(CURRENT_DIR, { recursive: true });
 
+    // Capture exactly as the baselines were made: same device list, same masks.
+    await stubBaselineDeviceTokens(page);
     for (const pageDef of APP_PAGES) {
       await page.goto(pageDef.path);
       await installDeterministicVisualFonts(page);
       await waitForAppReady(page, pageDef.ready);
-      const screenshot = await page.screenshot({ fullPage: true, animations: 'disabled' });
+      const screenshot = await page.screenshot({
+        fullPage: true,
+        animations: 'disabled',
+        mask: volatileRegions(page),
+      });
       fs.writeFileSync(path.join(CURRENT_DIR, getPlatformScopedDesktopSnapshotFile(pageDef.name)), screenshot);
     }
 

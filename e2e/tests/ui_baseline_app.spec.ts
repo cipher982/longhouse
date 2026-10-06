@@ -1,7 +1,7 @@
 import { test, expect, type Page } from './fixtures';
 import { waitForPageReady } from './helpers/ready-signals';
 import { APP_PAGES, type PageDef } from './helpers/page-list';
-import { getPlatformScopedSnapshotName, installDeterministicVisualFonts } from './helpers/visual-baseline';
+import { getPlatformScopedSnapshotName, installDeterministicVisualFonts, stubBaselineDeviceTokens, volatileRegions } from './helpers/visual-baseline';
 import { resetDatabase } from './test-utils';
 
 test.beforeEach(async ({ request }) => {
@@ -11,22 +11,18 @@ test.beforeEach(async ({ request }) => {
 async function waitForAppReady(page: Page, mode: PageDef['ready']) {
   if (mode === 'page') {
     await waitForPageReady(page, { timeout: 20000 });
-    return;
-  }
-
-  if (mode === 'settings') {
-    await waitForPageReady(page, { timeout: 20000 });
-    await expect(page.locator('.settings-page-container')).toBeVisible();
   }
 }
 
 async function captureBaseline(page: Page, path: string, name: string, ready: PageDef['ready']) {
+  await stubBaselineDeviceTokens(page);
   await page.goto(path);
   await installDeterministicVisualFonts(page);
   await waitForAppReady(page, ready);
   await expect(page).toHaveScreenshot(`${getPlatformScopedSnapshotName(name)}.png`, {
     fullPage: true,
     animations: 'disabled',
+    mask: volatileRegions(page),
   });
 }
 

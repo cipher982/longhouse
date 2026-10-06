@@ -1307,22 +1307,24 @@ qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshot
 	bunx tsx scripts/ui/ui-workbench-report.ts $$RUN_DIR; \
 	echo "Workbench bundle: $$RUN_DIR"
 
-qa-ui-baseline: ## Visual baseline check for current app and public pages
+qa-ui-baseline: ## Visual baseline check for app and public pages (Linux renders: run on crunch, scripts/ops/crunch.sh run make qa-ui-baseline)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
-		bunx playwright test --project=chromium tests/ui_baseline_app.spec.ts tests/ui_baseline_public.spec.ts --workers=1
+		bunx playwright test --project=visual-baseline tests/ui_baseline_app.spec.ts tests/ui_baseline_public.spec.ts
 
-qa-ui-baseline-update: ## Update visual baselines for current app, public, and mobile pages
+qa-ui-baseline-update: ## Rewrite visual baselines for app, public, and mobile pages (on crunch, so they stay Linux renders)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
-		bunx playwright test --project=chromium tests/ui_baseline_app.spec.ts tests/ui_baseline_public.spec.ts --update-snapshots --workers=1
-	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
-		bunx playwright test --project=chromium tests/mobile/ui_baseline_mobile.spec.ts --update-snapshots --workers=1
+		bunx playwright test --project=visual-baseline --update-snapshots=all
+	@# Copied under artifacts/ because an isolated run returns only artifacts. On crunch:
+	@#   scripts/ops/crunch.sh run 'make qa-ui-baseline-update && cp -r artifacts/test-isolation "$$CRUNCH_OUT"/'
+	@# then copy .../files/1/ui-baselines/* into e2e/tests/ and commit.
+	@mkdir -p artifacts/ui-baselines && cd e2e/tests && tar -cf - ui_baseline_app.spec.ts-snapshots ui_baseline_public.spec.ts-snapshots mobile/ui_baseline_mobile.spec.ts-snapshots | tar -xf - -C ../../artifacts/ui-baselines
 
-qa-ui-baseline-mobile: ## Visual baseline check for mobile app pages
+qa-ui-baseline-mobile: ## Visual baseline check for mobile app pages (Linux renders: run on crunch)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
-		bunx playwright test --project=chromium tests/mobile/ui_baseline_mobile.spec.ts --workers=1
+		bunx playwright test --project=visual-baseline tests/mobile/ui_baseline_mobile.spec.ts
 
 qa-visual-compare: ## Compare current app screenshots against baselines; set SKIP_LLM=1 to skip LLM triage
 	@$(MAKE) ensure-playwright-browser
