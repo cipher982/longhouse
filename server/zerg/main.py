@@ -36,7 +36,6 @@ from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # Logging configuration
@@ -183,26 +182,11 @@ app = FastAPI(
 )
 
 
-@app.middleware("http")
-async def runtime_write_admission_middleware(request, call_next):
-    """Fence mutating HTTP requests during an authenticated cutover drain."""
-    path = request.url.path
-    is_internal_control = path.startswith(("/internal/deployments/", "/api/internal/deployments/"))
-    mutating = request.method in {"POST", "PUT", "PATCH", "DELETE"} and not is_internal_control
-    admitted = False
-    if mutating:
-        from zerg.services.runtime_admission import runtime_admission
+from zerg.middleware.runtime_write_admission import RuntimeWriteAdmissionMiddleware
 
-        admitted, details = await runtime_admission().try_admit(path=path)
-        if not admitted:
-            return JSONResponse(status_code=503, content=details)
-    try:
-        return await call_next(request)
-    finally:
-        if admitted:
-            from zerg.services.runtime_admission import runtime_admission
-
-            await runtime_admission().release()
+# Never register a BaseHTTPMiddleware (`@app.middleware("http")`) here: it
+# re-streams every response, which turns off JSON compression for all of them.
+app.add_middleware(RuntimeWriteAdmissionMiddleware)
 
 
 api_app = FastAPI(
