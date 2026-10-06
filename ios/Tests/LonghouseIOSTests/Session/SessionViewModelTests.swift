@@ -3088,8 +3088,6 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func deltaCursors() -> [String] { deltaRequestCursors }
 
-    func tailRequestCount() -> Int { tailRequests.count }
-
     func sessionMobileTailDelta(id: String, afterCursor: String, limit: Int) async throws -> SessionMobileTailResponse? {
         deltaRequestCursors.append(afterCursor)
         return deltaResponses.isEmpty ? nil : deltaResponses.removeFirst()
