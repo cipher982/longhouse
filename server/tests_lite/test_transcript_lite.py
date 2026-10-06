@@ -196,7 +196,10 @@ async def test_workspace_lite_detail_drops_thread_session_copies(monkeypatch):
     async def read_page(**_kwargs):
         return {
             "generation_id": str(uuid4()),
-            "events": [_page_event("e1", role="user", content_text="hi"), _page_event("e2", tool_name="Bash", tool_input_json={"command": "ls"})],
+            "events": [
+                _page_event("e1", role="user", content_text="hi"),
+                _page_event("e2", tool_name="Bash", tool_input_json={"command": "ls"}),
+            ],
             "next_cursor": None,
             "has_more": False,
             "total": 2,
