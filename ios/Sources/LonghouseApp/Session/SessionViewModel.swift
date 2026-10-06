@@ -2518,6 +2518,7 @@ final class SessionViewModel: ObservableObject {
         }
         guard !wanted.isEmpty else { return }
         let generation = liteBodyGeneration
+        liteBodies.failed.subtract(wanted)
         liteBodies.loading.formUnion(wanted)
         var start = 0
         while start < wanted.count {
@@ -2530,9 +2531,15 @@ final class SessionViewModel: ObservableObject {
             if let response {
                 for body in response.events { next.bodies[body.cursor] = body }
                 next.unavailable.formUnion(response.missing)
+                // A cursor the server neither answered nor reported missing
+                // must not read as loading forever.
+                let answered = Set(response.events.map(\.cursor)).union(response.missing)
+                next.failed.formUnion(batch.filter { !answered.contains($0) })
                 openWaterfall?.mark("lite_bodies_loaded", "requested=\(batch.count) missing=\(response.missing.count)")
             } else {
-                // A failed read is retried by the next expand; the row keeps its preview.
+                // The row keeps its preview and says the read failed; opening
+                // it again retries.
+                next.failed.formUnion(batch)
                 openWaterfall?.mark("lite_bodies_failed", "requested=\(batch.count)")
             }
             liteBodies = next

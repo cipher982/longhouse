@@ -9,6 +9,8 @@ struct LiteBodyState: Sendable, Equatable {
     /// Cursors the server reported missing: the session was re-rendered since
     /// the page loaded. Those rows keep their preview and say so.
     var unavailable: Set<String> = []
+    /// Cursors whose last read failed. The row says so; opening it again retries.
+    var failed: Set<String> = []
 
     func merged(_ event: SessionEvent) -> SessionEvent {
         guard let cursor = event.liteBodyCursor, let body = bodies[cursor] else { return event }
@@ -32,11 +34,13 @@ struct LiteBodyState: Sendable, Equatable {
     }
 
     /// What an expanded row shows below a preview: `loading` while its bodies
-    /// are in flight, `unavailable` once the server no longer has them, and
-    /// `preview` before anything was asked. Nil when nothing is cut.
+    /// are in flight, `failed` after a read that did not answer (opening the
+    /// row again retries), `unavailable` once the server no longer has them,
+    /// and `preview` before anything was asked. Nil when nothing is cut.
     func state(for cursors: [String]) -> String? {
         guard !cursors.isEmpty else { return nil }
         if cursors.contains(where: loading.contains) { return "loading" }
+        if cursors.contains(where: failed.contains) { return "failed" }
         if cursors.allSatisfy(unavailable.contains) { return "unavailable" }
         return "preview"
     }

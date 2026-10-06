@@ -214,6 +214,20 @@ struct LiteTranscriptPayloadTests {
     }
 
     @Test
+    func aFailedBodyReadSaysSoInsteadOfLoadingForever() throws {
+        let items = TimelineBuilder.build(items: try liteTail().projection.items)
+        let preview = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
+        let row = try #require(preview.first { $0.bodyCursors?.contains("cursor-3") == true })
+        var bodies = LiteBodyState()
+        bodies.failed = ["cursor-3"]
+        let payload = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
+        #expect(payload.first { $0.id == row.id }?.bodyState == "failed")
+        bodies.loading = ["cursor-3"]
+        let retrying = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
+        #expect(retrying.first { $0.id == row.id }?.bodyState == "loading")
+    }
+
+    @Test
     func deltaAnchorsSkipRunningToolsAndProvisionalRows() {
         func item(_ index: Int, state: ToolCallState? = nil, origin: String = "durable", cursor: Bool = true) -> SessionProjectionItem {
             let event = SessionEvent(

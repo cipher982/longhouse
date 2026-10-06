@@ -13,12 +13,16 @@ function bodyAttributes(item: TranscriptItem): string {
   return cursors.length ? openKey + ' data-body-cursors="' + escapeHtml(cursors.join(" ")) + '"' : openKey;
 }
 
+const BODY_NOTES: Record<string, string> = {
+  loading: "Loading the full output…",
+  failed: "Couldn't load the full output; this is a preview. Close and reopen the row to try again.",
+  unavailable: "The full output is no longer available; this is a preview.",
+  preview: "This is a preview of the output.",
+};
+
 function bodyNote(item: TranscriptItem): string {
   if (!(item.bodyCursors || []).length) return "";
-  const text =
-    item.bodyState === "unavailable"
-      ? "The full output is no longer available; this is a preview."
-      : "Loading the full output…";
+  const text = BODY_NOTES[item.bodyState || "preview"] || BODY_NOTES.preview;
   return '<p class="body-note" role="status">' + escapeHtml(text) + "</p>";
 }
 

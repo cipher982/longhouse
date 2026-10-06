@@ -901,9 +901,15 @@ summary::-webkit-details-marker {
 		const openKey = " data-open-key=\"row:" + escapeHtml(item.id) + "\"";
 		return cursors.length ? openKey + " data-body-cursors=\"" + escapeHtml(cursors.join(" ")) + "\"" : openKey;
 	}
+	var BODY_NOTES = {
+		loading: "Loading the full output…",
+		failed: "Couldn't load the full output; this is a preview. Close and reopen the row to try again.",
+		unavailable: "The full output is no longer available; this is a preview.",
+		preview: "This is a preview of the output."
+	};
 	function bodyNote(item) {
 		if (!(item.bodyCursors || []).length) return "";
-		return "<p class=\"body-note\" role=\"status\">" + escapeHtml(item.bodyState === "unavailable" ? "The full output is no longer available; this is a preview." : "Loading the full output…") + "</p>";
+		return "<p class=\"body-note\" role=\"status\">" + escapeHtml(BODY_NOTES[item.bodyState || "preview"] || BODY_NOTES.preview) + "</p>";
 	}
 	function toolDetails(item) {
 		const isFailure = !!item.failurePreview || typeof item.status === "string" && (item.status.indexOf("exit ") === 0 || item.status === "failed");

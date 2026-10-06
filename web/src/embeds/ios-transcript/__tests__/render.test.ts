@@ -358,7 +358,7 @@ describe("subagents and the native bridge", () => {
     };
     render({ items: [preview] });
     const row = root().querySelector<HTMLDetailsElement>("details.tool")!;
-    expect(row.querySelector(".body-note")?.textContent).toBe("Loading the full output…");
+    expect(row.querySelector(".body-note")?.textContent).toBe("This is a preview of the output.");
     row.open = true;
     row.dispatchEvent(new Event("toggle"));
     expect(postMessage).toHaveBeenCalledWith({ type: "loadToolBodies", cursors: ["c-call", "c-result"] });
@@ -368,6 +368,15 @@ describe("subagents and the native bridge", () => {
     expect(loaded.open).toBe(true);
     expect(loaded.querySelector(".body-note")).toBeNull();
     expect(loaded.textContent).toContain("the whole output");
+  });
+
+  it("says when loading a cut row's full body failed", () => {
+    render({
+      items: [{ id: "tool:7", kind: "tool", title: "Read", calls: [], bodyCursors: ["c"], bodyState: "failed" }],
+    });
+    expect(root().querySelector(".body-note")?.textContent).toBe(
+      "Couldn't load the full output; this is a preview. Close and reopen the row to try again.",
+    );
   });
 
   it("says when a cut row's full body is gone", () => {
