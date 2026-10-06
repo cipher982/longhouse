@@ -346,3 +346,30 @@ async def test_event_bodies_report_a_re_rendered_cursor_missing(monkeypatch):
     result = await workspace_module.read_storage_v2_event_bodies(session_id=session_id, owner_id=42, cursors=[wanted])
 
     assert result == {"events": [], "missing": [wanted]}
+
+
+def test_a_cut_wrapper_input_marks_the_event_for_a_full_body():
+    command = "rg --files | " + "x" * 600
+    projection = {
+        "focus_session_id": "s-1",
+        "items": [
+            _item(
+                "8",
+                tool_name="exec",
+                tool_input_json="const r = await tools.exec_command({cmd: 'ls'})",
+                tool_presentation={
+                    "version": 2,
+                    "tool_name": "exec_command",
+                    "label": "Shell",
+                    "wrapper_recedes": True,
+                    "tool_input_json": {"cmd": command},
+                    "children": [],
+                },
+            )
+        ],
+    }
+
+    event = lite_projection(projection)["items"][0]["event"]
+
+    assert len(event["tool_presentation_input"]["value"]["cmd"]) == 300
+    assert event["tool_input_truncated"] is True

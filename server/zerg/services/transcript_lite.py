@@ -224,8 +224,11 @@ def _lite_event(event: dict[str, Any], *, item_timestamp: Any, presentations: di
             else:
                 # A wrapper's presented input (Codex apply_patch inside exec) is
                 # what an edit row counts, so it stays whole for edits too.
-                kept = presented_input if is_edit else truncate_tool_input(presented_input)[0]
+                kept, cut = (presented_input, False) if is_edit else truncate_tool_input(presented_input)
                 out["tool_presentation_input"] = {"value": kept}
+                if cut:
+                    # Lets the client fetch the whole presented input on expand.
+                    out["tool_input_truncated"] = True
         if presentation.get("shell_summary") is not None:
             out["tool_presentation_shell_summary"] = presentation["shell_summary"]
         if presentation.get("children"):
