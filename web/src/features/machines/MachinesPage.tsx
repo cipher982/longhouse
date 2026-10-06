@@ -160,10 +160,8 @@ export default function MachinesPage() {
   const [showQuiet, setShowQuiet] = useState(false);
 
   const waitingForDirectory = isError && !data && directory.isLoading;
-  useReadinessFlag({
-    ready: (!isLoading && !waitingForDirectory) || Boolean(directory.data?.machines?.length),
-    screenshotReady: !isLoading && !waitingForDirectory,
-  });
+  const pageReady = !isLoading && !waitingForDirectory;
+  useReadinessFlag({ ready: pageReady, screenshotReady: pageReady });
 
   const summaries = data?.machines ?? [];
   const active = summaries.filter((summary) => !machineStatus(summary).quiet);
@@ -174,6 +172,7 @@ export default function MachinesPage() {
   const online = summaries.filter((summary) => summary.machine.online).length;
   const machines = data ? summaries.map((summary) => summary.machine) : directory.data?.machines;
   const strays = machines ? unmatchedRunners(runners ?? [], machines) : [];
+  const directoryIsEmpty = data === undefined && directory.data?.machines?.length === 0;
 
   const connectButton = (
     <Button variant="primary" data-testid="machines-connect-button" onClick={() => setShowConnect(true)}>
@@ -181,9 +180,22 @@ export default function MachinesPage() {
       Connect a machine
     </Button>
   );
+  const firstMachineEmptyState = (
+    <EmptyState
+      title="Connect your first machine"
+      description="Install Longhouse on a machine and the Claude Code, Codex and other agent sessions it runs show up here and on the Timeline."
+      action={
+        <Button variant="primary" size="lg" data-testid="machines-connect-first-button" onClick={() => setShowConnect(true)}>
+          Connect a machine
+        </Button>
+      }
+    />
+  );
 
   let body: ReactNode;
-  if (isLoading) {
+  if (directoryIsEmpty) {
+    body = firstMachineEmptyState;
+  } else if (isLoading || waitingForDirectory) {
     body = machines?.length ? (
       <>
         <p className="machine-meta" role="status">Loading activity and sync…</p>
@@ -229,17 +241,7 @@ export default function MachinesPage() {
       </>
     );
   } else if (summaries.length === 0) {
-    body = (
-      <EmptyState
-        title="Connect your first machine"
-        description="Install Longhouse on a machine and the Claude Code, Codex and other agent sessions it runs show up here and on the Timeline."
-        action={
-          <Button variant="primary" size="lg" data-testid="machines-connect-first-button" onClick={() => setShowConnect(true)}>
-            Connect a machine
-          </Button>
-        }
-      />
-    );
+    body = firstMachineEmptyState;
   } else {
     body = (
       <>

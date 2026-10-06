@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
@@ -80,7 +80,7 @@ describe("MachinesPage", () => {
     renderPage();
 
     const row = await screen.findByTestId("machine-directory-row-cinder");
-    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).not.toHaveAttribute("data-ready", "true");
     expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
     expect(row).toHaveTextContent("cinder");
     expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
@@ -88,6 +88,25 @@ describe("MachinesPage", () => {
 
     await act(async () => resolveSummary(response([summary("cinder")])));
     expect(await screen.findByTestId("machine-row-cinder")).toHaveTextContent("No recent sessions");
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
+  });
+
+
+  it("shows the first-machine action when the empty directory arrives before summaries", async () => {
+    let resolveSummary!: (value: MachinesSummaryResponse) => void;
+    api.listMachineSummaries.mockImplementation(
+      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
+    );
+    api.listMachines.mockResolvedValue({ machines: [] });
+    renderPage();
+
+    expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
+    expect(document.body).not.toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
+
+    await act(async () => resolveSummary(response([])));
+    await waitFor(() => expect(document.body).toHaveAttribute("data-ready", "true"));
     expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
   });
 
@@ -100,11 +119,15 @@ describe("MachinesPage", () => {
     renderPage(true);
 
     expect(await screen.findByTestId("machine-name")).toHaveTextContent("cinder");
+    expect(document.body).not.toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
     expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
     expect(screen.queryByText("Last 14 days")).toBeNull();
 
     await act(async () => resolveSummary(response([summary("cinder")])));
     expect(await screen.findByText("Last 14 days")).toBeInTheDocument();
+    expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
   });
 
   it("lists active machines with their live work and folds quiet ones into one line", async () => {
@@ -177,6 +200,21 @@ describe("MachinesPage", () => {
     renderPage();
 
     expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
+    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
+  });
+
+  it("shows first-machine setup as soon as the directory is empty", async () => {
+    let resolveSummary!: (value: MachinesSummaryResponse) => void;
+    api.listMachineSummaries.mockImplementation(
+      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
+    );
+    api.listMachines.mockResolvedValue({ machines: [] });
+    renderPage();
+
+    expect(await screen.findByTestId("machines-connect-first-button")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    await act(async () => resolveSummary(response([])));
     expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
   });
 

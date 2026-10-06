@@ -169,10 +169,8 @@ export default function MachineDetailPage() {
   const waitingForDirectory = isError && !data && directory.isLoading;
   const [launchOpen, setLaunchOpen] = useState(false);
 
-  useReadinessFlag({
-    ready: (!isLoading && !waitingForDirectory) || Boolean(directoryMachine),
-    screenshotReady: !isLoading && !waitingForDirectory,
-  });
+  const pageReady = !isLoading && !waitingForDirectory;
+  useReadinessFlag({ ready: pageReady, screenshotReady: pageReady });
 
   if ((isLoading || waitingForDirectory) && !directoryMachine) {
     return (

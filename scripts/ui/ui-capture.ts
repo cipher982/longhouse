@@ -1227,15 +1227,20 @@ async function captureBundle(
   }
   await page.goto(url);
 
-  // Prefer the screenshot-specific gate when a page explicitly opts into one.
-  // `data-ready` can be true while it shows a useful but provisional state.
+  // `data-ready` allows interaction; an opted-in screenshot gate must also settle.
+  let hasReadinessMarker = false;
   try {
-    await page.waitForSelector(
-      "body[data-screenshot-ready='true'], body:not([data-screenshot-ready])[data-ready='true']",
-      { timeout: 5000 },
-    );
+    await page.waitForSelector("body[data-screenshot-ready], body[data-ready='true']", { timeout: 5000 });
+    hasReadinessMarker = true;
   } catch {
     await page.waitForLoadState("networkidle", { timeout: 10000 });
+  }
+  if (hasReadinessMarker) {
+    const screenshotGate = (await page.locator("body[data-screenshot-ready]").count()) > 0;
+    await page.waitForSelector(
+      screenshotGate ? "body[data-screenshot-ready='true']" : "body[data-ready='true']",
+      { timeout: screenshotGate ? 30_000 : 5_000 },
+    );
   }
 
   if (scene === DEVICES_REVOKE_SCENE) {
