@@ -106,6 +106,7 @@ def _snapshot(row: LiveSessionInputReceipt) -> LiveInputReceiptSnapshot:
         intent=str(row.intent or "auto"),
         status=str(row.status or "created"),
         client_request_id=row.client_request_id,
+        payload_digest=row.payload_digest,
         origin=str(getattr(row, "origin", None) or "user"),
         archive_session_input_id=(int(row.archive_session_input_id) if row.archive_session_input_id is not None else None),
         durable_event_id=getattr(row, "durable_event_id", None),

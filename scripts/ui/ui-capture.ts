@@ -140,6 +140,7 @@ const SCENES = [
   "session-resume",
   "session-ended",
   "session-stale-observation",
+  "session-tones",
   "session-background-notices",
   "session-parked-close",
   "landing",
