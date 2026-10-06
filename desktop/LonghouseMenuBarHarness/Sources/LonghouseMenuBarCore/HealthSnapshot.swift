@@ -1713,6 +1713,19 @@ public struct HostLinkSnapshot: Codable, Equatable, Sendable {
         state == "updating" || state == "slow_update"
     }
 
+    public func hasValidUpdateClaim(relativeTo referenceDate: Date) -> Bool {
+        guard isUpdateInProgress,
+              let claim,
+              claim.state == "updating",
+              let deadlineRaw = claim.deadline,
+              let deadline = HealthSnapshot.parseISO8601(deadlineRaw),
+              let cutoffRaw = claim.cutoff,
+              let cutoff = HealthSnapshot.parseISO8601(cutoffRaw) else {
+            return false
+        }
+        return referenceDate < min(deadline, cutoff)
+    }
+
     public init(
         state: String,
         since: String,

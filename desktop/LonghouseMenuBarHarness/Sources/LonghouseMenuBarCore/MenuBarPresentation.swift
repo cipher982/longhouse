@@ -85,6 +85,7 @@ public struct MenuBarPresentation: Equatable, Sendable {
     public let systemPromotion: MenuBarPromotion
     public let systemHeadline: String
     public let detail: String?
+    public let hostUpdateClaimIsValid: Bool
     public let facts: [MenuBarSystemFact]
     public let backgroundActivity: String?
 
@@ -93,8 +94,8 @@ public struct MenuBarPresentation: Equatable, Sendable {
 
 extension HealthSnapshot {
     // A host update is stronger evidence than a failed heartbeat from before its claim.
-    private var heartbeatPostFailed: Bool {
-        guard hostLink?.isUpdateInProgress != true else { return false }
+    private func heartbeatPostFailed(hasValidUpdateClaim: Bool) -> Bool {
+        guard !hasValidUpdateClaim else { return false }
         return heartbeatTransport?.state == "degraded" || reasons.contains("heartbeat_post_failed")
     }
 
@@ -104,8 +105,11 @@ extension HealthSnapshot {
                 .contains(heartbeatTransport?.evidenceState ?? "")
     }
 
-    private func hostLinkDisplay(relativeTo referenceDate: Date) -> HostLinkDisplay? {
-        guard let hostLink else { return nil }
+    private func hostLinkDisplay(
+        relativeTo referenceDate: Date,
+        hasValidUpdateClaim: Bool
+    ) -> HostLinkDisplay? {
+        guard hasValidUpdateClaim, let hostLink else { return nil }
         switch hostLink.state {
         case "updating":
             guard let elapsed = hostLinkElapsedSeconds(relativeTo: referenceDate), elapsed >= 2 else {
@@ -187,11 +191,16 @@ extension HealthSnapshot {
         let localStatusStale = engineStatus?.fresh == false
             || reasons.contains("engine_status_stale")
             || reasons.contains("engine_projection_stale")
+        let hasValidUpdateClaim = hostLink?.hasValidUpdateClaim(relativeTo: referenceDate) == true
+        let heartbeatPostFailed = self.heartbeatPostFailed(hasValidUpdateClaim: hasValidUpdateClaim)
         let hostUpdate: HostLinkDisplay?
         if localEvidenceUnavailable || engineStatus?.fresh == false {
             hostUpdate = nil
         } else {
-            hostUpdate = hostLinkDisplay(relativeTo: referenceDate)
+            hostUpdate = hostLinkDisplay(
+                relativeTo: referenceDate,
+                hasValidUpdateClaim: hasValidUpdateClaim
+            )
         }
         // preserved the session, but the phase contract is newer than this
         // client. Keep it visible in the session row without turning an
@@ -206,20 +215,21 @@ extension HealthSnapshot {
             reasons.contains("spool_dead") || reasons.contains("spool_dead_letters") ? 1 : 0
         )
         let hasDeadLetters = deadLetterCount > 0
-        // Ignore a red severity inherited from an earlier heartbeat failure during a valid claim.
-        let heartbeatFailureIsOnlyReason = hostLink?.isUpdateInProgress == true
-            && reasons.contains("heartbeat_post_failed")
+        // Ignore a red severity inherited from update-only reasons while a claim is valid.
+        let hostUpdateIsOnlyReason = hasValidUpdateClaim
+            && !reasons.isEmpty
             && reasons.allSatisfy {
                 $0 == "heartbeat_post_failed" || $0 == "host_updating" || $0 == "host_update_slow"
             }
         let nativeRedRequiresRepair = parsedSeverity == .red
-            && !heartbeatFailureIsOnlyReason
+            && !hostUpdateIsOnlyReason
             && rowLevelRedReasons.isDisjoint(with: reasons)
             && !reasons.contains("engine_status_stale")
             && !reasons.contains("engine_projection_stale")
         // The machine's own state, before session attention is considered.
         // A session waiting on the user outranks inspect/unknown for the
         // header and badge, but must not erase them from the health line.
+        var hostUpdateIsSystemState = false
         let systemPromotion: MenuBarPromotion
         if nativeRedRequiresRepair
             || storageBlockRequiresRepair
@@ -238,6 +248,7 @@ extension HealthSnapshot {
             systemPromotion = .unavailable
         } else if let hostUpdate {
             systemPromotion = hostUpdate.promotion
+            hostUpdateIsSystemState = true
         } else if projectionUnavailable {
             // Runtime Host session projection is a separate evidence lane.
             // Losing it must not make a healthy local Machine Agent look
@@ -314,7 +325,7 @@ extension HealthSnapshot {
         }
         let systemHeadline: String
         let detail: String?
-        if let hostUpdate, hostUpdate.promotion == systemPromotion {
+        if hostUpdateIsSystemState, let hostUpdate {
             systemHeadline = hostUpdate.headline
             detail = hostUpdate.detail
         } else {
@@ -328,11 +339,13 @@ extension HealthSnapshot {
             systemPromotion: systemPromotion,
             systemHeadline: systemHeadline,
             detail: detail,
+            hostUpdateClaimIsValid: hasValidUpdateClaim,
             facts: menuBarSystemFacts(
                 relativeTo: referenceDate,
                 localEvidenceTrust: localEvidenceTrust,
                 projectionTrust: projectionTrust,
-                hostUpdate: hostUpdate
+                hostUpdate: hostUpdate,
+                heartbeatPostFailed: heartbeatPostFailed
             ),
             backgroundActivity: archiveBackgroundActivity
         )
@@ -342,7 +355,8 @@ extension HealthSnapshot {
         relativeTo referenceDate: Date,
         localEvidenceTrust: DataTrust,
         projectionTrust: DataTrust,
-        hostUpdate: HostLinkDisplay?
+        hostUpdate: HostLinkDisplay?,
+        heartbeatPostFailed: Bool
     ) -> [MenuBarSystemFact] {
         let localEvidenceUnavailable = !localEvidenceTrust.isCurrent
         let projectionUnavailable = !projectionTrust.isCurrent
