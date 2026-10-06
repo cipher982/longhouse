@@ -489,7 +489,11 @@ def _run(
             lifecycle="ended",
             started_at=started_at,
             ended_at=ended_at,
-            end_reason=terminal_reason or terminal or _clean(capabilities.run_end_reason) or "process_ended",
+            end_reason=(
+                "run_failed"
+                if terminal == "run_failed" and terminal_reason not in FAILED_RUN_END_REASONS
+                else terminal_reason or terminal or _clean(capabilities.run_end_reason) or "process_ended"
+            ),
         )
     if mode == "console" and capabilities.turn_state in {"queued", "starting"}:
         return SessionRunFacts(

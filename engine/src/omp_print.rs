@@ -997,6 +997,9 @@ impl OmpStreamProjection {
                     self.assistant_message_index += 1;
                     self.final_assistant_id = None;
                     self.final_stop_reason = None;
+                    // A retry after a refused attempt is a new attempt; a
+                    // refusal that holds is reported again by its message_end.
+                    self.native_error = None;
                 }
             }
             Some("message_update") => {
@@ -1168,14 +1171,14 @@ fn terminal_state_for_projection(
     if cancel_requested {
         return ("run_cancelled", None);
     }
+    if let Some(error) = stream_error.or(projection.native_error.as_deref()) {
+        return ("run_failed", Some(error.into()));
+    }
     if process_succeeded == Some(false) {
         return (
             "run_failed",
             Some("OMP process exited unsuccessfully".into()),
         );
-    }
-    if let Some(error) = stream_error.or(projection.native_error.as_deref()) {
-        return ("run_failed", Some(error.into()));
     }
     if !output_drained {
         return (
@@ -1878,6 +1881,32 @@ mod tests {
             "run_failed"
         );
         assert_eq!(terminal_reason_code("run_completed", None), "run_completed");
+        // A bad exit after a refusal is still the refusal.
+        let (_, detail) =
+            terminal_state_for_projection(&projection, Some(false), false, None, true, true, true);
+        assert_eq!(detail.as_deref(), Some(refusal));
+    }
+
+    #[test]
+    fn a_retry_that_succeeds_after_a_refused_attempt_is_not_a_failure() {
+        let mut projection = OmpStreamProjection::default();
+        projection.identity_confirmed = true;
+        for event in [
+            json!({"type":"agent_start"}),
+            json!({"type":"message_start","message":{"role":"assistant","content":[]}}),
+            json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"429 slow down"}}),
+            json!({"type":"message_start","message":{"role":"assistant","content":[]}}),
+            json!({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}),
+            json!({"type":"agent_end"}),
+            json!({"type":"session_settled"}),
+        ] {
+            projection.apply(None, &event).unwrap();
+        }
+        assert_eq!(projection.native_error, None);
+        assert_eq!(
+            terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0,
+            "run_completed"
+        );
     }
 
     #[test]

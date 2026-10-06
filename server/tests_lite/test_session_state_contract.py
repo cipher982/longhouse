@@ -977,6 +977,24 @@ def test_explicit_legacy_run_failure_is_not_presented_as_an_ordinary_end():
     assert facts.presentation.primary.tone == "blocked"
 
 
+def test_a_failed_run_with_a_sentence_for_a_reason_still_reads_as_failed():
+    # Older OMP engines wrote "OMP native session source did not drain
+    # completely" where the reason code goes; the session read "Ended".
+    facts = _facts(
+        runtime=_runtime(
+            phase=None,
+            confidence="stale",
+            terminal_state="run_failed",
+            terminal_reason="OMP native session source did not drain completely",
+        ),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+    )
+
+    assert facts.run is not None and facts.run.end_reason == "run_failed"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.label == "Run failed"
+
+
 def test_provider_auth_failure_is_actionable_without_closing_the_session():
     facts = _facts(
         runtime=_runtime(
