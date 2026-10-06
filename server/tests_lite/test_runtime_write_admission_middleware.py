@@ -93,4 +93,4 @@ def test_the_runtime_host_registers_no_base_http_middleware(monkeypatch):
         monkeypatch.setenv(key, value)
     from zerg.main import app
 
-    assert [m for m in app.user_middleware if m.cls is BaseHTTPMiddleware] == []
+    assert [m for m in app.user_middleware if isinstance(m.cls, type) and issubclass(m.cls, BaseHTTPMiddleware)] == []
