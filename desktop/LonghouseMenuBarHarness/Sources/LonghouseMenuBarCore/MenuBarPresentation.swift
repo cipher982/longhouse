@@ -93,10 +93,22 @@ public struct MenuBarPresentation: Equatable, Sendable {
 }
 
 extension HealthSnapshot {
-    // A host update is stronger evidence than a failed heartbeat from before its claim.
-    private func heartbeatPostFailed(hasValidUpdateClaim: Bool) -> Bool {
+    // Only a lease-valid host update can suppress heartbeat failure; after expiry, retry the normal evidence check.
+    private func heartbeatPostFailed(
+        hasValidUpdateClaim: Bool,
+        relativeTo referenceDate: Date
+    ) -> Bool {
         guard !hasValidUpdateClaim else { return false }
-        return heartbeatTransport?.state == "degraded" || reasons.contains("heartbeat_post_failed")
+        if heartbeatTransport?.state == "degraded" || reasons.contains("heartbeat_post_failed") {
+            return true
+        }
+        let freshHorizonSecs = hostLink?.freshHorizonSecs.flatMap { $0 > 0 ? $0 : nil } ?? 120
+        guard let acknowledgedAt = hostLink?.lastAcknowledgedAt ?? heartbeatTransport?.lastSuccessAt,
+              let acknowledgedDate = Self.parseISO8601(acknowledgedAt) else {
+            return false
+        }
+        let age = referenceDate.timeIntervalSince(acknowledgedDate)
+        return age.isFinite && age >= TimeInterval(freshHorizonSecs)
     }
 
     private var heartbeatEvidenceRejected: Bool {
@@ -192,7 +204,10 @@ extension HealthSnapshot {
             || reasons.contains("engine_status_stale")
             || reasons.contains("engine_projection_stale")
         let hasValidUpdateClaim = hostLink?.hasValidUpdateClaim(relativeTo: referenceDate) == true
-        let heartbeatPostFailed = self.heartbeatPostFailed(hasValidUpdateClaim: hasValidUpdateClaim)
+        let heartbeatPostFailed = self.heartbeatPostFailed(
+            hasValidUpdateClaim: hasValidUpdateClaim,
+            relativeTo: referenceDate
+        )
         let hostUpdate: HostLinkDisplay?
         if localEvidenceUnavailable || engineStatus?.fresh == false {
             hostUpdate = nil
