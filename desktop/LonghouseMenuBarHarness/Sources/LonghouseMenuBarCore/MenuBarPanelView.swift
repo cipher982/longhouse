@@ -189,7 +189,8 @@ public struct MenuBarPanelView: View {
         let focus = entries.first { $0.kind.asksForUser }
         let rows = entries.filter { $0.kind != .quiet && $0.id != focus?.id }
         let quiet = entries.filter { $0.kind == .quiet }
-        let repairFirst = showsTroubleCard && (presentation.promotion == .repair || snapshot.isSetupRequired)
+        let hasTroubleCard = shouldShowTroubleCard(for: presentation)
+        let repairFirst = hasTroubleCard && (presentation.promotion == .repair || snapshot.isSetupRequired)
 
         PanelChrome {
             VStack(alignment: .leading, spacing: MenuBarPanelLayout.rootSpacing) {
@@ -227,9 +228,9 @@ public struct MenuBarPanelView: View {
                             sessionArea(rows: rows, quiet: quiet, hasFocus: focus != nil)
                         }
 
-                        if showsTroubleCard && !repairFirst {
+                        if hasTroubleCard && !repairFirst {
                             troubleCard(presentation)
-                        } else if !showsTroubleCard && !snapshot.isSetupRequired {
+                        } else if !hasTroubleCard && !snapshot.isSetupRequired {
                             healthLine(presentation)
                         }
 
@@ -941,7 +942,16 @@ public struct MenuBarPanelView: View {
 
     /// Whether the machine needs a card with an action rather than one line.
     var showsTroubleCard: Bool {
-        guard snapshot.hostLink?.isUpdateInProgress != true else { return false }
+        shouldShowTroubleCard(for: presentation)
+    }
+
+    private func shouldShowTroubleCard(for presentation: MenuBarPresentation) -> Bool {
+        let updateOnlyReasons = presentation.hostUpdateClaimIsValid
+            && !snapshot.reasons.isEmpty
+            && snapshot.reasons.allSatisfy {
+                $0 == "heartbeat_post_failed" || $0 == "host_updating" || $0 == "host_update_slow"
+            }
+        // Keep independent repair, trust, and storage actions visible during an update claim.
         return presentation.promotion == .repair
             || shouldOfferNativeRepair
             || !dataTrust.isCurrent
@@ -949,8 +959,10 @@ public struct MenuBarPanelView: View {
             || shouldRetryLocalStatus
             || snapshot.storageBlockProofUnknown
             || snapshot.suggestedActionIds?.contains("inspect_storage_source") == true
-            || snapshot.suggestedActionIds?.contains("inspect_transport") == true
-            || snapshot.suggestedActionIds?.contains("inspect_shipping") == true
+            || (!updateOnlyReasons && (
+                snapshot.suggestedActionIds?.contains("inspect_transport") == true
+                    || snapshot.suggestedActionIds?.contains("inspect_shipping") == true
+            ))
     }
 
     private var troubleSeverity: MenuBarPromotion {

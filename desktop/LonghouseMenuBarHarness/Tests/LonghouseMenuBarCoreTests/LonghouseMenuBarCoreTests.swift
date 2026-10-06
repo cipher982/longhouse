@@ -262,9 +262,9 @@ struct LonghouseMenuBarCoreTests {
         let snapshot = presentationSnapshot(
             reasons: ["heartbeat_post_failed", "host_updating"],
             sessions: [],
-            heartbeatTransport: presentationHeartbeatFailure(),
             severity: "red",
             suggestedActionIds: ["inspect_shipping"],
+            heartbeatTransport: presentationHeartbeatFailure(),
             hostLink: presentationHostLink(
                 state: "updating",
                 claimStartedAt: "1970-01-01T00:01:39Z"
@@ -288,8 +288,8 @@ struct LonghouseMenuBarCoreTests {
             reasons: ["heartbeat_post_failed", "host_updating"],
             sessions: [],
             severity: "red",
-            heartbeatTransport: presentationHeartbeatFailure(),
             suggestedActionIds: ["inspect_shipping"],
+            heartbeatTransport: presentationHeartbeatFailure(),
             hostLink: presentationHostLink(
                 state: "updating",
                 claimStartedAt: "1970-01-01T00:01:37Z"
@@ -301,11 +301,12 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(presentation.headline == "Longhouse is updating")
         #expect(presentation.promotion == .unavailable)
-        #expect(presentation.promotion.iconSeverity == .gray)
+        #expect(presentation.promotion.iconSeverity == HarnessSeverity.gray)
         #expect(presentation.systemPromotion == .unavailable)
         #expect(presentation.detail == "Your agents keep running on this Mac. Nothing is lost; updates resume in a few seconds.")
         #expect(status?.value == "Paused · updating")
         #expect(status?.promotion == .unavailable)
+        #expect(presentation.hostUpdateClaimIsValid)
         #expect(!panel(snapshot).showsTroubleCard)
     }
 
@@ -315,8 +316,8 @@ struct LonghouseMenuBarCoreTests {
         let snapshot = presentationSnapshot(
             reasons: ["host_update_slow"],
             sessions: [],
-            heartbeatTransport: presentationHeartbeatFailure(),
             suggestedActionIds: ["inspect_transport"],
+            heartbeatTransport: presentationHeartbeatFailure(),
             hostLink: presentationHostLink(
                 state: "slow_update",
                 claimStartedAt: "1970-01-01T00:05:20Z"
@@ -328,11 +329,82 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(presentation.headline == "Update is taking longer than usual · 3m")
         #expect(presentation.promotion == .inspect)
-        #expect(presentation.promotion.iconSeverity == .yellow)
+        #expect(presentation.promotion.iconSeverity == HarnessSeverity.yellow)
         #expect(status?.value == "Paused · updating")
         #expect(status?.promotion == .inspect)
         #expect(!panel(snapshot).showsTroubleCard)
     }
+
+    @Test
+    @MainActor
+    func expiredStoredUpdateClaimRestoresHeartbeatFailureAndTrouble() {
+        let referenceDate = Date(timeIntervalSince1970: 100)
+        let expiredClaims = [
+            (deadline: "1970-01-01T00:01:30Z", cutoff: "1970-01-01T00:02:30Z"),
+            (deadline: "1970-01-01T00:02:30Z", cutoff: "1970-01-01T00:01:30Z"),
+        ]
+
+        for claim in expiredClaims {
+            let snapshot = presentationSnapshot(
+                reasons: ["heartbeat_post_failed", "host_updating"],
+                sessions: [],
+                severity: "yellow",
+                suggestedActionIds: ["inspect_shipping"],
+                heartbeatTransport: presentationHeartbeatFailure(),
+                hostLink: presentationHostLink(
+                    state: "updating",
+                    claimStartedAt: "1970-01-01T00:00:00Z",
+                    deadline: claim.deadline,
+                    cutoff: claim.cutoff
+                )
+            )
+            let presentation = snapshot.menuBarPresentation(relativeTo: referenceDate)
+            let status = presentation.facts.first { $0.id == "heartbeat" }
+
+            #expect(!presentation.hostUpdateClaimIsValid)
+            #expect(presentation.headline == "Machine heartbeat failed")
+            #expect(status?.value == "POST failed")
+            #expect(panel(snapshot, presentationDate: referenceDate).showsTroubleCard)
+        }
+    }
+
+    @Test
+    @MainActor
+    func validUpdateKeepsIndependentStorageTroubleVisible() {
+        let snapshot = presentationSnapshot(
+            reasons: ["host_updating", "storage_v2_sources_proof_unknown"],
+            sessions: [],
+            storageBlocked: 1,
+            suggestedActionIds: ["inspect_storage_source"],
+            hostLink: presentationHostLink(
+                state: "updating",
+                claimStartedAt: "1970-01-01T00:01:37Z"
+            )
+        )
+
+        #expect(snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100)).hostUpdateClaimIsValid)
+        #expect(panel(snapshot).showsTroubleCard)
+    }
+
+    @Test
+    func unavailableEngineEvidenceOutranksUpdatingCopy() {
+        let snapshot = presentationSnapshot(
+            reasons: ["host_updating", "engine_offline"],
+            sessions: [],
+            hostLink: presentationHostLink(
+                state: "updating",
+                claimStartedAt: "1970-01-01T00:01:37Z"
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 100))
+
+        #expect(presentation.hostUpdateClaimIsValid)
+        #expect(presentation.systemPromotion == .unavailable)
+        #expect(presentation.systemHeadline == "Current local status unavailable")
+        #expect(presentation.detail == nil)
+    }
+
 
     @Test
     func unreachableHostLinkKeepsTheExistingPresentation() {
@@ -3716,11 +3788,14 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @MainActor
-    private func panel(_ snapshot: HealthSnapshot) -> MenuBarPanelView {
+    private func panel(
+        _ snapshot: HealthSnapshot,
+        presentationDate: Date = Date(timeIntervalSince1970: 0)
+    ) -> MenuBarPanelView {
         MenuBarPanelView(
             snapshot: snapshot,
             history: [],
-            presentationDate: Date(timeIntervalSince1970: 0),
+            presentationDate: presentationDate,
             feedback: nil,
             setFeedback: { _ in },
             actionSink: SpyHealthActionSink(logURL: nil, uiURL: nil),
@@ -4323,7 +4398,6 @@ private func presentationSnapshot(
             platform: "macos", status: status, serviceName: "com.longhouse.shipper",
             serviceFile: nil, logPath: nil
         ) },
-        heartbeatTransport: heartbeatTransport,
         engineStatus: EngineStatusSnapshot(
             path: nil, exists: true, fresh: engineFresh, ageSeconds: engineFresh ? 1 : 600,
             payload: EngineStatusPayload(
@@ -4342,16 +4416,29 @@ private func presentationSnapshot(
             error: nil
         ),
         outbox: OutboxSnapshot(path: nil, fileCount: 0, oldestAgeSeconds: nil),
-        activitySummary: nil, managedSessions: sessions, launchReadiness: nil,
+        activitySummary: nil,
+        managedSessions: sessions,
+        heartbeatTransport: heartbeatTransport,
+        launchReadiness: nil,
         hostLink: hostLink
     )
 }
 private func presentationHostLink(
     state: String,
-    claimStartedAt: String? = nil
+    claimStartedAt: String? = nil,
+    deadline: String? = nil,
+    cutoff: String? = nil
 ) -> HostLinkSnapshot {
     let claim = state == "updating" || state == "slow_update"
-        ? HostLifecycleSnapshot(type: "host.lifecycle", state: "updating")
+        ? HostLifecycleSnapshot(
+            type: "host.lifecycle",
+            state: "updating",
+            expectedBackBy: state == "updating"
+                ? "1970-01-01T01:00:00Z"
+                : "1970-01-01T00:00:30Z",
+            deadline: deadline ?? "1970-01-01T01:00:00Z",
+            cutoff: cutoff ?? "1970-01-01T02:00:00Z"
+        )
         : nil
     return HostLinkSnapshot(
         state: state,
