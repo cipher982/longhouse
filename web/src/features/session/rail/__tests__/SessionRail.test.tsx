@@ -166,6 +166,36 @@ describe("SessionRailFrame", () => {
     expect(fetchWorkspaceMock.mock.calls[0][1]).toMatchObject({ limit: 200, branch_mode: "head" });
   });
 
+  it("ignores key repeat, and Alt-digit typed into a field off a Mac", async () => {
+    renderRail("a");
+    await screen.findAllByTestId("session-rail-row");
+    fireEvent.keyDown(window, { code: "Digit2", ctrlKey: true, repeat: true });
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    Object.defineProperty(window.navigator, "platform", { value: "Linux x86_64", configurable: true });
+    const view = renderRail("a");
+    await screen.findAllByTestId("session-rail-row");
+    const field = document.createElement("textarea");
+    view.container.appendChild(field);
+    fireEvent.keyDown(field, { code: "Digit2", altKey: true });
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not warm anything while the tab is hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    try {
+      renderRail("a");
+      await screen.findAllByTestId("session-rail-row");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(fetchWorkspaceMock).not.toHaveBeenCalled();
+    } finally {
+      delete (document as { hidden?: boolean }).hidden;
+    }
+  });
+
   it("does not warm anything on Data Saver", async () => {
     Object.defineProperty(window.navigator, "connection", {
       value: { saveData: true },

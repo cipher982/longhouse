@@ -4,9 +4,9 @@
  * session expanded into its turns. It lives outside the per-session route,
  * so switching sessions swaps the transcript without remounting the rail.
  *
- * Rows come from the timeline's own first page (the same query and cache
- * entry the timeline uses), so the rail adds no endpoint and no extra fetch
- * when the user arrives from the timeline.
+ * Rows come from the timeline's default first page (the same query and cache
+ * entry the unfiltered timeline uses), so the rail adds no endpoint, and no
+ * extra fetch when the user arrives from an unfiltered timeline.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -17,6 +17,7 @@ import { useMobileNavSlot } from "@/app/headerSlot";
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import { getSessionCardText } from "@/shared/session/sessionLabels";
+import { workingStatusLabel } from "@/shared/session/sessionStatus";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { SearchIcon } from "@/shared/ui/icons";
 import { getSessionHeaderState } from "../sessionHeaderState";
@@ -77,14 +78,23 @@ type RailRow = {
 
 function rowFromSession(session: AgentSession, nowMs: number): RailRow {
   const state = getSessionHeaderState(session, nowMs);
+  // A neighbour's turn start is not loaded here, and the activity heartbeat
+  // is not a turn clock, so a working row names the work without a duration.
+  // The open session reports its own row, with the real elapsed time.
+  const stateText = state.tone === "live" ? workingStatusLabel(session.session_state) : state.text;
   return {
     id: session.id,
     title: getSessionCardText(session, { titleMaxChars: 80 }).title,
     provider: session.provider ?? null,
     host: session.control?.source_runner_name?.trim() || session.device_id || null,
-    stateText: state.text,
+    stateText,
     tone: state.tone,
   };
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
 function SessionRail({
@@ -129,6 +139,7 @@ function SessionRail({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.isComposing) return;
       if (isSwitcherHotkey(event, mac)) {
         event.preventDefault();
         setSwitcherOpen((open) => !open);
@@ -136,6 +147,10 @@ function SessionRail({
       }
       const index = railHotkeyIndex(event, mac);
       if (index == null || index >= Math.min(rows.length, RAIL_HOTKEY_COUNT)) return;
+      // Alt+digit types characters on some layouts; never take it from a field.
+      // Control+digit types nothing on a Mac, so it works from the composer too,
+      // the way terminal tabs do.
+      if (!mac && isEditableTarget(event.target)) return;
       event.preventDefault();
       openSession(rows[index].id);
     };

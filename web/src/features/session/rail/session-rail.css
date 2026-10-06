@@ -344,3 +344,12 @@
     border-right: 0;
   }
 }
+
+/* No keyboard in a phone drawer: drop the jump-key hints, keep the dots. */
+.mobile-nav-session-slot .session-rail__key {
+  font-size: 0;
+}
+
+.mobile-nav-session-slot .session-rail__find {
+  display: none;
+}

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { agentSessionWorkspaceQueryOptions } from "@/shared/api/useAgentSessions";
+import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
 
 /** How many rail sessions get warmed: the ones a ⌃-number reaches. */
 export const RAIL_PREFETCH_COUNT = 8;
@@ -34,14 +35,16 @@ const cancelIdle: (handle: IdleHandle) => void =
  * Warm the workspace of the rail's top sessions while the browser is idle,
  * one at a time, so switching sessions paints from cache. The open session is
  * skipped (its page is already loading it) and so is anything still fresh in
- * the cache.
+ * the cache. A hidden tab warms nothing; the queue starts over when it is
+ * shown again.
  */
 export function useRailPrefetch(sessionIds: readonly string[], activeSessionId: string | null) {
   const queryClient = useQueryClient();
+  const documentVisible = useDocumentVisible();
   const key = sessionIds.slice(0, RAIL_PREFETCH_COUNT).join(",");
 
   useEffect(() => {
-    if (!key || !railPrefetchAllowed()) return;
+    if (!key || !documentVisible || !railPrefetchAllowed()) return;
     const queue = key.split(",").filter((id) => id && id !== activeSessionId);
     let cancelled = false;
     let handle: IdleHandle | null = null;
@@ -64,5 +67,5 @@ export function useRailPrefetch(sessionIds: readonly string[], activeSessionId: 
       cancelled = true;
       if (handle != null) cancelIdle(handle);
     };
-  }, [key, activeSessionId, queryClient]);
+  }, [key, activeSessionId, documentVisible, queryClient]);
 }
