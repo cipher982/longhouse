@@ -18,8 +18,9 @@ sign-in and sync diagnostics; factory proof assertions remain machine API
 diagnostics, not a customer Admin page. A failed activity/sync read keeps the
 independently available directory and machine actions visible. Cached facts are
 marked last known when refresh fails; missing import progress is not completion.
-The Machines route code is prefetched on pointer hover or focus; its activity and
-sync summary still loads only after navigation, while the directory remains visible.
+The Machines navigation tab, mobile drawer item, and machine-status link prefetch
+route code on pointer hover or keyboard focus. Activity/sync still fetches only
+after navigation, while the directory remains visible.
 Machine filters apply before lexical and semantic result limits, including retained
 history whose display metadata lacks a device ID. The disposable search index adds
 nullable machine identity and uses retained source identity for existing rows; source

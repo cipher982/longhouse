@@ -16,7 +16,12 @@ test("preloads the Machines route on hover without fetching activity early", asy
   let summaryRequests = 0;
   page.on("requestfinished", (request) => {
     const url = new URL(request.url());
-    if (request.resourceType() === "script" && url.origin === origin && !loadedScripts.has(url.href)) {
+    if (
+      request.resourceType() === "script" &&
+      url.origin === origin &&
+      url.pathname.includes("MachinesPage") &&
+      !loadedScripts.has(url.href)
+    ) {
       routeScriptFinished = true;
     }
   });
