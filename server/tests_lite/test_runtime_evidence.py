@@ -72,7 +72,6 @@ def test_schema_observation_does_not_authorize_candidate(evidence_runtime):
     runtime.mark_candidate_consistent(attempt_id="owned-attempt")
 
 
-
 def test_health_exposes_runtime_epoch_and_admission_to_untrusted_callers(evidence_runtime, monkeypatch):
     client, runtime, _ping = evidence_runtime
     import zerg.services.runtime_admission as admission_module
@@ -81,6 +80,7 @@ def test_health_exposes_runtime_epoch_and_admission_to_untrusted_callers(evidenc
     response = client.get("/health")
 
     assert response.json()["runtime"] == {"epoch": runtime.runtime_epoch, "admission": "pending"}
+
 
 def test_non_ascii_internal_token_is_401_not_a_server_error(evidence_runtime):
     client, _runtime, _ping = evidence_runtime

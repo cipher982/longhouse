@@ -228,8 +228,6 @@ async def test_drain_uses_default_claim_horizons_when_request_omits_them() -> No
         assert before + timedelta(seconds=seconds - 1) < value < after + timedelta(seconds=seconds + 1)
 
 
-
-
 @pytest.mark.asyncio
 async def test_drain_route_publishes_start_and_completion_lifecycle(monkeypatch) -> None:
     from zerg.routers import internal_deployments
@@ -316,6 +314,7 @@ async def test_reopen_route_publishes_serving_lifecycle(monkeypatch) -> None:
     assert lifecycle["expected_back_by"] is None
     assert lifecycle["deadline"] is None
     assert lifecycle["cutoff"] is None
+
 
 class _Socket:
     def __init__(self, messages: list[dict] | None = None) -> None:
@@ -420,7 +419,9 @@ async def test_final_lifecycle_publish_closes_control_and_runner_websockets(monk
     system_broadcast = AsyncMock()
     monkeypatch.setattr(internal_deployments, "runtime_admission", lambda: runtime)
     monkeypatch.setattr(machine_control_channel, "get_machine_control_channel_registry", lambda: registry)
-    monkeypatch.setattr(runner_connection_manager, "get_runner_connection_manager", lambda: SimpleNamespace(close_all_for_host=runner_close))
+    monkeypatch.setattr(
+        runner_connection_manager, "get_runner_connection_manager", lambda: SimpleNamespace(close_all_for_host=runner_close)
+    )
     monkeypatch.setattr(session_pubsub, "get_pubsub", lambda: bus)
     monkeypatch.setattr(topic_manager, "broadcast_to_topic", system_broadcast)
 
