@@ -758,7 +758,7 @@ VALIDATE_MEMBERS := \
 	validate-review-gate \
 	validate-verifier-boundary \
 	validate-provider-cli-canaries \
-	validate-ops-scripts \
+	validate-deploy-window-probe \
 	validate-sdk \
 	validate-build-scripts \
 	validate-cohort-journey \
@@ -892,6 +892,9 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@python3 scripts/tests/engine-compat-receipt.test.py
 	@cd server && uv run python ../scripts/tests/testflight.test.py
 	@python3 scripts/tests/ios-upload-preconditions.test.py
+
+validate-deploy-window-probe: ## @internal Runtime Host restart measurement summary regression test
+	@python3 scripts/tests/deploy-window-probe.test.py
 
 validate-managed-identity: ## @internal Guard the generated managed-identity vocabulary and its launch sites
 	@cd server && uv run python ../scripts/generate/managed_identity_contract_rs.py --check
