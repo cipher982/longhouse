@@ -368,6 +368,35 @@ async def test_control_hello_sends_lifecycle_then_k3_ack(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_lifecycle_broadcast_bounds_stalled_send_lock() -> None:
+    from zerg.services.machine_control_channel import MachineControlChannelRegistry
+
+    websocket = _Socket()
+    registry = MachineControlChannelRegistry()
+    await registry.register(
+        owner_id=7,
+        device_id="machine-1",
+        machine_name="machine-1",
+        engine_build=None,
+        supports=[],
+        websocket=websocket,
+    )
+    connection = registry._connections[(7, "machine-1")]
+    await connection.send_lock.acquire()
+    try:
+        sent = await asyncio.wait_for(
+            registry.broadcast_host_lifecycle({"type": "host.lifecycle", "state": "updating"}, close_after=True),
+            timeout=2.5,
+        )
+    finally:
+        connection.send_lock.release()
+
+    assert sent == 0
+    assert websocket.sent == []
+    assert websocket.closed == (1012, "host.lifecycle")
+
+
+@pytest.mark.asyncio
 async def test_final_lifecycle_publish_closes_control_and_runner_websockets(monkeypatch) -> None:
     from zerg.routers import internal_deployments
     from zerg.services import machine_control_channel

@@ -241,6 +241,83 @@ def test_live_catalog_timeline_coalesces_queued_pubsub_wakes(monkeypatch):
     assert subscription.drained == 2
 
 
+def test_live_catalog_timeline_preserves_queued_lifecycle_when_coalescing(monkeypatch):
+    class Request:
+        async def is_disconnected(self):
+            return False
+
+    initial = {
+        "type": "host.lifecycle",
+        "state": "serving",
+        "runtime_epoch": "runtime-test",
+        "attempt_id": None,
+        "phase": None,
+        "expected_back_by": None,
+        "deadline": None,
+        "cutoff": None,
+    }
+    final = {**initial, "state": "updating", "attempt_id": "attempt-1", "phase": "drain"}
+    runtime = SimpleNamespace(runtime_epoch="runtime-test", admission="open", host_lifecycle=lambda: initial)
+    monkeypatch.setattr(runtime_admission_module, "runtime_admission", lambda: runtime)
+
+    class Subscription:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        async def next_message(self, *, timeout):
+            assert timeout == 5.0
+            return SimpleNamespace(payload={"wake": "first"})
+
+        def drain_nowait_messages(self):
+            return [
+                SimpleNamespace(payload={"wake": "coalesced"}),
+                SimpleNamespace(
+                    payload={"kind": "runtime_lifecycle", "host_lifecycle": final, "drain_complete": True}
+                ),
+            ]
+
+    subscription = Subscription()
+
+    class Bus:
+        stream_epoch = "epoch-1"
+
+        def peek_latest_seq(self, _topic):
+            return 0
+
+        def subscribe(self, topic, *, since_seq):
+            assert topic == "timeline"
+            assert since_seq == 0
+            return subscription
+
+    calls = 0
+
+    def list_snapshot(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(sessions=[], total=0, has_real_sessions=False)
+
+    monkeypatch.setattr(live_catalog_timeline, "get_pubsub", lambda: Bus())
+    monkeypatch.setattr(live_catalog_timeline, "list_live_catalog_timeline", list_snapshot)
+
+    async def collect():
+        stream = live_catalog_timeline.stream_live_catalog_timeline(
+            Request(),
+            params=_params(),
+            skip_initial_replay=True,
+            owner_id=1,
+        )
+        return [event async for event in stream]
+
+    events = asyncio.run(collect())
+
+    assert [event["event"] for event in events] == ["connected", "host_lifecycle", "host_lifecycle"]
+    assert json.loads(events[-1]["data"]) == final
+    assert calls == 1
+
+
 def test_live_catalog_timeline_survives_catalog_pressure_after_headers(monkeypatch):
     class Request:
         def __init__(self):

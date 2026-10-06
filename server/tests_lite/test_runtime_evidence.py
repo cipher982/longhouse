@@ -597,3 +597,56 @@ async def test_refused_steer_retry_cannot_drain_another_writer(monkeypatch):
     finally:
         await runtime.release()
     assert (await runtime.snapshot())["state"] == "drained"
+
+@pytest.mark.asyncio
+async def test_runtime_restarting_replay_refusal_remains_retryable(monkeypatch):
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+
+    from zerg.routers import session_chat
+
+    body = session_chat.SessionInputRequest(
+        text="keep working",
+        intent="auto",
+        client_request_id="restart-retry-1",
+    )
+    receipt = SimpleNamespace(
+        id="receipt",
+        delivery_request_id="delivery",
+        text=body.text,
+        intent=body.intent,
+        status="delivering",
+        error_json=json.dumps({"code": "runtime_restarting"}),
+    )
+    update_receipt = AsyncMock(return_value=True)
+    lock_manager = SimpleNamespace(acquire=AsyncMock(return_value=True), release=AsyncMock())
+    monkeypatch.setattr(session_chat, "load_live_input_receipt_by_client_request", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(session_chat, "_set_catalog_live_receipt_error", update_receipt)
+    monkeypatch.setattr(
+        session_chat,
+        "_build_managed_local_chat_response",
+        AsyncMock(
+            return_value=JSONResponse(
+                status_code=503,
+                content={"error_code": "runtime_restarting", "error": "Runtime is restarting"},
+            )
+        ),
+    )
+    monkeypatch.setattr(session_chat, "session_lock_manager", lock_manager)
+
+    with pytest.raises(HTTPException) as refused:
+        await session_chat._retry_runtime_draining_catalog_input(
+            source_session=SimpleNamespace(id=uuid4()),
+            owner_id=7,
+            body=body,
+            db=None,
+            existing=receipt,
+        )
+
+    assert refused.value.status_code == 503
+    assert refused.value.detail["error_code"] == "runtime_restarting"
+    assert update_receipt.await_args_list[-1].kwargs["error"]["error_code"] == "runtime_restarting"
+    lock_manager.release.assert_awaited_once()

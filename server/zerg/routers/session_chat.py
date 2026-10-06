@@ -1915,7 +1915,7 @@ async def _retry_runtime_draining_catalog_input(
             except Exception:
                 payload = {}
             payload = payload if isinstance(payload, dict) else {}
-            if payload.get("error_code") == "runtime_draining":
+            if payload.get("error_code") in {"runtime_draining", "runtime_restarting"}:
                 await mark_runtime_draining(payload)
             error = str(payload.get("error") or payload.get("message") or "send failed")
             if _delivery_unknown_error(json.dumps(payload)):
@@ -2832,7 +2832,7 @@ async def _create_catalog_session_input_response(
             except Exception:
                 payload = {}
             error = str(payload.get("error") or payload.get("message") or "send failed")
-            if payload.get("error_code") == "runtime_draining":
+            if payload.get("error_code") in {"runtime_draining", "runtime_restarting"}:
                 marked = await _set_catalog_live_receipt_error(
                     receipt_id=receipt_id,
                     source_session=source_session,

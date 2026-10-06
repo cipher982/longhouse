@@ -216,6 +216,17 @@ class _Subscription:
         except asyncio.TimeoutError:
             return None
 
+    def drain_nowait_messages(self) -> list[PubsubMessage]:
+        """Remove and return all queued messages in publication order."""
+        if self._closed:
+            return []
+        drained: list[PubsubMessage] = []
+        while True:
+            try:
+                drained.append(self._sub.queue.get_nowait())
+            except asyncio.QueueEmpty:
+                return drained
+
     def drain_nowait(self) -> int:
         """Discard queued wake messages and return how many were removed.
 
@@ -223,15 +234,7 @@ class _Subscription:
         rebuild a durable snapshot can coalesce a burst of wakes into one
         read, avoiding one full rescan per queued message.
         """
-        if self._closed:
-            return 0
-        drained = 0
-        while True:
-            try:
-                self._sub.queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return drained
-            drained += 1
+        return len(self.drain_nowait_messages())
 
     def close(self) -> None:
         if self._closed:

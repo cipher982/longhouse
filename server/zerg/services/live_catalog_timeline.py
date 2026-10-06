@@ -1125,9 +1125,21 @@ async def stream_live_catalog_timeline(
             # A timeline message is an invalidation, not a per-row delta. A
             # burst of unrelated writes therefore needs one authoritative
             # snapshot, not one catalog read per queued wake.
-            drain_nowait = getattr(subscription, "drain_nowait", None)
-            if drain_nowait is not None:
-                drain_nowait()
+            drain_messages_nowait = getattr(subscription, "drain_nowait_messages", None)
+            if drain_messages_nowait is None:
+                drain_nowait = getattr(subscription, "drain_nowait", None)
+                if drain_nowait is not None:
+                    drain_nowait()
+            else:
+                for queued_message in drain_messages_nowait():
+                    queued_event = queued_message.payload
+                    if queued_event.get("kind") != "runtime_lifecycle":
+                        continue
+                    lifecycle = queued_event.get("host_lifecycle")
+                    if isinstance(lifecycle, dict):
+                        yield {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
+                    if queued_event.get("drain_complete"):
+                        return
             try:
                 response = await asyncio.to_thread(
                     list_live_catalog_timeline,

@@ -464,12 +464,12 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches_once(tmp_path, monkeypatch):
-    """A late drain is retryable, but two same-ID replays cannot both dispatch."""
+async def test_catalog_runtime_restarting_replay_keeps_operation_id_and_dispatches_once(tmp_path, monkeypatch):
+    """A pending restart is retryable, but same-ID replays cannot dispatch twice."""
     from zerg.catalogd.schema import initialize_catalog_schema
     from zerg.catalogd.store import CatalogStore
 
-    engine = make_live_engine(f"sqlite:///{tmp_path / 'runtime-draining-input.db'}")
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'runtime-restarting-input.db'}")
     initialize_live_database(engine)
     initialize_catalog_schema(engine)
     factory = make_sessionmaker(engine)
@@ -510,7 +510,7 @@ async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches
             self.calls += 1
             if self.calls == 1:
                 return False, {
-                    "code": "runtime_draining",
+                    "code": "runtime_restarting",
                     "message": "Runtime is restarting",
                     "runtime_epoch": "epoch-1",
                     "retryable": True,
@@ -575,7 +575,7 @@ async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches
 
     from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
-    request_id = "runtime-draining-replay-1"
+    request_id = "runtime-restarting-replay-1"
     with factory() as db:
         session = load_live_control_session_snapshot(session_id, owner_id=7)
         assert session is not None
@@ -587,13 +587,13 @@ async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches
                 db=db,
             )
         assert refused.value.status_code == 503
-        assert refused.value.detail["error_code"] == "runtime_draining"
+        assert refused.value.detail["error_code"] == "runtime_restarting"
 
     with factory() as db:
         receipt = db.query(LiveSessionInputReceipt).one()
         original_delivery_request_id = receipt.delivery_request_id
         assert receipt.status == "delivering"
-        assert json.loads(receipt.error_json)["code"] == "runtime_draining"
+        assert json.loads(receipt.error_json)["code"] == "runtime_restarting"
         assert original_delivery_request_id
 
     with factory() as db:

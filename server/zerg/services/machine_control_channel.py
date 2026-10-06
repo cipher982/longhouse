@@ -213,18 +213,31 @@ class MachineControlChannelRegistry:
             connections = tuple(self._connections.values())
 
         async def send(connection: _MachineControlConnection) -> bool:
+            acquired = False
             try:
-                async with connection.send_lock:
-                    await asyncio.wait_for(connection.websocket.send_json(dict(frame)), timeout=1.0)
-                    if close_after:
+                await asyncio.wait_for(connection.send_lock.acquire(), timeout=1.0)
+                acquired = True
+                await asyncio.wait_for(connection.websocket.send_json(dict(frame)), timeout=1.0)
+                if close_after:
+                    await asyncio.wait_for(
+                        connection.websocket.close(code=1012, reason="host.lifecycle"),
+                        timeout=1.0,
+                    )
+                return True
+            except Exception as exc:
+                logger.debug("Could not publish host.lifecycle to machine control channel: %s", exc)
+                if close_after:
+                    try:
                         await asyncio.wait_for(
                             connection.websocket.close(code=1012, reason="host.lifecycle"),
                             timeout=1.0,
                         )
-                return True
-            except Exception as exc:
-                logger.debug("Could not publish host.lifecycle to machine control channel: %s", exc)
+                    except Exception as close_exc:
+                        logger.debug("Could not close machine control channel for host lifecycle: %s", close_exc)
                 return False
+            finally:
+                if acquired:
+                    connection.send_lock.release()
 
         results = await asyncio.gather(*(send(connection) for connection in connections))
         return sum(results)

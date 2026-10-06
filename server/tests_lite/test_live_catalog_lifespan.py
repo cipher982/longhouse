@@ -216,7 +216,12 @@ async def test_lifespan_stops_searchd_and_catalogd_when_later_startup_fails(monk
     monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw)
     monkeypatch.setattr("zerg.services.render_object_workers.close_render_object_worker_pool", stop_render)
 
-    with pytest.raises(RuntimeError, match="synthetic worker startup failure"):
+    def fail_later_startup(_app):
+        raise RuntimeError("synthetic later startup failure")
+
+    monkeypatch.setattr(lifespan_module, "_enforce_single_tenant_startup", fail_later_startup)
+
+    with pytest.raises(RuntimeError, match="synthetic later startup failure"):
         async with lifespan_module.lifespan(FastAPI()):
             pass
 
