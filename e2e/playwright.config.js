@@ -103,10 +103,12 @@ const config = {
     actionTimeout: 10_000,
   },
 
+  // Visual baselines are Linux renders made on the crunch VM (see the
+  // qa-ui-baseline targets). Both screenshot APIs share one honest name.
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-chromium-linux{ext}",
   expect: {
     toHaveScreenshot: {
-      pathTemplate:
-        "{testDir}/{testFilePath}-snapshots/{arg}{-projectName}-darwin{ext}",
+      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-chromium-linux{ext}",
     },
   },
 
@@ -128,7 +130,16 @@ const config = {
     {
       name: "chromium",
       testDir: "./tests",
-      testIgnore: ["**/core/**", "**/*.test.ts"],
+      testIgnore: ["**/core/**", "**/*.test.ts", "**/ui_baseline_*.spec.ts"],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // One worker: every worker mints its own device token, so a parallel run
+      // changes what the Devices page lists and in which order.
+      name: "visual-baseline",
+      testDir: "./tests",
+      testMatch: ["**/ui_baseline_*.spec.ts"],
+      workers: 1,
       use: { ...devices["Desktop Chrome"] },
     },
   ],

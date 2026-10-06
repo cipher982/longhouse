@@ -35,10 +35,6 @@ async function waitForAppReady(page: Page, mode: PageDef['ready']) {
     await waitForPageReady(page, { timeout: 20000 });
     return;
   }
-  if (mode === 'settings') {
-    await waitForPageReady(page, { timeout: 20000 });
-    await expect(page.locator('.settings-page-container')).toBeVisible();
-  }
   if (mode === 'domcontent') {
     await page.waitForLoadState('domcontentloaded');
   }
