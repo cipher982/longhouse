@@ -37,11 +37,9 @@ import { deriveTurnOutline, TurnOutline, turnRowId, type TurnOutlineTurn } from 
 import { useActiveTurn } from "./useActiveTurn";
 import { SessionStateBadge } from "./SessionStateBadge";
 import {
-  buildSessionMetaSentence,
-  buildSessionMetaSentenceParts,
+  buildSessionMetaItems,
   getSessionHeaderState,
 } from "./sessionHeaderState";
-import { Nixie } from "@/shared/instruments/Nixie";
 import { Sparkline } from "@/shared/instruments/Sparkline";
 import { ReadoutRail } from "@/shared/instruments/ReadoutRail";
 import {
@@ -58,6 +56,9 @@ import { TimelinePane } from "./TimelinePane";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import { useSessionWorkspace } from "./useSessionWorkspace";
 import { useAuth } from "@/features/auth/auth";
+import { useHeaderSlot } from "@/app/headerSlot";
+import { useStoredState } from "@/shared/hooks/useStoredState";
+import { GaugeIcon } from "@/shared/ui/icons";
 import { config } from "@/shared/lib/config";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import { getSessionStartedLabel } from "./sessionTiming";
@@ -102,6 +103,14 @@ function SessionDetailWorkspaceRoute({
 }) {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
+  const headerSlot = useHeaderSlot();
+  // The readout panel (turn clock, context, tool calls, activity) is opt-in:
+  // the header already carries the counts and state it used to repeat.
+  const [readoutsOpen, setReadoutsOpen] = useStoredState<boolean>(
+    "longhouse.session.readouts",
+    false,
+    (raw) => (typeof raw === "boolean" ? raw : null),
+  );
   const workspace = useSessionWorkspace(sessionId, {
     highlightEventId,
     shared_by: sharedByUserId,
@@ -407,29 +416,27 @@ function SessionDetailWorkspaceRoute({
   const usageLabel = displaySession.usage_latest?.label ?? null;
   const runtime = resolveSessionRuntimeState(displaySession);
   const headerState = getSessionHeaderState(displaySession, nowMs, turnStartMs);
-  // One sentence instead of a dot-joined fragment list and a separate
-  // "N messages · N tool calls loaded" pill — same facts, read as prose.
-  // "working" only appears while the header tone is live.
-  const identityLabel = buildSessionMetaSentence({
+  // Plain items, " · "-joined. Counts prefer the session's own totals so a
+  // partly loaded transcript does not shrink them.
+  const metaItems = buildSessionMetaItems({
     provider: interaction.providerLabel || null,
     project: displaySession.project?.trim() || null,
     host: identityHost,
-    messages: transcriptCounts.messages,
-    toolCalls: transcriptCounts.toolCalls,
-    tone: headerState.tone,
+    messages: Math.max(
+      (displaySession.user_messages ?? 0) + (displaySession.assistant_messages ?? 0),
+      transcriptCounts.messages,
+    ),
+    toolCalls: Math.max(displaySession.tool_calls ?? 0, transcriptCounts.toolCalls),
   });
-  // Phase 4 (Instruments): "57 messages" stays plain text, "334 tool calls"
-  // renders as a Nixie, lit while the session is live. Null when there are
-  // no tool calls to highlight, in which case the plain identityLabel above
-  // renders unchanged.
-  const metaSentenceParts = buildSessionMetaSentenceParts({
-    provider: interaction.providerLabel || null,
-    project: displaySession.project?.trim() || null,
-    host: identityHost,
-    messages: transcriptCounts.messages,
-    toolCalls: transcriptCounts.toolCalls,
-    tone: headerState.tone,
-  });
+  const identityLabel = [...metaItems, ...(usageLabel ? [usageLabel] : [])].join(" · ") || null;
+  const contextTokens = displaySession.usage_latest?.context_tokens ?? null;
+  const contextWindow = displaySession.usage_latest?.context_window ?? null;
+  // A ring only when the window is known; otherwise the label's "267k ctx"
+  // stands alone and nothing guesses a denominator.
+  const contextFraction =
+    contextTokens != null && contextWindow != null && contextWindow > 0
+      ? Math.min(1, Math.max(0, contextTokens / contextWindow))
+      : null;
   // The branch form sits beside Resume in the Run ended notice. A refusal gets
   // words only when `branchUnavailableNote` has some; see there for which.
   const branchAction = branchSourceSession.session_state.control.actions.branch;
@@ -472,7 +479,10 @@ function SessionDetailWorkspaceRoute({
     interaction.isManagedLocalSession
       ? "session-workspace-route--managed"
       : "session-workspace-route--unmanaged",
-  ].join(" ");
+    readoutsOpen ? "session-workspace-route--readouts" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const launchPendingBanner = (() => {
     const state = launchFacts?.state ?? null;
@@ -531,32 +541,34 @@ function SessionDetailWorkspaceRoute({
           <span
             className="session-workspace-header__identity"
             data-testid="session-identity"
-            title={usageLabel ? `${identityLabel} · ${usageLabel}` : identityLabel}
+            title={identityLabel}
           >
             {displaySession.provider ? (
               <ProviderGlyph
                 provider={displaySession.provider}
-                size={15}
+                size={13}
                 variant="bare"
                 className="session-workspace-header__provider-glyph"
               />
             ) : null}
-            {metaSentenceParts ? (
-              <>
-                {metaSentenceParts.before}
-                <Nixie value={metaSentenceParts.toolCalls} dim={headerState.tone !== "live"} />{" "}
-                {metaSentenceParts.toolCallsWord}
-                {metaSentenceParts.after}
-              </>
-            ) : (
-              identityLabel
-            )}
-            {usageLabel ? (
-              <span className="session-workspace-header__usage" data-testid="session-usage">
-                {" · "}
-                {usageLabel}
-              </span>
-            ) : null}
+            <span className="session-workspace-header__meta-text">
+              {metaItems.join(" · ")}
+              {usageLabel ? (
+                <span className="session-workspace-header__usage" data-testid="session-usage">
+                  {metaItems.length > 0 ? " · " : ""}
+                  {contextFraction != null ? (
+                    <span
+                      className="session-context-ring"
+                      data-testid="session-context-ring"
+                      style={{ ["--ring-fill" as string]: `${Math.round(contextFraction * 100)}%` }}
+                      title={`${Math.round(contextFraction * 100)}% of the context window`}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  {usageLabel}
+                </span>
+              ) : null}
+            </span>
           </span>
         ) : null}
         {shouldShowSharedByPill ? (
@@ -588,6 +600,17 @@ function SessionDetailWorkspaceRoute({
 
   const headerRight = (
     <div className="session-workspace-header__actions">
+      <button
+        type="button"
+        className={`timeline-pane__filter-toggle${readoutsOpen ? " is-active" : ""}`}
+        onClick={() => setReadoutsOpen((open) => !open)}
+        aria-label={readoutsOpen ? "Hide readouts" : "Show readouts"}
+        aria-pressed={readoutsOpen}
+        title="Turn clock, context and activity"
+        data-testid="session-readouts-toggle"
+      >
+        <GaugeIcon width={14} height={14} />
+      </button>
       {confirmingArchive ? (
         <div className="session-detail-archive-confirm">
           <span className="session-detail-archive-confirm-label">Archive?</span>
@@ -702,7 +725,7 @@ function SessionDetailWorkspaceRoute({
           onSelectKey={selectKey}
           onVisibleSelectionChange={handleVisibleSelectionChange}
           headerLeft={headerLeft}
-          headerSparkline={<Sparkline data={headerActivityBuckets} live={turnLive} />}
+          headerTarget={headerSlot}
           headerState={
             <SessionStateBadge
               tone={headerState.tone}
@@ -721,7 +744,9 @@ function SessionDetailWorkspaceRoute({
             />
           }
           rail={
+            readoutsOpen ? (
             <ReadoutRail
+              activity={<Sparkline data={headerActivityBuckets} live={turnLive} />}
               turnSeconds={turnSeconds}
               turnLive={turnLive}
               contextTokens={displaySession.usage_latest?.context_tokens ?? null}
@@ -730,6 +755,7 @@ function SessionDetailWorkspaceRoute({
               toolCallsLive={turnLive}
               waitingOn={waitingOn}
             />
+            ) : null
           }
           listRef={attachTimelineList}
           dock={

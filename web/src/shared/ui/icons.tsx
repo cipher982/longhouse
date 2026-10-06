@@ -112,3 +112,21 @@ export function EllipsisIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function GaugeIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <path d="M4 18a8 8 0 1 1 16 0" />
+      <path d="M12 18l4-6" />
+    </svg>
+  );
+}
+
+export function SearchIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20l-3.5-3.5" />
+    </svg>
+  );
+}

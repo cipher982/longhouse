@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildSessionMetaSentence,
-  buildSessionMetaSentenceParts,
+  buildSessionMetaItems,
   formatElapsedClock,
   getSessionHeaderState,
 } from "../sessionHeaderState";
@@ -295,157 +294,35 @@ describe("getSessionHeaderState", () => {
   });
 });
 
-describe("buildSessionMetaSentence", () => {
-  it("builds the full sentence from provider, project, host, and counts", () => {
+describe("buildSessionMetaItems", () => {
+  it("lists provider, project, host and counts as plain items", () => {
     expect(
-      buildSessionMetaSentence({
-        provider: "OMP",
+      buildSessionMetaItems({
+        provider: "Claude",
         project: "zerg",
         host: "cinder",
-        messages: 57,
-        toolCalls: 334,
-        tone: "live",
+        messages: 29,
+        toolCalls: 85,
       }),
-    ).toBe("OMP working in zerg on cinder, 57 messages and 334 tool calls so far");
+    ).toEqual(["Claude", "zerg", "cinder", "29 msgs", "85 tools"]);
   });
 
-  it("drops missing parts gracefully instead of leaving stray punctuation", () => {
+  it("drops missing parts and zero counts", () => {
     expect(
-      buildSessionMetaSentence({
-        provider: "OMP",
-        project: null,
-        host: null,
-        messages: 0,
-        toolCalls: 0,
-        tone: "live",
-      }),
-    ).toBe("OMP working");
+      buildSessionMetaItems({ provider: "OMP", project: null, host: null, messages: 0, toolCalls: 0 }),
+    ).toEqual(["OMP"]);
   });
 
-  it("falls back to counts alone when nothing else is known", () => {
+  it("uses the singular for one and does not repeat a host equal to the project", () => {
     expect(
-      buildSessionMetaSentence({
-        provider: null,
-        project: null,
-        host: null,
-        messages: 3,
-        toolCalls: 0,
-        tone: "live",
-      }),
-    ).toBe("3 messages so far");
+      buildSessionMetaItems({ provider: null, project: "cinder", host: "cinder", messages: 1, toolCalls: 1 }),
+    ).toEqual(["cinder", "1 msg", "1 tool"]);
   });
 
-  it("returns null when there is nothing to say", () => {
+  it("returns nothing when nothing is known", () => {
     expect(
-      buildSessionMetaSentence({
-        provider: null,
-        project: null,
-        host: null,
-        messages: 0,
-        toolCalls: 0,
-        tone: "live",
-      }),
-    ).toBeNull();
-  });
-
-  it("drops \"working\" when the header tone is not live, so an ended session isn't claimed as still working", () => {
-    expect(
-      buildSessionMetaSentence({
-        provider: "OMP",
-        project: "zerg",
-        host: "cinder",
-        messages: 57,
-        toolCalls: 334,
-        tone: "cool",
-      }),
-    ).toBe("OMP in zerg on cinder, 57 messages and 334 tool calls so far");
-  });
-
-  it("drops \"working\" for the attention tone too", () => {
-    expect(
-      buildSessionMetaSentence({
-        provider: "OMP",
-        project: "zerg",
-        host: "cinder",
-        messages: 0,
-        toolCalls: 0,
-        tone: "attention",
-      }),
-    ).toBe("OMP in zerg on cinder");
-  });
-});
-
-describe("buildSessionMetaSentenceParts", () => {
-  it("splits the sentence around the tool-call count, joining back to the same text", () => {
-    const parts = buildSessionMetaSentenceParts({
-      provider: "OMP",
-      project: "zerg",
-      host: "cinder",
-      messages: 57,
-      toolCalls: 334,
-      tone: "live",
-    });
-    expect(parts).not.toBeNull();
-    expect(`${parts!.before}334 ${parts!.toolCallsWord}${parts!.after}`).toBe(
-      "OMP working in zerg on cinder, 57 messages and 334 tool calls so far",
-    );
-  });
-
-  it("returns null when there are no tool calls to highlight", () => {
-    expect(
-      buildSessionMetaSentenceParts({
-        provider: "OMP",
-        project: "zerg",
-        host: "cinder",
-        messages: 57,
-        toolCalls: 0,
-        tone: "live",
-      }),
-    ).toBeNull();
-  });
-
-  it("drops the messages clause and the leading sentence when neither is known", () => {
-    const parts = buildSessionMetaSentenceParts({
-      provider: null,
-      project: null,
-      host: null,
-      messages: 0,
-      toolCalls: 5,
-      tone: "live",
-    });
-    expect(parts).toEqual({
-      before: "",
-      toolCalls: 5,
-      toolCallsWord: "tool calls",
-      after: " so far",
-    });
-  });
-
-  it("uses the singular word for exactly one tool call", () => {
-    const parts = buildSessionMetaSentenceParts({
-      provider: null,
-      project: null,
-      host: null,
-      messages: 0,
-      toolCalls: 1,
-      tone: "live",
-    });
-    expect(parts?.toolCallsWord).toBe("tool call");
-  });
-
-  it("drops \"working\" when the header tone is not live", () => {
-    const parts = buildSessionMetaSentenceParts({
-      provider: "OMP",
-      project: "zerg",
-      host: "cinder",
-      messages: 57,
-      toolCalls: 334,
-      tone: "cool",
-    });
-    expect(parts).not.toBeNull();
-    expect(`${parts!.before}334 ${parts!.toolCallsWord}${parts!.after}`).toBe(
-      "OMP in zerg on cinder, 57 messages and 334 tool calls so far",
-    );
+      buildSessionMetaItems({ provider: null, project: null, host: null, messages: 0, toolCalls: 0 }),
+    ).toEqual([]);
   });
 });
 

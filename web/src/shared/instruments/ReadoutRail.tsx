@@ -4,14 +4,18 @@
  * styles/instruments.css — both deletable together in one commit.
  *
  * A glass column of Nixie readouts beside the transcript on wide viewports
- * (>= 1180px; hidden below that in CSS). Ships only entries the caller can
- * actually back with real data — never a fabricated "Shipped" row.
+ * (>= 1180px; hidden below that in CSS), opened from the session header's
+ * readouts toggle. Ships only entries the caller can actually back with real
+ * data — never a fabricated "Shipped" row. Machines online lives in the app
+ * bar only.
  */
-import { useMachineDirectory } from "@/features/machines/useMachines";
+import type { ReactNode } from "react";
 import { formatElapsedClock } from "@/features/session/sessionHeaderState";
 import { Nixie } from "./Nixie";
 
 export interface ReadoutRailProps {
+  /** Tool-activity sparkline, shown first. */
+  activity?: ReactNode;
   /** Elapsed seconds for the running turn, or the most recently finished
    * turn's duration when idle. `null` omits the "Turn" entry — no elapsed
    * time is known. */
@@ -32,6 +36,7 @@ function formatCompactTokens(n: number): string {
 }
 
 export function ReadoutRail({
+  activity = null,
   turnSeconds,
   turnLive,
   contextTokens,
@@ -40,15 +45,16 @@ export function ReadoutRail({
   toolCallsLive,
   waitingOn,
 }: ReadoutRailProps) {
-  // Same cache entry as the nav's machine count, so no second request.
-  const { data: directory, dataUpdatedAt, isError: directoryUnavailable } = useMachineDirectory();
-
   const hasContext = contextTokens != null && contextWindow != null && contextWindow > 0;
-  const machines = directory?.machines ?? [];
-  const onlineMachines = machines.filter((machine) => machine.online).length;
 
   return (
     <div className="instrument-readout-rail" data-testid="session-readout-rail">
+      {activity ? (
+        <div className="instrument-readout" data-testid="readout-activity">
+          <span className="instrument-readout__key">Activity, last 30 min</span>
+          {activity}
+        </div>
+      ) : null}
       {turnSeconds != null ? (
         <div className="instrument-readout" data-testid="readout-turn">
           <span className="instrument-readout__key">Turn</span>
@@ -103,12 +109,6 @@ export function ReadoutRail({
         </div>
       ) : null}
 
-      {machines.length > 0 || directoryUnavailable ? (
-        <div className="instrument-readout" data-testid="readout-machines" title={directoryUnavailable && directory ? `Last known at ${new Date(dataUpdatedAt).toLocaleTimeString()}` : undefined}>
-          <span className="instrument-readout__key">{directoryUnavailable ? directory ? "Machines online (last known)" : "Machine status unavailable" : "Machines online"}</span>
-          <Nixie value={directory ? `${onlineMachines} / ${machines.length}` : "—"} dim />
-        </div>
-      ) : null}
     </div>
   );
 }

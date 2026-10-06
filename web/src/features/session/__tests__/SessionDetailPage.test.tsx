@@ -736,6 +736,36 @@ describe("SessionDetailPage", () => {
     );
   });
 
+  it("keeps the readouts closed by default and remembers the toggle per device", async () => {
+    window.localStorage.removeItem("longhouse.session.readouts");
+    const user = userEvent.setup();
+    const session = makeSession();
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    const first = renderSessionDetailPage();
+    expect(screen.queryByTestId("session-readout-rail")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("session-readouts-toggle"));
+    expect(screen.getByTestId("session-readout-rail")).toBeInTheDocument();
+    expect(window.localStorage.getItem("longhouse.session.readouts")).toBe("true");
+    first.unmount();
+
+    renderSessionDetailPage();
+    expect(screen.getByTestId("session-readout-rail")).toBeInTheDocument();
+    window.localStorage.removeItem("longhouse.session.readouts");
+  });
+
+  it("reads the session's own counts in the meta line, as plain text", () => {
+    const session = makeSession({ user_messages: 12, assistant_messages: 17, tool_calls: 85 });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+
+    const identity = screen.getByTestId("session-identity");
+    expect(identity).toHaveTextContent("29 msgs");
+    expect(identity).toHaveTextContent("85 tools");
+    expect(identity.querySelector(".instrument-nixie")).toBeNull();
+  });
+
   it("does not offer remote Helm launch from a session detail", () => {
     const session = makeSession();
     mockWorkspaceState({ session, model: buildTimelineModel([]) });

@@ -3787,3 +3787,114 @@
     align-items: flex-start;
   }
 }
+
+/* ===== App-bar header (session-view-terminal-parity C7) =====
+   The session header renders inside the global app bar's slot
+   (app/headerSlot.tsx), so the page has one ~44px top bar. Two lines on
+   the left (title, plain meta), state and icon actions on the right. */
+.timeline-pane__header.timeline-pane__header--app-bar {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__header-main {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__header-right {
+  flex: none;
+  max-width: none;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__title-stack,
+.timeline-pane__header--app-bar .session-workspace-header__name {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__title-group {
+  display: none;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__left {
+  min-width: 0;
+  gap: 6px;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__left > .ui-button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex: none;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__title-stack {
+  gap: 1px;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__name {
+  font-size: 15.5px;
+  line-height: 1.15;
+}
+
+.timeline-pane__header--app-bar .session-workspace-header__identity {
+  font-size: 11.5px;
+  line-height: 1.25;
+  color: var(--color-text-muted);
+}
+
+.timeline-pane__header--app-bar .session-shared-by-pill,
+.timeline-pane__header--app-bar .session-branched-from {
+  display: none;
+}
+
+.timeline-pane__header--app-bar .timeline-pane__header-right {
+  gap: 6px;
+}
+
+.session-context-ring {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: -1px;
+  background: conic-gradient(
+    var(--color-brand-primary) 0 var(--ring-fill, 0%),
+    var(--color-border-primary) var(--ring-fill, 0%) 100%
+  );
+}
+
+/* The readout panel is opt-in: the transcript only reserves its footprint
+   while it is open. */
+.session-workspace-route--single-column:not(.session-workspace-route--readouts) {
+  --tl-rail-space: 0px;
+}
+
+@media (max-width: 1179px) {
+  [data-testid="session-readouts-toggle"] {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .timeline-pane__header.timeline-pane__header--app-bar {
+    gap: var(--session-mobile-gap, 6px);
+  }
+
+  .timeline-pane__header--app-bar .session-workspace-header__identity {
+    display: none;
+  }
+
+  .timeline-pane__header--app-bar .session-workspace-header__name {
+    font-size: 14px;
+  }
+}
