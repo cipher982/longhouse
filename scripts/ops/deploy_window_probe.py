@@ -254,10 +254,10 @@ async def _sse_channel(
             raise
         except Exception as exc:
             await recorder.emit(
-                \"sse\",
-                event=\"connect_attempt\",
+                "sse",
+                event="connect_attempt",
                 attempt=attempt,
-                outcome=\"error\",
+                outcome="error",
                 latency_s=round(time.monotonic() - started, 6),
                 error_class=type(exc).__name__,
                 error=str(exc)[:240],
@@ -267,20 +267,20 @@ async def _sse_channel(
                 latency = round(time.monotonic() - started, 6)
                 if response.status_code < 200 or response.status_code >= 300:
                     await recorder.emit(
-                        \"sse\",
-                        event=\"connect_attempt\",
+                        "sse",
+                        event="connect_attempt",
                         attempt=attempt,
-                        outcome=\"http_error\",
+                        outcome="http_error",
                         status=response.status_code,
                         latency_s=latency,
                     )
                 else:
                     established = True
                     await recorder.emit(
-                        \"sse\",
-                        event=\"connect_attempt\",
+                        "sse",
+                        event="connect_attempt",
                         attempt=attempt,
-                        outcome=\"connected\",
+                        outcome="connected",
                         status=response.status_code,
                         latency_s=latency,
                     )
@@ -293,15 +293,15 @@ async def _sse_channel(
                             name, data = await asyncio.wait_for(messages.__anext__(), timeout=remaining)
                         except StopAsyncIteration:
                             disconnected = True
-                            await recorder.emit(\"sse\", event=\"disconnect\", reason=\"stream_ended\")
+                            await recorder.emit("sse", event="disconnect", reason="stream_ended")
                             break
                         except asyncio.TimeoutError:
                             break
-                        if name in {\"connected\", \"host_lifecycle\"}:
+                        if name in {"connected", "host_lifecycle"}:
                             decoded_data = _decode_json(data)
                             await recorder.emit(
-                                \"sse\",
-                                event=\"message\",
+                                "sse",
+                                event="message",
                                 name=name,
                                 data=decoded_data if decoded_data is not _INVALID_JSON else data,
                             )
@@ -311,18 +311,18 @@ async def _sse_channel(
                 if established:
                     disconnected = True
                     await recorder.emit(
-                        \"sse\",
-                        event=\"disconnect\",
-                        reason=\"transport_error\",
+                        "sse",
+                        event="disconnect",
+                        reason="transport_error",
                         transport_error_class=_transport_error_class(exc),
                         error=type(exc).__name__,
                     )
                 else:
                     await recorder.emit(
-                        \"sse\",
-                        event=\"connect_attempt\",
+                        "sse",
+                        event="connect_attempt",
                         attempt=attempt,
-                        outcome=\"error\",
+                        outcome="error",
                         latency_s=round(time.monotonic() - started, 6),
                         error_class=type(exc).__name__,
                         error=str(exc)[:240],
@@ -574,7 +574,7 @@ def _channel_summary(
         None,
     )
     reconnect_at = _mono(reconnect) if reconnect else None
-    evidence_at = _mono(serving_evidence) if serving_evidence else None
+    evidence_at = serving_evidence.get("at_monotonic") if serving_evidence else None
     after_open = reconnect_at - evidence_at if reconnect_at is not None and evidence_at is not None and reconnect_at >= evidence_at else None
     after_disconnect = reconnect_at - disconnect_at if reconnect_at is not None and disconnect_at is not None else None
     states: list[str] = []
@@ -688,7 +688,7 @@ def analyze_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     restart_times = [at for at in [window_start, *disconnect_times] if at is not None]
     restart_start = min(restart_times) if restart_times else None
-    evidence_floor = change_at if change_at is not None else restart_start
+    evidence_floor = restart_start if restart_start is not None else change_at
     evidence_candidates: list[tuple[float, str, dict[str, Any]]] = []
 
     def offer_evidence(source: str, row: dict[str, Any]) -> None:
