@@ -189,7 +189,7 @@ class RequestTimeoutMiddleware:
             return
 
         # Skip SSE / streaming / WebSocket-upgrade endpoints.
-        if any(frag in api_path for frag in _STREAMING_FRAGMENTS):
+        if api_path == "/telemetry/canary-stream" or any(frag in api_path for frag in _STREAMING_FRAGMENTS):
             await self.app(scope, receive, send)
             return
 

@@ -149,6 +149,8 @@ missing samples are unhealthy, not zero latency.
 using the existing `~/.config/longhouse-canary/env` and preserves the stable session-id
 and sequence files. The observer allows sixty seconds for initial bootstrap visibility
 and uses a finite stream read timeout so SIGTERM is not trapped in an idle stream.
+The canary stream is excluded from the normal finite HTTP request deadline;
+the non-streaming selfcheck remains deadline-bound.
 Both units supervise failures with a fifteen-second restart interval; an external
 watchdog must alert on missing hops, failed/auth-refused checks, and SLA breaches.
 

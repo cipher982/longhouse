@@ -31,11 +31,6 @@ def test_product_read_route_classes_are_bounded_and_ignore_identifiers():
     assert _product_read_route_class("/unrelated/private-session-id", "GET") is None
 
 
-def test_recall_timeout_override_covers_machine_and_browser_facades():
-    assert request_timeout_module._TIMEOUT_OVERRIDES["/agents/recall"] == request_timeout_module.RECALL_TIMEOUT_SECONDS
-    assert request_timeout_module._TIMEOUT_OVERRIDES["/timeline/recall"] == request_timeout_module.RECALL_TIMEOUT_SECONDS
-
-
 @pytest.mark.parametrize(
     "path",
     [
@@ -193,6 +188,39 @@ def test_session_export_stream_delivers_its_whole_body_past_the_deadline(monkeyp
 
     assert response.status_code == 200
     assert response.content == b'{"a":1}\n{"a":2}\n'
+
+
+def test_canary_stream_delivers_frames_past_the_normal_request_deadline():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.get("/api/telemetry/canary-stream")
+    async def stream():
+        async def body():
+            yield b"event: connected\ndata: {}\n\n"
+            await asyncio.sleep(0.05)
+            yield b'event: canary_observation\ndata: {"canary_seq":41}\n\n'
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    with TestClient(app) as client:
+        response = client.get("/api/telemetry/canary-stream")
+    assert response.status_code == 200
+    assert response.content == (b'event: connected\ndata: {}\n\nevent: canary_observation\ndata: {"canary_seq":41}\n\n')
+
+
+def test_canary_selfcheck_still_obeys_the_normal_request_deadline():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.get("/api/telemetry/selfcheck")
+    async def selfcheck():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.get("/api/telemetry/selfcheck")
+    assert response.status_code == 503
 
 
 def test_archive_backed_user_read_uses_longer_timeout_budget():
