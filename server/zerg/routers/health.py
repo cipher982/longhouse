@@ -591,10 +591,9 @@ def health_check(request: Request):
 
     health_status["checks"] = checks
 
-    # Untrusted callers get a minimal body: overall status, message, and the
-    # build identity ONLY. The commit/version is already public (git history +
-    # the image tag) and the deploy verifier reads it from here to confirm a
-    # rollout, so it is safe to expose. Everything genuinely sensitive — DB
+    # Public build identity verifies rollouts; the runtime epoch/admission state
+    # lets Machine Agents distinguish a planned update from an outage.
+    # Everything genuinely sensitive — DB
     # path, email addresses, migration log, env specifics, per-check internals —
     # stays behind the trust gate.
     if not trusted:

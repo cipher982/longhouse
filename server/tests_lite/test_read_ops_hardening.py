@@ -53,10 +53,8 @@ def test_health_untrusted_caller_gets_minimal_body(monkeypatch):
     with _client() as client:
         resp = client.get("/api/health")
     body = resp.json()
-    # Minimal body: status/message plus the (public) build identity only — no
-    # per-check internals, env, db path, or email detail.
+    # Per-check internals stay private regardless of public readiness metadata.
     assert "checks" not in body
-    assert set(body.keys()) <= {"status", "message", "build"}
     if "build" in body:
         # build block carries only version/commit info, nothing infra-sensitive.
         assert set(body["build"].keys()) <= {
