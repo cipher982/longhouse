@@ -457,7 +457,7 @@ class CanaryObservation(BaseModel):
     """A single observation from a canary producer or consumer.
 
     hop identifies where in the pipeline the observation was taken:
-      - "ingest": server-received timestamp minus producer emission
+      - "ingest": producer's committed-acknowledgement round-trip latency
       - "sse":    observer receipt time minus producer emission
       - "render": browser/iOS rendered_at minus producer emission
     """
@@ -725,7 +725,9 @@ async def _canary_workspace_stream(request: Request, *, session_id: UUID, owner_
             or type(emitted_at_ms) is not int
             or emitted_at_ms <= 0
             or type(server_fanout_at_ms) is not int
+            or server_fanout_at_ms <= 0
             or type(server_now_ms) is not int
+            or server_now_ms <= 0
             or type(pubsub_seq) is not int
             or pubsub_seq <= 0
         ):

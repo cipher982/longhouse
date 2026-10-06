@@ -7,6 +7,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -152,3 +153,28 @@ def test_canary_stream_correlates_producer_seq_and_never_leaks_workspace_content
     }
     assert "latest_event_id" not in data
     assert "id: 13" in observed
+
+
+@pytest.mark.parametrize("field", ["server_fanout_at_ms", "server_now_ms"])
+def test_canary_stream_rejects_non_positive_server_timing(monkeypatch, field):
+    session_id = uuid4()
+    monkeypatch.setattr(
+        "zerg.services.live_catalog_timeline.read_live_catalog_session",
+        lambda *_args, **_kwargs: (SimpleNamespace(provider="canary"), "canary-session", "12"),
+    )
+    marker = {
+        "canary_seq": 24,
+        "canary_emitted_at_ms": 1_800_000_000_000,
+        "server_fanout_at_ms": 1_800_000_000_050,
+        "server_now_ms": 1_800_000_000_055,
+        "pubsub_seq": 13,
+    }
+    marker[field] = 0
+
+    async def workspace_stream(_request, **_kwargs):
+        yield {"event": "workspace_changed", "data": json.dumps(marker)}
+
+    monkeypatch.setattr("zerg.routers.timeline._live_catalog_workspace_stream", workspace_stream)
+    response = TestClient(_authed_app()).get(f"/telemetry/canary-stream?session_id={session_id}")
+    assert "event: error" in response.text
+    assert "event: canary_observation" not in response.text

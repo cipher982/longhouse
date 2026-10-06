@@ -136,9 +136,12 @@ and owner-bound `X-Agents-Token` authentication. It accepts only that owner's ca
 sessions and emits timing/sequence coordinates, never transcript previews or tools.
 Initial invalidations and unrelated workspace changes are not delivery observations.
 The observer correlates producer sequences, not the independent pubsub cursor.
+Ingest latency is the producer's monotonic committed-acknowledgement round trip;
+it does not compare clocks on different hosts. Producer and observer share a host
+clock for end-to-end SSE timing in the supervised bundle.
 
 The authenticated `/api/telemetry/selfcheck` requires fresh ingest and SSE observations,
-a sequence gap below ten, and actual SSE latency samples with p95 at most 300 ms.
+an absolute sequence gap below ten, and actual SSE latency samples with p95 at most 300 ms.
 Render observations are optional. Its sample summary is bounded to fifteen minutes;
 missing samples are unhealthy, not zero latency.
 

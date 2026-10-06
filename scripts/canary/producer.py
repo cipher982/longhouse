@@ -2,9 +2,9 @@
 """Longhouse realtime canary producer.
 
 Every INTERVAL seconds, POST a canary RuntimeEventIngest with its persistent
-producer sequence and emission timestamp. The server confirms catalog apply,
-returns its receive timestamp, and the producer records that measured ingest
-latency through the canary observation endpoint.
+producer sequence and emission timestamp. After the server confirms catalog apply,
+the producer records the committed-acknowledgement round-trip latency using its
+own monotonic clock.
 
 Bootstrap creates the durable StorageSession via storage-v2 (not legacy
 /api/agents/ingest). Runtime binding/progress ticks stay on the runtime
@@ -388,9 +388,9 @@ def main() -> int:
         while not stopping:
             seq = _next_seq()
             emitted_at = datetime.now(timezone.utc)
-            emitted_at_ms = int(emitted_at.timestamp() * 1000)
             event = _runtime_event(session_id, seq, machine_name, emitted_at)
             try:
+                sent_at = time.monotonic()
                 resp = client.post(
                     f"{base_url}/api/agents/runtime/events/batch",
                     headers=_agents_headers(agents_token),
@@ -413,17 +413,7 @@ def main() -> int:
                     raise RuntimeError(
                         "runtime ingest did not confirm a live canary update"
                     )
-                received_at_raw = resp.headers.get("X-Canary-Received-At-Ms", "")
-                if not received_at_raw.isascii() or not received_at_raw.isdecimal():
-                    raise RuntimeError(
-                        "runtime ingest omitted its canary receive timestamp"
-                    )
-                received_at_ms = int(received_at_raw)
-                latency_ms = received_at_ms - emitted_at_ms
-                if latency_ms < 0 or latency_ms > 600_000:
-                    raise RuntimeError(
-                        f"runtime ingest returned invalid canary latency {latency_ms}ms"
-                    )
+                latency_ms = int((time.monotonic() - sent_at) * 1000)
                 _post_observation(
                     client,
                     base_url,

@@ -203,8 +203,6 @@ async def ingest_runtime_observation_batch(
                     canary_seq=marker[0] if marker is not None else None,
                     canary_emitted_at_ms=marker[1] if marker is not None else None,
                 )
-                if marker is not None:
-                    response.headers["X-Canary-Received-At-Ms"] = str(int(now_utc.timestamp() * 1000))
 
         catalogd = get_catalogd_client()
         if catalogd is None:

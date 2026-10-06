@@ -108,7 +108,6 @@ def test_runtime_ingest_drives_live_canary_workspace_sse_without_replay(live_cat
             )
             assert ingested.status_code == 200, ingested.text
             assert f"canary:{session_id}" in ingested.json()["updated_runtime_keys"]
-            assert ingested.headers["X-Canary-Received-At-Ms"].isdecimal()
             marker = await asyncio.wait_for(stream_task, timeout=5)
             return marker, emitted_at_ms
 
