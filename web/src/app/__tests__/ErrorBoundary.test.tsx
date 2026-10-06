@@ -17,17 +17,14 @@ describe("ErrorBoundary", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    "Failed to fetch dynamically imported module: /assets/MachinesPage.js",
-    "Importing a module script failed.",
-    "Failed to load module script: Expected a JavaScript module but the server responded with a MIME type of text/html.",
-  ])("reloads the document to retry a failed lazy page module: %s", (message) => {
+  it("reloads for Vite-signaled module failures without parsing browser error text", () => {
     const reload = vi.fn();
     const originalWindow = window;
     vi.stubGlobal(
       "window",
       new Proxy(originalWindow, {
         get(target, property) {
+          if (property === "__longhouseVitePreloadFailure") return true;
           if (property === "location") return { reload };
           const value = Reflect.get(target, property, target);
           return typeof value === "function" ? value.bind(target) : value;
@@ -37,7 +34,7 @@ describe("ErrorBoundary", () => {
 
     render(
       <ErrorBoundary>
-        <ThrowError error={new TypeError(message)} />
+        <ThrowError error={new TypeError("opaque module load failure")} />
       </ErrorBoundary>,
     );
 

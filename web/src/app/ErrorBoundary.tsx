@@ -12,8 +12,6 @@ interface ErrorBoundaryProps {
   fallback?: React.ComponentType<{ error?: Error; retry: () => void }>;
 }
 
-const MODULE_LOAD_FAILURE = /dynamically imported module|importing a module script failed|failed to load module script/i;
-
 // Default error fallback component
 function DefaultErrorFallback({
   error,
@@ -22,7 +20,7 @@ function DefaultErrorFallback({
   error?: Error;
   retry: () => void;
 }) {
-  const moduleLoadFailure = MODULE_LOAD_FAILURE.test(error?.message ?? "");
+  const moduleLoadFailure = window.__longhouseVitePreloadFailure === true;
   return (
     <div style={{
       display: 'flex',

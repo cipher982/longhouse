@@ -9,24 +9,9 @@ import { loadRouteChunks } from "./routeChunks";
 // Global stylesheet entrypoint
 import "./styles/app.css";
 import { AppContent, AppProviders } from "./AppRoot";
+import { installVitePreloadRecovery } from "./vitePreloadRecovery";
 
-const PRELOAD_RETRY_KEY = "longhouse:vite-preload-retried";
-
-window.addEventListener("vite:preloadError", (event) => {
-  let shouldReload = false;
-  try {
-    if (!window.sessionStorage.getItem(PRELOAD_RETRY_KEY)) {
-      window.sessionStorage.setItem(PRELOAD_RETRY_KEY, "1");
-      shouldReload = true;
-    }
-  } catch {
-    // Let the route boundary offer recovery when session storage is unavailable.
-    return;
-  }
-  if (!shouldReload) return;
-  event.preventDefault();
-  window.location.reload();
-});
+installVitePreloadRecovery();
 
 // Umami analytics is driven by runtime config.js.
 // Vite env fallback remains only for older standalone frontend deployments.
