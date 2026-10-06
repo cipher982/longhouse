@@ -369,6 +369,32 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func expiredUpdateOnlySnapshotNeedsFreshHeartbeatEvidence() {
+        let acknowledgedAt = "1970-01-01T00:00:00Z"
+        let snapshot = presentationSnapshot(
+            reasons: ["host_updating"],
+            sessions: [],
+            heartbeatTransport: presentationHeartbeatSuccess(lastSuccessAt: acknowledgedAt),
+            hostLink: presentationHostLink(
+                state: "updating",
+                claimStartedAt: acknowledgedAt,
+                lastAcknowledgedAt: acknowledgedAt,
+                deadline: "1970-01-01T00:01:30Z",
+                cutoff: "1970-01-01T00:02:30Z"
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 200))
+        let status = presentation.facts.first { $0.id == "heartbeat" }
+
+        #expect(!presentation.hostUpdateClaimIsValid)
+        #expect(presentation.headline == "Machine heartbeat failed")
+        #expect(presentation.promotion == .inspect)
+        #expect(status?.value == "POST failed")
+    }
+
+
+    @Test
     @MainActor
     func validUpdateKeepsIndependentStorageTroubleVisible() {
         let snapshot = presentationSnapshot(
@@ -4427,7 +4453,9 @@ private func presentationHostLink(
     state: String,
     claimStartedAt: String? = nil,
     deadline: String? = nil,
-    cutoff: String? = nil
+    cutoff: String? = nil,
+    lastAcknowledgedAt: String? = nil,
+    freshHorizonSecs: Int? = 120
 ) -> HostLinkSnapshot {
     let claim = state == "updating" || state == "slow_update"
         ? HostLifecycleSnapshot(
@@ -4445,7 +4473,8 @@ private func presentationHostLink(
         since: claimStartedAt ?? "1970-01-01T00:00:00Z",
         claim: claim,
         claimStartedAt: claimStartedAt,
-        freshHorizonSecs: 120,
+        lastAcknowledgedAt: lastAcknowledgedAt ?? claimStartedAt,
+        freshHorizonSecs: freshHorizonSecs,
         runtimeEpoch: "runtime-test"
     )
 }
@@ -4458,6 +4487,17 @@ private func presentationHeartbeatFailure() -> NativeHeartbeatTransportSnapshot 
         lastSuccessAt: "1970-01-01T00:00:02Z",
         lastFailureAt: "1970-01-01T00:00:04Z",
         lastError: "POST timed out"
+    )
+}
+
+private func presentationHeartbeatSuccess(lastSuccessAt: String) -> NativeHeartbeatTransportSnapshot {
+    NativeHeartbeatTransportSnapshot(
+        state: "healthy",
+        evidenceState: "applied",
+        lastAttemptAt: lastSuccessAt,
+        lastSuccessAt: lastSuccessAt,
+        lastFailureAt: nil,
+        lastError: nil
     )
 }
 
