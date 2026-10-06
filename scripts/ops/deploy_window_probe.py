@@ -15,11 +15,14 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 
+_INVALID_JSON = object()
 DEVICE_ID = "deploy-window-probe"
+MACHINE_NAME = DEVICE_ID
 HEALTH_INTERVAL_S = 0.25
 WRITE_INTERVAL_S = 1.0
 RECONNECT_INTERVAL_S = 0.5
 CONTROL_CONNECT_TIMEOUT_S = 3.0
+SSE_CONNECT_TIMEOUT_S = 3.0
 
 
 def _wall_time() -> str:
@@ -72,7 +75,7 @@ def _decode_json(text: str) -> Any:
     try:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
-        return None
+        return _INVALID_JSON
 
 
 def _is_html(content_type: str | None, body: str) -> bool:
@@ -145,6 +148,7 @@ async def _write_channel(
     recorder: JsonlRecorder,
     base_url: str,
     token: str,
+    device_id: str,
     stop: asyncio.Event,
     deadline: float,
 ) -> None:
@@ -154,12 +158,16 @@ async def _write_channel(
             response = await client.post(
                 _http_url(base_url, "/api/agents/heartbeat"),
                 json={},
-                headers={"X-Agents-Token": token},
+                headers={"X-Agents-Token": token, "X-Longhouse-Machine-Id": device_id},
                 timeout=6.0,
             )
             body_text = response.text
             decoded = _decode_json(body_text)
-            is_json = decoded is not None
+            is_json = decoded is not _INVALID_JSON
+            error_payload = decoded
+            if isinstance(decoded, dict) and isinstance(decoded.get("detail"), dict):
+                if "code" in decoded["detail"]:
+                    error_payload = decoded["detail"]
             content_type = response.headers.get("content-type")
             await recorder.emit(
                 "write",
@@ -168,8 +176,8 @@ async def _write_channel(
                 latency_s=round(time.monotonic() - started, 6),
                 content_type=content_type,
                 is_json=is_json,
-                code=decoded.get("code") if isinstance(decoded, dict) else None,
-                retryable=decoded.get("retryable") if isinstance(decoded, dict) else None,
+                code=error_payload.get("code") if isinstance(error_payload, dict) else None,
+                retryable=error_payload.get("retryable") if isinstance(error_payload, dict) else None,
                 retry_after=response.headers.get("retry-after"),
                 is_html=_is_html(content_type, body_text),
                 transport_error_class=None,
@@ -221,38 +229,58 @@ async def _sse_channel(
     recorder: JsonlRecorder,
     base_url: str,
     token: str,
+    device_id: str,
     stop: asyncio.Event,
     deadline: float,
 ) -> None:
 
     url = _http_url(base_url, "/api/agents/sessions/stream")
     headers = {"X-Agents-Token": token, "Accept": "text/event-stream"}
-    params = {"device_id": DEVICE_ID, "skip_initial_replay": "true"}
+    params = {"device_id": device_id, "skip_initial_replay": "true"}
     attempt = 0
     while not stop.is_set() and time.monotonic() < deadline:
         attempt += 1
         started = time.monotonic()
         established = False
         disconnected = False
+        response = None
         try:
-            async with client.stream("GET", url, headers=headers, params=params, timeout=None) as response:
+            request = client.build_request("GET", url, headers=headers, params=params, timeout=None)
+            response = await asyncio.wait_for(
+                client.send(request, stream=True),
+                timeout=SSE_CONNECT_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await recorder.emit(
+                \"sse\",
+                event=\"connect_attempt\",
+                attempt=attempt,
+                outcome=\"error\",
+                latency_s=round(time.monotonic() - started, 6),
+                error_class=type(exc).__name__,
+                error=str(exc)[:240],
+            )
+        else:
+            try:
                 latency = round(time.monotonic() - started, 6)
                 if response.status_code < 200 or response.status_code >= 300:
                     await recorder.emit(
-                        "sse",
-                        event="connect_attempt",
+                        \"sse\",
+                        event=\"connect_attempt\",
                         attempt=attempt,
-                        outcome="http_error",
+                        outcome=\"http_error\",
                         status=response.status_code,
                         latency_s=latency,
                     )
                 else:
                     established = True
                     await recorder.emit(
-                        "sse",
-                        event="connect_attempt",
+                        \"sse\",
+                        event=\"connect_attempt\",
                         attempt=attempt,
-                        outcome="connected",
+                        outcome=\"connected\",
                         status=response.status_code,
                         latency_s=latency,
                     )
@@ -265,40 +293,42 @@ async def _sse_channel(
                             name, data = await asyncio.wait_for(messages.__anext__(), timeout=remaining)
                         except StopAsyncIteration:
                             disconnected = True
-                            await recorder.emit("sse", event="disconnect", reason="stream_ended")
+                            await recorder.emit(\"sse\", event=\"disconnect\", reason=\"stream_ended\")
                             break
                         except asyncio.TimeoutError:
                             break
-                        if name in {"connected", "host_lifecycle"}:
+                        if name in {\"connected\", \"host_lifecycle\"}:
                             decoded_data = _decode_json(data)
                             await recorder.emit(
-                                "sse",
-                                event="message",
+                                \"sse\",
+                                event=\"message\",
                                 name=name,
-                                data=decoded_data if decoded_data is not None else data,
+                                data=decoded_data if decoded_data is not _INVALID_JSON else data,
                             )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if established:
-                disconnected = True
-                await recorder.emit(
-                    "sse",
-                    event="disconnect",
-                    reason="transport_error",
-                    transport_error_class=_transport_error_class(exc),
-                    error=type(exc).__name__,
-                )
-            else:
-                await recorder.emit(
-                    "sse",
-                    event="connect_attempt",
-                    attempt=attempt,
-                    outcome="error",
-                    latency_s=round(time.monotonic() - started, 6),
-                    transport_error_class=_transport_error_class(exc),
-                    error=type(exc).__name__,
-                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if established:
+                    disconnected = True
+                    await recorder.emit(
+                        \"sse\",
+                        event=\"disconnect\",
+                        reason=\"transport_error\",
+                        transport_error_class=_transport_error_class(exc),
+                        error=type(exc).__name__,
+                    )
+                else:
+                    await recorder.emit(
+                        \"sse\",
+                        event=\"connect_attempt\",
+                        attempt=attempt,
+                        outcome=\"error\",
+                        latency_s=round(time.monotonic() - started, 6),
+                        error_class=type(exc).__name__,
+                        error=str(exc)[:240],
+                    )
+            finally:
+                await response.aclose()
         if not disconnected and established:
             return
         if await _wait_or_stop(stop, min(RECONNECT_INTERVAL_S, max(0.0, deadline - time.monotonic()))):
@@ -309,6 +339,7 @@ async def _control_channel(
     recorder: JsonlRecorder,
     base_url: str,
     token: str,
+    device_id: str,
     stop: asyncio.Event,
     deadline: float,
 ) -> None:
@@ -319,12 +350,20 @@ async def _control_channel(
     hello = {
         "type": "hello",
         "schema_version": 1,
-        "device_id": DEVICE_ID,
-        "machine_name": DEVICE_ID,
+        "device_id": device_id,
+        "machine_name": MACHINE_NAME,
         "engine_build": "deploy-window-probe",
         "supports": [],
         "provider_readiness": {},
     }
+    async def emit_frame(frame: str | bytes) -> None:
+        payload = _decode_json(frame) if isinstance(frame, str) else None
+        frame_kind = "text" if isinstance(frame, str) else "binary"
+        frame_type = payload.get("type") if isinstance(payload, dict) else None
+        fields: dict[str, Any] = {"event": "frame", "type": frame_type, "frame_kind": frame_kind}
+        if frame_type == "host.lifecycle" and isinstance(payload, dict):
+            fields["host_lifecycle"] = payload
+        await recorder.emit("control", **fields)
     attempt = 0
     while not stop.is_set() and time.monotonic() < deadline:
         attempt += 1
@@ -334,6 +373,7 @@ async def _control_channel(
                 url,
                 additional_headers=headers,
                 open_timeout=min(CONTROL_CONNECT_TIMEOUT_S, max(0.001, deadline - started)),
+                close_timeout=1.0,
             )
         except asyncio.CancelledError:
             raise
@@ -351,6 +391,35 @@ async def _control_channel(
                 return
             continue
 
+        try:
+            await connection.send(json.dumps(hello, separators=(",", ":")))
+            await connection.send('{"type":"heartbeat"}')
+            await recorder.emit("control", event="heartbeat_sent", type="heartbeat")
+            first_frame = await asyncio.wait_for(
+                connection.recv(),
+                timeout=min(CONTROL_CONNECT_TIMEOUT_S, max(0.001, deadline - time.monotonic())),
+            )
+        except asyncio.CancelledError:
+            await connection.close()
+            raise
+        except Exception as exc:
+            await recorder.emit(
+                "control",
+                event="connect_attempt",
+                attempt=attempt,
+                outcome="error",
+                latency_s=round(time.monotonic() - started, 6),
+                close_code=getattr(connection, "close_code", None),
+                close_reason=getattr(connection, "close_reason", None),
+                error_class=type(exc).__name__,
+                error=str(exc)[:240],
+            )
+            await connection.close()
+            if await _wait_or_stop(stop, min(RECONNECT_INTERVAL_S, max(0.0, deadline - time.monotonic()))):
+                return
+            continue
+
+        await emit_frame(first_frame)
         await recorder.emit(
             "control",
             event="connect_attempt",
@@ -360,15 +429,19 @@ async def _control_channel(
         )
         disconnected = False
         try:
-            await connection.send(json.dumps(hello, separators=(",", ":")))
             next_heartbeat = time.monotonic() + 10.0
             while not stop.is_set():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
-                until_heartbeat = max(0.0, next_heartbeat - time.monotonic())
+                now = time.monotonic()
+                if now >= next_heartbeat:
+                    await connection.send('{"type":"heartbeat"}')
+                    await recorder.emit("control", event="heartbeat_sent", type="heartbeat")
+                    next_heartbeat = time.monotonic() + 10.0
+                    continue
                 try:
-                    frame = await asyncio.wait_for(connection.recv(), timeout=min(remaining, until_heartbeat or remaining))
+                    frame = await asyncio.wait_for(connection.recv(), timeout=min(remaining, next_heartbeat - now))
                 except asyncio.TimeoutError:
                     if time.monotonic() >= deadline:
                         break
@@ -377,17 +450,7 @@ async def _control_channel(
                         await recorder.emit("control", event="heartbeat_sent", type="heartbeat")
                         next_heartbeat = time.monotonic() + 10.0
                     continue
-                if isinstance(frame, bytes):
-                    payload = None
-                    frame_kind = "binary"
-                else:
-                    payload = _decode_json(frame)
-                    frame_kind = "text"
-                frame_type = payload.get("type") if isinstance(payload, dict) else None
-                fields: dict[str, Any] = {"event": "frame", "type": frame_type, "frame_kind": frame_kind}
-                if frame_type == "host.lifecycle" and isinstance(payload, dict):
-                    fields["host_lifecycle"] = payload
-                await recorder.emit("control", **fields)
+                await emit_frame(frame)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -424,6 +487,8 @@ async def _record(args: argparse.Namespace) -> None:
     token = os.environ.get(args.token_env)
     if not token:
         raise SystemExit(f"environment variable {args.token_env!r} is unset or empty")
+    if not args.device_id.strip():
+        raise SystemExit("--device-id must be non-empty")
     parsed = urlsplit(args.base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise SystemExit("--base-url must be an absolute http:// or https:// URL")
@@ -435,9 +500,9 @@ async def _record(args: argparse.Namespace) -> None:
         async with httpx.AsyncClient() as client:
             tasks = [
                 asyncio.create_task(_health_channel(client, recorder, args.base_url, stop, deadline)),
-                asyncio.create_task(_write_channel(client, recorder, args.base_url, token, stop, deadline)),
-                asyncio.create_task(_control_channel(recorder, args.base_url, token, stop, deadline)),
-                asyncio.create_task(_sse_channel(client, recorder, args.base_url, token, stop, deadline)),
+                asyncio.create_task(_write_channel(client, recorder, args.base_url, token, args.device_id, stop, deadline)),
+                asyncio.create_task(_control_channel(recorder, args.base_url, token, args.device_id, stop, deadline)),
+                asyncio.create_task(_sse_channel(client, recorder, args.base_url, token, args.device_id, stop, deadline)),
             ]
             try:
                 await asyncio.sleep(args.duration)
@@ -479,7 +544,21 @@ def _lifecycle_state(data: Any) -> str | None:
     return state if isinstance(state, str) else None
 
 
-def _channel_summary(records: list[dict[str, Any]], channel: str, open_at: float | None) -> dict[str, Any]:
+def _connected_admission_open(data: Any) -> bool:
+    if isinstance(data, str):
+        data = _decode_json(data)
+    if not isinstance(data, dict):
+        return False
+    if data.get("admission") == "open":
+        return True
+    runtime = data.get("runtime")
+    return isinstance(runtime, dict) and runtime.get("admission") == "open"
+
+def _channel_summary(
+    records: list[dict[str, Any]],
+    channel: str,
+    serving_evidence: dict[str, Any] | None,
+) -> dict[str, Any]:
     observations = [row for row in records if row.get("channel") == channel]
     disconnect = next((row for row in observations if row.get("event") == "disconnect"), None)
     disconnect_at = _mono(disconnect) if disconnect else None
@@ -495,7 +574,9 @@ def _channel_summary(records: list[dict[str, Any]], channel: str, open_at: float
         None,
     )
     reconnect_at = _mono(reconnect) if reconnect else None
-    after_open = reconnect_at - open_at if reconnect_at is not None and open_at is not None and reconnect_at >= open_at else None
+    evidence_at = _mono(serving_evidence) if serving_evidence else None
+    after_open = reconnect_at - evidence_at if reconnect_at is not None and evidence_at is not None and reconnect_at >= evidence_at else None
+    after_disconnect = reconnect_at - disconnect_at if reconnect_at is not None and disconnect_at is not None else None
     states: list[str] = []
     if channel == "control":
         for row in observations:
@@ -516,7 +597,9 @@ def _channel_summary(records: list[dict[str, Any]], channel: str, open_at: float
         "close_code": disconnect.get("close_code") if disconnect else None,
         "close_reason": disconnect.get("close_reason") if disconnect else None,
         "reconnect_monotonic": reconnect_at,
+        "reconnect_after_disconnect_s": round(after_disconnect, 6) if after_disconnect is not None else None,
         "reconnect_after_open_s": round(after_open, 6) if after_open is not None else None,
+        "reconnect_reference": serving_evidence.get("source") if serving_evidence else None,
         "host_lifecycle_states": states,
     }
 
@@ -596,6 +679,53 @@ def analyze_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     window_start = _mono(first_failure) if first_failure else None
     window_end = _mono(first_success_after) if first_success_after else None
     closed_writes_s = round(window_end - window_start, 6) if window_start is not None and window_end is not None else None
+    disconnect_times = [
+        at
+        for row in rows
+        if row.get("channel") in {"control", "sse"} and row.get("event") == "disconnect"
+        for at in [_mono(row)]
+        if at is not None
+    ]
+    restart_times = [at for at in [window_start, *disconnect_times] if at is not None]
+    restart_start = min(restart_times) if restart_times else None
+    evidence_floor = change_at if change_at is not None else restart_start
+    evidence_candidates: list[tuple[float, str, dict[str, Any]]] = []
+
+    def offer_evidence(source: str, row: dict[str, Any]) -> None:
+        at = _mono(row)
+        if at is not None and evidence_floor is not None and at >= evidence_floor:
+            evidence_candidates.append((at, source, row))
+
+    for row in health:
+        runtime = _runtime(row)
+        if runtime and runtime.get("admission") == "open":
+            offer_evidence("health_admission_open", row)
+    for row in rows:
+        if row.get("channel") == "control" and row.get("event") == "frame" and row.get("type") == "host.lifecycle":
+            if _lifecycle_state(row.get("host_lifecycle")) == "serving":
+                offer_evidence("control_host_lifecycle", row)
+        elif row.get("channel") == "sse" and row.get("event") == "message":
+            if row.get("name") == "host_lifecycle" and _lifecycle_state(row.get("data")) == "serving":
+                offer_evidence("sse_host_lifecycle", row)
+            elif row.get("name") == "connected" and _connected_admission_open(row.get("data")):
+                offer_evidence("sse_connected_admission_open", row)
+    for row in writes:
+        try:
+            status_code = int(row.get("status")) if row.get("status") is not None else None
+        except (TypeError, ValueError):
+            status_code = None
+        if status_code is not None and 200 <= status_code < 300:
+            offer_evidence("accepted_write", row)
+    serving_evidence = None
+    if evidence_candidates:
+        evidence_at, evidence_source, evidence_row = min(evidence_candidates, key=lambda candidate: candidate[0])
+        serving_evidence = {
+            "source": evidence_source,
+            "at_monotonic": evidence_at,
+            "wall_time": evidence_row.get("wall_time"),
+        }
+        if restart_start is not None:
+            serving_evidence["after_restart_start_s"] = round(evidence_at - restart_start, 6)
     writes_summary = {
         "first_failure_monotonic": window_start,
         "first_failure_wall_time": first_failure.get("wall_time") if first_failure else None,
@@ -607,9 +737,10 @@ def analyze_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     health_summary = {
         "epoch_change": epoch_change,
         "first_open_after_change": open_admission,
+        "first_serving_evidence": serving_evidence,
     }
-    control_summary = _channel_summary(rows, "control", open_admission.get("at_monotonic") if open_admission else None)
-    sse_summary = _channel_summary(rows, "sse", open_admission.get("at_monotonic") if open_admission else None)
+    control_summary = _channel_summary(rows, "control", serving_evidence)
+    sse_summary = _channel_summary(rows, "sse", serving_evidence)
     return {
         "observation_count": len(rows),
         "writes": writes_summary,
@@ -659,6 +790,7 @@ def _parser() -> argparse.ArgumentParser:
     record = commands.add_parser("record", help="record health, writes, control WebSocket, and SSE concurrently")
     record.add_argument("--base-url", required=True, help="Runtime Host base URL, e.g. https://longhouse.example")
     record.add_argument("--token-env", required=True, metavar="VAR", help="environment variable containing the device token")
+    record.add_argument("--device-id", default=DEVICE_ID, help="token-bound device id; default is deploy-window-probe")
     record.add_argument("--duration", required=True, type=_positive_duration, metavar="SECONDS")
     record.add_argument("--out", required=True, metavar="PATH.jsonl", help="write observations to this JSONL file")
     analyze_parser = commands.add_parser("analyze", help="summarize a recorded JSONL probe")

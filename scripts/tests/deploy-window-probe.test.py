@@ -61,6 +61,7 @@ def restart_records() -> list[dict[str, object]]:
         observation("sse", 12.6, event="disconnect", reason="transport_error"),
         observation("write", 13.0, event="response", status=502, latency_s=0.03, content_type="text/html", is_json=False, code=None, retryable=None, retry_after=None, is_html=True, transport_error_class=None),
         observation("health", 13.2, event="response", status=200, latency_s=0.02, runtime={"epoch": "epoch-2", "admission": "pending"}, build_commit="new-build"),
+        observation("sse", 13.4, event="message", name="connected", data={"runtime_epoch": "epoch-2", "admission": "open"}),
         observation("health", 13.5, event="response", status=200, latency_s=0.02, runtime={"epoch": "epoch-2", "admission": "open"}, build_commit="new-build"),
         observation("write", 13.75, event="response", status=503, latency_s=0.03, content_type="application/json", is_json=True, code=None, retryable=None, retry_after="1", is_html=False, transport_error_class=None),
         observation("write", 14.0, event="response", status=None, latency_s=0.02, content_type=None, is_json=False, code=None, retryable=None, retry_after=None, is_html=False, transport_error_class="connect"),
@@ -82,7 +83,7 @@ class AnalyzeRestartTests(unittest.TestCase):
             summary = PROBE.analyze(path)
 
         expected = {
-            "observation_count": 23,
+            "observation_count": 24,
             "writes": {
                 "first_failure_monotonic": 11.5,
                 "first_failure_wall_time": "2026-10-06T18:00:11.500Z",
@@ -110,13 +111,21 @@ class AnalyzeRestartTests(unittest.TestCase):
                     "wall_time": "2026-10-06T18:00:13.500Z",
                     "after_epoch_change_s": 0.3,
                 },
+                "first_serving_evidence": {
+                    "source": "sse_connected_admission_open",
+                    "at_monotonic": 13.4,
+                    "wall_time": "2026-10-06T18:00:13.400Z",
+                    "after_restart_start_s": 1.9,
+                },
             },
             "control": {
                 "disconnect_monotonic": 12.5,
                 "close_code": 1012,
                 "close_reason": "host.lifecycle",
                 "reconnect_monotonic": 14.25,
-                "reconnect_after_open_s": 0.75,
+                "reconnect_after_disconnect_s": 1.75,
+                "reconnect_after_open_s": 0.85,
+                "reconnect_reference": "sse_connected_admission_open",
                 "host_lifecycle_states": ["updating", "serving"],
             },
             "sse": {
@@ -124,7 +133,9 @@ class AnalyzeRestartTests(unittest.TestCase):
                 "close_code": None,
                 "close_reason": None,
                 "reconnect_monotonic": 14.1,
-                "reconnect_after_open_s": 0.6,
+                "reconnect_after_disconnect_s": 1.5,
+                "reconnect_after_open_s": 0.7,
+                "reconnect_reference": "sse_connected_admission_open",
                 "host_lifecycle_states": ["updating", "serving"],
             },
             "verdict": {
@@ -135,6 +146,46 @@ class AnalyzeRestartTests(unittest.TestCase):
         }
         self.assertEqual(summary, expected)
 
+
+    def test_legacy_health_reports_write_and_reconnect_durations(self) -> None:
+        records = [
+            observation("health", 1.0, event="response", status=200, latency_s=0.01, runtime=None, build_commit="legacy-build"),
+            observation("control", 1.1, event="connect_attempt", attempt=1, outcome="connected", latency_s=0.1),
+            observation("sse", 1.2, event="connect_attempt", attempt=1, outcome="connected", status=200, latency_s=0.1),
+            observation("write", 1.5, event="response", status=200, is_json=True, code=None, is_html=False, transport_error_class=None),
+            observation("write", 2.0, event="response", status=503, is_json=True, code="runtime_restarting", retryable=True, is_html=False, transport_error_class=None),
+            observation("control", 2.1, event="disconnect", close_code=1012, close_reason="host.lifecycle"),
+            observation("sse", 2.2, event="disconnect", reason="transport_error"),
+            observation("control", 3.2, event="connect_attempt", attempt=2, outcome="connected", latency_s=0.2),
+            observation("sse", 3.3, event="connect_attempt", attempt=2, outcome="connected", status=200, latency_s=0.2),
+            observation("write", 4.0, event="response", status=200, is_json=True, code=None, is_html=False, transport_error_class=None),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "legacy.jsonl"
+            path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+            summary = PROBE.analyze(path)
+
+        self.assertEqual(summary["observation_count"], 10)
+        self.assertIsNone(summary["health"]["epoch_change"])
+        self.assertIsNone(summary["health"]["first_open_after_change"])
+        self.assertEqual(
+            summary["health"]["first_serving_evidence"],
+            {
+                "source": "accepted_write",
+                "at_monotonic": 4.0,
+                "wall_time": "2026-10-06T18:00:04.000Z",
+                "after_restart_start_s": 2.0,
+            },
+        )
+        self.assertEqual(summary["writes"]["closed_writes_s"], 2.0)
+        self.assertEqual(
+            summary["writes"]["failed_by_class"],
+            {"typed": 1, "untyped_json": 0, "html": 0, "transport": 0, "timeout": 0, "other": 0},
+        )
+        self.assertEqual(summary["control"]["reconnect_after_disconnect_s"], 1.1)
+        self.assertIsNone(summary["control"]["reconnect_after_open_s"])
+        self.assertEqual(summary["sse"]["reconnect_after_disconnect_s"], 1.1)
+        self.assertIsNone(summary["sse"]["reconnect_after_open_s"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

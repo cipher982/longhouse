@@ -49,6 +49,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run ios-ui-shot ios-previews
 .PHONY: validate-playwright-install
+.PHONY: validate-deploy-window-probe
 .PHONY: test-engine-single test-engine-omp-helm build-health build-clean
 .PHONY: test-engine-projection-failure test-engine-focused
 .PHONY: provider-interaction-probe
@@ -758,6 +759,7 @@ VALIDATE_MEMBERS := \
 	validate-review-gate \
 	validate-verifier-boundary \
 	validate-provider-cli-canaries \
+	validate-ops-scripts \
 	validate-deploy-window-probe \
 	validate-sdk \
 	validate-build-scripts \
