@@ -54,6 +54,7 @@ import {
   buildSessionBackgroundNoticesFixture,
   buildSessionDetailStressFixture,
   buildSessionProseIdleFixture,
+  buildRailSessionsFixture,
   buildSessionQuestionFixture,
   buildSessionAttentionFixture,
   buildSessionResumeFixture,
@@ -576,6 +577,23 @@ async function installSceneMocks(
             command: `longhouse codex --cwd /Users/example/git/zerg --resume-session ${fixture.session.id}`,
             handoff: "terminal_command",
           }),
+        });
+        return;
+      }
+
+      // The rail warms its neighbours' workspaces while idle; they have no
+      // transcript in this scene.
+      if (/^\/api\/timeline\/sessions\/rail-[^/]+\/workspace$/.test(pathname)) {
+        await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+        return;
+      }
+
+      // The session rail's list: the timeline's first page.
+      if (pathname === "/api/timeline/sessions") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(buildRailSessionsFixture(fixture.session)),
         });
         return;
       }

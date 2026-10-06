@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Navigate,
@@ -59,6 +60,8 @@ import { useAuth } from "@/features/auth/auth";
 import { useHeaderSlot } from "@/app/headerSlot";
 import { useStoredState } from "@/shared/hooks/useStoredState";
 import { GaugeIcon } from "@/shared/ui/icons";
+import { SessionRailFrame } from "./rail/SessionRail";
+import { useReportActiveSession, useSessionRail } from "./rail/sessionRailContext";
 import { config } from "@/shared/lib/config";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import { getSessionStartedLabel } from "./sessionTiming";
@@ -104,6 +107,7 @@ function SessionDetailWorkspaceRoute({
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const headerSlot = useHeaderSlot();
+  const sessionRail = useSessionRail();
   // The readout panel (turn clock, context, tool calls, activity) is opt-in:
   // the header already carries the counts and state it used to repeat.
   const [readoutsOpen, setReadoutsOpen] = useStoredState<boolean>(
@@ -304,6 +308,22 @@ function SessionDetailWorkspaceRoute({
     [queryClient],
   );
 
+  // Tell the rail what this session looks like right now, so it can show it
+  // even when it is not among the recent sessions the rail lists.
+  const railReport = useMemo(() => {
+    if (!session) return null;
+    const state = getSessionHeaderState(session, nowMs, turnStartMs);
+    return {
+      id: session.id,
+      title: getSessionCardText(session, { titleMaxChars: 80 }).title,
+      provider: session.provider ?? null,
+      host: session.control?.source_runner_name?.trim() || session.device_id || null,
+      stateText: state.text,
+      tone: state.tone,
+    };
+  }, [session, nowMs, turnStartMs]);
+  useReportActiveSession(railReport);
+
   const workspaceReady = !sessionLoading && !eventsLoading;
 
   useReadinessFlag({
@@ -471,6 +491,17 @@ function SessionDetailWorkspaceRoute({
   // While running: elapsed so far. Otherwise: the most recently finished
   // turn's real duration, never a fabricated "since idle" value.
   const turnSeconds = turnElapsedSeconds ?? lastTurnSeconds;
+
+  // With the rail, the turns list is an accordion under this session's rail
+  // row; without it (shared views, tests) it keeps its own column.
+  const turnOutline = (
+    <TurnOutline
+      turns={turns}
+      runningTurnKey={runningTurnKey}
+      currentTurnKey={currentTurnKey}
+      onSelectTurn={handleSelectTurn}
+    />
+  );
 
   const workspaceClassName = [
     "session-workspace-route",
@@ -705,6 +736,7 @@ function SessionDetailWorkspaceRoute({
       data-runtime-tone={runtime.tone}
     >
       {launchPendingBanner}
+      {sessionRail?.turnsTarget ? createPortal(turnOutline, sessionRail.turnsTarget) : null}
       <div className="session-workspace-shell">
         <TimelinePane
           items={items}
@@ -735,14 +767,7 @@ function SessionDetailWorkspaceRoute({
             />
           }
           headerRight={headerRight}
-          outline={
-            <TurnOutline
-              turns={turns}
-              runningTurnKey={runningTurnKey}
-              currentTurnKey={currentTurnKey}
-              onSelectTurn={handleSelectTurn}
-            />
-          }
+          outline={sessionRail ? undefined : turnOutline}
           rail={
             readoutsOpen ? (
             <ReadoutRail
@@ -931,7 +956,7 @@ export default function SessionDetailPage() {
 
   // Key the workspace by session ID so filters, selection, and scroll state reset
   // through remount semantics instead of a session-sync effect inside the hook.
-  return (
+  const workspaceRoute = (
     <SessionDetailWorkspaceRoute
       key={sessionId ?? "__missing-session__"}
       sessionId={sessionId ?? null}
@@ -940,5 +965,13 @@ export default function SessionDetailPage() {
       debugTelemetry={debugTelemetry}
       sharedByUserId={sharedByUserId}
     />
+  );
+  // A shared view is someone else's session; the viewer's own rail does not
+  // belong beside it. Everywhere else the rail stays mounted across switches.
+  if (sharedByUserId != null) return workspaceRoute;
+  return (
+    <SessionRailFrame activeSessionId={sessionId ?? null} returnTo={returnTo}>
+      {workspaceRoute}
+    </SessionRailFrame>
   );
 }

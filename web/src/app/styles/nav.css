@@ -788,3 +788,15 @@
     display: none;
   }
 }
+
+/* Session routes: the phone menu drawer also holds the session rail. */
+.mobile-nav-drawer:has(.mobile-nav-session-slot) .mobile-nav-links {
+  flex: none;
+}
+
+.mobile-nav-session-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border-subtle);
+}

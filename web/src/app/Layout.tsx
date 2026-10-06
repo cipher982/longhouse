@@ -17,7 +17,7 @@ import { SwarmLogo } from "@/shared/ui/SwarmLogo";
 import "./styles/layout.css";
 import { XIcon } from "@/shared/ui/icons";
 import { getNavItems } from "./navigation/navItems";
-import { HeaderSlotContext, isSessionRoute } from "./headerSlot";
+import { HeaderSlotContext, MobileNavSlotContext, isSessionRoute } from "./headerSlot";
 
 const MACHINE_STATUS_INITIAL_DELAY_MS = 2_500;
 
@@ -46,10 +46,12 @@ function AvatarContent({ user, initials, className }: { user: AvatarUser; initia
 function WelcomeHeader({
   compact = false,
   slotRef,
+  mobileSlotRef,
 }: {
   /** Session routes: one ~44px bar whose middle is the page's slot. */
   compact?: boolean;
   slotRef?: (node: HTMLDivElement | null) => void;
+  mobileSlotRef?: (node: HTMLDivElement | null) => void;
 }) {
   const { user, logout } = useAuth();
   const location = useLocation();
@@ -348,6 +350,13 @@ function WelcomeHeader({
           </button>
         )}
       </div>
+      {compact ? (
+        <div
+          className="mobile-nav-session-slot"
+          ref={mobileSlotRef}
+          data-testid="mobile-nav-session-slot"
+        />
+      ) : null}
       {user && (
         <div className="mobile-nav-footer">
           <div className="mobile-nav-user">
@@ -477,16 +486,19 @@ export default function Layout({ children }: PropsWithChildren) {
   const location = useLocation();
   const compact = isSessionRoute(location.pathname);
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
+  const [mobileSlot, setMobileSlot] = useState<HTMLDivElement | null>(null);
 
   return (
     <HeaderSlotContext.Provider value={compact ? slot : null}>
-      <WelcomeHeader compact={compact} slotRef={setSlot} />
-      <div
-        id="app-container"
-        data-testid="app-container"
-      >
-        {children}
-      </div>
+      <MobileNavSlotContext.Provider value={compact ? mobileSlot : null}>
+        <WelcomeHeader compact={compact} slotRef={setSlot} mobileSlotRef={setMobileSlot} />
+        <div
+          id="app-container"
+          data-testid="app-container"
+        >
+          {children}
+        </div>
+      </MobileNavSlotContext.Provider>
     </HeaderSlotContext.Provider>
   );
 }

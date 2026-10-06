@@ -18,3 +18,11 @@ export function useHeaderSlot(): HTMLElement | null {
 export function isSessionRoute(pathname: string): boolean {
   return /^\/(timeline|sessions)\/[^/]+\/?$/.test(pathname);
 }
+
+/** The phone menu drawer's page slot: on a session route the session rail
+ * renders there, behind the existing menu button. */
+export const MobileNavSlotContext = createContext<HTMLElement | null>(null);
+
+export function useMobileNavSlot(): HTMLElement | null {
+  return useContext(MobileNavSlotContext);
+}
