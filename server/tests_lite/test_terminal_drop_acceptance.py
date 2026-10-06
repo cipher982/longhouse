@@ -237,7 +237,8 @@ def test_a_terminal_lost_in_transit_keeps_the_console_check_red(tmp_path, monkey
             assert applied.status_code == 200, applied.text
 
             settled, observed = _settled(client, session_id, run_id)
-            assert observed["display_phase"] == "Ended", observed
+            # A completed Console turn leaves a reusable session: Idle, not Ended.
+            assert observed["display_phase"] == "Idle", observed
             assert observed["working_set"] == "history", observed
             assert settled, f"{provider}: a delivered terminal must settle the served state, got {observed}"
     finally:
