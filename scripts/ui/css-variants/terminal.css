@@ -1,0 +1,42 @@
+/* Terminal density: a review-only layout experiment, injected by
+   `ui-capture --css-variant=terminal`. Never imported by the app.
+
+   The transcript fills the main column (capped near 190 characters of
+   14.5px prose, ~1400px), prose drops to 14.5px / 1.45, and paragraph and
+   list spacing tightens. Tool rows key off --tl-tool-max, so they widen
+   with it. The scroller's --tl-side clamps at zero, so a column wider than
+   the viewport simply fills it. */
+.session-workspace-route--single-column {
+  --tl-tool-max: 1400px;
+  --tl-prose-max: var(--tl-tool-max);
+  --tl-message-max: var(--tl-tool-max);
+}
+
+.tl-msg {
+  padding: var(--space-2) 0;
+}
+
+.tl-msg__body {
+  font-size: 14.5px;
+  line-height: 1.45;
+}
+
+.tl-msg__body p {
+  margin: 0 0 0.4em;
+}
+
+.tl-msg__body ul,
+.tl-msg__body ol {
+  margin: 0.25em 0;
+}
+
+.tl-msg__body li {
+  margin: 0.05em 0;
+}
+
+.tl-msg__body h1,
+.tl-msg__body h2,
+.tl-msg__body h3,
+.tl-msg__body h4 {
+  margin: 0.6em 0 0.2em;
+}

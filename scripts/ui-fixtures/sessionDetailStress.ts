@@ -1527,3 +1527,221 @@ export function buildSessionBackgroundNoticesFixture(): SessionDetailFixture {
   fixture.projection.items = events.map((event) => projectionEvent(event, sessionId));
   return fixture;
 }
+
+/**
+ * The shape most sessions actually have when someone opens them: a Claude
+ * Helm session, idle, about thirty messages over five asks, whose newest
+ * assistant turn is a long prose answer (headings, bold lead-ins, bullets,
+ * inline code). The stress fixture is mostly tool rows; this one is what the
+ * reading column has to hold. Invented content.
+ */
+export function buildSessionProseIdleFixture(): SessionDetailFixture {
+  const sessionId = SESSION_DETAIL_STRESS_SESSION_ID;
+  const lastTurnEndedAt = "2026-04-15T16:02:40Z";
+  const delegation = {
+    state: "none",
+    count: 0,
+    kinds: {},
+    source: "claude_hook",
+    observed_at: lastTurnEndedAt,
+    valid_until: null,
+    items: [],
+    recent_items: [],
+  };
+  const session = makeSession({
+    id: sessionId,
+    provider: "claude",
+    project: "formula-lab",
+    cwd: "/Users/example/git/formula-lab",
+    git_repo: "https://github.com/example/formula-lab.git",
+    git_branch: "main",
+    started_at: "2026-04-15T14:54:00Z",
+    last_activity_at: lastTurnEndedAt,
+    timeline_anchor_at: lastTurnEndedAt,
+    status: "idle",
+    thread_root_session_id: sessionId,
+    thread_head_session_id: sessionId,
+    thread_continuation_count: 0,
+    user_messages: 5,
+    assistant_messages: 24,
+    tool_calls: 85,
+    summary_title: "Benchmark for AI-designed formula languages",
+    summary:
+      "Built a small harness that trains tiny models on spreadsheet-formula tasks written in several candidate languages and compares held-out pass rates.",
+    first_user_message: "I want a benchmark that tells us which formula language a small model learns fastest.",
+    usage_latest: {
+      model: "claude-opus-5-5",
+      effort: "high",
+      context_tokens: 267_310,
+      output_tokens: 1_840,
+      thinking_tokens: 420,
+      at: lastTurnEndedAt,
+      label: "opus 5.5 · high · 267k ctx",
+    },
+    control: {
+      managed_transport: "claude_channel",
+      source_runner_name: "cinder",
+      attach_command: `longhouse claude --attach ${sessionId}`,
+    },
+    capabilities: {
+      live_control_available: true,
+      host_reattach_available: true,
+      reply_to_live_session_available: true,
+      can_queue_next_input: true,
+      attach_images: true,
+      can_steer_active_turn: true,
+      display_label: "Live on cinder",
+      display_tone: "success",
+    },
+    session_state: makeSessionState({
+      run: { lifecycle: "running", started_at: "2026-04-15T14:54:00Z", ended_at: null },
+      activity: {
+        state: "quiescent",
+        raw_kind: "idle",
+        tool: null,
+        source: "claude_hook",
+        observed_at: lastTurnEndedAt,
+        valid_until: null,
+      },
+      delegation,
+      presentation: {
+        primary: { key: "idle", label: "Idle", tone: "idle", observed_at: lastTurnEndedAt },
+        access: { key: "live_control", label: "Live control", tone: "live", observed_at: lastTurnEndedAt },
+        transcript: null,
+      },
+    }),
+  });
+
+  let nextId = 5000;
+  const events: AgentEvent[] = [];
+  const at = (hhmmss: string) => `2026-04-15T${hhmmss}Z`;
+  const say = (role: "user" | "assistant", time: string, text: string, overrides: Partial<AgentEvent> = {}) =>
+    events.push(makeEvent(nextId++, role, at(time), { content_text: text, ...overrides }));
+  const tool = (time: string, name: string, input: unknown, output: string) => {
+    const callId = `prose-tool-${nextId}`;
+    events.push(makeEvent(nextId++, "assistant", at(time), { tool_name: name, tool_input_json: input, tool_call_id: callId }));
+    events.push(makeEvent(nextId++, "tool", at(time), { tool_name: name, tool_output_text: output, tool_call_id: callId }));
+  };
+  const endTurn = (startedAt: string, endedAt: string, messageCount: number) => ({
+    turn_end: {
+      duration_ms: Date.parse(at(endedAt)) - Date.parse(at(startedAt)),
+      ended_at: at(endedAt),
+      message_count: messageCount,
+      outcome: "completed" as const,
+    },
+  });
+
+  say("user", "14:54:00", "I want a benchmark that tells us which formula language a small model learns fastest. Thoughts on how to set it up?");
+  say("assistant", "14:54:20", "Let me look at what's in the repo first.");
+  tool("14:54:30", "Bash", { command: "ls ~/git/formula-lab" }, "README.md\npyproject.toml\nsrc/\ntests/");
+  say("assistant", "14:54:35", "Mostly empty, so we're starting fresh. Reading the README for any constraints.");
+  tool("14:54:40", "Read", { file_path: "/Users/example/git/formula-lab/README.md" }, "# formula-lab\nScratch space for formula language experiments.");
+  say(
+    "assistant",
+    "14:56:10",
+    "The cleanest setup is a fixed task generator, one renderer per candidate language, and the same tiny model trained on each. Then the only thing that varies is the language.\n\nI'd start with four languages: classic spreadsheet syntax, a Lisp-style prefix form, a pipeline form (`range | filter | sum`), and a verbose English-like form.",
+    endTurn("14:54:00", "14:56:10", 4),
+  );
+
+  say("user", "15:14:00", "Oh maybe I got confused earlier. Is the model trained per language, or once on all of them?");
+  say(
+    "assistant",
+    "15:14:50",
+    "Per language. Training once on all of them would let a strong language carry a weak one, and the comparison would stop meaning anything.",
+    endTurn("15:14:00", "15:14:50", 2),
+  );
+
+  say("user", "15:22:00", "I was thinking RL could help here too, rewarding programs that pass hidden tests. Worth it at this size?");
+  say("assistant", "15:22:30", "Checking whether anything reward-shaped exists yet.");
+  tool("15:22:40", "Grep", { pattern: "reward", path: "src" }, "No matches found");
+  say(
+    "assistant",
+    "15:24:00",
+    "Yes, as a second phase. Supervised training gets each model to valid syntax; a short RL phase rewarded by hidden tests then shows which language leaves more room to improve. I'll keep RL behind a flag so the supervised numbers stand on their own.",
+    endTurn("15:22:00", "15:24:00", 4),
+  );
+
+  say("user", "15:26:00", "Here's a second opinion I got on the design. Anything worth taking from it?");
+  say(
+    "assistant",
+    "15:28:30",
+    "Two things worth taking: deduplicate tasks by behaviour rather than by text, so held-out tasks are genuinely unseen; and report cost per program alongside pass rate, since a language that passes slightly less often but is half as long may still win.",
+    endTurn("15:26:00", "15:28:30", 2),
+  );
+
+  say("user", "15:39:00", "We can start with my laptop. Build the first version and run an overfit check so we know the wiring works.");
+  const toolTimes = ["15:40", "15:42", "15:44", "15:47", "15:50", "15:53", "15:56", "15:58"];
+  // Claude narrates between tool calls; these short messages are most of a
+  // real session's message count.
+  const narration = [
+    "Starting with the task generator, since every other phase reads its output.",
+    "Generator is in. Adding one renderer per language next, with a round-trip test for each.",
+    "The Lisp renderer double-quoted string literals; fixed and re-running the round trip.",
+    "Renderers pass. Wiring the character-level model and the training loop.",
+    "Training runs. The GPU is fast for training but slow for sampling, so I'm moving sampling to a CPU copy.",
+    "Adding the RL phase behind a flag, rewarded by hidden tests.",
+    "Overfit check on 16 tasks: every language reaches 1.0 after training.",
+    "Running the full test suite before I write this up.",
+  ];
+  toolTimes.forEach((minute, index) => {
+    say("assistant", `${minute}:00`, narration[index]);
+    tool(
+      `${minute}:00`,
+      index % 3 === 0 ? "Edit" : "Bash",
+      index % 3 === 0
+        ? { file_path: `/Users/example/git/formula-lab/src/formula_lab/phase_${index}.py` }
+        : { command: index === 7 ? "uv run pytest -q" : `uv run formula-lab overfit --step ${index}` },
+      index === 7 ? "42 passed in 38.4s" : "ok",
+    );
+  });
+  say(
+    "assistant",
+    "16:02:40",
+    [
+      "## Where things stand",
+      "",
+      "The first version is in and the overfit check passes. Here is what exists, what the check proved, and what I'd run next.",
+      "",
+      "### What I built",
+      "",
+      "- **Task generator:** chains of list operations (`map`, `filter`, `sort`, `sum` and so on) over small ranges. Duplicates are removed by behaviour, so held-out tasks are genuinely unseen.",
+      "- **Renderers:** one per language. Each turns the same abstract task into source text, and a round-trip test proves every renderer parses its own output.",
+      "- **Training loop:** generate tasks, render them in the language, train a small character-level model from scratch, evaluate, run reinforcement learning rewarded by passing hidden tests, then evaluate again. Each phase is timed.",
+      "- **Comparison loop:** ranks languages by pass rate and by how their cost per program changes as models get bigger. For now it tries every language in the starting set; a learned language designer comes later.",
+      "- **Commands:** `scripts/smoke.sh` runs the overfit check. `uv run pytest` takes about 40 s and covers every phase, including a test that forces mixed rewards so the RL update itself runs.",
+      "",
+      "**Overfit result** (16 tasks, ~800K-parameter model): all four languages reach 1.0 pass@1 after training and stay at 1.0 after RL. RL did update on most steps. This only proves the wiring works, not which language is better. Details are in `results/2026-04-15-overfit.md`.",
+      "",
+      "### Speed",
+      "",
+      "- The laptop GPU trains about 20× faster than its CPU but generates text token by token 6–14× slower. So training runs on the GPU and sampling runs on a CPU copy of the weights.",
+      "- Other builds kept the machine at a load average of 8–23 throughout. That slowed everything several times over and made one safety hook time out twice.",
+      "",
+      "### Next step",
+      "",
+      "The first real comparison: 2,000 training tasks and 200 held-out, three model sizes (about 100K, 800K and 5M parameters), and all four languages, ranked by held-out pass rate and cost per program. It's one command (`uv run formula-lab search --sizes xs s m`). I'd start it once the other builds have finished, so the timings are clean. Tell me when to go, or I can start it now regardless.",
+    ].join("\n"),
+    endTurn("15:39:00", "16:02:40", 22),
+  );
+
+  const items = events.map((event) => projectionEvent(event, sessionId));
+  const projection: AgentSessionProjectionResponse = {
+    root_session_id: sessionId,
+    focus_session_id: sessionId,
+    head_session_id: sessionId,
+    path_session_ids: [sessionId],
+    items,
+    total: items.length,
+    page_offset: 0,
+    branch_mode: "head",
+    abandoned_events: 0,
+  };
+  const thread: AgentSessionThreadResponse = { root_session_id: sessionId, head_session_id: sessionId, sessions: [session] };
+  return {
+    session,
+    thread,
+    projection,
+    workspace: { session, thread, projection },
+    turns: { turns: [], total: 0 },
+  };
+}

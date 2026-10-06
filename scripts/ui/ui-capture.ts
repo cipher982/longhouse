@@ -14,7 +14,10 @@
  * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
  *
  * Usage:
- *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map]
+ *   bunx tsx scripts/ui/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2] [--wheel-map] [--css-variant=X]
+ *
+ * --css-variant injects scripts/ui/css-variants/<X>.css after the page loads:
+ * a layout experiment to look at, never shipped CSS (e.g. terminal density).
  *
  * --wheel-map sends a real wheel event at every 40px cell and writes
  * <page>-wheelmap.txt/.json: which scroll container moved (or "." = nothing),
@@ -29,6 +32,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts --scene=empty
  *   bunx tsx scripts/ui/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-detail-stress
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-prose-idle --viewport=2000x1200 --css-variant=terminal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
@@ -42,13 +46,14 @@
  */
 
 import { chromium, type BrowserContext, type Page, type Route } from "playwright";
-import { execSync, spawn } from "child_process";
-import { mkdirSync, writeFileSync } from "fs";
+import { execSync } from "child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { ensureFrontend, REPO_ROOT } from "./frontend";
 import {
   buildSessionBackgroundNoticesFixture,
   buildSessionDetailStressFixture,
+  buildSessionProseIdleFixture,
   buildSessionQuestionFixture,
   buildSessionAttentionFixture,
   buildSessionResumeFixture,
@@ -108,6 +113,7 @@ const SCENES = [
   "launch-model-picker",
   "launch-model-picked",
   "session-detail-stress",
+  "session-prose-idle",
   "session-input-outbox",
   "session-remote-image-outbox",
   "session-question",
@@ -156,6 +162,7 @@ const MACHINES_SCENES: readonly SceneName[] = ["machines-fleet", "machines-unava
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
   "session-detail-stress",
+  "session-prose-idle",
   "session-input-outbox",
   "session-remote-image-outbox",
   "session-question",
@@ -220,6 +227,7 @@ interface Options {
   viewport: ViewportConfig;
   probe: string[];
   wheelMap: boolean;
+  cssVariant: string | null;
 }
 
 type A11yFormat = "json" | "yaml" | "none";
@@ -257,6 +265,7 @@ function parseArgs(): Options {
   const probeArg = args.find((a) => a.startsWith("--probe="))?.slice("--probe=".length);
   const all = args.includes("--all");
   const wheelMap = args.includes("--wheel-map");
+  const cssVariant = args.find((a) => a.startsWith("--css-variant="))?.slice("--css-variant=".length) || null;
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const parsedViewport = parseViewport(viewportArg);
@@ -273,6 +282,7 @@ function parseArgs(): Options {
     viewport: parsedViewport,
     probe: probeArg ? probeArg.split(",").map((s) => s.trim()).filter(Boolean) : [],
     wheelMap,
+    cssVariant,
   };
 }
 
@@ -319,6 +329,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "landing-session" ||
     scene === PROVIDER_CERTIFICATION_SCENE ||
     scene === "session-detail-stress" ||
+    scene === "session-prose-idle" ||
     scene === "session-input-outbox" ||
     scene === "session-remote-image-outbox" ||
     scene === "session-question" ||
@@ -336,7 +347,16 @@ function sceneUsesMockApi(scene: SceneName): boolean {
   );
 }
 
+const CSS_VARIANTS_DIR = path.join(REPO_ROOT, "scripts/ui/css-variants");
+
+function cssVariantPath(name: string): string {
+  return path.join(CSS_VARIANTS_DIR, `${name}.css`);
+}
+
 function validateOptions(opts: Options): void {
+  if (opts.cssVariant && !existsSync(cssVariantPath(opts.cssVariant))) {
+    throw new Error(`--css-variant=${opts.cssVariant}: no ${path.relative(REPO_ROOT, cssVariantPath(opts.cssVariant))}`);
+  }
   if ((opts.scene === PROVIDER_CERTIFICATION_SCENE) !== (opts.page === "landing")) {
     throw new Error(`PAGE=landing and --scene=${PROVIDER_CERTIFICATION_SCENE} capture only each other.`);
   }
@@ -469,6 +489,8 @@ async function installSceneMocks(
         ? buildLandingSessionFixture()
         : scene === "session-resume" || scene === "session-ended"
         ? buildSessionResumeFixture()
+        : scene === "session-prose-idle"
+          ? buildSessionProseIdleFixture()
         : scene === "session-question"
           ? buildSessionQuestionFixture()
           : scene === "session-attention"
@@ -575,7 +597,7 @@ async function installSceneMocks(
         return;
       }
 
-      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && scene === "landing-session") {
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle")) {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
         return;
       }
@@ -1164,6 +1186,7 @@ async function captureBundle(
   frameName: string = pageName,
   probe: string[] = [],
   wheelMap = false,
+  cssVariant: string | null = null,
 ): Promise<CaptureResult> {
   const query = scene === "landing-search" ? `?query=${encodeURIComponent(LANDING_SEARCH_QUERY)}` : "";
   const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}${query}`;
@@ -1246,6 +1269,10 @@ async function captureBundle(
     `,
   });
 
+  if (cssVariant) {
+    await page.addStyleTag({ content: readFileSync(cssVariantPath(cssVariant), "utf-8") });
+  }
+
   // Let CSS apply
   await page.waitForTimeout(100);
 
@@ -1321,87 +1348,6 @@ async function captureBundle(
   }
 
   return { screenshotPath, a11yPath, a11yFormat };
-}
-
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
-async function isServing(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(url);
-    return response.status < 500;
-  } catch {
-    return false;
-  }
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Make sure something serves the web app at baseUrl. If nothing does and the
- * host is local, start Vite in web/ on that port and return a function that
- * stops it. If something already serves it, return a no-op: it is not ours.
- */
-async function ensureFrontend(baseUrl: string): Promise<() => Promise<void>> {
-  if (await isServing(baseUrl)) {
-    console.log(`Frontend already serving at ${baseUrl} (not owned by this capture)`);
-    return async () => {};
-  }
-  const target = new URL(baseUrl);
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)) {
-    throw new Error(`Nothing serves ${baseUrl} and it is not local; start it or change FRONTEND_URL.`);
-  }
-  const port = target.port || "80";
-  console.log(`Nothing listening at ${baseUrl}; starting Vite on :${port} for this capture...`);
-
-  const output: string[] = [];
-  const child = spawn("bunx", ["vite", "--port", port, "--strictPort", "--clearScreen", "false"], {
-    cwd: path.join(REPO_ROOT, "web"),
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-  });
-  child.stdout?.on("data", (chunk) => output.push(String(chunk)));
-  child.stderr?.on("data", (chunk) => output.push(String(chunk)));
-
-  const stop = async () => {
-    if (child.exitCode !== null || child.signalCode !== null || child.pid == null) return;
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {
-      /* already gone */
-    }
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
-      await sleep(100);
-    }
-    if (child.exitCode === null && child.signalCode === null) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
-    console.log("Stopped the Vite server this capture started.");
-  };
-
-  const onSignal = () => {
-    void stop().finally(() => process.exit(130));
-  };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
-
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Vite exited before serving:\n${output.join("")}`);
-    }
-    if (await isServing(baseUrl)) {
-      console.log(`Vite ready at ${baseUrl}`);
-      return stop;
-    }
-    await sleep(250);
-  }
-  await stop();
-  throw new Error(`Vite did not start serving ${baseUrl} within 60s:\n${output.join("")}`);
 }
 
 function getGitInfo(): { sha: string; branch: string; dirty: boolean } {
@@ -1532,6 +1478,7 @@ async function main() {
           frameName,
           opts.probe,
           opts.wheelMap,
+          opts.cssVariant,
         );
       } catch (error) {
         const { message, detail } = formatError(error);
@@ -1586,6 +1533,7 @@ async function main() {
         backendUrl: opts.backendUrl,
         viewport_name: opts.viewportName,
         viewport: opts.viewport,
+        css_variant: opts.cssVariant,
       },
     };
 

@@ -22,6 +22,7 @@ shown to you. Use it.
 | iOS ingest/recovery without a phone | `make simlab-run` | Hosted macOS VM (dispatched); `simlab.py up/run` on the bench for iteration | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
 | Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | Here, ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
 | Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | Here, ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed, unknown side by side |
+| Every web page and state at once | `make ui-gallery` (`ONLY=session` narrows it) | Here, ~3 min for ~105 captures, one Vite, 4 at a time | One `index.html` contact sheet under `/tmp/agents/ui-gallery/<stamp>/`: each fixture scene at 1440x900, 2000x1200 and phone, plus the newest downloaded iOS renders |
 
 **Dispatched targets** (`ios-previews`, `ios-ui-shot`, `simlab-run`, `test-ios`,
 `menubar-harness`) run in a fresh GitHub-hosted macOS VM and refuse a dirty or
@@ -239,6 +240,7 @@ request, render the page before reasoning from CSS or a pasted screenshot:
 make ui-capture PAGE=session-detail SCENE=session-detail-stress   # the session chat, ~7s from cold
 make ui-capture PAGE=session-detail SCENE=session-tones            # composer in all seven live states
 make ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile
+make ui-capture PAGE=session-detail SCENE=session-prose-idle VIEWPORT=2000x1200 CSS_VARIANT=terminal   # a layout experiment from scripts/ui/css-variants/
 make qa-ui-workbench                                  # timeline + session fixtures, desktop and mobile, one index.html (a qa-* goal: runs in the disposable container, output returns under artifacts/test-isolation/<run-id>/files/)
 make ui-capture                                       # demo data; needs the demo backend on :47300 (`make dev-demo`)
 make ui-capture ALL=1
