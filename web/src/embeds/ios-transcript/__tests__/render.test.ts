@@ -375,7 +375,7 @@ describe("subagents and the native bridge", () => {
       items: [{ id: "tool:7", kind: "tool", title: "Read", calls: [], bodyCursors: ["c"], bodyState: "failed" }],
     });
     expect(root().querySelector(".body-note")?.textContent).toBe(
-      "Couldn't load the full output; this is a preview. Close and reopen the row to try again.",
+      "Couldn't load the full output; this is a preview. Reopen the row in a few seconds to try again.",
     );
   });
 

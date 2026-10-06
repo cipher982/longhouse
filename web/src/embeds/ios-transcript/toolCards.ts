@@ -15,7 +15,7 @@ function bodyAttributes(item: TranscriptItem): string {
 
 const BODY_NOTES: Record<string, string> = {
   loading: "Loading the full output…",
-  failed: "Couldn't load the full output; this is a preview. Close and reopen the row to try again.",
+  failed: "Couldn't load the full output; this is a preview. Reopen the row in a few seconds to try again.",
   unavailable: "The full output is no longer available; this is a preview.",
   preview: "This is a preview of the output.",
 };
