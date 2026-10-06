@@ -159,7 +159,11 @@ export default function MachinesPage() {
   const [showConnect, setShowConnect] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
 
-  useReadinessFlag({ ready: !isLoading || Boolean(directory.data?.machines?.length) });
+  const waitingForDirectory = isError && !data && directory.isLoading;
+  useReadinessFlag({
+    ready: (!isLoading && !waitingForDirectory) || Boolean(directory.data?.machines?.length),
+    screenshotReady: !isLoading && !waitingForDirectory,
+  });
 
   const summaries = data?.machines ?? [];
   const active = summaries.filter((summary) => !machineStatus(summary).quiet);

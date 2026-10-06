@@ -81,12 +81,14 @@ describe("MachinesPage", () => {
 
     const row = await screen.findByTestId("machine-directory-row-cinder");
     expect(document.body).toHaveAttribute("data-ready", "true");
+    expect(document.body).not.toHaveAttribute("data-screenshot-ready", "true");
     expect(row).toHaveTextContent("cinder");
     expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
     expect(within(row).queryByText("No recent sessions")).toBeNull();
 
     await act(async () => resolveSummary(response([summary("cinder")])));
     expect(await screen.findByTestId("machine-row-cinder")).toHaveTextContent("No recent sessions");
+    expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
   });
 
   it("shows directory-backed machine details while activity loads", async () => {
