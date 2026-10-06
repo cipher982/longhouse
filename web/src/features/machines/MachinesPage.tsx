@@ -17,7 +17,7 @@ import {
   relativeTime,
   unmatchedRunners,
 } from "./machinePresentation";
-import { useMachineDirectory, useMachineSummaries } from "./useMachines";
+import { useMachineDirectoryForSummary, useMachineSummaries } from "./useMachines";
 import "./MachinesPage.css";
 
 const AGENTS_SHOWN = 5;
@@ -154,12 +154,12 @@ function DirectoryRow({ machine, provisional = false }: { machine: MachineDirect
 
 export default function MachinesPage() {
   const { data, isLoading, error, isError, refetch, isRefetchError } = useMachineSummaries();
-  const directory = useMachineDirectory({ enabled: !data, refetchInterval: isError && !data ? 30_000 : false });
+  const directory = useMachineDirectoryForSummary({ hasData: data !== undefined, isError });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const [showConnect, setShowConnect] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
 
-  useReadinessFlag({ ready: !isLoading });
+  useReadinessFlag({ ready: !isLoading || Boolean(directory.data?.machines?.length) });
 
   const summaries = data?.machines ?? [];
   const active = summaries.filter((summary) => !machineStatus(summary).quiet);

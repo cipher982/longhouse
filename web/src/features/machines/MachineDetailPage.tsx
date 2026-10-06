@@ -19,7 +19,7 @@ import {
   relativeTime,
   runnerForMachine,
 } from "./machinePresentation";
-import { useMachineDirectory, useMachineSummaries } from "./useMachines";
+import { useMachineDirectoryForSummary, useMachineSummaries } from "./useMachines";
 import "./MachinesPage.css";
 
 function shortDate(isoDate: string): string {
@@ -163,7 +163,7 @@ export default function MachineDetailPage() {
   const { deviceId = "" } = useParams();
   const navigate = useNavigate();
   const { data, isLoading, isError, error, refetch } = useMachineSummaries();
-  const directory = useMachineDirectory({ enabled: !data, refetchInterval: isError && !data ? 30_000 : false });
+  const directory = useMachineDirectoryForSummary({ hasData: data !== undefined, isError });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
   const directoryMachine = directory.data?.machines?.find((machine) => machine.device_id === deviceId);
   const waitingForDirectory = isError && !data && directory.isLoading;

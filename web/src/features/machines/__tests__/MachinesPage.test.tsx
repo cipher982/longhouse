@@ -80,6 +80,7 @@ describe("MachinesPage", () => {
     renderPage();
 
     const row = await screen.findByTestId("machine-directory-row-cinder");
+    expect(document.body).toHaveAttribute("data-ready", "true");
     expect(row).toHaveTextContent("cinder");
     expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
     expect(within(row).queryByText("No recent sessions")).toBeNull();
