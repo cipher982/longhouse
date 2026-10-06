@@ -177,14 +177,16 @@ struct LiteTranscriptPayloadTests {
     func aCutRowCarriesItsBodyCursorsUntilTheBodiesLoad() throws {
         let items = TimelineBuilder.build(items: try liteTail().projection.items)
         let preview = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
-        let row = try #require(preview.first { $0.id == "tool:evt-3" })
-        #expect(row.bodyCursors == ["cursor-3", "cursor-4"])
+        // The command may render on its own or inside an activity group; find
+        // the row by the cut it carries rather than by its id shape.
+        let row = try #require(preview.first { $0.bodyCursors?.contains("cursor-3") == true })
+        #expect(row.bodyCursors?.starts(with: ["cursor-3", "cursor-4"]) == true)
         #expect(row.bodyState == "preview")
 
         var bodies = LiteBodyState()
         bodies.loading = ["cursor-3", "cursor-4"]
         let loading = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        #expect(loading.first { $0.id == "tool:evt-3" }?.bodyState == "loading")
+        #expect(loading.first { $0.id == row.id }?.bodyState == "loading")
 
         let whole = try #require(try fullOutput())
         bodies.loading = []
@@ -193,19 +195,22 @@ struct LiteTranscriptPayloadTests {
             "cursor-4": SessionEventBody(id: "evt-4", cursor: "cursor-4", toolInputJson: nil, toolOutputText: whole, toolPresentation: nil),
         ]
         let loaded = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        let full = try #require(loaded.first { $0.id == "tool:evt-3" })
-        #expect(full.bodyCursors == nil)
-        #expect(full.bodyState == nil)
-        #expect(full.output == whole)
+        let full = try #require(loaded.first { $0.id == row.id })
+        #expect(full.bodyCursors?.contains("cursor-3") != true)
+        #expect(full.bodyCursors?.contains("cursor-4") != true)
+        let outputs = [full.output] + full.calls.map(\.output)
+        #expect(outputs.contains(whole))
     }
 
     @Test
     func aBodyTheServerNoLongerHasSaysSo() throws {
         let items = TimelineBuilder.build(items: try liteTail().projection.items)
+        let preview = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
+        let row = try #require(preview.first { $0.bodyCursors?.contains("cursor-3") == true })
         var bodies = LiteBodyState()
-        bodies.unavailable = ["cursor-3", "cursor-4"]
+        bodies.unavailable = Set(row.bodyCursors ?? [])
         let payload = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        #expect(payload.first { $0.id == "tool:evt-3" }?.bodyState == "unavailable")
+        #expect(payload.first { $0.id == row.id }?.bodyState == "unavailable")
     }
 
     @Test

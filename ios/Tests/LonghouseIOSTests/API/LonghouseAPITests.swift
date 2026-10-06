@@ -183,6 +183,7 @@ struct LonghouseAPITests {
             URLQueryItem(name: "limit", value: "50"),
             URLQueryItem(name: "offset", value: "100"),
             URLQueryItem(name: "branch_mode", value: "head"),
+            URLQueryItem(name: "detail", value: "lite"),
             URLQueryItem(name: "snapshot_event_id", value: "42"),
             URLQueryItem(name: "cursor", value: "generation-qualified-cursor"),
         ])

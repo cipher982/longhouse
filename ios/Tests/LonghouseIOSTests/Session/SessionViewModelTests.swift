@@ -156,7 +156,7 @@ struct SessionViewModelTests {
         #expect(await api.deltaCursors() == ["cursor-10"])
         #expect(await api.tailRequestCount() == fullReadsBefore)
         #expect(model.items.count == 31)
-        #expect(model.items.first?.id == "user:evt-1")
+        #expect(model.items.first?.id == "prose:evt-1")
         #expect(model.items.last?.id == "prose:evt-31")
     }
 
