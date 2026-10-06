@@ -108,8 +108,11 @@ describe("MachinesPage", () => {
     expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
 
     await act(async () => resolveSummary(response([])));
-    await waitFor(() => expect(document.body).toHaveAttribute("data-ready", "true"));
-    expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
+    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.body).toHaveAttribute("data-ready", "true");
+      expect(document.body).toHaveAttribute("data-screenshot-ready", "true");
+    });
   });
 
   it("shows directory-backed machine details while activity loads", async () => {
