@@ -180,6 +180,14 @@
   color: var(--color-signal-fault-text);
 }
 
+/* The ⌘K switcher has the width for the Timeline's status word
+   (instruments.css .hearth-lamp[data-state]), capped so titles still lead. */
+.session-rail__status.hearth-lamp {
+  gap: 5px;
+  max-width: 78px;
+  font-size: 11.5px;
+}
+
 .session-rail__dot {
   flex: none;
   width: 6px;
