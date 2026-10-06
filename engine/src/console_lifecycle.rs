@@ -127,7 +127,7 @@ struct RetainedWake {
     expires_at: Instant,
 }
 
-const RETAINED_WAKE_TTL: Duration = Duration::from_secs(10 * 60);
+pub(crate) const RETAINED_WAKE_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Debug)]
 pub struct WakeBinding {
@@ -269,6 +269,17 @@ impl ConsoleInvocation {
         (state.phase == InvocationState::Responding && state.current_turn.is_none())
             .then(|| state.pending_wake_id.clone())
             .flatten()
+    }
+    pub fn expire_pending_wake(&self, wake_id: &str, signal: IdleSignal) -> Option<IdleOutcome> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.phase != InvocationState::Responding
+            || state.current_turn.is_some()
+            || state.pending_wake_id.as_deref() != Some(wake_id)
+        {
+            return None;
+        }
+        state.buffered_events.clear();
+        Some(complete_idle(&mut state, signal))
     }
 
     pub fn response_started(&self, trigger: Value) -> Option<WakeRequest> {
@@ -800,6 +811,85 @@ mod tests {
         assert_eq!(binding.buffered_events.len(), 1);
         assert!(binding.deferred_idle.is_none());
         assert_eq!(invocation.latest_turn().run_id, "wake-run");
+    }
+    #[test]
+    fn expiring_unbound_wake_returns_to_normal_pending_state() {
+        let invocation = invocation();
+        invocation.replace_pending(
+            vec![
+                PendingItem {
+                    id: "task-1".to_string(),
+                    kind: "monitor".to_string(),
+                    status: "running".to_string(),
+                    description: None,
+                },
+                PendingItem {
+                    id: "task-2".to_string(),
+                    kind: "monitor".to_string(),
+                    status: "running".to_string(),
+                    description: None,
+                },
+            ],
+            vec![],
+        );
+        invocation
+            .idle(IdleSignal {
+                terminal_state: "run_completed".to_string(),
+                exit_code: Some(0),
+                stderr: None,
+            })
+            .unwrap();
+        let first = invocation
+            .response_started(serde_json::json!({"kind": "task_completed"}))
+            .unwrap();
+        invocation.update_pending_item(
+            PendingItem {
+                id: "task-1".to_string(),
+                kind: "monitor".to_string(),
+                status: "completed".to_string(),
+                description: None,
+            },
+            false,
+        );
+        let parked = invocation
+            .expire_pending_wake(
+                &first.wake_id,
+                IdleSignal {
+                    terminal_state: "run_completed".to_string(),
+                    exit_code: Some(0),
+                    stderr: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(parked.invocation_state, InvocationState::Parked);
+        assert_eq!(parked.pending_count, 1);
+        assert!(!parked.has_active_turn);
+        assert_eq!(invocation.pending_wake_id(), None);
+
+        let second = invocation
+            .response_started(serde_json::json!({"kind": "task_completed"}))
+            .unwrap();
+        invocation.update_pending_item(
+            PendingItem {
+                id: "task-2".to_string(),
+                kind: "monitor".to_string(),
+                status: "completed".to_string(),
+                description: None,
+            },
+            false,
+        );
+        let closed = invocation
+            .expire_pending_wake(
+                &second.wake_id,
+                IdleSignal {
+                    terminal_state: "run_completed".to_string(),
+                    exit_code: Some(0),
+                    stderr: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(closed.invocation_state, InvocationState::Closed);
+        assert_eq!(closed.pending_count, 0);
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::sync::{LazyLock, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::io::Write as _;
@@ -25,7 +25,7 @@ use crate::console_lifecycle::{
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use tokio::process::{Child, ChildStdin, ChildStdout};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use walkdir::WalkDir;
 
 const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
@@ -75,34 +75,51 @@ enum CodexConsoleInputControl {
 
 struct CodexConsoleInput {
     sender: mpsc::UnboundedSender<CodexConsoleInputControl>,
-    next_turn: Mutex<Option<CodexExecRunConfig>>,
-    wake_inputs: Mutex<HashMap<String, Vec<(String, CompletedCommandExecution)>>>,
+    next_turn: AsyncMutex<Option<CodexExecRunConfig>>,
+    wake_inputs: AsyncMutex<HashMap<String, CodexWakeInput>>,
+}
+
+struct CodexWakeInput {
+    completions: Vec<(String, CompletedCommandExecution)>,
+    expires_at: Instant,
 }
 
 impl CodexConsoleInput {
-    fn set_next_turn(&self, config: CodexExecRunConfig) {
-        *self.next_turn.lock().expect("Codex input lock poisoned") = Some(config);
+    async fn set_next_turn(&self, config: CodexExecRunConfig) {
+        *self.next_turn.lock().await = Some(config);
     }
 
-    fn add_wake_completions(
+    async fn add_wake_completions(
         &self,
         wake_id: String,
         completions: Vec<(String, CompletedCommandExecution)>,
     ) {
-        self.wake_inputs
-            .lock()
-            .expect("Codex input lock poisoned")
+        let mut wake_inputs = self.wake_inputs.lock().await;
+        let pending = wake_inputs
             .entry(wake_id)
-            .or_default()
-            .extend(completions);
+            .or_insert_with(|| CodexWakeInput {
+                completions: Vec::new(),
+                expires_at: Instant::now() + crate::console_lifecycle::RETAINED_WAKE_TTL,
+            });
+        pending.completions.extend(completions);
     }
 
-    fn take_wake_input(&self, wake_id: &str) -> Option<String> {
+    async fn wake_input_prompt(&self, wake_id: &str, now: Instant) -> Option<String> {
+        let wake_inputs = self.wake_inputs.lock().await;
+        let pending = wake_inputs.get(wake_id)?;
+        (pending.expires_at > now).then(|| command_completion_input(&pending.completions))
+    }
+
+    async fn discard_wake_input(&self, wake_id: &str) {
+        self.wake_inputs.lock().await.remove(wake_id);
+    }
+
+    async fn wake_input_expired(&self, wake_id: &str, now: Instant) -> bool {
         self.wake_inputs
             .lock()
-            .expect("Codex input lock poisoned")
-            .remove(wake_id)
-            .map(|items| command_completion_input(&items))
+            .await
+            .get(wake_id)
+            .is_some_and(|pending| pending.expires_at <= now)
     }
 }
 
@@ -116,7 +133,7 @@ impl ConsoleInput for CodexConsoleInput {
             let mut config = self
                 .next_turn
                 .lock()
-                .map_err(|_| anyhow::anyhow!("Codex input lock poisoned"))?
+                .await
                 .take()
                 .context("Codex Console turn context was not queued")?;
             config.prompt = text.to_string();
@@ -649,7 +666,7 @@ fn bounded_output_tail_with_limits(output: &str, max_bytes: usize, max_lines: us
         byte_start += 1;
     }
     let mut end = output.len();
-    while end > byte_start && output.as_bytes()[end - 1] == b'\n' {
+    if end > byte_start && output.as_bytes()[end - 1] == b'\n' {
         end -= 1;
     }
     let tail = &output[byte_start..end];
@@ -1304,13 +1321,30 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         if let Some(provider_thread_id) = config.resume_thread_id.as_deref() {
             if let Some(invocation) = crate::console_lifecycle::lookup("codex", provider_thread_id)
             {
-                if invocation.state() == InvocationState::Parked {
-                    return adopt_parked_codex_turn(config, invocation).await;
+                match invocation.state() {
+                    InvocationState::Parked => {
+                        return adopt_parked_codex_turn(config, invocation).await;
+                    }
+                    InvocationState::Responding => {
+                        let Some(wake_id) = invocation.pending_wake_id() else {
+                            bail!("Codex Console invocation already has an active turn");
+                        };
+                        let mut config = config;
+                        config.wake_id = Some(wake_id);
+                        return bind_codex_wake_turn(config, invocation).await;
+                    }
+                    InvocationState::Closed => {
+                        invocation.wait_stopped().await;
+                        crate::console_lifecycle::unregister(&invocation.launch_id);
+                    }
                 }
             }
         }
     }
+    start_new_codex_exec(config).await
+}
 
+async fn start_new_codex_exec(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
     let starting = ConsoleStartingGuard::new(&config.run_id);
     let warm_compatible = warm_pool_compatible(&config);
     let (mut worker, warm_hit) = start_console_worker_by(
@@ -1406,7 +1440,7 @@ async fn adopt_parked_codex_turn(
         true,
     )?;
     let starting = ConsoleStartingGuard::new(&config.run_id);
-    input.set_next_turn(config.clone());
+    input.set_next_turn(config.clone()).await;
     invocation
         .send_user_input(turn_binding(&config), &config.prompt, &config.image_paths)
         .await?;
@@ -1428,12 +1462,24 @@ async fn bind_codex_wake_turn(
         .wake_id
         .as_deref()
         .context("Codex wake turn omitted wake_id")?;
+    let is_user_turn = config.origin == "user";
     let input = codex_console_input(&invocation.launch_id)
         .context("parked Codex invocation has no app-server input channel")?;
-    let wake_prompt = input
-        .take_wake_input(wake_id)
-        .context("Codex wake completion details expired before the wake bound")?;
-    config.prompt = wake_prompt;
+    if invocation.pending_wake_id().as_deref() != Some(wake_id) {
+        return if is_user_turn {
+            retry_codex_user_after_wake_miss(config, invocation).await
+        } else {
+            cancel_missing_codex_wake(config).await
+        };
+    }
+    let wake_prompt = if is_user_turn {
+        None
+    } else {
+        let Some(prompt) = input.wake_input_prompt(wake_id, Instant::now()).await else {
+            return cancel_missing_codex_wake(config).await;
+        };
+        Some(prompt)
+    };
     let previous =
         crate::turn_claims::default_registry()?.read(&invocation.latest_turn().run_id)?;
     let argv = claim_argv(&previous);
@@ -1441,7 +1487,7 @@ async fn bind_codex_wake_turn(
     let starting = ConsoleStartingGuard::new(&config.run_id);
     let claims = crate::turn_claims::default_registry()?;
     let binding = turn_binding(&config);
-    let _wake_binding = invocation.bind_wake(&invocation.launch_id, wake_id, binding, || {
+    match invocation.bind_wake(&invocation.launch_id, wake_id, binding, || {
         claims.mark_spawned_invocation(
             &config.run_id,
             pid,
@@ -1454,10 +1500,24 @@ async fn bind_codex_wake_turn(
             "",
             json!({"argv": argv}),
         )?;
-        claims.record_invocation_turn(&config.run_id, "wake", true)?;
+        claims.record_invocation_turn(&config.run_id, &config.origin, true)?;
         Ok(())
-    })?;
-    input.set_next_turn(config.clone());
+    }) {
+        Ok(_) => {}
+        Err(error) if error.is::<crate::console_lifecycle::WakeTargetGone>() => {
+            return if is_user_turn {
+                retry_codex_user_after_wake_miss(config, invocation).await
+            } else {
+                cancel_missing_codex_wake(config).await
+            };
+        }
+        Err(error) => return Err(error),
+    }
+    if let Some(prompt) = wake_prompt {
+        config.prompt = prompt;
+    }
+    input.discard_wake_input(wake_id).await;
+    input.set_next_turn(config.clone()).await;
     invocation
         .write_input(&config.prompt, &config.image_paths)
         .await?;
@@ -1469,6 +1529,23 @@ async fn bind_codex_wake_turn(
         process_group_id: Some(process_group_id),
         argv,
     })
+}
+
+async fn retry_codex_user_after_wake_miss(
+    config: CodexExecRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+) -> Result<CodexExecRunSummary> {
+    match invocation.state() {
+        InvocationState::Parked => adopt_parked_codex_turn(config, invocation).await,
+        InvocationState::Closed => {
+            invocation.wait_stopped().await;
+            crate::console_lifecycle::unregister(&invocation.launch_id);
+            start_new_codex_exec(config).await
+        }
+        InvocationState::Responding => {
+            bail!("Codex Console invocation began another turn before the user turn was bound")
+        }
+    }
 }
 
 async fn cancel_missing_codex_wake(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
@@ -1912,8 +1989,8 @@ async fn run_codex_invocation(
     let (control_tx, mut control_rx) = mpsc::unbounded_channel();
     let input = Arc::new(CodexConsoleInput {
         sender: control_tx,
-        next_turn: Mutex::new(None),
-        wake_inputs: Mutex::new(HashMap::new()),
+        next_turn: AsyncMutex::new(None),
+        wake_inputs: AsyncMutex::new(HashMap::new()),
     });
     let invocation = Arc::new(ConsoleInvocation::new(
         "codex",
@@ -2058,12 +2135,14 @@ async fn run_codex_invocation(
             .retain(|id, _| pending_by_id.contains_key(id));
         let pending = pending_by_id.values().cloned().collect::<Vec<_>>();
         invocation.replace_pending(pending, Vec::new());
+        let idle_signal = IdleSignal {
+            terminal_state: "run_completed".to_string(),
+            exit_code: Some(0),
+            stderr: None,
+        };
         let outcome = invocation
-            .idle(IdleSignal {
-                terminal_state: "run_completed".to_string(),
-                exit_code: Some(0),
-                stderr: None,
-            })
+            .idle(idle_signal)
+            .or_else(|| invocation.finish_pending_user_input())
             .context("Codex Console idle arrived without an active turn")?;
         let invocation_state = outcome.invocation_state;
         complete_codex_idle(&invocation, &runtime.sink, outcome).await;
@@ -2155,6 +2234,42 @@ async fn run_codex_invocation(
                         &mut known_pending,
                         &mut projection,
                     ).await;
+                    if let Some(wake_id) = invocation.pending_wake_id() {
+                        if input.wake_input_expired(&wake_id, Instant::now()).await {
+                            if let Some(outcome) = invocation.expire_pending_wake(
+                                &wake_id,
+                                IdleSignal {
+                                    terminal_state: "run_completed".to_string(),
+                                    exit_code: Some(0),
+                                    stderr: None,
+                                },
+                            ) {
+                                input.discard_wake_input(&wake_id).await;
+                                let invocation_state = outcome.invocation_state;
+                                let pending_count = outcome.pending_count;
+                                let run_id = outcome.binding.run_id.clone();
+                                complete_codex_idle(&invocation, &runtime.sink, outcome).await;
+                                if let Ok(registry) = crate::turn_claims::default_registry() {
+                                    let _ = registry.record_invocation_state(
+                                        &run_id,
+                                        invocation_state.as_str(),
+                                        pending_count,
+                                    );
+                                }
+                                if invocation_state == InvocationState::Closed {
+                                    invocation.process_exited();
+                                    crate::console_lifecycle::unregister(&launch_id);
+                                    finish_runtime_turn(
+                                        runtime,
+                                        &current_config.session_id,
+                                        &current_config.run_id,
+                                    )
+                                    .await;
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2210,7 +2325,7 @@ async fn trigger_codex_wake(
         .iter()
         .map(|(id, _, item)| (id.clone(), item.clone()))
         .collect::<Vec<_>>();
-    input.add_wake_completions(wake_id, prompt_items);
+    input.add_wake_completions(wake_id, prompt_items).await;
     for (id, pending_item, completion) in completed {
         invocation.update_pending_item(
             PendingItem {
@@ -4331,6 +4446,49 @@ for line in sys.stdin:
         assert!(tail.contains("line-99"));
     }
     #[test]
+    fn bounded_output_tail_counts_trailing_blank_line_within_cap() {
+        let output = "old\nmiddle\nlast\n\n";
+        let tail = bounded_output_tail_with_limits(output, 1024, 2);
+        assert_eq!(tail, "last\n\n");
+        assert_eq!(tail.lines().count(), 2);
+    }
+    #[tokio::test]
+    async fn codex_unbound_wake_input_uses_console_retention_ttl() {
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        let input = CodexConsoleInput {
+            sender,
+            next_turn: AsyncMutex::new(None),
+            wake_inputs: AsyncMutex::new(HashMap::new()),
+        };
+        let wake_id = "launch:1".to_string();
+        input
+            .add_wake_completions(
+                wake_id.clone(),
+                vec![(
+                    "exec-1".to_string(),
+                    CompletedCommandExecution {
+                        command: "echo complete".to_string(),
+                        status: "completed".to_string(),
+                        exit_code: Some(0),
+                        output: "done\n".to_string(),
+                    },
+                )],
+            )
+            .await;
+        let now = Instant::now();
+        let expires_at = now + crate::console_lifecycle::RETAINED_WAKE_TTL + Duration::from_secs(1);
+        assert!(!input.wake_input_expired(&wake_id, now).await);
+        assert!(input.wake_input_prompt(&wake_id, now).await.is_some());
+        assert!(input.wake_input_expired(&wake_id, expires_at).await);
+        assert!(input
+            .wake_input_prompt(&wake_id, expires_at)
+            .await
+            .is_none());
+        input.discard_wake_input(&wake_id).await;
+        assert!(input.wake_input_prompt(&wake_id, now).await.is_none());
+    }
+
+    #[test]
     fn real_app_server_shapes_keep_message_boundaries_and_failed_tools() {
         let mut projection = AppServerProjection::default();
         let events = [
@@ -4504,7 +4662,7 @@ for line in sys.stdin:
         let codex_bin = temp.join("codex");
         let input_log = temp.join("turn-inputs.txt");
         let script = r#"#!/usr/bin/env python3
-import json, sys
+import json, sys, time
 scenario = "__SCENARIO__"
 input_log = __INPUT_LOG__
 pending = {}
@@ -4553,6 +4711,8 @@ for line in sys.stdin:
             stream.write(input_text + "\n")
         emit({"id": msg["id"], "result": {"turn": {"id": turn_id, "status": "inProgress"}}})
         emit({"method": "turn/started", "params": {"turn": {"id": turn_id, "status": "inProgress"}}})
+        if scenario == "UserDuringPendingWake" and turn_count == 2:
+            time.sleep(1)
         if turn_count == 1 and scenario != "Plain":
             start_item("exec-1", "python3 -c 'print(\"first\")'")
             if scenario == "WakePending":
@@ -4574,6 +4734,8 @@ for line in sys.stdin:
         if scenario == "WakePending" and list_count == 2:
             complete_item("exec-1")
         elif scenario == "WakeDrained" and list_count == 2:
+            complete_item("exec-1")
+        elif scenario == "UserDuringPendingWake" and list_count == 2:
             complete_item("exec-1")
         data = [{
             "itemId": item_id, "processId": "process-" + item_id,
@@ -4843,7 +5005,7 @@ for line in sys.stdin:
         let temp = tempfile::tempdir().unwrap();
         let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
         let outbox = temp.path().join("outbox");
-        let (mut child, start) = spawn_fake_codex_process(temp.path());
+        let (child, start) = spawn_fake_codex_process(temp.path());
         let run_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         let thread_id = uuid::Uuid::new_v4().to_string();
@@ -4906,6 +5068,89 @@ for line in sys.stdin:
             crate::console_lifecycle::conformance::ScenarioRunner,
         ); 1] = [("codex", run_codex_scenario)];
         crate::console_lifecycle::conformance::run_phase_one(&adapters).await;
+    }
+    #[tokio::test]
+    async fn user_turn_supersedes_unbound_codex_wake_on_same_worker() {
+        let _agent_state = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let scenario = "UserDuringPendingWake";
+        let (fake_codex, input_log) = fake_app_server_for_scenario(temp.path(), scenario);
+        let (api_url, mut received) = spawn_runtime_capture_server().await;
+        let first_config = scenario_run_config(
+            temp.path(),
+            &api_url,
+            &fake_codex,
+            "start background command",
+        );
+        claim_codex_test_run(&first_config);
+        let first = start_codex_exec_once(first_config.clone()).await.unwrap();
+        let mut events = Vec::new();
+        wait_for_captured_event(&mut received, &mut events, |event| {
+            event["run_id"] == first.run_id && event["kind"] == "terminal_signal"
+        })
+        .await;
+        let first_claim = crate::turn_claims::default_registry()
+            .unwrap()
+            .read(&first.run_id)
+            .unwrap();
+        assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+        let launch_id = first_claim.launch_id.clone().unwrap();
+        let wake = wait_for_captured_event(&mut received, &mut events, |event| {
+            event["session_id"] == first.session_id && event["kind"] == "wake_signal"
+        })
+        .await;
+        assert_eq!(wake["payload"]["trigger"]["kind"], "task_completed");
+
+        let mut user_config = scenario_run_config(
+            temp.path(),
+            &api_url,
+            &fake_codex,
+            "user turn supersedes the unbound wake",
+        );
+        user_config.session_id = first.session_id.clone();
+        user_config.thread_id = first_config.thread_id.clone();
+        user_config.resume_thread_id = Some("provider-thread".to_string());
+        user_config.origin = "user".to_string();
+        claim_codex_test_run(&user_config);
+        let user_run = start_codex_exec_once(user_config).await.unwrap();
+        assert_eq!(user_run.pid, first.pid);
+        assert_eq!(user_run.process_group_id, first.process_group_id);
+        let active_invocation = crate::console_lifecycle::lookup_launch(&launch_id).unwrap();
+        assert_eq!(active_invocation.state(), InvocationState::Responding);
+        assert_eq!(active_invocation.pending_wake_id(), None);
+        let mut stale_wake_config = scenario_run_config(temp.path(), &api_url, &fake_codex, "");
+        stale_wake_config.session_id = first.session_id.clone();
+        stale_wake_config.thread_id = first_config.thread_id.clone();
+        stale_wake_config.resume_thread_id = Some("provider-thread".to_string());
+        stale_wake_config.origin = "wake".to_string();
+        stale_wake_config.wake_id = wake["payload"]["wake_id"].as_str().map(str::to_string);
+        stale_wake_config.invocation_id = Some(launch_id.clone());
+        claim_codex_test_run(&stale_wake_config);
+        let stale_wake = start_codex_exec_once(stale_wake_config).await.unwrap();
+        assert_eq!(stale_wake.pid, None);
+        let cancelled = wait_for_captured_event(&mut received, &mut events, |event| {
+            event["run_id"] == stale_wake.run_id && event["kind"] == "terminal_signal"
+        })
+        .await;
+        assert_eq!(cancelled["payload"]["terminal_state"], "run_cancelled");
+        assert_eq!(cancelled["payload"]["stderr_tail"], "wake_target_gone");
+        assert!(crate::console_lifecycle::lookup_launch(&launch_id).is_some());
+        let user_terminal = wait_for_captured_event(&mut received, &mut events, |event| {
+            event["run_id"] == user_run.run_id && event["kind"] == "terminal_signal"
+        })
+        .await;
+        let user_claim = crate::turn_claims::default_registry()
+            .unwrap()
+            .read(&user_run.run_id)
+            .unwrap();
+        assert_eq!(user_claim.origin.as_deref(), Some("user"));
+        assert!(user_claim.adopted_parked_invocation);
+        assert_eq!(user_terminal["payload"]["invocation"]["state"], "closed");
+        assert!(fs::read_to_string(input_log)
+            .unwrap()
+            .contains("user turn supersedes the unbound wake"));
+        wait_for_codex_invocation_closed(&launch_id).await;
+        assert_fake_process_group_gone(first.process_group_id.unwrap()).await;
     }
 
     /// Drive one real turn and return (provider thread id, assistant text).
@@ -5298,7 +5543,7 @@ for line in sys.stdin:
         let temp = tempfile::tempdir().unwrap();
         let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
         let outbox = temp.path().join("outbox");
-        let (mut child, start) = spawn_fake_codex_process(temp.path());
+        let (child, start) = spawn_fake_codex_process(temp.path());
         let run_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         let thread_id = uuid::Uuid::new_v4().to_string();

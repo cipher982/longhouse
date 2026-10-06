@@ -54,5 +54,7 @@ items and turns delayed `item/completed` notifications into Longhouse wake
 turns. Wake input is explicitly Longhouse-authored and carries the finished
 command and exit code plus at most 40 lines / 4 KB of output. Machine Agent
 recovery kills only the recorded process group because stdio cannot be reattached.
+An unbound wake expires after 10 minutes; an intervening user turn supersedes
+it on the same worker.
 
 Test: `make test-engine`. Install locally: `make install-engine`.
