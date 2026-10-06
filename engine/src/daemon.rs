@@ -2274,7 +2274,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                         }
                         acknowledged_machine_evidence.record_send_result(
-                            result.result.is_ok(),
+                            &result.result,
                             &result.sent_evidence_identities,
                         );
                         if let Some(evidence) = last_status_projection

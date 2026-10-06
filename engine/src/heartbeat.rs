@@ -52,6 +52,8 @@ use crate::state::spool::Spool;
 const HEARTBEAT_POST_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY: usize = 2_048;
 const MAX_REDUCER_EVIDENCE_FACTS: usize = 256;
+/// Keep a rotating repair slice available while changed facts churn.
+const ROTATING_EVIDENCE_REFRESH_BUDGET: usize = MAX_REDUCER_EVIDENCE_FACTS / 4;
 const ANTIGRAVITY_READINESS_TTL_SECS: i64 = 120;
 
 /// Latest measurement of pending runtime-event files from one collection pass.
@@ -654,6 +656,8 @@ fn acknowledged_evidence_hash<'a>(
 /// present in the latest machine-evidence projection.
 #[derive(Debug, Default)]
 pub(crate) struct AcknowledgedEvidenceHashes {
+    // Fingerprints make per-row probes allocation-free; the full identity key
+    // in each bucket keeps fingerprint collisions exact.
     hashes: HashMap<u64, Vec<(EvidenceIdentityKey, String)>>,
 }
 
@@ -671,10 +675,14 @@ impl AcknowledgedEvidenceHashes {
 
     pub(crate) fn record_send_result(
         &mut self,
-        acknowledged: bool,
+        result: &std::result::Result<HeartbeatPostAck, String>,
         identities: &[EvidenceIdentity],
     ) {
-        if !acknowledged {
+        if !matches!(
+            result,
+            Ok(ack)
+                if ack.evidence_ack.as_deref().map(str::trim) == Some("applied")
+        ) {
             return;
         }
         for identity in identities {
@@ -3047,7 +3055,12 @@ fn changed_first_evidence_identities(
     }
 
     let changed_count = changed_families.iter().map(Vec::len).sum::<usize>();
-    let changed_budget = changed_count.min(MAX_REDUCER_EVIDENCE_FACTS);
+    let unchanged_count = unchanged_families.iter().map(Vec::len).sum::<usize>();
+    let target_count = (changed_count + unchanged_count).min(MAX_REDUCER_EVIDENCE_FACTS);
+    let rotating_budget = ROTATING_EVIDENCE_REFRESH_BUDGET
+        .min(unchanged_count)
+        .min(target_count);
+    let changed_budget = changed_count.min(target_count - rotating_budget);
     let changed_shares = family_shares_for_budget(&changed_families, changed_budget);
     let mut selected = select_rotating_identity_refs(
         &changed_families,
@@ -3055,8 +3068,11 @@ fn changed_first_evidence_identities(
         changed_budget,
         &changed_shares,
     );
-    if selected.len() < MAX_REDUCER_EVIDENCE_FACTS {
-        let remaining_budget = MAX_REDUCER_EVIDENCE_FACTS - selected.len();
+
+    // Changed facts lead, but reserve a rotating repair slice so timestamp
+    // churn cannot keep previously acknowledged stable facts out forever.
+    if selected.len() < target_count {
+        let remaining_budget = target_count - selected.len();
         let unchanged_shares = family_shares_for_budget(&unchanged_families, remaining_budget);
         selected.extend(select_rotating_identity_refs(
             &unchanged_families,
@@ -3065,6 +3081,35 @@ fn changed_first_evidence_identities(
             &unchanged_shares,
         ));
     }
+
+    if selected.len() < target_count {
+        let selected_keys = selected
+            .iter()
+            .map(|identity| evidence_identity_key_ref(identity))
+            .collect::<HashSet<_>>();
+        let mut remaining_changed_families: [Vec<&EvidenceIdentity>; 7] =
+            std::array::from_fn(|_| Vec::new());
+        for (family_index, family) in changed_families.iter().enumerate() {
+            remaining_changed_families[family_index].extend(
+                family
+                    .iter()
+                    .copied()
+                    .filter(|identity| {
+                        !selected_keys.contains(&evidence_identity_key_ref(identity))
+                    }),
+            );
+        }
+        let remaining_budget = target_count - selected.len();
+        let remaining_shares =
+            family_shares_for_budget(&remaining_changed_families, remaining_budget);
+        selected.extend(select_rotating_identity_refs(
+            &remaining_changed_families,
+            rotation,
+            remaining_budget,
+            &remaining_shares,
+        ));
+    }
+
     selected
         .into_iter()
         .map(|identity| (*identity).clone())
@@ -7858,13 +7903,20 @@ mod tests {
         }
     }
 
+    fn applied_evidence_ack() -> std::result::Result<HeartbeatPostAck, String> {
+        Ok(HeartbeatPostAck {
+            evidence_ack: Some("applied".to_string()),
+        })
+    }
+
     #[test]
     fn changed_evidence_is_selected_before_unchanged_rows() {
         let mut candidates = (0..300)
             .map(|index| test_evidence_identity(index, &format!("hash-{index:04}")))
             .collect::<Vec<_>>();
         let mut acknowledged = AcknowledgedEvidenceHashes::default();
-        acknowledged.record_send_result(true, &candidates);
+        let applied = applied_evidence_ack();
+        acknowledged.record_send_result(&applied, &candidates);
         candidates[299].evidence_hash = "changed-hash".to_string();
 
         let selected = changed_first_evidence_identities(&candidates, &acknowledged.hashes, 0);
@@ -7882,11 +7934,29 @@ mod tests {
         let identity = test_evidence_identity(0, "current");
         let mut acknowledged = AcknowledgedEvidenceHashes::default();
 
-        acknowledged.record_send_result(false, std::slice::from_ref(&identity));
+        let failed = Err("heartbeat timed out".to_string());
+        acknowledged.record_send_result(&failed, std::slice::from_ref(&identity));
         assert!(acknowledged.identity_changed(&identity));
 
-        acknowledged.record_send_result(true, std::slice::from_ref(&identity));
+        let applied = applied_evidence_ack();
+        acknowledged.record_send_result(&applied, std::slice::from_ref(&identity));
         assert!(!acknowledged.identity_changed(&identity));
+    }
+
+    #[test]
+    fn rejected_or_unconfirmed_evidence_ack_does_not_mark_rows_as_sent() {
+        let identity = test_evidence_identity(0, "current");
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+
+        let rejected = Ok(HeartbeatPostAck {
+            evidence_ack: Some("rejected".to_string()),
+        });
+        acknowledged.record_send_result(&rejected, std::slice::from_ref(&identity));
+        assert!(acknowledged.identity_changed(&identity));
+
+        let unconfirmed = Ok(HeartbeatPostAck { evidence_ack: None });
+        acknowledged.record_send_result(&unconfirmed, std::slice::from_ref(&identity));
+        assert!(acknowledged.identity_changed(&identity));
     }
 
     #[test]
@@ -7895,7 +7965,8 @@ mod tests {
             .map(|index| test_evidence_identity(index, &format!("hash-{index}")))
             .collect::<Vec<_>>();
         let mut acknowledged = AcknowledgedEvidenceHashes::default();
-        acknowledged.record_send_result(true, &identities);
+        let applied = applied_evidence_ack();
+        acknowledged.record_send_result(&applied, &identities);
 
         acknowledged.prune_to_current(&identities[..1]);
 
@@ -7913,7 +7984,8 @@ mod tests {
             .map(|index| test_evidence_identity(index, &format!("hash-{index:04}")))
             .collect::<Vec<_>>();
         let mut acknowledged = AcknowledgedEvidenceHashes::default();
-        acknowledged.record_send_result(true, &identities);
+        let applied = applied_evidence_ack();
+        acknowledged.record_send_result(&applied, &identities);
         let mut seen = HashSet::new();
 
         for rotation in 0..=identities.len().div_ceil(MAX_REDUCER_EVIDENCE_FACTS) {
@@ -7924,6 +7996,47 @@ mod tests {
         }
 
         assert_eq!(seen.len(), identities.len());
+    }
+
+    #[test]
+    fn rotating_refresh_slice_covers_stable_rows_during_continuous_churn() {
+        let stable_count = 300;
+        let previous = (0..stable_count * 2)
+            .map(|index| test_evidence_identity(index, &format!("hash-{index:04}")))
+            .collect::<Vec<_>>();
+        let mut current = previous.clone();
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+        let applied = applied_evidence_ack();
+        acknowledged.record_send_result(&applied, &previous);
+        for identity in current.iter_mut().skip(stable_count) {
+            identity.evidence_hash = format!("changed-{}", identity.fact_index);
+        }
+
+        let mut seen_stable = HashSet::new();
+        let rotations = stable_count.div_ceil(ROTATING_EVIDENCE_REFRESH_BUDGET) + 1;
+        for rotation in 0..rotations {
+            let selected = changed_first_evidence_identities(
+                &current,
+                &acknowledged.hashes,
+                rotation,
+            );
+            assert_eq!(selected.len(), MAX_REDUCER_EVIDENCE_FACTS);
+            assert!(selected[..MAX_REDUCER_EVIDENCE_FACTS
+                - ROTATING_EVIDENCE_REFRESH_BUDGET]
+                .iter()
+                .all(|identity| identity.evidence_hash.starts_with("changed-")));
+            assert!(selected[MAX_REDUCER_EVIDENCE_FACTS
+                - ROTATING_EVIDENCE_REFRESH_BUDGET..]
+                .iter()
+                .all(|identity| identity.evidence_hash.starts_with("hash-")));
+            seen_stable.extend(
+                selected[MAX_REDUCER_EVIDENCE_FACTS - ROTATING_EVIDENCE_REFRESH_BUDGET..]
+                    .iter()
+                    .map(|identity| identity.subject_key.clone()),
+            );
+        }
+
+        assert_eq!(seen_stable.len(), stable_count);
     }
 
     #[test]

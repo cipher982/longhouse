@@ -134,10 +134,12 @@ retried once as identity and disables gzip until the engine process restarts.
 The status file keeps the complete machine-evidence family arrays for local
 health. Each POST includes only the rows referenced by that send's identity
 budget, with `fact_index` remapped and row content (therefore canonical hashes)
-unchanged. The 256 identities prioritize rows whose canonical hash differs from
-the last 2xx-acknowledged send for `(family, subject_key, source, source_epoch)`;
-the rotating per-family shares fill the remaining slots. Failed sends do not
-update remembered hashes, and hashes for disappeared rows are pruned.
+unchanged. Up to 64 of the 256 identities are reserved for a rotating refresh
+slice of previously acknowledged, unchanged rows; changed or never-applied rows
+fill the remaining slots first. Both slices use deterministic per-family
+rotation. Hashes advance only after a 2xx response with an explicit `applied`
+evidence disposition. Failed, rejected, and unconfirmed sends do not update
+remembered hashes, and hashes for disappeared rows are pruned.
 `engine-status.json.host_link` records the host's planned-update claim. The
 engine derives `updating` before `expected_back_by`, `slow_update` until the
 lease `deadline` or attempt `cutoff`, and `unreachable` after expiry without a
