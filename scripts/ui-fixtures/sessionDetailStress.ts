@@ -1661,7 +1661,13 @@ export function buildSessionProseIdleFixture(): SessionDetailFixture {
     endTurn("15:22:00", "15:24:00", 4),
   );
 
-  say("user", "15:26:00", "Here's a second opinion I got on the design. Anything worth taking from it?");
+  // A pasted second opinion, wrapped the way Claude Code wraps a paste: the
+  // turn outline must preview it as "[pasted] …", not the raw markup.
+  say(
+    "user",
+    "15:26:00",
+    '"""\n<pasted_content id="268e">\nA second opinion on the design: keep the task generator, but measure cost per program in tokens of the rendered language.\n</pasted_content id="268e">\n"""',
+  );
   say(
     "assistant",
     "15:28:30",
@@ -1716,6 +1722,14 @@ export function buildSessionProseIdleFixture(): SessionDetailFixture {
       "",
       "- The laptop GPU trains about 20× faster than its CPU but generates text token by token 6–14× slower. So training runs on the GPU and sampling runs on a CPU copy of the weights.",
       "- Other builds kept the machine at a load average of 8–23 throughout. That slowed everything several times over and made one safety hook time out twice.",
+      "",
+      // Wider than the column on a laptop: the table must scroll in its own
+      // box, never break its words one letter per line.
+      "| Phase | Device | Wall time | Tokens per second | Notes |",
+      "| --- | --- | --- | --- | --- |",
+      "| Supervised training | GPU (Metal) | 4m 12s | 18,400 | Batch 64, sequence length 256, mixed precision off |",
+      "| Sampling for evaluation | CPU copy | 1m 05s | 2,900 | Token-by-token generation is faster on the CPU at this size |",
+      "| RL phase | GPU + CPU | 6m 40s | 9,100 | Rewards from hidden tests; one update per 32 sampled programs |",
       "",
       "### Next step",
       "",
@@ -1842,6 +1856,37 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
       }),
     },
   ];
+  // Rows the rail must leave on the Timeline (automation runs), and a prompt
+  // headline wrapped in paste markup that the rail must name, not print.
+  neighbours.push(
+    {
+      id: "rail-canary",
+      provider: "codex",
+      summary_title: "Canary SSE p95 latency regression",
+      timeline_title: "Canary SSE p95 latency regression",
+      device_id: "clifford-sauron",
+      launch_actor: "automation",
+      origin_kind: "test_or_canary",
+    },
+    {
+      id: "rail-echo",
+      provider: "omp",
+      summary_title: "Run echo hello in bash",
+      timeline_title: "Run echo hello in bash",
+      device_id: "cinder",
+      launch_surface: "test",
+    },
+    {
+      id: "rail-pasted",
+      provider: "claude",
+      summary_title: null,
+      timeline_title: '""" <pasted_content id="268e"> David - Staff Research on Scale\'s General Agents team',
+      title_source: "prompt",
+      first_user_message: '"""\n<pasted_content id="268e">\nDavid - Staff Research on Scale\'s General Agents team\n</pasted_content id="268e">',
+      device_id: "cinder",
+      session_state: idleState("2026-04-15T14:42:00Z"),
+    },
+  );
   const sessions = [active, ...neighbours.map((overrides) => makeSession(overrides))];
   return {
     sessions: sessions.map((head) => ({

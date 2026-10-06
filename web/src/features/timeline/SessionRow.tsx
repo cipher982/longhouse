@@ -71,7 +71,6 @@ export function SessionRow({
   sortableListeners,
 }: SessionRowProps) {
   const session = thread.head;
-  const timelineStatus = session.session_state.presentation.primary;
   const isClosed = closed || isCardClosed(thread);
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
@@ -100,20 +99,12 @@ export function SessionRow({
   });
   const ageText = getRowAgeText({ seenAt: seenAtForTime, startedAt: startedAtIso, relativeNowMs });
 
-  // The same freshness gate as the session header: a work claim whose
-  // `valid_until` has passed on this clock may no longer speak, so a cached
-  // row can never keep saying "Using Bash".
-  const claimExpired = !unread && !isClosed && workClaimExpired(session.session_state, relativeNowMs);
-  const statusTone = unread
-    ? (unreadOutcome === "failed" ? "blocked" : "idle")
-    : isClosed ? "closed" : claimExpired ? "unknown" : (timelineStatus?.tone ?? "inactive");
-  const statusLabel = unread
-    ? unreadOutcomeLabel
-    : isClosed ? "Closed" : claimExpired ? ACTIVITY_UNCERTAIN_LABEL : (timelineStatus?.label ?? "");
-  // Attention signal shared with iOS (waiting / working / quiet / unknown /
-  // closed). Drives the row's one status instrument.
-  const signal: TimelineSignal = claimExpired ? "unknown" : resolveTimelineSignal(session, { nowMs: relativeNowMs });
-  const lampState = getRowLampState({ signal, isClosed, unread, unreadOutcome });
+  const { statusTone, statusLabel, signal, lampState } = getRowStatus({
+    thread,
+    relativeNowMs,
+    closed: isClosed,
+    unread,
+  });
   const hearthSnapshot = hearthSnapshotFromSession(session, hearthModeForLamp(lampState), relativeNowMs);
 
   // When the user is searching and the backend returned a match snippet,
@@ -310,6 +301,43 @@ export function SessionRow({
       </span>
     </div>
   );
+}
+
+/**
+ * The row's status word, its tone and its lamp, shared by the Timeline row and
+ * the session rail so both say the same thing in the same colour.
+ */
+export function getRowStatus({
+  thread,
+  relativeNowMs,
+  closed,
+  unread = false,
+}: {
+  thread: TimelineSessionCard;
+  relativeNowMs: number;
+  closed?: boolean;
+  unread?: boolean;
+}): { statusTone: string; statusLabel: string; signal: TimelineSignal; lampState: StatusLampState } {
+  const session = thread.head;
+  const timelineStatus = session.session_state.presentation.primary;
+  const isClosed = closed ?? isCardClosed(thread);
+  const unreadOutcome = session.session_state.last_result_outcome;
+  const unreadOutcomeLabel = unreadOutcome === "failed" ? "Failed" : unreadOutcome === "cancelled" ? "Cancelled" : "Finished";
+  // The same freshness gate as the session header: a work claim whose
+  // `valid_until` has passed on this clock may no longer speak, so a cached
+  // row can never keep saying "Using Bash".
+  const claimExpired = !unread && !isClosed && workClaimExpired(session.session_state, relativeNowMs);
+  const statusTone = unread
+    ? (unreadOutcome === "failed" ? "blocked" : "idle")
+    : isClosed ? "closed" : claimExpired ? "unknown" : (timelineStatus?.tone ?? "inactive");
+  const statusLabel = unread
+    ? unreadOutcomeLabel
+    : isClosed ? "Closed" : claimExpired ? ACTIVITY_UNCERTAIN_LABEL : (timelineStatus?.label ?? "");
+  // Attention signal shared with iOS (waiting / working / quiet / unknown /
+  // closed). Drives the row's one status instrument.
+  const signal: TimelineSignal = claimExpired ? "unknown" : resolveTimelineSignal(session, { nowMs: relativeNowMs });
+  const lampState = getRowLampState({ signal, isClosed, unread, unreadOutcome });
+  return { statusTone, statusLabel, signal, lampState };
 }
 
 /** One instrument state per row. Unread results and closed rows are decided

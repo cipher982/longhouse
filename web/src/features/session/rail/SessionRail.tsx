@@ -11,19 +11,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router";
-import type { AgentSession } from "@/shared/api/agents";
+import type { TimelineSessionCard } from "@/shared/api/agents";
 import { useAgentSessions } from "@/shared/api/useAgentSessions";
 import { useMobileNavSlot } from "@/app/headerSlot";
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useWallClock } from "@/shared/hooks/useWallClock";
-import { getSessionCardText } from "@/shared/session/sessionLabels";
-import { workingStatusLabel } from "@/shared/session/sessionStatus";
+import type { StatusLampState } from "@/shared/instruments/StatusLamp";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
-import { SearchIcon } from "@/shared/ui/icons";
-import { getSessionHeaderState } from "../sessionHeaderState";
+import { SearchIcon, XIcon } from "@/shared/ui/icons";
+import { getRowStatus } from "@/features/timeline/SessionRow";
+import { buildInboxLayout, historySortKey, isAutomationSession } from "@/features/timeline/timelineInboxModel";
+import { getProjectLabel, getSessionCardText } from "@/shared/session/sessionLabels";
 import {
   SessionRailContext,
   type RailActiveSession,
+  type RailRow,
   type SessionRailContextValue,
 } from "./sessionRailContext";
 import { useRailPrefetch } from "./useRailPrefetch";
@@ -67,29 +69,83 @@ export function isSwitcherHotkey(
   return mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
-type RailRow = {
-  id: string;
-  title: string;
-  provider: string | null;
-  host: string | null;
-  stateText: string;
-  tone: RailActiveSession["tone"];
+type RailGroup = RailRow["group"];
+
+const GROUP_LABEL: Record<RailGroup, string> = {
+  live: "Live now",
+  attention: "Needs attention",
+  recent: "Recent",
 };
 
-function rowFromSession(session: AgentSession, nowMs: number): RailRow {
-  const state = getSessionHeaderState(session, nowMs);
-  // A neighbour's turn start is not loaded here, and the activity heartbeat
-  // is not a turn clock, so a working row names the work without a duration.
-  // The open session reports its own row, with the real elapsed time.
-  const stateText = state.tone === "live" ? workingStatusLabel(session.session_state) : state.text;
+const LAMP_FOR_TONE: Record<RailActiveSession["tone"], StatusLampState> = {
+  live: "working",
+  attention: "waiting",
+  unknown: "unknown",
+  cool: "idle",
+};
+
+const TONE_FOR_LAMP: Record<StatusLampState, RailActiveSession["tone"]> = {
+  working: "live",
+  waiting: "attention",
+  unknown: "unknown",
+  idle: "cool",
+  ended: "cool",
+  done: "cool",
+  failed: "attention",
+};
+
+function rowFromCard(
+  card: TimelineSessionCard,
+  group: RailGroup,
+  nowMs: number,
+): RailRow {
+  const session = card.head;
+  const status = getRowStatus({ thread: card, relativeNowMs: nowMs, unread: group === "attention" });
   return {
     id: session.id,
-    title: getSessionCardText(session, { titleMaxChars: 80 }).title,
+    title: getSessionCardText(session, { titleMaxChars: 96 }).title,
     provider: session.provider ?? null,
     host: session.control?.source_runner_name?.trim() || session.device_id || null,
-    stateText,
-    tone: state.tone,
+    stateText: status.statusLabel,
+    tone: TONE_FOR_LAMP[status.lampState],
+    lamp: status.lampState,
+    group,
   };
+}
+
+/**
+ * The Timeline's own tiers, read with its own layout function so the rail and
+ * the Timeline never disagree about what is live: Live now, results waiting
+ * (Needs attention), then Recent. Automation runs (canaries, Hatch workers,
+ * test launches), by the Timeline's own classifier, stay on the Timeline: the
+ * rail is for sessions a person is steering.
+ */
+export function buildRailRows(
+  cards: readonly TimelineSessionCard[],
+  nowMs: number,
+  active: RailActiveSession | null,
+): RailRow[] {
+  const people = cards.filter((card) => !isAutomationSession(card.head, getProjectLabel(card.head)));
+  const layout = buildInboxLayout(people, undefined, nowMs);
+  const recent = layout.history
+    .flatMap((group) => group.sessions)
+    .sort((a, b) => historySortKey(b) - historySortKey(a));
+  const rows = [
+    ...layout.shelf.map((card) => rowFromCard(card, "live", nowMs)),
+    ...layout.unread.map((card) => rowFromCard(card, "attention", nowMs)),
+    ...recent.map((card) => rowFromCard(card, "recent", nowMs)),
+  ];
+  if (!active) return rows;
+  // The open session's own page has the freshest state; prefer its words.
+  const activeRow = (group: RailGroup): RailRow => ({
+    ...active,
+    lamp: LAMP_FOR_TONE[active.tone],
+    group,
+  });
+  const index = rows.findIndex((row) => row.id === active.id);
+  if (index === -1) return [activeRow("recent"), ...rows];
+  rows[index] = activeRow(rows[index].group);
+  return rows;
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -102,11 +158,17 @@ function SessionRail({
   activeSession,
   returnTo,
   onTurnsTarget,
+  layout,
+  onExpandedChange,
 }: {
   activeSessionId: string | null;
   activeSession: RailActiveSession | null;
   returnTo: string;
   onTurnsTarget: (node: HTMLDivElement | null) => void;
+  /** docked: beside the page. strip: a narrow column of glyphs that opens
+   * over the page (laptop widths). drawer: inside the phone menu. */
+  layout: "docked" | "strip" | "overlay" | "drawer";
+  onExpandedChange?: (expanded: boolean) => void;
 }) {
   const navigate = useNavigate();
   const nowMs = useWallClock(true);
@@ -136,14 +198,19 @@ function SessionRail({
     setSwitcherOpenState(value);
   }, []);
 
-  const rows = useMemo(() => {
-    const listed = (data?.sessions ?? []).map((card) => rowFromSession(card.head, nowMs));
-    if (activeSession && !listed.some((row) => row.id === activeSession.id)) {
-      return [activeSession, ...listed];
-    }
-    // The open session's own page has the freshest state; prefer it.
-    return listed.map((row) => (activeSession && row.id === activeSession.id ? activeSession : row));
-  }, [data?.sessions, nowMs, activeSession]);
+  const rows = useMemo(
+    () => buildRailRows(data?.sessions ?? [], nowMs, activeSession),
+    [data?.sessions, nowMs, activeSession],
+  );
+  // Most sessions run on one machine; name the machine only on the rows that
+  // run somewhere else, so the common case spends its width on the title.
+  const usualHost = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of rows) if (row.host) counts.set(row.host, (counts.get(row.host) ?? 0) + 1);
+    let best: string | null = null;
+    for (const [host, count] of counts) if (best == null || count > (counts.get(best) ?? 0)) best = host;
+    return best;
+  }, [rows]);
 
   useRailPrefetch(
     useMemo(() => rows.map((row) => row.id), [rows]),
@@ -180,26 +247,105 @@ function SessionRail({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mac, openSession, rows, setSwitcherOpen, switcherOpen]);
 
+  const strip = layout === "strip";
+  const groups: RailGroup[] = ["live", "attention", "recent"];
+
+  const renderRow = (row: RailRow, index: number) => {
+    const active = row.id === activeSessionId;
+    const hotkey = index < RAIL_HOTKEY_COUNT ? railHotkeyLabel(index, mac) : null;
+    const host = row.host && row.host !== usualHost ? row.host : null;
+    return (
+      <li key={row.id}>
+        <button
+          type="button"
+          className={`session-rail__row${active ? " is-active" : ""}`}
+          aria-current={active ? "page" : undefined}
+          aria-keyshortcuts={hotkey ? (mac ? `Control+${index + 1}` : `Alt+${index + 1}`) : undefined}
+          aria-label={strip ? `${row.title}, ${row.stateText || "status unknown"}` : undefined}
+          data-testid="session-rail-row"
+          data-session-id={row.id}
+          data-group={row.group}
+          onClick={() => {
+            openSession(row.id);
+            if (layout === "overlay") onExpandedChange?.(false);
+          }}
+          title={[row.title, row.host, row.stateText, hotkey].filter(Boolean).join(" · ")}
+        >
+          <span className="session-rail__glyph">
+            {row.provider ? <ProviderGlyph provider={row.provider} size={14} /> : null}
+            {strip ? (
+              <span className="session-rail__dot" data-state={row.lamp} aria-hidden="true" />
+            ) : null}
+          </span>
+          {strip ? null : (
+            <>
+              <span className="session-rail__title">{row.title}</span>
+              {host ? <span className="session-rail__host">{host}</span> : null}
+              <span className="hearth-lamp session-rail__status" data-state={row.lamp}>
+                <span className="session-rail__dot" data-state={row.lamp} aria-hidden="true" />
+                <span className="hearth-lamp__label">{row.stateText}</span>
+              </span>
+            </>
+          )}
+        </button>
+        {active && !strip ? <div className="session-rail__turns" ref={onTurnsTarget} /> : null}
+      </li>
+    );
+  };
+
   return (
-    <nav className="session-rail" aria-label="Sessions" data-testid="session-rail">
+    <nav
+      className={`session-rail session-rail--${layout}`}
+      aria-label="Sessions"
+      data-testid="session-rail"
+    >
       <div className="session-rail__head">
-        <span>Sessions</span>
-        <span className="session-rail__head-actions">
+        {strip ? (
           <button
             type="button"
-            className="session-rail__find"
-            onClick={() => setSwitcherOpen(true)}
-            title={`Switch session (${switcherLabel})`}
-            data-testid="session-switcher-open"
+            className="session-rail__toggle"
+            onClick={() => onExpandedChange?.(true)}
+            title="Show sessions"
+            aria-label="Show sessions"
+            aria-expanded={false}
+            data-testid="session-rail-expand"
           >
-            <SearchIcon width={12} height={12} />
-            <span className="session-rail__find-key">{switcherLabel}</span>
-            <span className="sr-only">Switch session</span>
+            <span aria-hidden="true">»</span>
           </button>
-          <Link to={returnTo} className="session-rail__all">
-            Timeline
-          </Link>
-        </span>
+        ) : (
+          <>
+            <span>Sessions</span>
+            <span className="session-rail__head-actions">
+              <button
+                type="button"
+                className="session-rail__find"
+                onClick={() => setSwitcherOpen(true)}
+                title={`Switch session (${switcherLabel})`}
+                data-testid="session-switcher-open"
+              >
+                <SearchIcon width={12} height={12} />
+                <span className="session-rail__find-key">{switcherLabel}</span>
+                <span className="sr-only">Switch session</span>
+              </button>
+              <Link to={returnTo} className="session-rail__all">
+                Timeline
+              </Link>
+              {layout === "overlay" ? (
+                <button
+                  type="button"
+                  className="session-rail__toggle"
+                  onClick={() => onExpandedChange?.(false)}
+                  title="Hide sessions"
+                  aria-label="Hide sessions"
+                  aria-expanded
+                  data-testid="session-rail-collapse"
+                >
+                  <XIcon width={12} height={12} />
+                </button>
+              ) : null}
+            </span>
+          </>
+        )}
       </div>
       {switcherOpen
         ? createPortal(
@@ -216,41 +362,23 @@ function SessionRail({
             document.body,
           )
         : null}
-      <ol className="session-rail__list">
-        {rows.map((row, index) => {
-          const active = row.id === activeSessionId;
-          return (
-            <li key={row.id}>
-              <button
-                type="button"
-                className={`session-rail__row${active ? " is-active" : ""}`}
-                aria-current={active ? "page" : undefined}
-                data-testid="session-rail-row"
-                data-session-id={row.id}
-                onClick={() => openSession(row.id)}
-                title={row.title}
-              >
-                {row.provider ? (
-                  <ProviderGlyph provider={row.provider} size={14} className="session-rail__glyph" />
-                ) : (
-                  <span className="session-rail__glyph" aria-hidden="true" />
-                )}
-                <span className="session-rail__title">{row.title}</span>
-                <span className="session-rail__key">
-                  <span className={`session-rail__dot session-rail__dot--${row.tone}`} aria-hidden="true" />
-                  {index < RAIL_HOTKEY_COUNT ? (
-                    <span className="session-rail__hotkey">{railHotkeyLabel(index, mac)}</span>
-                  ) : null}
-                </span>
-                <span className="session-rail__sub">
-                  {[row.host, row.stateText].filter(Boolean).join(" · ")}
-                </span>
-              </button>
-              {active ? <div className="session-rail__turns" ref={onTurnsTarget} /> : null}
-            </li>
-          );
-        })}
-      </ol>
+      {groups.map((group) => {
+        const groupRows = rows
+          .map((row, index) => ({ row, index }))
+          .filter(({ row }) => row.group === group);
+        if (groupRows.length === 0) return null;
+        return (
+          <section key={group} className="session-rail__group" aria-label={GROUP_LABEL[group]}>
+            {strip ? null : (
+              <h3 className="session-rail__group-label">
+                {GROUP_LABEL[group]}
+                <span className="session-rail__group-count">{groupRows.length}</span>
+              </h3>
+            )}
+            <ol className="session-rail__list">{groupRows.map(({ row, index }) => renderRow(row, index))}</ol>
+          </section>
+        );
+      })}
     </nav>
   );
 }
@@ -269,9 +397,13 @@ export function SessionRailFrame({
   children: ReactNode;
 }) {
   const narrow = useMediaQuery("(max-width: 767px)");
+  // Below this the docked rail would squeeze the transcript: the rail
+  // becomes a strip of glyphs that opens over the page instead.
+  const compact = useMediaQuery("(max-width: 1199px)");
   const mobileSlot = useMobileNavSlot();
   const [turnsTarget, setTurnsTarget] = useState<HTMLElement | null>(null);
   const [activeSession, setActiveSession] = useState<RailActiveSession | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const reportActiveSession = useCallback((next: RailActiveSession | null) => {
     setActiveSession((previous) =>
@@ -279,24 +411,58 @@ export function SessionRailFrame({
     );
   }, []);
 
+  useEffect(() => {
+    if (!compact) setExpanded(false);
+  }, [compact]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
+
   const context = useMemo<SessionRailContextValue>(
     () => ({ turnsTarget, reportActiveSession }),
     [turnsTarget, reportActiveSession],
   );
 
-  const rail = (
+  const railFor = (layout: "docked" | "strip" | "overlay" | "drawer") => (
     <SessionRail
       activeSessionId={activeSessionId}
       activeSession={activeSession?.id === activeSessionId ? activeSession : null}
       returnTo={returnTo}
       onTurnsTarget={setTurnsTarget}
+      layout={layout}
+      onExpandedChange={setExpanded}
     />
   );
 
+  let rail: ReactNode;
+  if (narrow) {
+    rail = mobileSlot ? createPortal(railFor("drawer"), mobileSlot) : null;
+  } else if (compact && expanded) {
+    rail = (
+      <>
+        <button
+          type="button"
+          className="session-rail-frame__scrim"
+          aria-label="Hide sessions"
+          onClick={() => setExpanded(false)}
+        />
+        {railFor("overlay")}
+      </>
+    );
+  } else {
+    rail = railFor(compact ? "strip" : "docked");
+  }
+
   return (
     <SessionRailContext.Provider value={context}>
-      <div className="session-rail-frame">
-        {narrow ? (mobileSlot ? createPortal(rail, mobileSlot) : null) : rail}
+      <div className={`session-rail-frame${compact && !narrow ? " session-rail-frame--compact" : ""}`}>
+        {rail}
         <div className="session-rail-frame__main">{children}</div>
       </div>
     </SessionRailContext.Provider>

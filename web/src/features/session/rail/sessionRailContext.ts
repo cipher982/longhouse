@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect } from "react";
+import type { StatusLampState } from "@/shared/instruments/StatusLamp";
 
 /** What the open session tells the rail about itself, so the rail can show
  * it even when it is not among the recent sessions the rail lists. */
@@ -10,6 +11,12 @@ export interface RailActiveSession {
   stateText: string;
   tone: "live" | "attention" | "unknown" | "cool";
 }
+
+/** One rail row: the session, its Timeline tier, and the Timeline's lamp. */
+export type RailRow = RailActiveSession & {
+  lamp: StatusLampState;
+  group: "live" | "attention" | "recent";
+};
 
 export interface SessionRailContextValue {
   /** Where the open session's turns list renders: inside its rail row. */

@@ -946,7 +946,9 @@ export function buildTimelineCardStressFixture(): {
       anchor_title: "Nightly dependency audit",
       timeline_title: "Nightly dependency audit",
       summary: "Audited outdated dependencies and drafted the upgrade plan.",
-      first_user_message: "Audit our outdated dependencies and draft an upgrade plan.",
+      // Pasted the way Claude Code wraps a paste: the row must say "[pasted] …".
+      first_user_message:
+        '"""\n<pasted_content id="4b1e">\nAudit our outdated dependencies and draft an upgrade plan.\n</pasted_content id="4b1e">',
       origin_label: "cinder",
       home_label: "On this Mac",
     },

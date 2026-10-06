@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, TimelineSessionsListResponse } from "@/shared/api/agents";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
-import { SessionRailFrame, isSwitcherHotkey, railHotkeyIndex, railHotkeyLabel } from "../SessionRail";
+import { SessionRailFrame, buildRailRows, isSwitcherHotkey, railHotkeyIndex, railHotkeyLabel } from "../SessionRail";
 import { filterSwitcherRows, previewFromWorkspace, trimPreviewMarkdown } from "../SessionSwitcher";
 import type { AgentSessionWorkspaceResponse } from "@/shared/api/agents";
 import { RAIL_PREFETCH_COUNT, railPrefetchAllowed } from "../useRailPrefetch";
@@ -137,7 +137,7 @@ describe("SessionRailFrame", () => {
     const rows = await screen.findAllByTestId("session-rail-row");
     expect(rows.map((row) => row.getAttribute("data-session-id"))).toEqual(["a", "b", "c"]);
     expect(rows[0]).toHaveAttribute("aria-current", "page");
-    expect(rows[1]).toHaveTextContent("⌃2");
+    expect(rows[1]).toHaveAttribute("aria-keyshortcuts", "Control+2");
 
     fireEvent.keyDown(window, { code: "Digit3", ctrlKey: true });
     expect(navigateMock).toHaveBeenCalledWith("/timeline/c", { state: { from: "/timeline" } });
@@ -388,5 +388,47 @@ describe("trimPreviewMarkdown", () => {
     // A fence on the first line is closed, not cut to nothing.
     const first = `${fence}sh\necho one\n\necho two\n${"z".repeat(80)}`;
     expect(trimPreviewMarkdown(first, 40)).toBe(`${fence}sh\necho one\n…\n${fence}`);
+  });
+});
+
+describe("rail rows follow the Timeline's tiers", () => {
+  function card(id: string, head: Partial<AgentSession>, state: Parameters<typeof makeSessionStateFacts>[0]) {
+    return {
+      thread_id: id,
+      timeline_anchor_at: null,
+      head: { ...session(id, `Session ${id}`), ...head, session_state: makeSessionStateFacts(state) },
+      continuation_count: 0,
+      started_origin_label: null,
+      head_origin_label: null,
+    } as unknown as TimelineSessionsListResponse["sessions"][number];
+  }
+
+  it("puts live work first, results next, then recent, and leaves automation runs on the Timeline", () => {
+    const rows = buildRailRows(
+      [
+        card("idle", { started_at: "2026-10-06T10:00:00Z" }, { activity: "quiescent", access: "live_control" }),
+        card("canary", { launch_actor: "automation", started_at: "2026-10-06T12:00:00Z" }, { activity: "quiescent" }),
+        card("working", { started_at: "2026-10-06T09:00:00Z" }, { activity: "thinking", access: "live_control" }),
+        card("result", {}, { activity: "quiescent", unread: true, lastResultAt: "2026-10-06T11:00:00Z" }),
+      ],
+      Date.parse("2026-10-06T12:30:00Z"),
+      null,
+    );
+    expect(rows.map((row) => [row.id, row.group])).toEqual([
+      ["working", "live"],
+      ["result", "attention"],
+      ["idle", "recent"],
+    ]);
+    expect(rows[0].lamp).toBe("working");
+  });
+
+  it("keeps the open session listed with its own words even when the Timeline hides it", () => {
+    const rows = buildRailRows(
+      [card("a", {}, { activity: "quiescent" })],
+      Date.now(),
+      { id: "auto", title: "Run echo hello in bash", provider: "omp", host: "cinder", stateText: "Idle", tone: "cool" },
+    );
+    expect(rows.map((row) => row.id)).toEqual(["auto", "a"]);
+    expect(rows[0]).toMatchObject({ stateText: "Idle", lamp: "idle", group: "recent" });
   });
 });

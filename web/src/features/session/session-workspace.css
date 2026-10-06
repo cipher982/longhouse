@@ -1985,15 +1985,27 @@
 .tl-msg__body a:hover {
   color: var(--color-brand-primary);
 }
+/* A table wider than the column scrolls inside its own box; its cells wrap
+   between words, never one letter per line. */
+.tl-msg__table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
 .tl-msg__body table {
   border-collapse: collapse;
-  margin: 0.5em 0;
+  margin: 0;
 }
 .tl-msg__body th,
 .tl-msg__body td {
   border: 1px solid rgba(158, 124, 90, 0.2);
   padding: 4px 8px;
   text-align: left;
+  min-width: 6em;
+  max-width: 40em;
+  word-break: normal;
+  overflow-wrap: normal;
+  vertical-align: top;
 }
 .tl-msg__plain {
   white-space: pre-wrap;

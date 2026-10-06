@@ -3,6 +3,7 @@
  */
 
 import { type AgentSession } from "@/shared/api/agents";
+import { cleanPromptPreview } from "./promptPreview";
 
 // ---------------------------------------------------------------------------
 // Navigation helpers
@@ -82,12 +83,18 @@ export function getSessionCardText(
   const titleMaxChars = options.titleMaxChars ?? 96;
   const subheadingMaxChars = options.subheadingMaxChars ?? 180;
   const preferGenerated = options.preferGenerated ?? true;
-  const firstUser = compactText(session.first_user_message);
+  // The prompt as a one-line preview: paste/attachment/image wrappers named,
+  // not printed (promptPreview.ts).
+  const firstUser = cleanPromptPreview(session.first_user_message);
 
   // The server resolves a single sanitized, frozen headline (timeline_title) so
   // iOS/web/widget render identical text and the row stays stable as the live
   // summary drifts. Prefer it; the ladder below is only for pre-anchor payloads.
-  const resolved = compactText(session.timeline_title);
+  // A headline cut from the prompt carries the prompt's wrappers too.
+  const resolved =
+    session.title_source === "prompt"
+      ? cleanPromptPreview(session.timeline_title)
+      : compactText(session.timeline_title);
   if (preferGenerated && resolved) {
     // With no title model the server's headline is the first prompt cut to a few
     // words (`title_source: "prompt"`), and the subheading is the whole prompt:

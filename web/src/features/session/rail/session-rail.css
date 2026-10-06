@@ -22,8 +22,8 @@
 }
 
 .session-rail {
-  flex: 0 0 248px;
-  width: 248px;
+  flex: 0 0 288px;
+  width: 288px;
   min-height: 0;
   overflow-y: auto;
   display: flex;
@@ -34,10 +34,10 @@
   background: rgba(7, 6, 5, 0.45);
 }
 
-@media (min-width: 1400px) {
+@media (min-width: 1600px) {
   .session-rail {
-    flex-basis: 272px;
-    width: 272px;
+    flex-basis: 312px;
+    width: 312px;
   }
 }
 
@@ -75,28 +75,57 @@
   list-style: none;
 }
 
+.session-rail__group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.session-rail__group + .session-rail__group {
+  margin-top: 10px;
+}
+
+/* The Timeline's tier headings, small: "Live now 6". */
+.session-rail__group-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 8px 3px;
+  font-family: var(--font-family-display);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.session-rail__group-count {
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+}
+
+/* One line per session, like a Timeline row: mark, title, status. */
 .session-rail__row {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto;
   column-gap: 8px;
-  row-gap: 1px;
   align-items: center;
   width: 100%;
-  padding: 6px 8px;
+  min-height: 30px;
+  padding: 5px 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   font-family: var(--font-family-base);
   font-size: 12.5px;
-  line-height: 1.35;
+  line-height: 1.3;
   text-align: left;
   cursor: pointer;
 }
 
 .session-rail__row:hover {
-  background: rgba(246, 235, 214, 0.035);
-  color: var(--color-text-primary);
+  background: rgba(246, 235, 214, 0.04);
 }
 
 .session-rail__row:focus-visible {
@@ -106,11 +135,12 @@
 
 .session-rail__row.is-active {
   background: var(--color-surface-elevated);
-  color: var(--color-text-primary);
   box-shadow: inset 2px 0 0 var(--color-brand-primary);
 }
 
 .session-rail__glyph {
+  position: relative;
+  display: inline-flex;
   width: 14px;
   height: 14px;
 }
@@ -122,44 +152,48 @@
   white-space: nowrap;
 }
 
-.session-rail__key {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-family-mono);
+.session-rail__host {
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 10.5px;
   color: var(--color-text-muted);
 }
 
+/* The Timeline's status word in the Timeline's colours (instruments.css
+   .hearth-lamp[data-state]), without the fire. */
+.session-rail__status.hearth-lamp {
+  gap: 5px;
+  max-width: 78px;
+  font-size: 11.5px;
+}
+
 .session-rail__dot {
-  width: 7px;
-  height: 7px;
+  flex: none;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--color-signal-off);
 }
 
-.session-rail__dot--live {
+.session-rail__dot[data-state="working"] {
   background: var(--color-signal-live);
   box-shadow: 0 0 6px rgba(70, 214, 140, 0.6);
 }
 
-.session-rail__dot--attention {
+.session-rail__dot[data-state="waiting"],
+.session-rail__dot[data-state="failed"] {
   background: var(--color-signal-attention);
   box-shadow: 0 0 6px rgba(245, 163, 59, 0.6);
 }
 
-.session-rail__dot--unknown {
+.session-rail__dot[data-state="unknown"] {
   background: var(--color-signal-quiet);
 }
 
-.session-rail__sub {
-  grid-column: 2 / 4;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--color-text-muted);
+.session-rail__dot[data-state="done"] {
+  background: var(--color-text-secondary);
 }
 
 /* The open session's turns, as an accordion under its row. TurnOutline is
@@ -404,9 +438,98 @@
   }
 }
 
-/* No keyboard in a phone drawer: drop the key hints, keep the dots and the
-   search button (the switcher's only touch entry). */
-.mobile-nav-session-slot .session-rail__hotkey,
+/* No keyboard in a phone drawer: drop the key hint, keep the search button
+   (the switcher's only touch entry). Rows get finger-sized. */
+.mobile-nav-session-slot .session-rail__row {
+  min-height: 40px;
+  font-size: 14px;
+}
+
 .mobile-nav-session-slot .session-rail__find-key {
   display: none;
+}
+
+.session-rail__toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session-rail__toggle:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-primary);
+}
+
+/* Laptop widths: a strip of provider marks with status dots, so the
+   transcript keeps its width. » opens the full rail over the page. */
+.session-rail-frame--compact {
+  position: relative;
+}
+
+.session-rail--strip {
+  flex: 0 0 44px;
+  width: 44px;
+  padding: 6px 4px 16px;
+  align-items: center;
+}
+
+.session-rail--strip .session-rail__head {
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
+.session-rail--strip .session-rail__group + .session-rail__group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.session-rail--strip .session-rail__row {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  width: 34px;
+  min-height: 30px;
+  padding: 0;
+}
+
+.session-rail--strip .session-rail__glyph {
+  width: 16px;
+  height: 16px;
+}
+
+.session-rail--strip .session-rail__glyph .session-rail__dot {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  border: 1.5px solid var(--color-surface-page);
+  box-sizing: content-box;
+}
+
+.session-rail--overlay {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 30;
+  width: min(320px, 85vw);
+  flex: none;
+  background: var(--color-surface-overlay);
+  box-shadow: 18px 0 40px rgba(0, 0, 0, 0.45);
+}
+
+.session-rail-frame__scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  border: 0;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.35);
+  cursor: default;
 }

@@ -52,7 +52,7 @@ function isCardClosed(card: TimelineSessionCard): boolean {
   return isSessionClosed(session);
 }
 
-function historySortKey(card: TimelineSessionCard): number {
+export function historySortKey(card: TimelineSessionCard): number {
   return isCardClosed(card) ? closedAtMs(card) : startedAtMs(card);
 }
 
@@ -79,7 +79,7 @@ function explicitAutomationClassification(
   return null;
 }
 
-function isAutomationSession(
+export function isAutomationSession(
   session: TimelineSessionCard["head"],
   resolvedRepo: string,
 ): boolean {

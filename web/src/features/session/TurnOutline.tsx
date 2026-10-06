@@ -9,6 +9,7 @@ import { useEffect, useRef } from "react";
 import type { TimelineItem } from "@/shared/session/model";
 import { formatTime } from "@/shared/session/model";
 import type { AgentEventId } from "@/shared/api/agents";
+import { cleanPromptPreview } from "@/shared/session/promptPreview";
 
 /** DOM id prefix of a transcript row: `event-<eventId>`. */
 export const TURN_ROW_ID_PREFIX = "event-";
@@ -30,7 +31,7 @@ export interface TurnOutlineTurn {
   /** The originating user message's event id — turns rowId `event-<id>`. */
   eventId: AgentEventId;
   timestamp: string;
-  /** First 48 characters of the user's ask, whitespace-collapsed. */
+  /** First 48 characters of the user's ask, as a one-line preview. */
   askPreview: string;
 }
 
@@ -43,7 +44,7 @@ export function deriveTurnOutline(items: TimelineItem[]): TurnOutlineTurn[] {
   const turns: TurnOutlineTurn[] = [];
   for (const item of items) {
     if (item.kind !== "message" || item.event.role !== "user") continue;
-    const raw = (item.event.content_text ?? "").replace(/\s+/g, " ").trim();
+    const raw = cleanPromptPreview(item.event.content_text);
     turns.push({
       key: turnKeyForEventId(item.event.id),
       eventId: item.event.id,

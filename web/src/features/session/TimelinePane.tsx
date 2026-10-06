@@ -461,6 +461,11 @@ function MessageRow({
               a: ({ node: _node, ...props }) => (
                 <a {...props} target="_blank" rel="noreferrer noopener" />
               ),
+              table: ({ node: _node, ...props }) => (
+                <div className="tl-msg__table-scroll">
+                  <table {...props} />
+                </div>
+              ),
             }}
           >
             {visible}

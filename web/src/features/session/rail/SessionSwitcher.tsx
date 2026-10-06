@@ -21,7 +21,8 @@ import { useDebouncedValue } from "@/shared/hooks/useDebouncedValue";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { SearchIcon } from "@/shared/ui/icons";
-import type { RailActiveSession } from "./sessionRailContext";
+import type { RailActiveSession, RailRow } from "./sessionRailContext";
+import { cleanPromptPreview } from "@/shared/session/promptPreview";
 
 const PREVIEW_CHARS = 600;
 
@@ -87,7 +88,9 @@ export function previewFromWorkspace(workspace: AgentSessionWorkspaceResponse | 
     if (!event || !text || event.tool_name) continue;
     if (event.role === "assistant" && reply == null) reply = trimPreviewMarkdown(text);
     if (event.role === "user" && ask == null) {
-      ask = trimPreviewMarkdown(text);
+      const typed = cleanPromptPreview(text);
+      if (!typed) continue;
+      ask = trimPreviewMarkdown(typed);
       askIsNewer = reply == null;
     }
   }
@@ -147,7 +150,7 @@ export function SessionSwitcher({
   onOpen,
   onClose,
 }: {
-  rows: readonly RailActiveSession[];
+  rows: readonly RailRow[];
   activeSessionId: string | null;
   shortcutLabel: string;
   onOpen: (sessionId: string) => void;
@@ -232,17 +235,15 @@ export function SessionSwitcher({
                 onMouseEnter={() => setHighlight(index)}
                 onClick={() => onOpen(row.id)}
               >
-                {row.provider ? (
-                  <ProviderGlyph provider={row.provider} size={14} className="session-rail__glyph" />
-                ) : (
-                  <span className="session-rail__glyph" aria-hidden="true" />
-                )}
-                <span className="session-rail__title">{row.title}</span>
-                <span className="session-rail__key">
-                  <span className={`session-rail__dot session-rail__dot--${row.tone}`} aria-hidden="true" />
-                  {row.id === activeSessionId ? "open" : null}
+                <span className="session-rail__glyph">
+                  {row.provider ? <ProviderGlyph provider={row.provider} size={14} /> : null}
                 </span>
-                <span className="session-rail__sub">{[row.host, row.stateText].filter(Boolean).join(" · ")}</span>
+                <span className="session-rail__title">{row.title}</span>
+                <span className="session-rail__host">{row.id === activeSessionId ? "open" : row.host}</span>
+                <span className="hearth-lamp session-rail__status" data-state={row.lamp}>
+                  <span className="session-rail__dot" data-state={row.lamp} aria-hidden="true" />
+                  <span className="hearth-lamp__label">{row.stateText}</span>
+                </span>
               </button>
             </li>
           ))}
