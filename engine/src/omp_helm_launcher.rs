@@ -255,6 +255,40 @@ fn sort_background_snapshot_items(items: &mut [BackgroundSnapshotItemObservation
     items.sort_unstable_by(|left, right| left.id.cmp(right.id));
 }
 
+pub(crate) struct NormalizedAsyncJob {
+    pub(crate) kind: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) running: bool,
+}
+
+pub(crate) fn normalize_async_job(
+    job_type: Option<&str>,
+    agent_id: Option<&str>,
+    status: Option<&str>,
+    queued: bool,
+) -> Option<NormalizedAsyncJob> {
+    let running = status == Some("running");
+    let status = match status? {
+        "running" if queued => "queued",
+        "running" => "running",
+        "completed" => "completed",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        "aborted" => "aborted",
+        _ => return None,
+    };
+    let kind = match (job_type, agent_id) {
+        (Some("task"), Some(_)) => "subagent",
+        (Some("bash"), _) => "shell",
+        _ => "other",
+    };
+    Some(NormalizedAsyncJob {
+        kind,
+        status,
+        running,
+    })
+}
+
 struct BackgroundSnapshotEmission {
     identity: BackgroundSnapshotIdentity,
     snapshot: BackgroundSnapshotKey,
@@ -1789,30 +1823,24 @@ impl OmpHelmServer {
         let mut recent_items = Vec::new();
         for job in jobs {
             let status = job.get("status").and_then(Value::as_str);
-            let running = status == Some("running");
-            if job.get("source").and_then(Value::as_str) != Some("async_job_manager")
-                || !matches!(
-                    status,
-                    Some("running" | "completed" | "failed" | "cancelled" | "aborted")
-                )
-            {
+            if job.get("source").and_then(Value::as_str) != Some("async_job_manager") {
                 continue;
             }
+            let agent_id = job.get("agent_id").and_then(Value::as_str);
+            let Some(normalized) = normalize_async_job(
+                job.get("type").and_then(Value::as_str),
+                agent_id,
+                status,
+                job.get("queued").and_then(Value::as_bool) == Some(true),
+            ) else {
+                continue;
+            };
+            let running = normalized.running;
             let Some(id) = job.get("id").and_then(Value::as_str) else {
                 return;
             };
-            let job_type = job.get("type").and_then(Value::as_str);
-            let agent_id = job.get("agent_id").and_then(Value::as_str);
-            let kind = match (job_type, agent_id) {
-                (Some("task"), Some(_)) => "subagent",
-                (Some("bash"), _) => "shell",
-                _ => "other",
-            };
-            let status = if running && job.get("queued").and_then(Value::as_bool) == Some(true) {
-                "queued"
-            } else {
-                status.unwrap()
-            };
+            let kind = normalized.kind;
+            let status = normalized.status;
             let registered_at_ms = job
                 .get("start_time")
                 .and_then(Value::as_i64)

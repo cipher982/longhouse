@@ -11,6 +11,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -21,10 +22,15 @@ use tokio::process::{Child, Command};
 use uuid::Uuid;
 
 use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
+use crate::console_lifecycle::{
+    ConsoleInvocation, IdleOutcome, IdleSignal, InvocationState, PendingItem, TurnBinding,
+    TurnOrigin, WakeRequest,
+};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 
 pub const OMP_PRINT_ADAPTER: &str = "omp_print";
+const OMP_RUNTIME_SOURCE: &str = "omp_console";
 pub const DEFAULT_OMP_BIN: &str = "omp";
 const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
@@ -47,6 +53,9 @@ pub struct OmpPrintRunConfig {
     pub resume_provider_thread_id: Option<String>,
     pub resume_session_file: Option<PathBuf>,
     pub permission_mode: String,
+    pub origin: String,
+    pub wake_id: Option<String>,
+    pub invocation_id: Option<String>,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -58,8 +67,8 @@ pub struct OmpPrintRunSummary {
     pub run_id: String,
     pub provider_thread_id: Option<String>,
     pub launch_id: String,
-    pub pid: u32,
-    pub process_group_id: i32,
+    pub pid: Option<u32>,
+    pub process_group_id: Option<i32>,
     pub stdout_path: String,
     pub stderr_path: String,
     pub session_dir: String,
@@ -96,6 +105,49 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     }
     if config.permission_mode != "provider_local" {
         anyhow::bail!("OMP Console currently supports provider_local permission mode only");
+    }
+    if config.origin == "wake" {
+        let invocation_id = config.invocation_id.as_deref().unwrap_or_default();
+        let wake_id = config.wake_id.as_deref().unwrap_or_default();
+        if let Some(invocation) = crate::console_lifecycle::lookup_launch(invocation_id) {
+            match bind_wake_turn(&config, invocation, wake_id, TurnOrigin::Wake).await {
+                Ok(summary) => return Ok(summary),
+                Err(error) if error.is::<crate::console_lifecycle::WakeTargetGone>() => {}
+                Err(error) => return Err(error).context("binding OMP Console wake"),
+            }
+        }
+        if let Some(invocation) =
+            crate::console_lifecycle::lookup_retained_wake(invocation_id, wake_id)
+        {
+            match bind_retained_wake_turn(&config, invocation, wake_id).await {
+                Ok(summary) => return Ok(summary),
+                Err(error) if error.is::<crate::console_lifecycle::WakeTargetGone>() => {}
+                Err(error) => {
+                    return Err(error).context("binding retained OMP Console wake");
+                }
+            }
+        }
+        return cancel_missing_wake(&config).await;
+    }
+
+    if let Some(provider_thread_id) = config.resume_provider_thread_id.as_deref() {
+        crate::console_lifecycle::discard_retained_wakes("omp", provider_thread_id);
+        if let Some(invocation) = crate::console_lifecycle::lookup("omp", provider_thread_id) {
+            match invocation.state() {
+                InvocationState::Parked => return adopt_parked_turn(&config, invocation).await,
+                InvocationState::Closed => {
+                    invocation.wait_stopped().await;
+                    crate::console_lifecycle::unregister(&invocation.launch_id);
+                }
+                InvocationState::Responding => {
+                    if let Some(wake_id) = invocation.pending_wake_id() {
+                        return bind_wake_turn(&config, invocation, &wake_id, TurnOrigin::User)
+                            .await
+                            .context("binding OMP Console user input to wake response");
+                    }
+                }
+            }
+        }
     }
 
     let session_dir = config
@@ -174,7 +226,6 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     // there; stdout still goes to the file the monitors tail.
     let rpc_stdin = run_dir.join(crate::console_rpc::RPC_STDIN);
     crate::console_rpc::create_fifo(&rpc_stdin)?;
-    let prompt_command = crate::console_rpc::prompt_command(&config.prompt, &config.image_paths)?;
     let rpc_stdin_c = std::ffi::CString::new(rpc_stdin.as_os_str().as_bytes())?;
     let argv = std::iter::once(config.omp_bin.clone())
         .chain(args.iter().cloned())
@@ -241,7 +292,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     }
     refresh_owned_processes(&config.run_id);
 
-    let sink = OmpPrintSink {
+    let mut sink = OmpPrintSink {
         session_id: config.session_id.clone(),
         thread_id: config.thread_id.clone(),
         turn_id: config.turn_id.clone(),
@@ -266,51 +317,115 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
             crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error.to_string());
         return Err(error).context("waiting for OMP to become ready");
     }
-    for command in [
-        json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "get_state"}),
-        prompt_command,
-    ] {
-        if let Err(error) = crate::console_rpc::write_command(&rpc_stdin, &command).await {
+    let identity_start = std::fs::metadata(&stdout_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if let Err(error) = crate::console_rpc::write_command(
+        &rpc_stdin,
+        &json!({"id": crate::console_rpc::RPC_IDENTITY_ID, "type": "get_state"}),
+    )
+    .await
+    {
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ =
+            crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error.to_string());
+        return Err(error).context("requesting OMP Console identity");
+    }
+    let state = match wait_for_rpc_response(
+        &mut child,
+        &stdout_path,
+        &stderr_path,
+        identity_start,
+        crate::console_rpc::RPC_IDENTITY_ID,
+    )
+    .await
+    {
+        Ok(state) => state,
+        Err(error) => {
             let _ = cleanup_owned_child(&mut child, &config.run_id).await;
             let _ = crate::turn_claims::default_registry()?
                 .mark_failed(&config.run_id, &error.to_string());
-            return Err(error).context("sending the OMP Console prompt");
-        }
-    }
-    let monitor_stderr_path = stderr_path.clone();
-    tokio::spawn(async move {
-        monitor_omp_print(&mut child, &monitor_stderr_path, sink).await;
-    });
-    let provider_thread_id = {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-        loop {
-            let claim = crate::turn_claims::default_registry()?.read(&config.run_id)?;
-            if claim.provider_identity_confirmed {
-                break claim.provider_thread_id;
-            }
-            if claim.state == "terminal" || tokio::time::Instant::now() >= deadline {
-                break None;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            return Err(error).context("waiting for OMP Console identity");
         }
     };
+    let provider_thread_id = state
+        .pointer("/data/sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let Some(provider_thread_id) = provider_thread_id else {
-        let cleanup_verified = cleanup_live_claim(&config.run_id).await;
-        let mut error = if cleanup_verified {
-            "OMP native session identity was not confirmed before launch acknowledgment".to_string()
-        } else {
-            "OMP native session identity was not confirmed before launch acknowledgment; owned process-group cleanup was not verified".to_string()
-        };
-        // The identity timeout is only the symptom. When OMP died at once the
-        // cause is in its stderr (on a fresh Linux machine it was
-        // "/usr/bin/env: bun: No such file or directory"), so say it here
-        // instead of leaving it in a file nobody opens.
-        if let Some(cause) = stderr_tail(&stderr_path) {
-            error.push_str(&format!("; omp stderr: {cause}"));
-        }
-        let _ = crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error);
-        anyhow::bail!(error);
+        let error = anyhow::anyhow!("OMP get_state reported no sessionId");
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ =
+            crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error.to_string());
+        return Err(error);
     };
+    if expected_provider_thread_id
+        .as_deref()
+        .is_some_and(|expected| expected != provider_thread_id)
+    {
+        let error = anyhow::anyhow!(
+            "OMP RPC session id {provider_thread_id} does not match the exact resume identity"
+        );
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ =
+            crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error.to_string());
+        return Err(error);
+    }
+    sink.provider_thread_id = Some(provider_thread_id.clone());
+    let registry = crate::turn_claims::default_registry()?;
+    if let Err(error) = registry.mark_provider_binding(&config.run_id, &provider_thread_id, None) {
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        return Err(error).context("recording OMP Console identity");
+    }
+    if let Err(error) = registry.record_invocation_turn(&config.run_id, "user", false) {
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        return Err(error).context("recording OMP Console turn origin");
+    }
+    let input = Arc::new(crate::console_rpc::ConsoleRpcInput::new(rpc_stdin.clone()));
+    let binding = turn_binding(&config, TurnOrigin::User);
+    let invocation = Arc::new(ConsoleInvocation::new(
+        "omp",
+        provider_thread_id.clone(),
+        launch_id.clone(),
+        pid,
+        process_group_id,
+        binding,
+        input,
+    ));
+    if state
+        .pointer("/data/hasPendingAsyncWork")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        invocation.replace_pending(vec![async_work_placeholder()], vec![]);
+    }
+    if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
+        return Err(error);
+    }
+    sink.provider_thread_id = Some(provider_thread_id.clone());
+    sink.post_phase("thinking", None, 0).await;
+    if let Err(error) = invocation
+        .write_input(&config.prompt, &config.image_paths)
+        .await
+    {
+        invocation.take_active_turn();
+        let _ = registry.record_invocation_state(&config.run_id, "closed", 0);
+        invocation.close_input().await.ok();
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        invocation.process_exited();
+        crate::console_lifecycle::unregister(&launch_id);
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
+        return Err(error).context("writing the OMP Console prompt");
+    }
+    let monitor = crate::turn_claims::register_monitor(&config.run_id);
+    let monitor_stderr_path = stderr_path.clone();
+    let monitored_invocation = invocation.clone();
+    tokio::spawn(async move {
+        monitor_omp_print(&mut child, &monitor_stderr_path, sink, monitored_invocation).await;
+        drop(monitor);
+    });
 
     Ok(OmpPrintRunSummary {
         session_id: config.session_id,
@@ -318,8 +433,8 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         run_id: config.run_id,
         provider_thread_id: Some(provider_thread_id),
         launch_id,
-        pid,
-        process_group_id,
+        pid: Some(pid),
+        process_group_id: Some(process_group_id),
         stdout_path: stdout_path.to_string_lossy().to_string(),
         stderr_path: stderr_path.to_string_lossy().to_string(),
         session_dir: session_dir.to_string_lossy().to_string(),
@@ -357,6 +472,439 @@ async fn wait_for_rpc_ready(
     }
 }
 
+fn turn_binding(config: &OmpPrintRunConfig, origin: TurnOrigin) -> TurnBinding {
+    TurnBinding {
+        run_id: config.run_id.clone(),
+        turn_id: config.turn_id.clone(),
+        client_request_id: config.client_request_id.clone(),
+        origin,
+    }
+}
+
+fn async_work_placeholder() -> PendingItem {
+    PendingItem {
+        id: "omp:async-work".to_string(),
+        kind: "other".to_string(),
+        status: "running".to_string(),
+        description: Some("OMP reports pending asynchronous work".to_string()),
+    }
+}
+
+async fn wait_for_rpc_response(
+    child: &mut Child,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    start: u64,
+    id: &str,
+) -> Result<Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        if let Some(response) = crate::console_rpc::find_response(stdout_path, start, id) {
+            anyhow::ensure!(
+                response.get("success").and_then(Value::as_bool) == Some(true),
+                "OMP RPC command {id} failed: {}",
+                response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown error")
+            );
+            return Ok(response);
+        }
+        if let Some(status) = child.try_wait()? {
+            anyhow::bail!(
+                "OMP exited ({status}) before RPC command {id} returned{}",
+                stderr_tail(stderr_path)
+                    .map(|tail| format!("; omp stderr: {tail}"))
+                    .unwrap_or_default()
+            );
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("OMP did not answer RPC command {id} within 8s");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+struct OmpExistingRun {
+    pid: u32,
+    process_group_id: i32,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    session_dir: PathBuf,
+    session_file: PathBuf,
+    source_start_len: u64,
+    argv: Vec<String>,
+}
+
+fn existing_run(invocation: &ConsoleInvocation) -> Result<OmpExistingRun> {
+    let previous =
+        crate::turn_claims::default_registry()?.read(&invocation.latest_turn().run_id)?;
+    let result = previous
+        .result
+        .as_ref()
+        .context("parked OMP invocation has no launch record")?;
+    let stdout_path = previous
+        .stdout_path
+        .as_deref()
+        .context("parked OMP invocation has no stdout path")?;
+    let stderr_path = previous
+        .stderr_path
+        .as_deref()
+        .context("parked OMP invocation has no stderr path")?;
+    let session_file = result
+        .get("session_file")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("parked OMP invocation has no exact session file")?;
+    let session_dir = result
+        .get("session_dir")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("parked OMP invocation has no session directory")?;
+    let source_start_len = std::fs::metadata(&session_file)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
+    let argv = result
+        .get("argv")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    let (pid, process_group_id) = invocation.process_identity();
+    Ok(OmpExistingRun {
+        pid,
+        process_group_id,
+        stdout_path: PathBuf::from(stdout_path),
+        stderr_path: PathBuf::from(stderr_path),
+        session_dir,
+        session_file,
+        source_start_len,
+        argv,
+    })
+}
+
+fn invocation_spawn_result(
+    config: &OmpPrintRunConfig,
+    invocation: &ConsoleInvocation,
+    run: &OmpExistingRun,
+) -> Value {
+    json!({
+        "session_id": config.session_id,
+        "thread_id": config.thread_id,
+        "run_id": config.run_id,
+        "provider": "omp",
+        "transport": OMP_PRINT_ADAPTER,
+        "provider_thread_id": invocation.provider_thread_id,
+        "source_start_len": run.source_start_len,
+        "launch_id": invocation.launch_id,
+        "pid": run.pid,
+        "process_group_id": run.process_group_id,
+        "stdout_path": run.stdout_path,
+        "stderr_path": run.stderr_path,
+        "session_dir": run.session_dir,
+        "session_file": run.session_file,
+        "cwd": config.cwd,
+        "machine_name": config.machine_name,
+        "argv": run.argv,
+    })
+}
+
+fn sink_for_existing_run(
+    config: &OmpPrintRunConfig,
+    invocation: &ConsoleInvocation,
+    run: &OmpExistingRun,
+) -> Result<OmpPrintSink> {
+    Ok(OmpPrintSink {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        turn_id: config.turn_id.clone(),
+        run_id: config.run_id.clone(),
+        client_request_id: config.client_request_id.clone(),
+        launch_id: invocation.launch_id.clone(),
+        process_group_id: Some(run.process_group_id),
+        stdout_path: run.stdout_path.clone(),
+        session_dir: run.session_dir.clone(),
+        session_file: run.session_file.clone(),
+        provider_thread_id: Some(invocation.provider_thread_id.clone()),
+        source_start_len: run.source_start_len,
+        binding_emitted: true,
+        machine_name: config.machine_name.clone(),
+        local_db_path: config
+            .local_db_path
+            .clone()
+            .or_else(|| crate::config::get_agent_db_path().ok()),
+        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+    })
+}
+
+fn existing_summary(
+    config: &OmpPrintRunConfig,
+    invocation: &ConsoleInvocation,
+    run: &OmpExistingRun,
+    process_active: bool,
+) -> OmpPrintRunSummary {
+    OmpPrintRunSummary {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        run_id: config.run_id.clone(),
+        provider_thread_id: Some(invocation.provider_thread_id.clone()),
+        launch_id: invocation.launch_id.clone(),
+        pid: process_active.then_some(run.pid),
+        process_group_id: process_active.then_some(run.process_group_id),
+        stdout_path: run.stdout_path.to_string_lossy().into_owned(),
+        stderr_path: run.stderr_path.to_string_lossy().into_owned(),
+        session_dir: run.session_dir.to_string_lossy().into_owned(),
+        session_file: run.session_file.to_string_lossy().into_owned(),
+        argv: run.argv.clone(),
+    }
+}
+
+fn hold_turn_monitor(run_id: &str, invocation: Arc<ConsoleInvocation>) {
+    let monitor = crate::turn_claims::register_monitor(run_id);
+    tokio::spawn(async move {
+        while invocation.state() != InvocationState::Closed {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        drop(monitor);
+    });
+}
+
+fn persist_rebound_claim(
+    claims: &crate::turn_claims::TurnClaimRegistry,
+    config: &OmpPrintRunConfig,
+    invocation: &ConsoleInvocation,
+    run: &OmpExistingRun,
+    origin: &TurnOrigin,
+) -> Result<()> {
+    claims.mark_spawned_invocation(
+        &config.run_id,
+        run.pid,
+        run.process_group_id,
+        crate::turn_claims::process_start_time_for_pid(Some(run.pid)),
+        OMP_PRINT_ADAPTER,
+        &invocation.launch_id,
+        Some(&invocation.provider_thread_id),
+        &run.stdout_path.to_string_lossy(),
+        &run.stderr_path.to_string_lossy(),
+        invocation_spawn_result(config, invocation, run),
+    )?;
+    claims.record_invocation_turn(&config.run_id, origin.as_str(), true)?;
+    claims.mark_provider_binding(
+        &config.run_id,
+        &invocation.provider_thread_id,
+        Some(&run.session_file.to_string_lossy()),
+    )?;
+    Ok(())
+}
+
+async fn adopt_parked_turn(
+    config: &OmpPrintRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+) -> Result<OmpPrintRunSummary> {
+    let run = existing_run(&invocation)?;
+    let claims = crate::turn_claims::default_registry()?;
+    let sink = sink_for_existing_run(config, &invocation, &run)?;
+    persist_rebound_claim(&claims, config, &invocation, &run, &TurnOrigin::User)?;
+    sink.post_phase("thinking", None, 0).await;
+    if let Err(error) = invocation
+        .send_user_input(
+            turn_binding(config, TurnOrigin::User),
+            &config.prompt,
+            &config.image_paths,
+        )
+        .await
+    {
+        let pending_count = invocation.pending_count();
+        invocation.take_active_turn();
+        sink.post_terminal_with_lifecycle(
+            "run_failed",
+            None,
+            Some(error.to_string()),
+            Some("closed"),
+            Some(pending_count),
+        )
+        .await;
+        invocation.close_input().await.ok();
+        let _ = cleanup_live_claim(&config.run_id).await;
+        invocation.process_exited();
+        crate::console_lifecycle::unregister(&invocation.launch_id);
+        return Err(error).context("writing user input to parked OMP invocation");
+    }
+    hold_turn_monitor(&config.run_id, invocation.clone());
+    Ok(existing_summary(config, &invocation, &run, true))
+}
+
+async fn bind_wake_turn(
+    config: &OmpPrintRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+    wake_id: &str,
+    origin: TurnOrigin,
+) -> Result<OmpPrintRunSummary> {
+    let run = existing_run(&invocation)?;
+    let claims = crate::turn_claims::default_registry()?;
+    let sink = sink_for_existing_run(config, &invocation, &run)?;
+    let binding = turn_binding(config, origin.clone());
+    let wake = invocation.bind_wake(&invocation.launch_id, wake_id, binding, || {
+        persist_rebound_claim(&claims, config, &invocation, &run, &origin)
+    })?;
+    sink.post_phase("thinking", None, 0).await;
+    let mut projection = OmpStreamProjection::default();
+    for event in wake.buffered_events {
+        projection.apply(Some(&invocation.provider_thread_id), &event.value)?;
+        sink.for_binding(&invocation.latest_turn())
+            .post_stream_event(event.sequence, &event.value, &projection)
+            .await;
+    }
+    if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+        sink.for_binding(&binding)
+            .post_delegation_snapshot(snapshot)
+            .await;
+    }
+    if origin == TurnOrigin::User {
+        if let Err(error) = invocation
+            .write_input(&config.prompt, &config.image_paths)
+            .await
+        {
+            let pending_count = invocation.pending_count();
+            invocation.take_active_turn();
+            sink.post_terminal_with_lifecycle(
+                "run_failed",
+                None,
+                Some(error.to_string()),
+                Some("closed"),
+                Some(pending_count),
+            )
+            .await;
+            invocation.close_input().await.ok();
+            let _ = cleanup_live_claim(&config.run_id).await;
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&invocation.launch_id);
+            return Err(error).context("writing user input to OMP wake response");
+        }
+        if let Some(outcome) = invocation.finish_pending_user_input() {
+            complete_idle(&invocation, &sink, outcome).await;
+        }
+    } else if let Some(outcome) = wake.deferred_idle {
+        complete_idle(&invocation, &sink, outcome).await;
+    }
+    hold_turn_monitor(&config.run_id, invocation.clone());
+    Ok(existing_summary(
+        config,
+        &invocation,
+        &run,
+        invocation.state() != InvocationState::Closed,
+    ))
+}
+
+async fn bind_retained_wake_turn(
+    config: &OmpPrintRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+    wake_id: &str,
+) -> Result<OmpPrintRunSummary> {
+    let run = existing_run(&invocation)?;
+    let claims = crate::turn_claims::default_registry()?;
+    let sink = sink_for_existing_run(config, &invocation, &run)?;
+    let binding = turn_binding(config, TurnOrigin::Wake);
+    let wake =
+        invocation.bind_retained_wake(&invocation.launch_id, wake_id, binding, |source_state| {
+            if source_state == InvocationState::Parked {
+                persist_rebound_claim(&claims, config, &invocation, &run, &TurnOrigin::Wake)?;
+            } else {
+                claims.mark_spawned(
+                    &config.run_id,
+                    None,
+                    None,
+                    None,
+                    OMP_PRINT_ADAPTER,
+                    invocation_spawn_result(config, &invocation, &run),
+                )?;
+                claims.record_invocation_turn(&config.run_id, "wake", true)?;
+                claims.mark_provider_binding(
+                    &config.run_id,
+                    &invocation.provider_thread_id,
+                    Some(&run.session_file.to_string_lossy()),
+                )?;
+            }
+            Ok(())
+        })?;
+    sink.post_phase("thinking", None, 0).await;
+    let mut projection = OmpStreamProjection::default();
+    for event in wake.buffered_events {
+        projection.apply(Some(&invocation.provider_thread_id), &event.value)?;
+        sink.post_stream_event(event.sequence, &event.value, &projection)
+            .await;
+    }
+    if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+        sink.for_binding(&binding)
+            .post_delegation_snapshot(snapshot)
+            .await;
+    }
+    if let Some(outcome) = wake.deferred_idle {
+        complete_idle(&invocation, &sink, outcome).await;
+    }
+    if invocation.state() != InvocationState::Closed {
+        hold_turn_monitor(&config.run_id, invocation.clone());
+    }
+    Ok(existing_summary(
+        config,
+        &invocation,
+        &run,
+        invocation.state() != InvocationState::Closed,
+    ))
+}
+
+async fn cancel_missing_wake(config: &OmpPrintRunConfig) -> Result<OmpPrintRunSummary> {
+    let launch_id = config.invocation_id.as_deref().unwrap_or_default();
+    let provider_thread_id = config.resume_provider_thread_id.clone().unwrap_or_default();
+    let session_file = config.resume_session_file.clone().unwrap_or_default();
+    let sink = OmpPrintSink {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        turn_id: config.turn_id.clone(),
+        run_id: config.run_id.clone(),
+        client_request_id: config.client_request_id.clone(),
+        launch_id: launch_id.to_string(),
+        process_group_id: None,
+        stdout_path: PathBuf::new(),
+        session_dir: session_file.parent().unwrap_or(Path::new("")).to_path_buf(),
+        session_file: session_file.clone(),
+        provider_thread_id: Some(provider_thread_id.clone()),
+        source_start_len: 0,
+        binding_emitted: true,
+        machine_name: config.machine_name.clone(),
+        local_db_path: config.local_db_path.clone(),
+        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+    };
+    sink.post_terminal_with_lifecycle(
+        "run_cancelled",
+        None,
+        Some("wake target is gone or wake_id is unknown".to_string()),
+        Some("closed"),
+        Some(0),
+    )
+    .await;
+    Ok(OmpPrintRunSummary {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        run_id: config.run_id.clone(),
+        provider_thread_id: Some(provider_thread_id),
+        launch_id: launch_id.to_string(),
+        pid: None,
+        process_group_id: None,
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        session_dir: session_file
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_string_lossy()
+            .into_owned(),
+        session_file: session_file.to_string_lossy().into_owned(),
+        argv: Vec::new(),
+    })
+}
+
 /// Enter the running OMP Console turn with an RPC `steer`. OMP delivers it at
 /// the next message boundary; a long-running command is moved to the
 /// background rather than cancelled, and its result is collected later.
@@ -389,6 +937,39 @@ pub async fn recover_omp_print_turns(
     let registry = crate::turn_claims::default_registry()?;
     let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
+    for claim in registry.list_all()? {
+        if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER)
+            || claim.state != "terminal"
+            || claim.invocation_state.as_deref() != Some("parked")
+        {
+            continue;
+        }
+        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+            ClaimLiveness::Live if claim.process_group_is_from_this_boot() => {
+                if cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id)
+                    .await
+                {
+                    registry.record_invocation_state(
+                        &claim.run_id,
+                        "closed",
+                        claim.pending_count,
+                    )?;
+                } else {
+                    tracing::error!(
+                        run_id = %claim.run_id,
+                        "Could not verify cleanup of orphaned parked OMP invocation"
+                    );
+                }
+            }
+            ClaimLiveness::Gone | ClaimLiveness::Live => {
+                registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
+            }
+            ClaimLiveness::Unknown => tracing::warn!(
+                run_id = %claim.run_id,
+                "Process inventory unavailable; leaving parked OMP invocation for a later recovery pass"
+            ),
+        }
+    }
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "spawned" {
             continue;
@@ -527,140 +1108,439 @@ pub async fn interrupt_omp_print_turn(
     Ok(())
 }
 
-async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpPrintSink) {
+async fn monitor_omp_print(
+    child: &mut Child,
+    stderr_path: &Path,
+    mut sink: OmpPrintSink,
+    invocation: Arc<ConsoleInvocation>,
+) {
     let mut projection = OmpStreamProjection::default();
     let mut offset = 0_u64;
-    let mut pending = Vec::new();
+    let mut pending_bytes = Vec::new();
     let mut seq = 0_u64;
-    let mut terminal_drain_deadline = None;
-    // An RPC process stays up after the run settles; Longhouse ends it, and
-    // that exit is the run's successful end rather than a failure.
-    let mut settled_shutdown = false;
-    let prompt_written_at = Instant::now();
-    sink.post_phase("thinking", None, 0).await;
+    let mut observed_run = invocation.latest_turn().run_id;
+    let mut prompt_written_at = Instant::now();
+    let mut last_trigger = json!({"kind": "unknown", "task_ids": [], "summary": ""});
+    let mut deferred_updates = Vec::<(PendingItem, bool)>::new();
+
     loop {
-        if let Err(error) = publish_stdout_growth(
-            &mut sink,
-            &mut projection,
+        if invocation.state() == InvocationState::Closed {
+            let _ = invocation.close_input().await;
+            let run_id = invocation.latest_turn().run_id;
+            if !cleanup_owned_child(child, &run_id).await {
+                tracing::error!(
+                    process_group_id = invocation.process_identity().1,
+                    "OMP Console process group survived lifecycle close"
+                );
+            }
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&invocation.launch_id);
+            return;
+        }
+
+        let current_binding = invocation.latest_turn();
+        if current_binding.run_id != observed_run {
+            sink = sink.for_binding(&current_binding);
+            sink.source_start_len = std::fs::metadata(&sink.session_file)
+                .map(|metadata| metadata.len())
+                .unwrap_or_default();
+            sink.binding_emitted = true;
+            observed_run = current_binding.run_id.clone();
+            projection.begin_turn();
+            if current_binding.origin == TurnOrigin::Wake {
+                projection.prompt_acknowledged = true;
+            }
+            prompt_written_at = Instant::now();
+        }
+
+        let lines = match crate::console_adapter::read_growth(
+            &sink.stdout_path,
             &mut offset,
-            &mut pending,
-            &mut seq,
-        )
-        .await
-        {
-            let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
-            let reason = if cleanup_verified {
-                error.to_string()
-            } else {
-                format!("OMP owned process-group cleanup was not verified: {error}")
-            };
-            sink.post_terminal("run_failed", None, Some(reason)).await;
-            return;
-        }
-        if projection.turn_settled {
-            terminal_drain_deadline.get_or_insert_with(|| Instant::now() + TERMINAL_DRAIN_GRACE);
-        } else {
-            terminal_drain_deadline = None;
-        }
-        if !settled_shutdown && (projection.turn_settled || projection.rpc_rejected) {
-            settled_shutdown = projection.turn_settled;
-            crate::console_adapter::cleanup_process_group("omp-print", sink.process_group_id).await;
-        }
-        refresh_owned_processes(&sink.run_id);
-        if crate::console_rpc::prompt_ack_overdue(
-            projection.prompt_acknowledged,
-            projection.rpc_rejected,
-            prompt_written_at.elapsed(),
+            &mut pending_bytes,
         ) {
-            // The process is alive and idle and nothing will follow. Say so now
-            // instead of presenting a turn nobody is running as Thinking.
-            let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
-            let reason = crate::console_rpc::prompt_ack_overdue_reason(prompt_written_at.elapsed());
-            let reason = if cleanup_verified {
-                reason
-            } else {
-                format!("{reason}; owned process-group cleanup was not verified")
-            };
-            sink.post_terminal("run_failed", None, Some(reason)).await;
-            return;
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                let drain_error = publish_stdout_growth(
-                    &mut sink,
-                    &mut projection,
-                    &mut offset,
-                    &mut pending,
-                    &mut seq,
+            Ok(lines) => lines,
+            Err(error) => {
+                fail_omp_invocation(
+                    child,
+                    stderr_path,
+                    &invocation,
+                    &sink,
+                    error.to_string(),
+                    None,
                 )
-                .await
-                .err()
-                .map(|error| error.to_string());
-                let cancel_requested = crate::turn_claims::default_registry()
-                    .and_then(|registry| registry.read(&sink.run_id))
+                .await;
+                return;
+            }
+        };
+        let had_lines = !lines.is_empty();
+        for bytes in lines {
+            seq += 1;
+            let event = match serde_json::from_slice::<Value>(&bytes) {
+                Ok(event) => event,
+                Err(error) => {
+                    sink.post_decode_gap(seq, &error.to_string()).await;
+                    continue;
+                }
+            };
+            if let Err(error) = projection.apply(Some(&invocation.provider_thread_id), &event) {
+                fail_omp_invocation(
+                    child,
+                    stderr_path,
+                    &invocation,
+                    &sink,
+                    error.to_string(),
+                    None,
+                )
+                .await;
+                return;
+            }
+            if let Some(provider_thread_id) = projection.provider_thread_id.as_deref() {
+                sink.provider_thread_id = Some(provider_thread_id.to_string());
+            }
+            if let Err(error) = sink.ensure_transcript_binding().await {
+                fail_omp_invocation(
+                    child,
+                    stderr_path,
+                    &invocation,
+                    &sink,
+                    error.to_string(),
+                    None,
+                )
+                .await;
+                return;
+            }
+            if let Some((phase, tool)) = omp_phase_from_event(&event) {
+                sink.post_phase(phase, tool, seq).await;
+            }
+
+            let updates = omp_async_job_updates(&event);
+            if !updates.is_empty() || is_omp_async_result(&event) {
+                projection.has_pending_async_work = None;
+            }
+            if let Some(trigger) = omp_async_trigger(&event, &updates) {
+                last_trigger = trigger;
+            }
+            let mut should_close = false;
+            for (item, is_pending) in updates {
+                if !is_pending && invocation.state() == InvocationState::Parked {
+                    deferred_updates.push((item, is_pending));
+                } else if apply_pending_update(&invocation, &sink, item, is_pending).await {
+                    should_close = true;
+                    break;
+                }
+            }
+            if should_close {
+                break;
+            }
+
+            if event.get("type").and_then(Value::as_str) == Some("response")
+                && event.get("command").and_then(Value::as_str) == Some("get_state")
+                && event.get("success").and_then(Value::as_bool) == Some(true)
+            {
+                match projection.has_pending_async_work {
+                    Some(true) if invocation.pending_count() == 0 => {
+                        if apply_pending_update(&invocation, &sink, async_work_placeholder(), true)
+                            .await
+                        {
+                            break;
+                        }
+                    }
+                    Some(false) => {
+                        if apply_pending_snapshot(&invocation, &sink, Vec::new(), Vec::new()).await
+                        {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if event.get("type").and_then(Value::as_str) == Some("agent_start") {
+                if let Some(wake) = invocation.response_started(last_trigger.clone()) {
+                    sink.for_binding(&invocation.latest_turn())
+                        .post_wake_signal(&wake)
+                        .await;
+                    for (item, is_pending) in std::mem::take(&mut deferred_updates) {
+                        if apply_pending_update(&invocation, &sink, item, is_pending).await {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if let Some((binding, routed)) = invocation.route_stream_event(seq, event.clone()) {
+                sink.for_binding(&binding)
+                    .post_stream_event(seq, &routed, &projection)
+                    .await;
+            }
+
+            if event.get("type").and_then(Value::as_str) == Some("agent_end")
+                && is_terminal_agent_end(&event)
+            {
+                let cancelled = crate::turn_claims::default_registry()
+                    .and_then(|claims| claims.read(&invocation.latest_turn().run_id))
                     .ok()
-                    .and_then(|claim| claim.cancel_requested_at)
-                    .is_some();
+                    .is_some_and(|claim| claim.cancel_requested_at.is_some());
+                if invocation.pending_count() == 0 {
+                    let state_id = format!("longhouse-async-state-{}", Uuid::new_v4());
+                    let state_start = std::fs::metadata(&sink.stdout_path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or_default();
+                    let fifo = sink
+                        .stdout_path
+                        .with_file_name(crate::console_rpc::RPC_STDIN);
+                    if crate::console_rpc::write_command(
+                        &fifo,
+                        &json!({"id": state_id, "type": "get_state"}),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        if let Ok(state) = wait_for_rpc_response(
+                            child,
+                            &sink.stdout_path,
+                            stderr_path,
+                            state_start,
+                            &state_id,
+                        )
+                        .await
+                        {
+                            let pending = state
+                                .pointer("/data/hasPendingAsyncWork")
+                                .and_then(Value::as_bool)
+                                == Some(true)
+                                || state.pointer("/data/isSettled").and_then(Value::as_bool)
+                                    == Some(false);
+                            if pending {
+                                apply_pending_update(
+                                    &invocation,
+                                    &sink,
+                                    async_work_placeholder(),
+                                    true,
+                                )
+                                .await;
+                            } else {
+                                apply_pending_snapshot(&invocation, &sink, Vec::new(), Vec::new())
+                                    .await;
+                            }
+                        }
+                    }
+                }
                 let source_bound = sink.ensure_transcript_binding().await.unwrap_or(false);
                 let source_drained = sink.source_is_drained(&projection).unwrap_or(false);
                 if source_bound {
                     sink.wake_transcript_shipper().await;
                 }
-                let cleanup_verified = cleanup_live_claim(&sink.run_id).await;
-                let (terminal_state, reason) = if cleanup_verified {
-                    terminal_state_for_projection(
-                        &projection,
-                        Some(status.success() || settled_shutdown),
-                        cancel_requested,
-                        drain_error.as_deref(),
-                        pending.is_empty(),
-                        source_bound,
-                        source_drained,
-                    )
-                } else {
-                    (
-                        "run_failed",
-                        Some("OMP owned process-group cleanup was not verified".to_string()),
-                    )
-                };
-                let terminal_reason = if terminal_state == "run_failed" {
-                    reason.or_else(|| stderr_tail(stderr_path))
-                } else {
-                    reason
-                };
-                sink.post_terminal(terminal_state, status.code(), terminal_reason)
-                    .await;
+                let (terminal_state, reason) = terminal_state_for_projection(
+                    &projection,
+                    Some(true),
+                    cancelled,
+                    None,
+                    pending_bytes.is_empty(),
+                    source_bound,
+                    source_drained,
+                );
+                let stderr = reason.or_else(|| stderr_tail(stderr_path));
+                if let Some(outcome) = invocation.idle(IdleSignal {
+                    terminal_state: terminal_state.to_string(),
+                    exit_code: None,
+                    stderr,
+                }) {
+                    complete_idle(&invocation, &sink, outcome).await;
+                }
+                if invocation.state() == InvocationState::Closed {
+                    break;
+                }
+            }
+
+            if event.get("type").and_then(Value::as_str) == Some("session_settled") {
+                for (item, is_pending) in std::mem::take(&mut deferred_updates) {
+                    if apply_pending_update(&invocation, &sink, item, is_pending).await {
+                        break;
+                    }
+                }
+                if invocation.state() == InvocationState::Parked {
+                    apply_pending_snapshot(&invocation, &sink, Vec::new(), Vec::new()).await;
+                }
+                if invocation.state() == InvocationState::Closed {
+                    break;
+                }
+            }
+        }
+
+        if had_lines {
+            if let Ok(registry) = crate::turn_claims::default_registry() {
+                let _ = registry.mark_projection_checkpoint(
+                    &sink.run_id,
+                    offset.saturating_sub(pending_bytes.len() as u64),
+                    seq,
+                );
+            }
+        }
+        if invocation.state() == InvocationState::Closed {
+            continue;
+        }
+        if invocation.latest_turn().origin == TurnOrigin::User
+            && crate::console_rpc::prompt_ack_overdue(
+                projection.prompt_acknowledged,
+                projection.rpc_rejected,
+                prompt_written_at.elapsed(),
+            )
+        {
+            let reason = crate::console_rpc::prompt_ack_overdue_reason(prompt_written_at.elapsed());
+            fail_omp_invocation(child, stderr_path, &invocation, &sink, reason, None).await;
+            return;
+        }
+
+        refresh_owned_processes(&sink.run_id);
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                fail_omp_invocation(
+                    child,
+                    stderr_path,
+                    &invocation,
+                    &sink,
+                    format!("OMP process exited unexpectedly ({status})"),
+                    status.code(),
+                )
+                .await;
                 return;
             }
-            Ok(None) => {
-                if terminal_drain_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                    let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
-                    let reason = if cleanup_verified {
-                        format!(
-                            "OMP terminal event did not release the provider process within {}s",
-                            TERMINAL_DRAIN_GRACE.as_secs()
-                        )
-                    } else {
-                        "OMP terminal drain expired and owned process-group cleanup was not verified"
-                            .to_string()
-                    };
-                    sink.post_terminal("run_failed", None, Some(reason)).await;
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
+            Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
-                let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
-                let reason = if cleanup_verified {
-                    error.to_string()
-                } else {
-                    format!("OMP owned process-group cleanup was not verified: {error}")
-                };
-                sink.post_terminal("run_failed", None, Some(reason)).await;
+                fail_omp_invocation(
+                    child,
+                    stderr_path,
+                    &invocation,
+                    &sink,
+                    error.to_string(),
+                    None,
+                )
+                .await;
                 return;
             }
         }
+    }
+}
+
+async fn apply_pending_update(
+    invocation: &ConsoleInvocation,
+    sink: &OmpPrintSink,
+    item: PendingItem,
+    is_pending: bool,
+) -> bool {
+    let (changed, close) = invocation.update_pending_item(item, is_pending);
+    if changed || close {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            sink.for_binding(&binding)
+                .post_delegation_snapshot(snapshot)
+                .await;
+        }
+    }
+    close
+}
+
+async fn apply_pending_snapshot(
+    invocation: &ConsoleInvocation,
+    sink: &OmpPrintSink,
+    items: Vec<PendingItem>,
+    recent_items: Vec<PendingItem>,
+) -> bool {
+    let (changed, close) = invocation.replace_pending(items, recent_items);
+    if changed || close {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            sink.for_binding(&binding)
+                .post_delegation_snapshot(snapshot)
+                .await;
+        }
+    }
+    close
+}
+
+async fn complete_idle(
+    invocation: &ConsoleInvocation,
+    sink: &OmpPrintSink,
+    outcome: IdleOutcome,
+) -> bool {
+    let turn_sink = sink.for_binding(&outcome.binding);
+    if outcome.has_active_turn {
+        turn_sink
+            .post_terminal_with_lifecycle(
+                &outcome.signal.terminal_state,
+                outcome.signal.exit_code,
+                outcome.signal.stderr,
+                Some(outcome.invocation_state.as_str()),
+                Some(outcome.pending_count),
+            )
+            .await;
+    } else if let Ok(claims) = crate::turn_claims::default_registry() {
+        let _ = claims.record_invocation_state(
+            &outcome.binding.run_id,
+            outcome.invocation_state.as_str(),
+            outcome.pending_count,
+        );
+    }
+    if outcome.invocation_state == InvocationState::Parked {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            sink.for_binding(&binding)
+                .post_delegation_snapshot(snapshot)
+                .await;
+        }
+    }
+    if outcome.invocation_state == InvocationState::Closed {
+        let _ = invocation.close_input().await;
+        true
+    } else {
+        false
+    }
+}
+
+async fn fail_omp_invocation(
+    child: &mut Child,
+    stderr_path: &Path,
+    invocation: &ConsoleInvocation,
+    sink: &OmpPrintSink,
+    error: String,
+    exit_code: Option<i32>,
+) {
+    let pending_count = invocation.pending_count();
+    let binding = invocation.take_active_turn();
+    let latest_binding = invocation.latest_turn();
+    let run_id = binding
+        .as_ref()
+        .map(|binding| binding.run_id.clone())
+        .unwrap_or(latest_binding.run_id);
+    let terminal_sink = binding
+        .as_ref()
+        .map(|binding| sink.for_binding(binding))
+        .unwrap_or_else(|| sink.clone());
+    let _ = invocation.close_input().await;
+    let cleanup_verified = cleanup_owned_child(child, &run_id).await;
+    if let Some(binding) = binding {
+        let mut reason = error;
+        if !cleanup_verified {
+            reason.push_str("; owned process-group cleanup was not verified");
+        }
+        terminal_sink
+            .post_terminal_with_lifecycle(
+                "run_failed",
+                exit_code,
+                Some(reason),
+                Some("closed"),
+                Some(pending_count),
+            )
+            .await;
+    } else if let Ok(claims) = crate::turn_claims::default_registry() {
+        let _ = claims.record_invocation_state(&run_id, "closed", pending_count);
+    }
+    invocation.process_exited();
+    crate::console_lifecycle::unregister(&invocation.launch_id);
+    if !cleanup_verified {
+        tracing::error!(
+            process_group_id = invocation.process_identity().1,
+            stderr = ?stderr_tail(stderr_path),
+            "OMP Console failure cleanup was not verified"
+        );
     }
 }
 
@@ -957,6 +1837,8 @@ struct OmpStreamProjection {
     current_assistant: Option<String>,
     final_stop_reason: Option<String>,
     turn_settled: bool,
+    session_settled: bool,
+    has_pending_async_work: Option<bool>,
     native_error: Option<String>,
     /// OMP refused the prompt before accepting it: no run will follow.
     rpc_rejected: bool,
@@ -967,6 +1849,18 @@ struct OmpStreamProjection {
 }
 
 impl OmpStreamProjection {
+    fn begin_turn(&mut self) {
+        self.current_assistant = None;
+        self.final_assistant_id = None;
+        self.final_stop_reason = None;
+        self.turn_settled = false;
+        self.session_settled = false;
+        self.has_pending_async_work = None;
+        self.native_error = None;
+        self.rpc_rejected = false;
+        self.prompt_acknowledged = false;
+    }
+
     fn apply(&mut self, expected_provider_thread_id: Option<&str>, event: &Value) -> Result<()> {
         match event.get("type").and_then(Value::as_str) {
             Some("session") => {
@@ -979,11 +1873,8 @@ impl OmpStreamProjection {
                 self.identity_confirmed = true;
             }
             Some("agent_start") => {
+                self.begin_turn();
                 self.prompt_acknowledged = true;
-                self.turn_settled = false;
-                self.final_assistant_id = None;
-                self.final_stop_reason = None;
-                self.native_error = None;
             }
             Some("message_start") => {
                 if event
@@ -1057,6 +1948,11 @@ impl OmpStreamProjection {
             }
             Some("response") => {
                 let ok = event.get("success").and_then(Value::as_bool) == Some(true);
+                if event.get("command").and_then(Value::as_str) == Some("get_state") && ok {
+                    self.has_pending_async_work = event
+                        .pointer("/data/hasPendingAsyncWork")
+                        .and_then(Value::as_bool);
+                }
                 if event.get("id").and_then(Value::as_str)
                     == Some(crate::console_rpc::RPC_IDENTITY_ID)
                     && ok
@@ -1084,8 +1980,7 @@ impl OmpStreamProjection {
                     );
                 }
             }
-            // RPC mode's end of a whole prompt, after any steer it absorbed.
-            Some("session_settled") => self.turn_settled = true,
+            Some("session_settled") => self.session_settled = true,
             Some("agent_settled" | "session_stop" | "turn_end") => {}
             Some("agent_end") => {
                 let is_terminal = is_terminal_agent_end(event);
@@ -1139,6 +2034,118 @@ fn message_text(message: &Value) -> String {
             .collect(),
         _ => String::new(),
     }
+}
+
+fn is_omp_async_result(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some("custom_message")
+        && (event.get("customType").and_then(Value::as_str) == Some("async-result")
+            || event.pointer("/message/customType").and_then(Value::as_str) == Some("async-result"))
+}
+
+fn omp_async_details(event: &Value) -> Option<&Value> {
+    event
+        .pointer("/details/async")
+        .or_else(|| event.pointer("/result/details/async"))
+        .or_else(|| event.pointer("/message/details/async"))
+        .or_else(|| event.pointer("/data/details/async"))
+        .or_else(|| event.pointer("/data/async"))
+}
+
+fn omp_async_result_jobs(event: &Value) -> Option<&[Value]> {
+    event
+        .pointer("/details/jobs")
+        .or_else(|| event.pointer("/message/details/jobs"))
+        .or_else(|| event.pointer("/data/details/jobs"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+}
+
+fn omp_pending_item(
+    details: &Value,
+    job_type: Option<&str>,
+    state: Option<&str>,
+) -> Option<(PendingItem, bool)> {
+    let id = details
+        .get("jobId")
+        .or_else(|| details.get("job_id"))
+        .and_then(Value::as_str)?;
+    let job_type = job_type.or_else(|| details.get("type").and_then(Value::as_str));
+    let agent_id = details
+        .get("agent_id")
+        .or_else(|| details.get("agentId"))
+        .and_then(Value::as_str);
+    let normalized =
+        crate::omp_helm_launcher::normalize_async_job(job_type, agent_id, state, false)?;
+    let description = details
+        .get("description")
+        .or_else(|| details.get("label"))
+        .or_else(|| details.get("summary"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some((
+        PendingItem {
+            id: id.to_string(),
+            kind: normalized.kind.to_string(),
+            status: normalized.status.to_string(),
+            description,
+        },
+        normalized.running,
+    ))
+}
+
+fn omp_async_job_updates(event: &Value) -> Vec<(PendingItem, bool)> {
+    if is_omp_async_result(event) {
+        if let Some(jobs) = omp_async_result_jobs(event) {
+            return jobs
+                .iter()
+                .filter_map(|job| omp_pending_item(job, None, Some("completed")))
+                .collect();
+        }
+        if let Some(details) = omp_async_details(event) {
+            return omp_pending_item(details, None, Some("completed"))
+                .into_iter()
+                .collect();
+        }
+        return omp_pending_item(event, None, Some("completed"))
+            .into_iter()
+            .collect();
+    }
+    omp_async_details(event)
+        .and_then(|details| {
+            omp_pending_item(
+                details,
+                details.get("type").and_then(Value::as_str),
+                details.get("state").and_then(Value::as_str),
+            )
+        })
+        .into_iter()
+        .collect()
+}
+
+fn omp_async_trigger(event: &Value, updates: &[(PendingItem, bool)]) -> Option<Value> {
+    if !is_omp_async_result(event) && updates.iter().all(|(_, pending)| *pending) {
+        return None;
+    }
+    let task_ids = updates
+        .iter()
+        .filter(|(_, pending)| !pending)
+        .map(|(item, _)| item.id.clone())
+        .collect::<Vec<_>>();
+    let summary = updates
+        .iter()
+        .find(|(_, pending)| !pending)
+        .and_then(|(item, _)| item.description.as_deref())
+        .or_else(|| event.get("message").and_then(Value::as_str))
+        .or_else(|| event.get("content").and_then(Value::as_str))
+        .unwrap_or("OMP asynchronous job completed")
+        .chars()
+        .take(180)
+        .collect::<String>();
+    Some(json!({
+        "kind": "async_job_completed",
+        "task_ids": task_ids,
+        "summary": summary,
+    }))
 }
 
 fn is_terminal_agent_end(event: &Value) -> bool {
@@ -1310,6 +2317,13 @@ fn replay_projection(path: &Path, limit: u64, expected: Option<&str>) -> OmpStre
 }
 
 impl OmpPrintSink {
+    fn for_binding(&self, binding: &TurnBinding) -> Self {
+        let mut sink = self.clone();
+        sink.run_id = binding.run_id.clone();
+        sink.turn_id = binding.turn_id.clone();
+        sink.client_request_id = binding.client_request_id.clone();
+        sink
+    }
     async fn ensure_transcript_binding(&mut self) -> Result<bool> {
         if self.binding_emitted {
             return Ok(self.provider_thread_id.is_some());
@@ -1411,7 +2425,25 @@ impl OmpPrintSink {
     }
 
     async fn post_binding(&self, provider_thread_id: &str) {
-        self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "binding_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:binding", self.session_id, self.launch_id), "payload": {"provider_session_id": provider_thread_id, "source_path": self.session_file.to_string_lossy(), "managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot"}})]).await;
+        self.post_events(vec![json!({
+            "runtime_key": format!("omp:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "omp",
+            "device_id": self.machine_name,
+            "source": OMP_PRINT_ADAPTER,
+            "kind": "binding_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("omp-print:{}:{}:binding", self.session_id, self.launch_id),
+            "payload": {
+                "provider_session_id": provider_thread_id,
+                "source_path": self.session_file.to_string_lossy(),
+                "managed_transport": OMP_PRINT_ADAPTER,
+                "execution_lifetime": "persistent"
+            }
+        })])
+        .await;
     }
     async fn post_phase(&self, phase: &str, tool_name: Option<String>, activity_seq: u64) {
         // One slot per session: the daemon records the local ledger from it and
@@ -1427,7 +2459,7 @@ impl OmpPrintSink {
             phase,
             tool_name.as_deref(),
             json!({
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
                 "thread_id": self.thread_id,
                 "device_id": self.machine_name,
                 "activity_seq": activity_seq,
@@ -1457,25 +2489,134 @@ impl OmpPrintSink {
                 "event": crate::console_rpc::runtime_stream_event(event),
                 "live_text": projection.live_text(),
                 "managed_transport": OMP_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
             },
         })])
         .await;
     }
     async fn post_decode_gap(&self, seq: u64, error: &str) {
-        self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "progress_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:decode-gap:{seq}", self.session_id, self.run_id), "payload": {"progress_kind": "omp_print_decode_gap", "seq": seq, "error": error, "managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot"}})]).await;
+        self.post_events(vec![json!({
+            "runtime_key": format!("omp:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "omp",
+            "device_id": self.machine_name,
+            "source": OMP_PRINT_ADAPTER,
+            "kind": "progress_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("omp-print:{}:{}:decode-gap:{seq}", self.session_id, self.run_id),
+            "payload": {
+                "progress_kind": "omp_print_decode_gap",
+                "seq": seq,
+                "error": error,
+                "managed_transport": OMP_PRINT_ADAPTER,
+                "execution_lifetime": "persistent"
+            }
+        })])
+        .await;
     }
+
+    async fn post_delegation_snapshot(&self, snapshot: Value) {
+        let observed_at = snapshot
+            .get("observed_at")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+        self.post_events(vec![json!({
+            "runtime_key": format!("omp:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "omp",
+            "device_id": self.machine_name,
+            "source": OMP_RUNTIME_SOURCE,
+            "kind": "delegation_signal",
+            "occurred_at": observed_at,
+            "dedupe_key": format!(
+                "omp-console:{}:{}:delegation:{}",
+                self.launch_id, self.run_id, snapshot["observed_at"]
+            ),
+            "payload": {"delegation": snapshot}
+        })])
+        .await;
+    }
+
+    async fn post_wake_signal(&self, wake: &WakeRequest) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("omp:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "provider": "omp",
+            "device_id": self.machine_name,
+            "source": OMP_RUNTIME_SOURCE,
+            "kind": "wake_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("wake:{}", wake.wake_id),
+            "payload": {
+                "invocation_id": wake.invocation_id,
+                "wake_id": wake.wake_id,
+                "provider_thread_id": wake.provider_thread_id,
+                "trigger": wake.trigger
+            }
+        })])
+        .await;
+    }
+
     async fn post_terminal(
         &self,
         terminal_state: &str,
         exit_code: Option<i32>,
         reason: Option<String>,
     ) {
+        self.post_terminal_with_lifecycle(terminal_state, exit_code, reason, None, None)
+            .await;
+    }
+
+    async fn post_terminal_with_lifecycle(
+        &self,
+        terminal_state: &str,
+        exit_code: Option<i32>,
+        reason: Option<String>,
+        invocation_state: Option<&str>,
+        pending_count: Option<usize>,
+    ) {
         self.persist_local_phase("finished", None, Utc::now());
-        // The reason is a code the served state keys on; the sentence is the
-        // detail. A sentence in this field reads as no known reason: "Ended".
         let terminal_reason = terminal_reason_code(terminal_state, reason.as_deref());
-        self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "terminal_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id), "payload": {"managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot", "terminal_state": terminal_state, "terminal_reason": terminal_reason, "terminal_source": OMP_PRINT_ADAPTER, "exit_code": exit_code, "stderr_tail": reason, "provider_thread_id": self.provider_thread_id, "source_path": self.session_file.to_string_lossy(), "turn_id": self.turn_id, "client_request_id": self.client_request_id}})]).await;
+        let mut payload = json!({
+            "managed_transport": OMP_PRINT_ADAPTER,
+            "execution_lifetime": "persistent",
+            "terminal_state": terminal_state,
+            "terminal_reason": terminal_reason,
+            "terminal_source": OMP_PRINT_ADAPTER,
+            "exit_code": exit_code,
+            "stderr_tail": reason,
+            "provider_thread_id": self.provider_thread_id,
+            "source_path": self.session_file.to_string_lossy(),
+            "turn_id": self.turn_id,
+            "client_request_id": self.client_request_id
+        });
+        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
+            payload["invocation"] = json!({
+                "id": self.launch_id,
+                "state": state,
+                "pending_count": count
+            });
+        }
+        self.post_events(vec![json!({
+            "runtime_key": format!("omp:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "omp",
+            "device_id": self.machine_name,
+            "source": OMP_PRINT_ADAPTER,
+            "kind": "terminal_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id),
+            "payload": payload
+        })])
+        .await;
         crate::turn_claims::mark_terminal(
             &self.run_id,
             terminal_state,
@@ -1483,6 +2624,11 @@ impl OmpPrintSink {
                 .then_some(reason.clone())
                 .flatten(),
         );
+        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
+            if let Ok(registry) = crate::turn_claims::default_registry() {
+                let _ = registry.record_invocation_state(&self.run_id, state, count);
+            }
+        }
     }
     fn persist_local_phase(
         &self,
@@ -1780,6 +2926,9 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::console_lifecycle::conformance::{
+        self, LifecycleScenario, ScenarioFuture, ScenarioOutcome, ScenarioRunner,
+    };
 
     #[test]
     fn stock_omp_console_runs_in_rpc_mode_and_binds_exact_resume() {
@@ -1910,7 +3059,7 @@ mod tests {
     }
 
     #[test]
-    fn rpc_identity_is_get_state_and_session_settled_ends_the_run() {
+    fn session_settled_is_distinct_from_response_end() {
         let mut projection = OmpStreamProjection::default();
         projection
             .apply(
@@ -1931,6 +3080,11 @@ mod tests {
         assert!(!projection.turn_settled);
         projection
             .apply(None, &json!({"type": "session_settled"}))
+            .unwrap();
+        assert!(projection.session_settled);
+        assert!(!projection.turn_settled);
+        projection
+            .apply(None, &json!({"type": "agent_end"}))
             .unwrap();
         assert!(projection.turn_settled);
         let mut refused = OmpStreamProjection::default();
@@ -2010,11 +3164,17 @@ mod tests {
 import json
 import os
 import sys
+import threading
+import time
 import uuid
 
 args = sys.argv[1:]
 source = args[args.index("--resume") + 1]
-native_id = "01a08857-826d-72f6-b816-672b54116504"
+if os.path.exists(source) and os.path.getsize(source) > 0:
+    with open(source, "r", encoding="utf-8") as stream:
+        native_id = json.loads(stream.readline())["id"]
+else:
+    native_id = str(uuid.uuid4())
 header = {
     "type": "session",
     "version": 3,
@@ -2022,15 +3182,71 @@ header = {
     "timestamp": "2026-09-09T22:43:51.533Z",
     "cwd": os.getcwd(),
 }
+write_lock = threading.Lock()
+pending_jobs = set()
 def out(event):
-    print(json.dumps(event, separators=(",", ":")), flush=True)
+    with write_lock:
+        print(json.dumps(event, separators=(",", ":")), flush=True)
+def append_native(message):
+    if os.path.getsize(source) == 0:
+        with open(source, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(header, separators=(",", ":")) + "\n")
+    with open(source, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            "type": "message",
+            "id": message["id"],
+            "message": message,
+        }, separators=(",", ":")) + "\n")
+def user_message(text):
+    append_native({
+        "role": "user",
+        "content": [{"type": "text", "text": text}],
+    })
+def assistant_message(text, start=True):
+    message_id = str(uuid.uuid4())
+    message = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "stopReason": "stop",
+    }
+    append_native(dict(message, id=message_id))
+    if start:
+        out({"type": "agent_start"})
+    out({"type": "message_start", "message": {"role": "assistant", "content": []}})
+    out({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}})
+    out({"type": "message_end", "message": dict(message, id=message_id)})
+    out({"type": "agent_end", "isTerminal": True, "willContinue": False})
+def start_job(job_id):
+    pending_jobs.add(job_id)
+    out({
+        "type": "tool_execution_end",
+        "toolName": "bash",
+        "result": {"details": {"async": {"state": "running", "jobId": job_id, "type": "bash"}}},
+    })
+def finish_job(job_id):
+    pending_jobs.discard(job_id)
+    out({"type": "custom_message", "customType": "async-result", "content": "background command finished", "details": {"jobs": [{"jobId": job_id, "type": "bash", "label": "background command"}]}})
+def finish_in_background(job_id, keep_pending):
+    time.sleep(0.2)
+    finish_job(job_id)
+    out({"type": "agent_start"})
+    if keep_pending:
+        start_job("job-2")
+    assistant_message("background task completed", start=False)
+    if not keep_pending:
+        out({"type": "session_settled"})
 out({"type":"ready"})
-# RPC mode never exits on its own: Longhouse ends it after session_settled.
 for line in sys.stdin:
     command = json.loads(line)
     kind = command["type"]
     if kind == "get_state":
-        out({"id":command.get("id"),"type":"response","command":"get_state","success":True,"data":{"sessionId":native_id}})
+        out({
+            "id": command.get("id"),
+            "type": "response",
+            "command": "get_state",
+            "success": True,
+            "data": {"sessionId": native_id, "hasPendingAsyncWork": bool(pending_jobs)},
+        })
     elif kind == "steer":
         with open(source + ".steer.log", "a", encoding="utf-8") as stream:
             stream.write(command["message"])
@@ -2038,21 +3254,25 @@ for line in sys.stdin:
     elif kind == "prompt":
         prompt = command["message"]
         out({"id":command.get("id"),"type":"response","command":"prompt","success":True})
-        if os.path.getsize(source) == 0:
-            with open(source, "w", encoding="utf-8") as stream:
-                stream.write(json.dumps(header, separators=(",", ":")) + "\n")
-        with open(source, "a", encoding="utf-8") as stream:
-            stream.write(json.dumps({"type":"message","id":str(uuid.uuid4()),"message":{"role":"user","content":[{"type":"text","text":prompt}]}}) + "\n")
-            stream.write(json.dumps({"type":"message","id":str(uuid.uuid4()),"message":{"role":"assistant","content":[{"type":"text","text":prompt}],"stopReason":"stop"}}) + "\n")
-        for event in [
-            {"type":"agent_start"},
-            {"type":"message_start","message":{"role":"assistant","content":[]}},
-            {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":prompt}},
-            {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":prompt}],"stopReason":"stop"}},
-            {"type":"agent_end","isTerminal":True,"willContinue":False},
-            {"type":"session_settled"},
-        ]:
-            out(event)
+        if pending_jobs:
+            for job_id in list(pending_jobs):
+                finish_job(job_id)
+            user_message(prompt)
+            assistant_message(prompt)
+            out({"type":"session_settled"})
+        elif prompt.startswith(("scenario=background", "scenario=user", "scenario=wake", "scenario=drain", "scenario=restart")):
+            user_message(prompt)
+            out({"type":"agent_start"})
+            start_job("job-1")
+            assistant_message(prompt, start=False)
+            if prompt.startswith("scenario=wake"):
+                threading.Thread(target=finish_in_background, args=("job-1", True), daemon=True).start()
+            elif prompt.startswith("scenario=drain"):
+                threading.Thread(target=finish_in_background, args=("job-1", False), daemon=True).start()
+        else:
+            user_message(prompt)
+            assistant_message(prompt)
+            out({"type":"session_settled"})
 "##,
         )
         .unwrap();
@@ -2282,6 +3502,330 @@ for line in sys.stdin:
         }
     }
 
+    fn lifecycle_config(
+        temp: &Path,
+        fake_omp: &Path,
+        session_id: &str,
+        thread_id: &str,
+        run_id: &str,
+        prompt: &str,
+        resume_provider_thread_id: Option<String>,
+        resume_session_file: Option<PathBuf>,
+        origin: &str,
+        wake_id: Option<String>,
+        invocation_id: Option<String>,
+    ) -> OmpPrintRunConfig {
+        OmpPrintRunConfig {
+            session_id: session_id.to_string(),
+            thread_id: thread_id.to_string(),
+            turn_id: None,
+            run_id: run_id.to_string(),
+            client_request_id: Some(format!("canary-{run_id}")),
+            cwd: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+            omp_bin: fake_omp.to_string_lossy().into_owned(),
+            prompt: prompt.to_string(),
+            image_paths: Vec::new(),
+            model: None,
+            profile: None,
+            session_dir: Some(temp.join("omp-sessions")),
+            resume_provider_thread_id,
+            resume_session_file,
+            permission_mode: "provider_local".into(),
+            origin: origin.to_string(),
+            wake_id,
+            invocation_id,
+            machine_name: "omp-lifecycle-test".into(),
+            local_db_path: Some(temp.join("agent.db")),
+        }
+    }
+
+    fn runtime_events() -> Vec<Value> {
+        let directory = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+        std::fs::read_dir(directory)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .filter_map(|path| std::fs::read(path).ok())
+            .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+            .collect()
+    }
+
+    async fn wait_for_runtime_event(session_id: &str, kind: &str) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(event) = runtime_events()
+                .into_iter()
+                .find(|event| event["session_id"] == session_id && event["kind"] == kind)
+            {
+                return event;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "OMP did not emit {kind}"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    fn run_omp_scenario(scenario: LifecycleScenario) -> ScenarioFuture {
+        Box::pin(async move {
+            match scenario {
+                LifecycleScenario::Plain
+                | LifecycleScenario::Background
+                | LifecycleScenario::WakePending
+                | LifecycleScenario::UserSend
+                | LifecycleScenario::WakeDrained
+                | LifecycleScenario::Restart => {
+                    run_omp_scenario_inner(scenario).await;
+                    ScenarioOutcome::Passed
+                }
+                LifecycleScenario::WakeUserSend
+                | LifecycleScenario::WakeUnboundDrained
+                | LifecycleScenario::WakeImmediateUnbound => {
+                    ScenarioOutcome::Unsupported("not_in_phase_one_table")
+                }
+            }
+        })
+    }
+
+    async fn run_omp_scenario_inner(scenario: LifecycleScenario) {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
+        let fake_omp = temp.path().join("omp");
+        write_fake_omp(&fake_omp);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let first_run_id = Uuid::new_v4().to_string();
+        let first_prompt = match scenario {
+            LifecycleScenario::Plain => "plain",
+            LifecycleScenario::Background => "scenario=background",
+            LifecycleScenario::WakePending => "scenario=wake",
+            LifecycleScenario::UserSend => "scenario=user",
+            LifecycleScenario::WakeDrained => "scenario=drain",
+            LifecycleScenario::Restart => "scenario=restart",
+            _ => unreachable!(),
+        };
+        let claims = crate::turn_claims::default_registry().unwrap();
+        claims
+            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let first = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &first_run_id,
+            first_prompt,
+            None,
+            None,
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        let first_claim = wait_for_terminal(&first_run_id).await;
+        assert_eq!(
+            first_claim.result.as_ref().unwrap()["terminal_state"],
+            "run_completed",
+            "scenario {scenario:?}: {first_claim:?}"
+        );
+        let first_pid = first.pid.unwrap();
+        let first_pgid = first.process_group_id.unwrap();
+
+        match scenario {
+            LifecycleScenario::Plain => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("closed"));
+                assert_eq!(first_claim.pending_count, 0);
+                assert!(!crate::process_group::group_is_alive(first_pgid));
+                let terminal = runtime_events()
+                    .into_iter()
+                    .find(|event| {
+                        event["kind"] == "terminal_signal"
+                            && event["run_id"] == first_run_id
+                            && event["session_id"] == session_id
+                    })
+                    .expect("plain terminal event");
+                assert_eq!(terminal["payload"]["invocation"]["state"], "closed");
+                assert_eq!(terminal["payload"]["invocation"]["pending_count"], 0);
+            }
+            LifecycleScenario::Background | LifecycleScenario::UserSend => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                assert_eq!(first_claim.pending_count, 1);
+                assert!(crate::process_group::group_is_alive(first_pgid));
+                let delegation = wait_for_runtime_event(&session_id, "delegation_signal").await;
+                assert_eq!(delegation["payload"]["delegation"]["count"], 1);
+
+                let second_run_id = Uuid::new_v4().to_string();
+                claims
+                    .claim(&second_run_id, &session_id, &thread_id, None, None, "omp")
+                    .unwrap();
+                let second = start_omp_print_turn(lifecycle_config(
+                    temp.path(),
+                    &fake_omp,
+                    &session_id,
+                    &thread_id,
+                    &second_run_id,
+                    "cleanup pending work",
+                    first.provider_thread_id.clone(),
+                    Some(PathBuf::from(&first.session_file)),
+                    "user",
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+                assert_eq!(second.pid, Some(first_pid));
+                assert_eq!(second.launch_id, first.launch_id);
+                let second_claim = wait_for_terminal(&second_run_id).await;
+                assert_eq!(second_claim.origin.as_deref(), Some("user"));
+                assert!(second_claim.adopted_parked_invocation);
+                assert_eq!(second_claim.invocation_state.as_deref(), Some("closed"));
+                assert!(std::fs::read_to_string(&first.session_file)
+                    .unwrap()
+                    .contains("cleanup pending work"));
+                assert!(!crate::process_group::group_is_alive(first_pgid));
+            }
+            LifecycleScenario::WakePending | LifecycleScenario::WakeDrained => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                let wake = wait_for_runtime_event(&session_id, "wake_signal").await;
+                assert_eq!(wake["source"], OMP_RUNTIME_SOURCE);
+                assert_eq!(wake["payload"]["invocation_id"], first.launch_id);
+                assert_eq!(
+                    wake["payload"]["provider_thread_id"].as_str(),
+                    first.provider_thread_id.as_deref()
+                );
+                assert_eq!(wake["payload"]["trigger"]["task_ids"][0], "job-1");
+                let wake_run_id = Uuid::new_v4().to_string();
+                claims
+                    .claim(&wake_run_id, &session_id, &thread_id, None, None, "omp")
+                    .unwrap();
+                let wake_turn = start_omp_print_turn(lifecycle_config(
+                    temp.path(),
+                    &fake_omp,
+                    &session_id,
+                    &thread_id,
+                    &wake_run_id,
+                    "",
+                    first.provider_thread_id.clone(),
+                    Some(PathBuf::from(&first.session_file)),
+                    "wake",
+                    wake["payload"]["wake_id"].as_str().map(str::to_string),
+                    wake["payload"]["invocation_id"]
+                        .as_str()
+                        .map(str::to_string),
+                ))
+                .await
+                .unwrap();
+                let wake_claim = wait_for_terminal(&wake_run_id).await;
+                assert_eq!(wake_claim.origin.as_deref(), Some("wake"));
+                assert!(wake_claim.adopted_parked_invocation);
+                if matches!(scenario, LifecycleScenario::WakePending) {
+                    assert_eq!(wake_claim.invocation_state.as_deref(), Some("parked"));
+                    assert_eq!(wake_claim.pending_count, 1);
+                    assert_eq!(wake_turn.pid, Some(first_pid));
+                    let cleanup_run_id = Uuid::new_v4().to_string();
+                    claims
+                        .claim(&cleanup_run_id, &session_id, &thread_id, None, None, "omp")
+                        .unwrap();
+                    let cleanup = start_omp_print_turn(lifecycle_config(
+                        temp.path(),
+                        &fake_omp,
+                        &session_id,
+                        &thread_id,
+                        &cleanup_run_id,
+                        "cleanup pending work",
+                        first.provider_thread_id.clone(),
+                        Some(PathBuf::from(&first.session_file)),
+                        "user",
+                        None,
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+                    assert_eq!(cleanup.pid, Some(first_pid));
+                    assert_eq!(
+                        wait_for_terminal(&cleanup_run_id)
+                            .await
+                            .invocation_state
+                            .as_deref(),
+                        Some("closed")
+                    );
+                } else {
+                    assert_eq!(wake_claim.invocation_state.as_deref(), Some("closed"));
+                    assert_eq!(wake_turn.pid, None);
+                    assert!(!crate::process_group::group_is_alive(first_pgid));
+                    let resumed_run_id = Uuid::new_v4().to_string();
+                    claims
+                        .claim(&resumed_run_id, &session_id, &thread_id, None, None, "omp")
+                        .unwrap();
+                    let resumed = start_omp_print_turn(lifecycle_config(
+                        temp.path(),
+                        &fake_omp,
+                        &session_id,
+                        &thread_id,
+                        &resumed_run_id,
+                        "resume after drain",
+                        first.provider_thread_id.clone(),
+                        Some(PathBuf::from(&first.session_file)),
+                        "user",
+                        None,
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+                    assert_ne!(resumed.pid, Some(first_pid));
+                    assert_eq!(resumed.provider_thread_id, first.provider_thread_id);
+                    assert_eq!(
+                        wait_for_terminal(&resumed_run_id)
+                            .await
+                            .invocation_state
+                            .as_deref(),
+                        Some("closed")
+                    );
+                }
+            }
+            LifecycleScenario::Restart => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                assert!(crate::process_group::group_is_alive(first_pgid));
+                crate::console_lifecycle::unregister(&first.launch_id);
+                assert_eq!(
+                    recover_omp_print_turns("omp-lifecycle-test", None)
+                        .await
+                        .unwrap(),
+                    0
+                );
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let claim = claims.read(&first_run_id).unwrap();
+                    if claim.invocation_state.as_deref() == Some("closed")
+                        && !crate::process_group::group_is_alive(first_pgid)
+                    {
+                        break;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "orphaned parked OMP process survived recovery"
+                    );
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }
+            _ => unreachable!(),
+        }
+        restore_test_longhouse_home(previous_home);
+    }
+
+    #[tokio::test]
+    async fn console_lifecycle_conformance_runs_phase_one_scenarios() {
+        let adapters: [(&str, ScenarioRunner); 1] = [("omp", run_omp_scenario)];
+        conformance::run_phase_one(&adapters).await;
+    }
+
     #[tokio::test]
     async fn fake_stock_omp_completes_and_continues_through_exact_native_file() {
         let _home_guard = crate::console_adapter::longhouse_home_test_guard();
@@ -2322,6 +3866,9 @@ for line in sys.stdin:
             resume_provider_thread_id: None,
             resume_session_file: None,
             permission_mode: "provider_local".into(),
+            origin: "user".into(),
+            wake_id: None,
+            invocation_id: None,
             machine_name: "omp-test".into(),
             local_db_path: Some(local_db_path.clone()),
         })
@@ -2333,7 +3880,7 @@ for line in sys.stdin:
             "run_completed"
         );
         let native_id = first_claim.provider_thread_id.clone().unwrap();
-        assert_eq!(native_id, "01a08857-826d-72f6-b816-672b54116504");
+        assert!(uuid::Uuid::parse_str(&native_id).is_ok());
         // The console turn owns a local claim, which is what discovery reads
         // once the daemon projects it; the archive database is no longer written
         // on this path.
@@ -2346,7 +3893,10 @@ for line in sys.stdin:
         // command, never argv.
         assert!(first.argv.windows(2).any(|pair| pair == ["--mode", "rpc"]));
         assert!(!first.argv.iter().any(|arg| arg == "--OMP_FIRST"));
-        assert_ne!(unsafe { libc::killpg(first.process_group_id, 0) }, 0);
+        assert_ne!(
+            unsafe { libc::killpg(first.process_group_id.unwrap(), 0) },
+            0
+        );
 
         registry
             .claim(&second_run, &session_id, &thread_id, None, None, "omp")
@@ -2364,9 +3914,12 @@ for line in sys.stdin:
             model: Some("gpt-5.2".into()),
             profile: Some("work".into()),
             session_dir: Some(session_dir.clone()),
-            resume_provider_thread_id: Some(native_id),
+            resume_provider_thread_id: Some(native_id.clone()),
             resume_session_file: Some(PathBuf::from(&first.session_file)),
             permission_mode: "provider_local".into(),
+            origin: "user".into(),
+            wake_id: None,
+            invocation_id: None,
             machine_name: "omp-test".into(),
             local_db_path: Some(local_db_path),
         })
@@ -2379,7 +3932,7 @@ for line in sys.stdin:
         );
         assert_eq!(
             second.provider_thread_id.as_deref(),
-            Some("01a08857-826d-72f6-b816-672b54116504")
+            Some(native_id.as_str())
         );
         assert!(second
             .argv
@@ -2498,6 +4051,9 @@ for line in sys.stdin:
                 resume_provider_thread_id: None,
                 resume_session_file: None,
                 permission_mode: "provider_local".into(),
+                origin: "user".into(),
+                wake_id: None,
+                invocation_id: None,
                 machine_name: "omp-test".into(),
                 local_db_path: Some(temp.join("agent.db")),
             },
@@ -2574,7 +4130,10 @@ for line in sys.stdin:
             "{claim:?}"
         );
         // The idle provider is not left running behind a failed turn.
-        assert_ne!(unsafe { libc::killpg(started.process_group_id, 0) }, 0);
+        assert_ne!(
+            unsafe { libc::killpg(started.process_group_id.unwrap(), 0) },
+            0
+        );
         restore_test_longhouse_home(previous);
     }
 

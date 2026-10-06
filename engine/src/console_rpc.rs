@@ -6,6 +6,9 @@
 //! stdout still goes to the run's file, which the live and recovered monitors
 //! tail, so a command's `response` frame is read back from there.
 
+use crate::console_lifecycle::{ConsoleInput, InputFuture};
+use anyhow::{Context, Result};
+use serde_json::{json, Value};
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -13,9 +16,6 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-
-use anyhow::{Context, Result};
-use serde_json::{json, Value};
 use uuid::Uuid;
 
 pub const RPC_STDIN: &str = "stdin.fifo";
@@ -23,6 +23,35 @@ pub const RPC_STDIN: &str = "stdin.fifo";
 /// because RPC mode prints no session header.
 pub const RPC_IDENTITY_ID: &str = "longhouse-identity";
 pub const RPC_PROMPT_ID: &str = "longhouse-prompt";
+
+#[derive(Clone)]
+pub struct ConsoleRpcInput {
+    fifo: PathBuf,
+}
+
+impl ConsoleRpcInput {
+    pub fn new(fifo: PathBuf) -> Self {
+        Self { fifo }
+    }
+}
+
+impl ConsoleInput for ConsoleRpcInput {
+    fn send_input<'a>(&'a self, text: &'a str, images: &'a [PathBuf]) -> InputFuture<'a> {
+        Box::pin(async move {
+            let command = prompt_command(text, images)?;
+            write_command(&self.fifo, &command).await
+        })
+    }
+
+    fn close_input(&self) -> InputFuture<'_> {
+        Box::pin(async move {
+            if self.fifo.exists() {
+                write_command(&self.fifo, &json!({"type": "abort"})).await?;
+            }
+            Ok(())
+        })
+    }
+}
 
 pub fn create_fifo(path: &Path) -> Result<()> {
     let _ = std::fs::remove_file(path);

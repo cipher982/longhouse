@@ -11,6 +11,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -20,6 +21,7 @@ use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
+use crate::console_lifecycle::{ConsoleInvocation, IdleSignal, TurnBinding, TurnOrigin};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::pi_session::prepare_session;
@@ -221,7 +223,8 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
         "machine_name": config.machine_name,
         "argv": argv,
     });
-    if let Err(error) = crate::turn_claims::default_registry()?.mark_spawned_invocation(
+    let registry = crate::turn_claims::default_registry()?;
+    if let Err(error) = registry.mark_spawned_invocation(
         &config.run_id,
         pid,
         process_group_id,
@@ -237,6 +240,32 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
         let _ = child.kill().await;
         return Err(error).context("persisting Pi Console spawn identity");
     }
+    if let Err(error) = registry.record_invocation_turn(&config.run_id, "user", false) {
+        cleanup_process_group(Some(process_group_id)).await;
+        let _ = child.kill().await;
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
+        return Err(error).context("recording Pi Console turn origin");
+    }
+    let invocation = Arc::new(ConsoleInvocation::new(
+        "pi",
+        target.provider_thread_id.clone(),
+        launch_id.clone(),
+        pid,
+        process_group_id,
+        TurnBinding {
+            run_id: config.run_id.clone(),
+            turn_id: config.turn_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            origin: TurnOrigin::User,
+        },
+        Arc::new(crate::console_rpc::ConsoleRpcInput::new(rpc_stdin.clone())),
+    ));
+    if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
+        cleanup_process_group(Some(process_group_id)).await;
+        let _ = child.kill().await;
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
+        return Err(error);
+    }
     // Identity first: RPC mode prints no session header, so `get_state`'s
     // sessionId is what confirms the reserved native session.
     let commands = [
@@ -247,12 +276,18 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
         if let Err(error) = crate::console_rpc::write_command(&rpc_stdin, &command).await {
             cleanup_process_group(Some(process_group_id)).await;
             let _ = child.kill().await;
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&launch_id);
+            let _ = registry.mark_failed(&config.run_id, &error.to_string());
             return Err(error).context("sending the Pi Console prompt");
         }
     }
+    let monitor = crate::turn_claims::register_monitor(&config.run_id);
     let monitor_stderr = stderr_path.clone();
+    let monitored_invocation = invocation.clone();
     tokio::spawn(async move {
-        monitor_pi_print(&mut child, &monitor_stderr, sink).await;
+        monitor_pi_print(&mut child, &monitor_stderr, sink, monitored_invocation).await;
+        drop(monitor);
     });
 
     Ok(PiPrintRunSummary {
@@ -421,14 +456,17 @@ pub fn interrupt_pi_print_turn(
     Ok(())
 }
 
-async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPrintSink) {
+async fn monitor_pi_print(
+    child: &mut Child,
+    stderr_path: &Path,
+    mut sink: PiPrintSink,
+    invocation: Arc<ConsoleInvocation>,
+) {
     let mut projection = PiStreamProjection::default();
     sink.post_phase("thinking", None, 0).await;
     let mut offset = 0_u64;
     let mut pending = Vec::new();
     let mut seq = 0_u64;
-    // An RPC process stays up after the run settles; Longhouse ends it, and
-    // that exit is the run's successful end rather than a failure.
     let mut settled_shutdown = false;
     loop {
         if let Err(error) = publish_stdout_growth(
@@ -441,8 +479,22 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPri
         .await
         {
             cleanup_process_group(sink.process_group_id).await;
-            sink.post_terminal("run_failed", None, Some(error.to_string()))
+            if let Some(outcome) = invocation.idle(IdleSignal {
+                terminal_state: "run_failed".to_string(),
+                exit_code: None,
+                stderr: Some(error.to_string()),
+            }) {
+                sink.post_terminal_with_lifecycle(
+                    &outcome.signal.terminal_state,
+                    outcome.signal.exit_code,
+                    outcome.signal.stderr,
+                    Some(outcome.invocation_state.as_str()),
+                    Some(outcome.pending_count),
+                )
                 .await;
+            }
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&invocation.launch_id);
             return;
         }
         if !settled_shutdown && (projection.agent_settled || projection.rpc_rejected) {
@@ -451,8 +503,6 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPri
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                // Pi flushes the final JSON event and native file close during
-                // shutdown. Drain after the child exits before deciding success.
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 let drain_error = publish_stdout_growth(
                     &mut sink,
@@ -489,20 +539,49 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPri
                     pending.is_empty(),
                     source_bound,
                 );
-                let terminal_reason = if terminal_state == "run_failed" {
+                let stderr = if terminal_state == "run_failed" {
                     reason.or_else(|| stderr_tail(stderr_path))
                 } else {
                     reason
                 };
-                sink.post_terminal(terminal_state, status.code(), terminal_reason)
+                if let Some(outcome) = invocation.idle(IdleSignal {
+                    terminal_state: terminal_state.to_string(),
+                    exit_code: status.code(),
+                    stderr,
+                }) {
+                    sink.post_terminal_with_lifecycle(
+                        &outcome.signal.terminal_state,
+                        outcome.signal.exit_code,
+                        outcome.signal.stderr,
+                        Some(outcome.invocation_state.as_str()),
+                        Some(outcome.pending_count),
+                    )
                     .await;
+                }
+                invocation.close_input().await.ok();
+                invocation.process_exited();
+                crate::console_lifecycle::unregister(&invocation.launch_id);
                 return;
             }
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
                 cleanup_process_group(sink.process_group_id).await;
-                sink.post_terminal("run_failed", None, Some(error.to_string()))
+                if let Some(outcome) = invocation.idle(IdleSignal {
+                    terminal_state: "run_failed".to_string(),
+                    exit_code: None,
+                    stderr: Some(error.to_string()),
+                }) {
+                    sink.post_terminal_with_lifecycle(
+                        &outcome.signal.terminal_state,
+                        outcome.signal.exit_code,
+                        outcome.signal.stderr,
+                        Some(outcome.invocation_state.as_str()),
+                        Some(outcome.pending_count),
+                    )
                     .await;
+                }
+                invocation.process_exited();
+                crate::console_lifecycle::unregister(&invocation.launch_id);
                 return;
             }
         }
@@ -1179,7 +1258,39 @@ impl PiPrintSink {
         exit_code: Option<i32>,
         stderr: Option<String>,
     ) {
+        self.post_terminal_with_lifecycle(terminal_state, exit_code, stderr, None, None)
+            .await;
+    }
+
+    async fn post_terminal_with_lifecycle(
+        &self,
+        terminal_state: &str,
+        exit_code: Option<i32>,
+        stderr: Option<String>,
+        invocation_state: Option<&str>,
+        pending_count: Option<usize>,
+    ) {
         self.persist_local_phase("finished", None, Utc::now());
+        let mut payload = json!({
+            "managed_transport": PI_PRINT_ADAPTER,
+            "execution_lifetime": "one_shot",
+            "terminal_state": terminal_state,
+            "terminal_reason": terminal_state,
+            "terminal_source": PI_PRINT_ADAPTER,
+            "exit_code": exit_code,
+            "stderr_tail": stderr,
+            "provider_thread_id": self.provider_thread_id,
+            "source_path": self.session_file.as_ref().map(|path| path.to_string_lossy()),
+            "turn_id": self.turn_id,
+            "client_request_id": self.client_request_id
+        });
+        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
+            payload["invocation"] = json!({
+                "id": self.launch_id,
+                "state": state,
+                "pending_count": count
+            });
+        }
         self.post_events(vec![json!({
             "runtime_key": format!("pi:{}", self.session_id),
             "session_id": self.session_id,
@@ -1191,19 +1302,7 @@ impl PiPrintSink {
             "kind": "terminal_signal",
             "occurred_at": Utc::now().to_rfc3339(),
             "dedupe_key": format!("pi-print:{}:{}:terminal", self.session_id, self.run_id),
-            "payload": {
-                "managed_transport": PI_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot",
-                "terminal_state": terminal_state,
-                "terminal_reason": terminal_state,
-                "terminal_source": PI_PRINT_ADAPTER,
-                "exit_code": exit_code,
-                "stderr_tail": stderr,
-                "provider_thread_id": self.provider_thread_id,
-                "source_path": self.session_file.as_ref().map(|path| path.to_string_lossy()),
-                "turn_id": self.turn_id,
-                "client_request_id": self.client_request_id
-            }
+            "payload": payload
         })])
         .await;
         crate::turn_claims::mark_terminal(
@@ -1213,6 +1312,11 @@ impl PiPrintSink {
                 .then(|| stderr.clone())
                 .flatten(),
         );
+        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
+            if let Ok(registry) = crate::turn_claims::default_registry() {
+                let _ = registry.record_invocation_state(&self.run_id, state, count);
+            }
+        }
     }
 
     fn persist_local_phase(
@@ -1352,6 +1456,9 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::console_lifecycle::conformance::{
+        self, LifecycleScenario, ScenarioFuture, ScenarioOutcome, ScenarioRunner,
+    };
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -1676,6 +1783,96 @@ if args[:2] == ["--mode", "rpc"]:
             machine_name: "pi-console-canary".to_string(),
             local_db_path: None,
         }
+    }
+
+    fn run_pi_scenario(scenario: LifecycleScenario) -> ScenarioFuture {
+        Box::pin(async move {
+            match scenario {
+                LifecycleScenario::Plain | LifecycleScenario::Restart => {
+                    run_pi_closed_scenario(scenario).await;
+                    ScenarioOutcome::Passed
+                }
+                LifecycleScenario::Background
+                | LifecycleScenario::WakePending
+                | LifecycleScenario::UserSend
+                | LifecycleScenario::WakeDrained
+                | LifecycleScenario::WakeUserSend
+                | LifecycleScenario::WakeUnboundDrained
+                | LifecycleScenario::WakeImmediateUnbound => {
+                    ScenarioOutcome::Unsupported("upstream_absent")
+                }
+            }
+        })
+    }
+
+    async fn run_pi_closed_scenario(scenario: LifecycleScenario) {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        let longhouse_home = temp.path().join("longhouse");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
+        }
+        std::fs::create_dir_all(longhouse_home.join("agent")).unwrap();
+        let fake_pi = temp.path().join("pi");
+        write_fake_pi(&fake_pi, 0);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(
+                &run_id,
+                &session_id,
+                &thread_id,
+                None,
+                Some(&format!("canary-{run_id}")),
+                "pi",
+            )
+            .unwrap();
+        let summary = start_pi_print_turn(run_config(
+            fake_pi.to_str().unwrap(),
+            &session_id,
+            &thread_id,
+            &run_id,
+            temp.path(),
+            "plain conformance turn",
+        ))
+        .await
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let claim = loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(&run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                break claim;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Pi scenario {scenario:?} did not settle"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        assert_eq!(
+            claim.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(claim.pending_count, 0);
+        assert_ne!(unsafe { libc::killpg(summary.process_group_id, 0) }, 0);
+        assert!(crate::console_lifecycle::lookup("pi", &summary.provider_thread_id).is_none());
+        match previous_home {
+            Some(home) => unsafe { std::env::set_var("LONGHOUSE_HOME", home) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+    }
+
+    #[tokio::test]
+    async fn console_lifecycle_conformance_runs_supported_phase_one_scenarios() {
+        let adapters: [(&str, ScenarioRunner); 1] = [("pi", run_pi_scenario)];
+        conformance::run_phase_one(&adapters).await;
     }
 
     #[tokio::test]

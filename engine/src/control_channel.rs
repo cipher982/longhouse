@@ -2702,6 +2702,10 @@ async fn execute_turn_start(
             resume_session_file: payload_optional_string(payload, "resume_session_file")
                 .map(PathBuf::from),
             permission_mode,
+            origin: payload_optional_string(payload, "origin")
+                .unwrap_or_else(|| "user".to_string()),
+            wake_id: payload_optional_string(payload, "wake_id"),
+            invocation_id: payload_optional_string(payload, "invocation_id"),
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
