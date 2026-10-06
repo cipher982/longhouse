@@ -38,6 +38,7 @@
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
+        "engine/src/console_lifecycle.rs",
         "engine/src/codex_ws_relay.rs",
         "engine/src/qa_fault.rs"
       ],
@@ -861,7 +862,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "3cd4e6c4c3e1a95728cac4d7635f61194283d562779c389a6da92f8e40f3da5a"
+      "adapter_digest": "151ce189ae4b99d285fef6e886482b7fd7268ca59245321d9a9b2af683185c16"
     },
     {
       "provider": "claude",
@@ -897,7 +898,8 @@
       "adapter_sources": [
         "engine/src/claude_channel_server.rs",
         "server/zerg/services/shipper/hooks.py",
-        "engine/src/claude_print.rs"
+        "engine/src/claude_print.rs",
+        "engine/src/console_lifecycle.rs"
       ],
       "wire_families": [
         "claude_jsonl",
@@ -1880,7 +1882,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "c2d6210f4faf2a05d67a379c567c090afb63ad638fdd24a558b380fb97131d94"
+      "adapter_digest": "890b2133877236201b942c4a6ed9ecfbe349087898c4f713835fb43c976da590"
     },
     {
       "provider": "opencode",
@@ -3793,6 +3795,7 @@
         "engine/assets/longhouse-pi-helm.ts",
         "engine/src/pi_print.rs",
         "engine/src/console_rpc.rs",
+        "engine/src/console_lifecycle.rs",
         "engine/src/pi_session.rs",
         "server/zerg/qa/provider_adapters/pi.py",
         "server/zerg/qa/pi_native.py"
@@ -4391,7 +4394,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "4147502b55be943a6a53820c662e436e0be0d1ca943d3f462ce61b19f5bb6605"
+      "adapter_digest": "16c539f5e945bf6182011e40d40965e1ba319bacf2eb24a1acd9b4f420c4eea1"
     },
     {
       "provider": "omp",
@@ -4421,6 +4424,7 @@
         "engine/assets/longhouse-omp-helm.ts",
         "engine/src/omp_print.rs",
         "engine/src/console_rpc.rs",
+        "engine/src/console_lifecycle.rs",
         "server/zerg/services/session_live_previews.py",
         "server/zerg/services/session_runtime.py",
         "server/zerg/services/provider_interaction_semantics.py",
@@ -5061,7 +5065,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "2073ed66294c017d35f89dac2870d6be5118d55fe2d6494b3db31ac5eee1a4d0"
+      "adapter_digest": "3c2e0d6745bc17109fc28a9f5b07e1537e840339864722490e7eec94813efa21"
     }
   ]
 }

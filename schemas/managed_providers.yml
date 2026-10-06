@@ -42,6 +42,7 @@ providers:
   - engine/src/codex_bridge.rs
   - engine/src/codex_bridge_ownership.rs
   - engine/src/codex_exec.rs
+  - engine/src/console_lifecycle.rs
   - engine/src/codex_ws_relay.rs
   # QA-only negative-control seam at the codex-bridge dispatch functions.
   - engine/src/qa_fault.rs
@@ -630,6 +631,7 @@ providers:
   - engine/src/claude_channel_server.rs
   - server/zerg/services/shipper/hooks.py
   - engine/src/claude_print.rs
+  - engine/src/console_lifecycle.rs
   wire_families: [claude_jsonl, claude_hooks, claude_channel]
   observation_sources: [native_archive, hooks, managed_bridge]
   normalization_ruleset: claude
@@ -2355,6 +2357,7 @@ providers:
   - engine/assets/longhouse-pi-helm.ts
   - engine/src/pi_print.rs
   - engine/src/console_rpc.rs
+  - engine/src/console_lifecycle.rs
   - engine/src/pi_session.rs
   - server/zerg/qa/provider_adapters/pi.py
   - server/zerg/qa/pi_native.py
@@ -2741,6 +2744,7 @@ providers:
   - engine/assets/longhouse-omp-helm.ts
   - engine/src/omp_print.rs
   - engine/src/console_rpc.rs
+  - engine/src/console_lifecycle.rs
   - server/zerg/services/session_live_previews.py
   - server/zerg/services/session_runtime.py
   - server/zerg/services/provider_interaction_semantics.py

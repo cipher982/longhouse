@@ -274,31 +274,7 @@ impl ConsoleInvocation {
             }
             state.queued_turn = Some(binding.clone());
         }
-        if let Err(error) = self.write_input(text, images).await {
-            self.cancel_queued_user_turn(&binding.run_id);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    pub fn cancel_queued_user_turn(&self, run_id: &str) -> bool {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if !state
-            .queued_turn
-            .as_ref()
-            .is_some_and(|binding| binding.run_id == run_id)
-        {
-            return false;
-        }
-        state.queued_turn = None;
-        if state.phase == InvocationState::Responding && state.current_turn.is_none() {
-            state.phase = if state.pending.is_empty() {
-                InvocationState::Closed
-            } else {
-                InvocationState::Parked
-            };
-        }
-        true
+        self.write_input(text, images).await
     }
     pub async fn write_input(&self, text: &str, images: &[PathBuf]) -> Result<()> {
         let input = self
