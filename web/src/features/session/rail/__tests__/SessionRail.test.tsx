@@ -370,8 +370,13 @@ describe("session switcher focus", () => {
 describe("trimPreviewMarkdown", () => {
   it("cuts at a block boundary, never mid-heading or mid-list", () => {
     const text = `## Where things stand\n\nFirst paragraph.\n\n- **Task generator:** ${"x".repeat(80)}`;
-    expect(trimPreviewMarkdown(text, 60)).toBe("## Where things stand\n\nFirst paragraph.");
+    expect(trimPreviewMarkdown(text, 60)).toBe("## Where things stand\n\nFirst paragraph.…");
     expect(trimPreviewMarkdown("short", 60)).toBe("short");
     expect(trimPreviewMarkdown("y".repeat(100), 60)).toBe(`${"y".repeat(60)}…`);
+  });
+
+  it("never leaves a code fence open", () => {
+    const text = `Intro line here.\n\n\`\`\`sh\necho one\n\necho two\n${"z".repeat(80)}\n\`\`\``;
+    expect(trimPreviewMarkdown(text, 50)).toBe("Intro line here.…");
   });
 });

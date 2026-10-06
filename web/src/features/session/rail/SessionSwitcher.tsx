@@ -25,16 +25,19 @@ import type { RailActiveSession } from "./sessionRailContext";
 
 const PREVIEW_CHARS = 600;
 
-/** Cut long markdown at a block boundary so a heading, list item or code
- * fence is never split mid-way; fall back to a line, then a hard cut. */
+/** Cut long markdown at a paragraph, else a line, else a hard cut, and mark
+ * the cut with "…". A cut that leaves a code fence open is moved back to
+ * before that fence, so the preview never renders a runaway code block. */
 export function trimPreviewMarkdown(text: string, max = PREVIEW_CHARS): string {
   if (text.length <= max) return text;
   const head = text.slice(0, max);
   const block = head.lastIndexOf("\n\n");
-  if (block > max / 3) return head.slice(0, block);
   const line = head.lastIndexOf("\n");
-  if (line > max / 3) return head.slice(0, line);
-  return `${head.trimEnd()}…`;
+  let cut = block > max / 3 ? head.slice(0, block) : line > max / 3 ? head.slice(0, line) : head;
+  if ((cut.match(/^```/gm) ?? []).length % 2 === 1) {
+    cut = cut.slice(0, cut.lastIndexOf("```"));
+  }
+  return `${cut.trimEnd()}…`;
 }
 
 function PreviewMarkdown({ text }: { text: string }) {
