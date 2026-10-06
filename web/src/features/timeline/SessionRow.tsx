@@ -224,6 +224,7 @@ export function SessionRow({
       onKeyDown={(e) => {
         if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault();
+          preloadSessionDetailPage();
           onClick();
         }
       }}
@@ -232,6 +233,7 @@ export function SessionRow({
       onFocus={() => {
         clearHover();
         onPrefetch?.();
+        preloadSessionDetailPage();
       }}
       onBlur={clearHover}
     >

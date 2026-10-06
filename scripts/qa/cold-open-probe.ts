@@ -18,7 +18,7 @@
  */
 import { chromium, type BrowserContext, type Page, type Route } from "playwright";
 import { execSync, spawn } from "child_process";
-import { mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { REPO_ROOT, isServing } from "../ui/frontend";
 import { buildMachinesFleetFixture } from "../ui-fixtures/machinesFleet";
@@ -215,6 +215,7 @@ async function main(): Promise<void> {
   const started = Date.now();
   const web = path.join(REPO_ROOT, "web");
   if (BUILD) execSync("bunx vite build --logLevel error", { cwd: web, stdio: "inherit" });
+  else if (!existsSync(path.join(web, "dist", "index.html"))) throw new Error("--no-build but web/dist has no build");
   if (await isServing(BASE)) throw new Error(`${BASE} is already serving; pick another --port`);
   const child = spawn("bunx", ["vite", "preview", "--port", String(PORT), "--strictPort"], { cwd: web, stdio: "ignore", detached: true });
   const stop = () => {
@@ -230,6 +231,9 @@ async function main(): Promise<void> {
   });
   try {
     for (let i = 0; i < 60 && !(await isServing(BASE)); i++) await sleep(250);
+    if (!(await isServing(BASE))) {
+      throw new Error(`vite preview never answered at ${BASE}; is web/dist built? (drop --no-build)`);
+    }
     const runs: { cold: Marks; warm: Marks }[] = [];
     for (let i = 0; i < RUNS; i++) {
       const r = await oneRun();

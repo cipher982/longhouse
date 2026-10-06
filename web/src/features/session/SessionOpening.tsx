@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { AgentSession, TimelineSessionsListResponse } from "@/shared/api/agents";
@@ -39,13 +39,20 @@ export function SessionOpening({
   onBack: () => void;
 }) {
   const queryClient = useQueryClient();
-  const listed = useMemo(() => findListedSession(queryClient, sessionId), [queryClient, sessionId]);
+  // Subscribed, not read once: on a reload straight into a session the
+  // Timeline list may land while this frame is still showing.
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient],
+  );
+  const listed = useSyncExternalStore(subscribe, () => findListedSession(queryClient, sessionId));
   const title = listed ? getSessionCardText(listed, { titleMaxChars: 96 }).title : null;
   const meta = listed
     ? buildSessionMetaItems({
         provider: listed.provider ? getProviderLabel(listed.provider) : null,
         project: listed.project?.trim() || null,
-        // Same order the loaded page uses, so the line does not change on load.
+        // Same host order as the loaded page. Its counts can still tick up on
+        // load when the transcript outcounts the list's totals.
         host: listed.control?.source_runner_name?.trim() || listed.device_id?.trim() || null,
         messages: (listed.user_messages ?? 0) + (listed.assistant_messages ?? 0),
         toolCalls: listed.tool_calls ?? 0,

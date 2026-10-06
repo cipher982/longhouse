@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TimelineSessionCard, TimelineSessionsListResponse } from "@/shared/api/agents";
@@ -139,5 +139,23 @@ describe("cold open: the frame before the transcript", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByTestId("session-opening-header")).toHaveTextContent("Opening session…");
+  });
+
+  it("fills the title in when the Timeline list lands after the frame (reload into a session)", () => {
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SessionOpening sessionId="a" headerTarget={null} onBack={() => {}} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("session-opening-header")).toHaveTextContent("Opening session…");
+    act(() => {
+      queryClient.setQueryData(["agent-sessions", { limit: 50 }], {
+        sessions: [card("a", 1, "Fix the flaky reconnect test")],
+        total: 1,
+        has_real_sessions: true,
+      });
+    });
+    expect(screen.getByTestId("session-opening-header")).toHaveTextContent("Fix the flaky reconnect test");
   });
 });
