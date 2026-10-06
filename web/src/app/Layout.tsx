@@ -327,7 +327,6 @@ function WelcomeHeader({
           const isActive =
             location.pathname === href ||
             (href !== '/' && location.pathname.startsWith(href));
-          const routePreload = href === "/machines" ? preloadMachinesPage : undefined;
 
           return (
             <button
@@ -335,8 +334,6 @@ function WelcomeHeader({
               type="button"
               className={clsx("mobile-nav-link", { "mobile-nav-link--active": isActive })}
               aria-current={isActive ? 'page' : undefined}
-              onPointerEnter={routePreload}
-              onFocus={routePreload}
               onClick={() => {
                 navigate(href);
                 closeMobileNav();

@@ -4,14 +4,6 @@ test("preloads the Machines route on hover without fetching activity early", asy
   await page.goto("/timeline");
   await expect(page.getByRole("heading", { name: "Connect your first machine" })).toBeVisible();
 
-  // Let the timeline's own lazy renderer finish so it cannot satisfy the hover check.
-  await expect.poll(
-    () => page.evaluate(() =>
-      typeof Reflect.get(window, "__longhouseHearth") === "function" ||
-      !document.querySelector(".hearth-canvas"),
-    ),
-    { timeout: 5000 },
-  ).toBe(true);
   const origin = new URL(page.url()).origin;
   const loadedScripts = new Set(
     await page.evaluate(() =>
@@ -27,6 +19,7 @@ test("preloads the Machines route on hover without fetching activity early", asy
     if (
       request.resourceType() === "script" &&
       url.origin === origin &&
+      url.pathname.includes("MachinesPage") &&
       !loadedScripts.has(url.href)
     ) {
       routeScriptFinished = true;
@@ -38,7 +31,7 @@ test("preloads the Machines route on hover without fetching activity early", asy
 
   const machinesTab = page.getByTestId("global-machines-tab");
   await machinesTab.hover();
-  await expect.poll(() => routeScriptFinished).toBe(true);
+  await expect.poll(() => routeScriptFinished, { timeout: 5000 }).toBe(true);
   await expect(page).toHaveURL(/\/timeline(?:\?.*)?$/);
   expect(summaryRequests).toBe(0);
 
