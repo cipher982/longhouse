@@ -22,7 +22,7 @@ The desktop Machines tab prefetches route code on pointer hover or keyboard focu
 The activity/sync summary still loads only after navigation, while the directory
 remains visible.
 
-If Vite cannot load a lazy page chunk, Longhouse retries once and throttles automatic reloads for 30 seconds to avoid loops; repeated failures show a manual reload action.
+On `/machines`, Vite lazy-chunk failures trigger a reload at most once every 30 seconds; other routes retain manual recovery to avoid losing in-progress state.
 Machine filters apply before lexical and semantic result limits, including retained
 history whose display metadata lacks a device ID. The disposable search index adds
 nullable machine identity and uses retained source identity for existing rows; source

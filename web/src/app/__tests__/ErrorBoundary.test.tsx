@@ -14,6 +14,7 @@ describe("ErrorBoundary", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    delete window.__longhouseVitePreloadFailure;
     vi.restoreAllMocks();
   });
 

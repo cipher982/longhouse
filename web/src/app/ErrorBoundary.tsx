@@ -5,6 +5,7 @@ interface ErrorBoundaryState {
   hasError: boolean;
   error?: Error;
   errorInfo?: React.ErrorInfo;
+  moduleLoadFailure?: boolean;
 }
 
 interface ErrorBoundaryProps {
@@ -16,11 +17,12 @@ interface ErrorBoundaryProps {
 function DefaultErrorFallback({
   error,
   retry,
+  moduleLoadFailure = false,
 }: {
   error?: Error;
   retry: () => void;
+  moduleLoadFailure?: boolean;
 }) {
-  const moduleLoadFailure = window.__longhouseVitePreloadFailure === true;
   return (
     <div style={{
       display: 'flex',
@@ -115,9 +117,13 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    const moduleLoadFailure =
+      typeof window !== 'undefined' && window.__longhouseVitePreloadFailure === true;
+    if (moduleLoadFailure) window.__longhouseVitePreloadFailure = false;
     return {
       hasError: true,
       error,
+      moduleLoadFailure,
     };
   }
 
@@ -143,15 +149,27 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   handleRetry = () => {
-    this.setState({ hasError: false, error: undefined, errorInfo: undefined });
+    this.setState({
+      hasError: false,
+      error: undefined,
+      errorInfo: undefined,
+      moduleLoadFailure: false,
+    });
   };
 
   render() {
-    if (this.state.hasError) {
-      const FallbackComponent = this.props.fallback || DefaultErrorFallback;
+    if (!this.state.hasError) return this.props.children;
+
+    if (this.props.fallback) {
+      const FallbackComponent = this.props.fallback;
       return <FallbackComponent error={this.state.error} retry={this.handleRetry} />;
     }
-
-    return this.props.children;
+    return (
+      <DefaultErrorFallback
+        error={this.state.error}
+        retry={this.handleRetry}
+        moduleLoadFailure={this.state.moduleLoadFailure}
+      />
+    );
   }
 }

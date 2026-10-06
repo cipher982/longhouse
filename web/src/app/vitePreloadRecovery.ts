@@ -10,6 +10,7 @@ const RETRY_COOLDOWN_MS = 30_000;
 export function installVitePreloadRecovery(targetWindow: Window = window): void {
   targetWindow.addEventListener("vite:preloadError", (event) => {
     targetWindow.__longhouseVitePreloadFailure = true;
+    if (!/^\/machines(?:\/|$)/.test(targetWindow.location.pathname)) return;
     let lastRetryAt: number;
     try {
       lastRetryAt = Number(targetWindow.sessionStorage.getItem(RETRY_AT_KEY) ?? 0);
