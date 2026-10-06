@@ -3679,10 +3679,9 @@ describe("SessionChat composer status", () => {
       composerPlaceholder: "Message the ended run",
     });
 
-    expect(screen.getByLabelText("Next instruction")).toHaveAttribute(
-      "placeholder",
-      "Message the ended run",
-    );
+    const input = screen.getByLabelText("Next instruction");
+    expect(input).toBeEnabled();
+    expect(input).toHaveAttribute("placeholder", "Message the ended run");
   });
 
   it("demotes an expired work claim instead of repeating the cached label", () => {

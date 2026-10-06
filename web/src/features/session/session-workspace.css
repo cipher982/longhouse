@@ -3109,7 +3109,7 @@
 
   .tl-msg {
     gap: 3px;
-    padding: 8px 0;
+    padding: var(--tl-msg-pad, 8px) 0;
     max-width: 100%;
   }
 
@@ -3118,13 +3118,15 @@
     font-size: 10px;
   }
 
+  /* Phones keep their 13px type for both Terminal (14.5px) and Comfortable
+     (no override), and the size control still steps it from there. */
   .tl-msg__body {
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: calc(var(--tl-prose-size, 14.5px) - 1.5px);
+    line-height: var(--tl-prose-leading, 1.5);
   }
 
   .tl-msg__body p {
-    margin-bottom: 0.45em;
+    margin-bottom: var(--tl-para-gap, 0.45em);
   }
 
   .tl-chip {

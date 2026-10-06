@@ -81,5 +81,15 @@ describe("display settings", () => {
     expect(current().size).toBe(14);
     fireEvent.keyDown(window, { key: "-" });
     expect(current().size).toBe(14);
+
+    const modal = document.createElement("div");
+    modal.setAttribute("aria-modal", "true");
+    document.body.appendChild(modal);
+    try {
+      fireEvent.keyDown(window, { key: "=", metaKey: true });
+      expect(current().size).toBe(14);
+    } finally {
+      modal.remove();
+    }
   });
 });

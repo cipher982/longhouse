@@ -29,6 +29,9 @@ export function useDisplaySettings() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      // A modal over the session (resume, launch, the switcher) keeps the
+      // browser's own zoom.
+      if (document.querySelector('[aria-modal="true"]')) return;
       const direction = event.key === "=" || event.key === "+" ? 1 : event.key === "-" ? -1 : 0;
       if (direction === 0) return;
       event.preventDefault();
