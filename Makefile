@@ -776,6 +776,7 @@ VALIDATE_MEMBERS := \
 	validate-provider-brands \
 	validate-managed-session-contract \
 	validate-host-link-contract \
+	validate-session-state-contract \
 	validate-phase-contract \
 	validate-managed-identity \
 	validate-managed-provider-contracts \
