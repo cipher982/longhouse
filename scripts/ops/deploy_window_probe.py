@@ -544,6 +544,19 @@ def _lifecycle_state(data: Any) -> str | None:
     return state if isinstance(state, str) else None
 
 
+def _evidence_epoch(data: Any) -> Any:
+    if isinstance(data, str):
+        data = _decode_json(data)
+    if not isinstance(data, dict):
+        return None
+    nested = data.get("host_lifecycle")
+    if isinstance(nested, dict):
+        data = nested
+    if data.get("runtime_epoch") is not None:
+        return data.get("runtime_epoch")
+    runtime = data.get("runtime")
+    return runtime.get("epoch") if isinstance(runtime, dict) else None
+
 def _connected_admission_open(data: Any) -> bool:
     if isinstance(data, str):
         data = _decode_json(data)
@@ -688,27 +701,36 @@ def analyze_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     restart_times = [at for at in [window_start, *disconnect_times] if at is not None]
     restart_start = min(restart_times) if restart_times else None
-    evidence_floor = restart_start if restart_start is not None else change_at
+    evidence_floor = restart_start if epoch_change is None else None
     evidence_candidates: list[tuple[float, str, dict[str, Any]]] = []
 
-    def offer_evidence(source: str, row: dict[str, Any]) -> None:
+    def offer_evidence(source: str, row: dict[str, Any], source_epoch: Any = None) -> None:
         at = _mono(row)
-        if at is not None and evidence_floor is not None and at >= evidence_floor:
-            evidence_candidates.append((at, source, row))
+        if at is None:
+            return
+        if epoch_change is not None:
+            if source_epoch is not None:
+                if source_epoch != epoch_change.get("to_epoch"):
+                    return
+            elif change_at is None or at < change_at:
+                return
+        elif evidence_floor is None or at < evidence_floor:
+            return
+        evidence_candidates.append((at, source, row))
 
     for row in health:
         runtime = _runtime(row)
         if runtime and runtime.get("admission") == "open":
-            offer_evidence("health_admission_open", row)
+            offer_evidence("health_admission_open", row, runtime.get("epoch"))
     for row in rows:
         if row.get("channel") == "control" and row.get("event") == "frame" and row.get("type") == "host.lifecycle":
             if _lifecycle_state(row.get("host_lifecycle")) == "serving":
-                offer_evidence("control_host_lifecycle", row)
+                offer_evidence("control_host_lifecycle", row, _evidence_epoch(row.get("host_lifecycle")))
         elif row.get("channel") == "sse" and row.get("event") == "message":
             if row.get("name") == "host_lifecycle" and _lifecycle_state(row.get("data")) == "serving":
-                offer_evidence("sse_host_lifecycle", row)
+                offer_evidence("sse_host_lifecycle", row, _evidence_epoch(row.get("data")))
             elif row.get("name") == "connected" and _connected_admission_open(row.get("data")):
-                offer_evidence("sse_connected_admission_open", row)
+                offer_evidence("sse_connected_admission_open", row, _evidence_epoch(row.get("data")))
     for row in writes:
         try:
             status_code = int(row.get("status")) if row.get("status") is not None else None
