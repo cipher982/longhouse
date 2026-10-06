@@ -158,7 +158,9 @@ final class SessionChatUITests: XCTestCase {
     func testLiteToolRowLoadsItsFullBodyWhenExpanded() {
         let app = launchChatFixture(name: "lite-bodies", eventCount: 0)
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(5)))
-        let command = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "pytest -q tests/")).firstMatch
+        // WebKit may expose the summary as text, a button or a group; match the element itself.
+        let command = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "pytest -q tests/")).firstMatch
         XCTAssertTrue(command.waitForExistence(timeout: Self.webTranscriptTimeout))
 
         let collapsed = XCTAttachment(screenshot: app.screenshot())
@@ -167,15 +169,18 @@ final class SessionChatUITests: XCTestCase {
         add(collapsed)
 
         command.tap()
-        XCTAssertTrue(app.staticTexts["Loading the full output…"].waitForExistence(timeout: Self.patient(5)))
+        let loadingNote = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Loading the full output")).firstMatch
+        XCTAssertTrue(loadingNote.waitForExistence(timeout: Self.patient(5)))
         let expanding = XCTAttachment(screenshot: app.screenshot())
         expanding.name = "lite-row-loading"
         expanding.lifetime = .keepAlways
         add(expanding)
 
-        let tail = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Full body loaded: 40 passed")).firstMatch
+        let tail = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Full body loaded: 40 passed")).firstMatch
         XCTAssertTrue(tail.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertFalse(app.staticTexts["Loading the full output…"].exists)
+        XCTAssertFalse(loadingNote.exists)
         let loaded = XCTAttachment(screenshot: app.screenshot())
         loaded.name = "lite-row-loaded"
         loaded.lifetime = .keepAlways
