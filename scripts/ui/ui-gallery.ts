@@ -85,6 +85,24 @@ const children = new Set<ChildProcess>();
 // Set on Ctrl-C: no new capture starts once the sweep is stopping.
 let stopping = false;
 
+/**
+ * SIGKILL what a finished capture left in its process group (a Chromium whose
+ * leader died without closing it). Probe first: a group ID stays reserved
+ * while any member lives, so only a live group is signalled, never a reused id.
+ */
+function reapGroup(pgid: number): void {
+  try {
+    process.kill(-pgid, 0);
+  } catch {
+    return; // group already empty
+  }
+  try {
+    process.kill(-pgid, "SIGKILL");
+  } catch {
+    /* emptied in between */
+  }
+}
+
 function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl: string): Promise<Capture> {
   const dir = path.join(outDir, jobKey(job), viewport);
   mkdirSync(dir, { recursive: true });
@@ -113,6 +131,7 @@ function runCapture(job: Job, viewport: ViewportKey, outDir: string, frontendUrl
     child.stderr?.pipe(log);
     child.on("close", (code) => {
       children.delete(child);
+      reapGroup(child.pid!);
       const seconds = (Date.now() - started) / 1000;
       const frames: Frame[] = [];
       let error = code === 0 ? undefined : `exit ${code}`;

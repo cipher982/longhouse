@@ -23,8 +23,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * Make sure something serves the web app at baseUrl. If nothing does and the
  * host is local, start Vite in web/ on that port and return a function that
  * stops it. If something already serves it, return a no-op: it is not ours.
- */
-/**
+ *
  * handleSignals: false when the caller owns Ctrl-C once this returns; Ctrl-C
  * during startup still stops the Vite this started.
  */
@@ -87,6 +86,7 @@ export async function ensureFrontend(
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
+      releaseSignals();
       throw new Error(`Vite exited before serving:\n${output.join("")}`);
     }
     if (await isServing(baseUrl)) {
@@ -97,5 +97,6 @@ export async function ensureFrontend(
     await sleep(250);
   }
   await stop();
+  releaseSignals();
   throw new Error(`Vite did not start serving ${baseUrl} within 60s:\n${output.join("")}`);
 }
