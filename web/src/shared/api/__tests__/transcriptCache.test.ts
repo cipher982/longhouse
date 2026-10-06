@@ -86,11 +86,36 @@ describe("transcriptCache", () => {
     expect(await readCachedTranscript("s1", "workspace")).toBeNull();
   });
 
-  it("evicts by bytes, but never the session just written", async () => {
+  it("evicts by bytes, but never the session just written, even within one millisecond", async () => {
     const big = "x".repeat(25 * 1024 * 1024);
-    await writeCachedTranscript("old", "workspace", { big });
-    await writeCachedTranscript("new", "workspace", { big });
-    expect(await listCachedSessions()).toEqual(["new"]);
+    const realNow = Date.now;
+    Date.now = () => 5_000;
+    try {
+      // "a-new" sorts before "z-old", so position alone would evict the newcomer.
+      await writeCachedTranscript("z-old", "workspace", { big });
+      await writeCachedTranscript("a-new", "workspace", { big });
+    } finally {
+      Date.now = realNow;
+    }
+    expect(await listCachedSessions()).toEqual(["a-new"]);
+  });
+
+  it("a write that straddles sign-out leaves nothing behind", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow: TranscriptCacheBackend = {
+      ...backend,
+      get: async (key) => {
+        await gate;
+        return backend.get(key);
+      },
+    };
+    setTranscriptCacheBackendForTests(slow);
+    const writing = writeCachedTranscript("s1", "workspace", { a: 1 });
+    const wiping = wipeTranscriptCache();
+    release();
+    await Promise.all([writing, wiping]);
+    expect(backend.store.size).toBe(0);
   });
 
   it("degrades to no cache when IndexedDB is unavailable", async () => {

@@ -84,9 +84,25 @@ export function startTranscriptPersistence(
   queryClient: QueryClient,
   { writeDelayMs = WRITE_DELAY_MS }: { writeDelayMs?: number } = {},
 ): TranscriptPersistence {
-  /** Data objects this module put in the cache: never written back, never trusted as fresh. */
-  const seeded = new WeakSet<object>();
-  const olderPagesTried = new Set<string>();
+  /**
+   * The `dataUpdatedAt` of each entry this module seeded from disk. An entry
+   * still carrying it holds the disk copy: never written back, never trusted
+   * as fresh. A network answer always moves `dataUpdatedAt`, even when
+   * structural sharing hands back the very object seeded (an unchanged
+   * session), so identity can't tell the two apart; the timestamp can.
+   */
+  const seededAt = new Map<string, number>();
+  const fromDisk = (queryKey: readonly unknown[]): boolean => {
+    const query = queryClient.getQueryCache().find({ queryKey, exact: true });
+    return Boolean(query && seededAt.get(query.queryHash) === query.state.dataUpdatedAt);
+  };
+  const seed = (queryKey: readonly unknown[], data: unknown, updatedAt: number) => {
+    queryClient.setQueryData(queryKey, data, { updatedAt });
+    const query = queryClient.getQueryCache().find({ queryKey, exact: true });
+    if (query) seededAt.set(query.queryHash, query.state.dataUpdatedAt);
+  };
+  const olderPagesDone = new Set<string>();
+  const olderPagesRunning = new Set<string>();
   const pendingWrites = new Map<string, number>();
 
   const scheduleWrite = (key: string, write: () => Promise<void>) => {
@@ -103,15 +119,17 @@ export function startTranscriptPersistence(
 
   const writeWorkspace = (sessionId: string) =>
     scheduleWrite(`workspace:${sessionId}`, async () => {
-      const workspace = queryClient.getQueryData<AgentSessionWorkspaceResponse>(workspaceKey(sessionId));
-      if (!workspace || seeded.has(workspace)) return;
+      const key = workspaceKey(sessionId);
+      const workspace = queryClient.getQueryData<AgentSessionWorkspaceResponse>(key);
+      if (!workspace || fromDisk(key)) return;
       await writeCachedTranscript(sessionId, "workspace", { workspace, savedAt: Date.now() } satisfies WorkspaceRecord);
     });
 
   const writePages = (sessionId: string) =>
     scheduleWrite(`pages:${sessionId}`, async () => {
-      const data = queryClient.getQueryData<ProjectionPages>(pagesKey(sessionId));
-      if (!data || seeded.has(data) || data.pages.length < 2) return;
+      const key = pagesKey(sessionId);
+      const data = queryClient.getQueryData<ProjectionPages>(key);
+      if (!data || fromDisk(key) || data.pages.length < 2) return;
       await writeCachedTranscript(sessionId, "pages", {
         pages: data.pages.slice(-PAGES_PER_SESSION),
         pageParams: data.pageParams.slice(-PAGES_PER_SESSION),
@@ -133,41 +151,54 @@ export function startTranscriptPersistence(
     if (queryClient.getQueryData(workspaceKey(sessionId)) !== undefined) return;
     const record = await readCachedTranscript<WorkspaceRecord>(sessionId, "workspace");
     if (!record?.workspace || queryClient.getQueryData(workspaceKey(sessionId)) !== undefined) return;
-    seeded.add(record.workspace);
     // `updatedAt` from disk keeps the entry stale: the mounted page refetches.
-    queryClient.setQueryData(workspaceKey(sessionId), record.workspace, { updatedAt: record.savedAt });
+    seed(workspaceKey(sessionId), record.workspace, record.savedAt);
     const tail = record.workspace.projection;
     if (tail && queryClient.getQueryData(pagesKey(sessionId)) === undefined) {
-      const pages: ProjectionPages = { pages: [tail], pageParams: [{ anchor: "tail" }] };
-      seeded.add(pages);
-      queryClient.setQueryData(pagesKey(sessionId), pages, { updatedAt: record.savedAt });
+      seed(pagesKey(sessionId), { pages: [tail], pageParams: [{ anchor: "tail" }] } satisfies ProjectionPages, record.savedAt);
     }
+  };
+
+  /** A single network-fresh tail page: the only state older pages are stitched onto. */
+  const freshSingleTail = (sessionId: string): ProjectionPages | null => {
+    const key = pagesKey(sessionId);
+    const current = queryClient.getQueryData<ProjectionPages>(key);
+    return current && current.pages.length === 1 && !fromDisk(key) ? current : null;
   };
 
   /** Stitch stored older pages above a network-fresh tail, and restore opened tool bodies. */
   const restoreOlderPages = async (sessionId: string): Promise<void> => {
-    olderPagesTried.add(sessionId);
-    const bodies = await readCachedTranscript<BodiesRecord>(sessionId, "bodies");
-    for (const entry of bodies?.entries ?? []) {
-      const key = ["agent-session-event-bodies", sessionId, entry.cursors];
-      if (queryClient.getQueryData(key) === undefined) queryClient.setQueryData(key, entry.response);
+    olderPagesRunning.add(sessionId);
+    try {
+      const [bodies, record] = await Promise.all([
+        readCachedTranscript<BodiesRecord>(sessionId, "bodies"),
+        readCachedTranscript<PagesRecord>(sessionId, "pages"),
+      ]);
+      for (const entry of bodies?.entries ?? []) {
+        const key = ["agent-session-event-bodies", sessionId, entry.cursors];
+        if (queryClient.getQueryData(key) === undefined) queryClient.setQueryData(key, entry.response);
+      }
+      const current = freshSingleTail(sessionId);
+      // Not ready (a refetch replaced the tail meanwhile): the next update retries.
+      if (!current) return;
+      olderPagesDone.add(sessionId);
+      if (!record?.pages.length) return;
+      const tail = current.pages[0];
+      const storedTail = record.pages[record.pages.length - 1];
+      if (!sameTranscript(storedTail, tail)) {
+        // Another generation or head session: those pages describe history
+        // this session no longer has.
+        await forgetCachedSession(sessionId);
+        return;
+      }
+      const merged = stitchProjectionTail({ pages: record.pages, pageParams: record.pageParams }, tail);
+      if (!merged || merged.pages.length < 2) return;
+      queryClient.setQueryData<ProjectionPages>(pagesKey(sessionId), (latest) =>
+        latest === current ? merged : latest,
+      );
+    } finally {
+      olderPagesRunning.delete(sessionId);
     }
-    const record = await readCachedTranscript<PagesRecord>(sessionId, "pages");
-    const current = queryClient.getQueryData<ProjectionPages>(pagesKey(sessionId));
-    if (!record?.pages.length || !current || current.pages.length !== 1 || seeded.has(current)) return;
-    const tail = current.pages[0];
-    const storedTail = record.pages[record.pages.length - 1];
-    if (!sameTranscript(storedTail, tail)) {
-      // Another generation or head session: those pages describe history
-      // this session no longer has.
-      await forgetCachedSession(sessionId);
-      return;
-    }
-    const merged = stitchProjectionTail({ pages: record.pages, pageParams: record.pageParams }, tail);
-    if (!merged || merged.pages.length < 2) return;
-    queryClient.setQueryData<ProjectionPages>(pagesKey(sessionId), (latest) =>
-      latest === current ? merged : latest,
-    );
   };
 
   const onQuery = (query: Query, eventType: "added" | "updated") => {
@@ -178,7 +209,7 @@ export function startTranscriptPersistence(
 
     if (kind === "workspace") {
       if (eventType === "added" && data === undefined) void paintFromDisk(sessionId);
-      if (data && !seeded.has(data) && query.state.status === "success") writeWorkspace(sessionId);
+      if (data && query.state.status === "success" && !fromDisk(query.queryKey)) writeWorkspace(sessionId);
       return;
     }
     if (kind === "bodies") {
@@ -188,13 +219,13 @@ export function startTranscriptPersistence(
       return;
     }
     // pages
-    if (!data || seeded.has(data)) return;
-    const pages = data as ProjectionPages;
+    if (!data || fromDisk(query.queryKey)) return;
     if (
-      pages.pages.length === 1 &&
-      !olderPagesTried.has(sessionId) &&
+      !olderPagesDone.has(sessionId) &&
+      !olderPagesRunning.has(sessionId) &&
       query.state.fetchStatus === "idle" &&
-      query.getObserversCount() > 0
+      query.getObserversCount() > 0 &&
+      freshSingleTail(sessionId)
     ) {
       void restoreOlderPages(sessionId);
     }

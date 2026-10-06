@@ -152,6 +152,34 @@ describe("transcript persistence", () => {
     expect(observer.getCurrentResult().hasPreviousPage).toBe(true);
   });
 
+  it("an unchanged session gets its stored pages back after a reload", async () => {
+    // Disk holds the tail and two older pages; the network answers with the
+    // same tail, so structural sharing returns the very objects seeded.
+    await writeCachedTranscript(SESSION, "workspace", { workspace: workspace(page(81, 100), "disk"), savedAt: 1 });
+    await writeCachedTranscript(SESSION, "pages", {
+      pages: [page(41, 60), page(61, 80), page(81, 100)],
+      pageParams: [{ anchor: "tail", cursor: "c61" }, { anchor: "tail", cursor: "c81" }, { anchor: "tail" }],
+      savedAt: 1,
+    });
+    let answer!: (value: AgentSessionWorkspaceResponse) => void;
+    const workspaceObserver = new QueryObserver(client, {
+      queryKey: workspaceKey,
+      queryFn: () => new Promise<AgentSessionWorkspaceResponse>((resolve) => (answer = resolve)),
+      staleTime: 10_000,
+    });
+    cleanups.push(workspaceObserver.subscribe(() => undefined));
+    // The disk copy (and its tail page) lands first; then the network agrees with it.
+    await vi.waitFor(() => expect(client.getQueryState(pagesKey)?.dataUpdatedAt).toBe(1));
+    answer(workspace(page(81, 100), "disk"));
+
+    const queryFn = vi.fn(async () => page(81, 100));
+    const observer = pagesObserver(client, queryFn);
+    cleanups.push(observer.subscribe(() => undefined));
+
+    await vi.waitFor(() => expect(client.getQueryData<InfiniteData<Page>>(pagesKey)?.pages.length).toBe(3));
+    expect(queryFn).toHaveBeenCalledTimes(1);
+  });
+
   it("stored pages from another generation are dropped, not shown", async () => {
     await writeCachedTranscript(SESSION, "pages", {
       pages: [page(61, 80, "old"), page(81, 100, "old")],

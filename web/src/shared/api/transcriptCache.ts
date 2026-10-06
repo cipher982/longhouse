@@ -107,6 +107,8 @@ export function setTranscriptCacheBackendForTests(next: TranscriptCacheBackend |
 }
 
 let currentScope: string | null = null;
+/** Bumped by every scope change; a write that straddles one removes what it wrote. */
+let scopeEpoch = 0;
 
 /** Origin plus user id; null while signed out, which disables the cache. */
 export function transcriptCacheScope(): string | null {
@@ -142,7 +144,9 @@ function sizeOf(value: unknown): number {
  * is wipeTranscriptCache's job, on an explicit sign-out.
  */
 export async function setTranscriptCacheUser(userId: number | null, origin = globalThis.location?.origin ?? ""): Promise<void> {
-  currentScope = userId == null ? null : `${origin}|${userId}`;
+  const next = userId == null ? null : `${origin}|${userId}`;
+  if (next !== currentScope) scopeEpoch += 1;
+  currentScope = next;
   const keep = currentScope;
   if (!keep) return;
   await deleteWhere((scope) => scope !== keep);
@@ -151,6 +155,7 @@ export async function setTranscriptCacheUser(userId: number | null, origin = glo
 /** Sign-out: forget the scope and delete every cached transcript. */
 export async function wipeTranscriptCache(): Promise<void> {
   currentScope = null;
+  scopeEpoch += 1;
   await deleteWhere(() => true);
 }
 
@@ -204,6 +209,7 @@ export async function writeCachedTranscript(
 ): Promise<void> {
   const scope = currentScope;
   if (!scope) return;
+  const epoch = scopeEpoch;
   await safely(undefined, async (db) => {
     const key = metaKey(scope, sessionId);
     const previous = (await db.get(key)) as SessionMeta | undefined;
@@ -211,7 +217,6 @@ export async function writeCachedTranscript(
       ...(previous ? await kindSizes(db, scope, previous) : {}),
       [kind]: sizeOf(value),
     };
-    await db.put(dataKey(scope, sessionId, kind), value);
     const meta: SessionMeta = {
       sessionId,
       bytes: Object.values(sizes).reduce<number>((sum, size) => sum + (size ?? 0), 0),
@@ -219,8 +224,15 @@ export async function writeCachedTranscript(
       kinds: Array.from(new Set([...(previous?.kinds ?? []), kind])),
       sizes,
     };
+    await db.put(dataKey(scope, sessionId, kind), value);
     await db.put(key, meta);
-    await evict(db, scope);
+    if (scopeEpoch !== epoch) {
+      // Signed out (or switched user) while this write was in flight: the
+      // wipe may already have run, so take back what was just written.
+      await deleteSession(db, scope, meta);
+      return;
+    }
+    await evict(db, scope, sessionId);
   });
 }
 
@@ -242,14 +254,18 @@ export async function forgetCachedSession(sessionId: string): Promise<void> {
   });
 }
 
-/** Least recently used sessions go first, until both caps hold. */
-async function evict(db: TranscriptCacheBackend, scope: string): Promise<void> {
-  const metas = (await readMetas(db, scope)).sort((a, b) => b.accessedAt - a.accessedAt);
+/** Least recently used sessions go first, until both caps hold; the one just written stays. */
+async function evict(db: TranscriptCacheBackend, scope: string, keepSessionId: string): Promise<void> {
+  const metas = await readMetas(db, scope);
   let bytes = metas.reduce((sum, meta) => sum + meta.bytes, 0);
   let count = metas.length;
-  for (let i = metas.length - 1; i > 0 && (count > MAX_CACHED_SESSIONS || bytes > MAX_CACHED_BYTES); i -= 1) {
-    await deleteSession(db, scope, metas[i]);
-    bytes -= metas[i].bytes;
+  const candidates = metas
+    .filter((meta) => meta.sessionId !== keepSessionId)
+    .sort((a, b) => a.accessedAt - b.accessedAt);
+  for (const meta of candidates) {
+    if (count <= MAX_CACHED_SESSIONS && bytes <= MAX_CACHED_BYTES) break;
+    await deleteSession(db, scope, meta);
+    bytes -= meta.bytes;
     count -= 1;
   }
 }
