@@ -1227,9 +1227,13 @@ async function captureBundle(
   }
   await page.goto(url);
 
-  // Wait for page stability - prefer shared readiness flags.
+  // Prefer the screenshot-specific gate when a page explicitly opts into one.
+  // `data-ready` can be true while it shows a useful but provisional state.
   try {
-    await page.waitForSelector("[data-screenshot-ready='true'], [data-ready='true']", { timeout: 5000 });
+    await page.waitForSelector(
+      "body[data-screenshot-ready='true'], body:not([data-screenshot-ready])[data-ready='true']",
+      { timeout: 5000 },
+    );
   } catch {
     await page.waitForLoadState("networkidle", { timeout: 10000 });
   }
