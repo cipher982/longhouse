@@ -21,6 +21,8 @@ marked last known when refresh fails; missing import progress is not completion.
 The desktop Machines tab prefetches route code on pointer hover or keyboard focus.
 The activity/sync summary still loads only after navigation, while the directory
 remains visible.
+
+If a page bundle cannot be downloaded, its error page reloads the app on retry to clear the browser's failed module cache.
 Machine filters apply before lexical and semantic result limits, including retained
 history whose display metadata lacks a device ID. The disposable search index adds
 nullable machine identity and uses retained source identity for existing rows; source

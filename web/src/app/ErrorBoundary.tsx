@@ -12,6 +12,9 @@ interface ErrorBoundaryProps {
   fallback?: React.ComponentType<{ error?: Error; retry: () => void }>;
 }
 
+const MODULE_LOAD_FAILURE = /dynamically imported module|module script failed|loading chunk/i;
+
+
 // Default error fallback component
 function DefaultErrorFallback({
   error,
@@ -20,7 +23,9 @@ function DefaultErrorFallback({
   error?: Error;
   retry: () => void;
 }) {
+  const moduleLoadFailure = MODULE_LOAD_FAILURE.test(error?.message ?? "");
   return (
+
     <div style={{
       display: 'flex',
       flexDirection: 'column',
@@ -56,15 +61,25 @@ function DefaultErrorFallback({
         maxWidth: '500px',
         lineHeight: 1.5,
       }}>
-        {error?.message || 'An unexpected error occurred. Please try refreshing the page or contact support if the problem persists.'}
+        {moduleLoadFailure
+          ? 'Longhouse could not load this page. Retry the page load.'
+          : error?.message || 'An unexpected error occurred. Please try refreshing the page or contact support if the problem persists.'}
       </p>
       <div style={{ display: 'flex', gap: '12px' }}>
-        <button onClick={retry} className="ui-button ui-button--primary">
-          Try Again
-        </button>
-        <button onClick={() => window.location.reload()} className="ui-button ui-button--secondary">
-          Reload Page
-        </button>
+        {moduleLoadFailure ? (
+          <button onClick={() => window.location.reload()} className="ui-button ui-button--primary">
+            Reload to try again
+          </button>
+        ) : (
+          <>
+            <button onClick={retry} className="ui-button ui-button--primary">
+              Try Again
+            </button>
+            <button onClick={() => window.location.reload()} className="ui-button ui-button--secondary">
+              Reload Page
+            </button>
+          </>
+        )}
       </div>
       {import.meta.env.MODE === 'development' && error && (
         <details style={{
