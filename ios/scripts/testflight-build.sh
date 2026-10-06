@@ -42,7 +42,21 @@ case "$BUILD_NUMBER" in ''|*[!0-9]*) fail "BUILD_NUMBER must be an integer (got 
 work="$(mktemp -d "${TMPDIR:-/tmp}/lh-testflight.XXXXXX")"
 out="${OUT_DIR:-$work/out}"
 mkdir -p "$out"
-trap 'rm -rf -- "$work"' EXIT
+# With an API key, archiving creates an "Apple Development: Created via API" certificate
+# whose private key lives only on this machine; on a hosted runner it dies with the VM.
+# Revoke what this run created (never anything listed before it started) so runs do not
+# accumulate certificates up to Apple's cap, which fails every later archive.
+certs_before=""
+cleanup() {
+  local status=$?
+  if [ -n "$certs_before" ] && ! scripts/ops/testflight.py revoke-dev-certs --keep "$certs_before" >&2; then
+    echo "testflight-build: could not revoke this run's development certificate; each leaked one counts toward Apple's cap" >&2
+    [ "$status" -ne 0 ] || status=1
+  fi
+  rm -rf -- "$work"
+  exit "$status"
+}
+trap cleanup EXIT
 
 # --- credentials: a key file for Xcode and altool, only when a key is configured
 auth_args=()
@@ -67,6 +81,11 @@ fi
 echo "testflight-build: version $MARKETING_VERSION build $BUILD_NUMBER team $TEAM_ID" >&2
 
 make ios-project >/dev/null
+
+if [ ${#auth_args[@]} -gt 0 ]; then
+  scripts/ops/testflight.py dev-certs > "$work/dev-certs.before"
+  certs_before="$work/dev-certs.before"
+fi
 
 archive="$out/Longhouse.xcarchive"
 xcodebuild archive \

@@ -9,6 +9,9 @@
     testflight.py wait-build --build N        block until build N has finished processing
     testflight.py publish --build N           make build N reachable through the public link
                                               and the internal group
+    testflight.py dev-certs                   ids of the API-created development certificates
+    testflight.py revoke-dev-certs --keep F   revoke the API-created development certificates
+                                              not listed in F (one id per line)
 
 `publish` is idempotent: it upserts the tester-facing text and review details from
 ios/testflight/beta.toml, attaches the build to the public beta group, submits it for
@@ -59,6 +62,13 @@ PAST_SUBMISSION = {
     "READY_FOR_BETA_TESTING",
     "IN_BETA_TESTING",
 }
+
+# `xcodebuild -allowProvisioningUpdates` with an API key signs the archive for development
+# first, so every machine without a usable identity gets a fresh certificate with this name.
+# A hosted runner's private key dies with the VM: each run leaks one unusable certificate
+# until Apple's cap fails every later archive ("Your account has reached the maximum number
+# of certificates"). The build snapshots these before archiving and revokes only its own.
+API_DEV_CERT_NAME = "Apple Development: Created via API"
 
 
 class AscError(RuntimeError):
@@ -233,6 +243,26 @@ def cmd_status(_: argparse.Namespace) -> None:
             continue
         link = a.get("publicLink") if a.get("publicLinkEnabled") else "(public link off)"
         print(f"group {a['name']!r}: internal=False link={link}")
+
+
+def _api_dev_certs() -> list[dict]:
+    certs = call_all("/v1/certificates" + q(**{"filter[certificateType]": "DEVELOPMENT", "limit": "200"}))
+    return [c for c in certs if c["attributes"].get("name") == API_DEV_CERT_NAME]
+
+
+def cmd_dev_certs(_: argparse.Namespace) -> None:
+    for cert in _api_dev_certs():
+        print(cert["id"])
+
+
+def cmd_revoke_dev_certs(args: argparse.Namespace) -> None:
+    keep = set(Path(args.keep).read_text().split())
+    revoked = 0
+    for cert in _api_dev_certs():
+        if cert["id"] not in keep:
+            call("DELETE", f"/v1/certificates/{cert['id']}")
+            revoked += 1
+    print(json.dumps({"revoked_dev_certs": revoked, "kept": len(keep)}))
 
 
 def cmd_wait_build(args: argparse.Namespace) -> None:
@@ -576,6 +606,11 @@ def main() -> None:
     publish.add_argument("--version", help="marketing version (default: Version.xcconfig)")
     publish.add_argument("--whats-new", help="tester-facing change note (default: latest commit subject)")
     publish.set_defaults(func=cmd_publish)
+
+    sub.add_parser("dev-certs").set_defaults(func=cmd_dev_certs)
+    revoke = sub.add_parser("revoke-dev-certs")
+    revoke.add_argument("--keep", required=True, help="file of certificate ids to keep, one per line")
+    revoke.set_defaults(func=cmd_revoke_dev_certs)
 
     args = parser.parse_args()
     try:

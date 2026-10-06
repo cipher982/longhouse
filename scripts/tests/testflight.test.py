@@ -29,6 +29,10 @@ sys.modules["testflight"] = testflight
 spec.loader.exec_module(testflight)
 
 
+def envelope(kind: str, id_: str, attributes: dict) -> dict:
+    return {"type": kind, "id": id_, "attributes": attributes}
+
+
 class Fake:
     """Just enough of App Store Connect for the publish path."""
 
@@ -57,13 +61,16 @@ class Fake:
         self.internal_hidden_reads = 0  # reads of G2's builds that do not list B1 yet
         self.internal_never_lists = False
         self.tester_lookup_fails = False
+        # the owner's own identity, an API certificate from before the run, and a distribution certificate
+        self.certificates = [
+            envelope("certificates", "C-OWNER", {"certificateType": "DEVELOPMENT", "name": "Apple Development: Ada Owner"}),
+            envelope("certificates", "C-OLD", {"certificateType": "DEVELOPMENT", "name": "Apple Development: Created via API"}),
+            envelope("certificates", "C-DIST", {"certificateType": "DISTRIBUTION", "name": "Apple Distribution: Created via API"}),
+        ]
+        self.revoked: list[str] = []
 
 
 FAKE = Fake()
-
-
-def envelope(kind: str, id_: str, attributes: dict) -> dict:
-    return {"type": kind, "id": id_, "attributes": attributes}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -193,6 +200,14 @@ class Handler(BaseHTTPRequestHandler):
             FAKE.submissions += 1
             FAKE.external = "WAITING_FOR_BETA_REVIEW"
             return self._send(201, {"data": {}})
+        if method == "GET" and path == "/v1/certificates":
+            wanted = parse_qs(url.query).get("filter[certificateType]", [None])[0]
+            return self._send(200, {"data": [c for c in FAKE.certificates if wanted in (None, c["attributes"]["certificateType"])]})
+        if method == "DELETE" and path.startswith("/v1/certificates/"):
+            cert_id = path.rsplit("/", 1)[1]
+            FAKE.certificates = [c for c in FAKE.certificates if c["id"] != cert_id]
+            FAKE.revoked.append(cert_id)
+            return self._send(204)
         return self._send(404, {"errors": [{"detail": f"unhandled {method} {path}"}]})
 
     def do_GET(self) -> None:
@@ -203,6 +218,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self) -> None:
         self.handle_any("PATCH")
+
+    def do_DELETE(self) -> None:
+        self.handle_any("DELETE")
 
 
 def run_publish(args: argparse.Namespace) -> dict:
@@ -388,6 +406,26 @@ def main() -> None:
             pass
         else:
             raise AssertionError("missing app record must stop with instructions")
+
+        # 7. the build revokes only the development certificate its own archive created: never the
+        # owner's identity, a distribution certificate, or an API certificate that existed before it
+        import io
+        from contextlib import redirect_stdout
+
+        snapshot = io.StringIO()
+        with redirect_stdout(snapshot):
+            testflight.cmd_dev_certs(argparse.Namespace())
+        assert snapshot.getvalue().split() == ["C-OLD"], snapshot.getvalue()
+        FAKE.certificates.append(
+            envelope("certificates", "C-RUN", {"certificateType": "DEVELOPMENT", "name": "Apple Development: Created via API"})
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".txt") as keep:
+            keep.write(snapshot.getvalue())
+            keep.flush()
+            with redirect_stdout(io.StringIO()):
+                testflight.cmd_revoke_dev_certs(argparse.Namespace(keep=keep.name))
+        assert FAKE.revoked == ["C-RUN"], FAKE.revoked
+        assert {c["id"] for c in FAKE.certificates} == {"C-OWNER", "C-OLD", "C-DIST"}, FAKE.certificates
         print("testflight.test: ok")
     finally:
         server.shutdown()
