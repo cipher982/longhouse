@@ -20,6 +20,10 @@ import { getNavItems } from "./navigation/navItems";
 import { HeaderSlotContext, MobileNavSlotContext, isSessionRoute } from "./headerSlot";
 
 const MACHINE_STATUS_INITIAL_DELAY_MS = 2_500;
+// Warm the lazy route code before selection; page queries still start on navigation.
+function preloadMachinesPage() {
+  void import("@/features/machines/MachinesPage").catch(() => undefined);
+}
 
 type AvatarUser = { avatar_url?: string | null } | null | undefined;
 
@@ -229,6 +233,7 @@ function WelcomeHeader({
             location.pathname === href ||
             (href !== '/' && location.pathname.startsWith(href))
 
+          const routePreload = href === "/machines" ? preloadMachinesPage : undefined;
           return (
             <button
               key={href}
@@ -236,6 +241,8 @@ function WelcomeHeader({
               data-testid={testId}
               className={clsx("nav-tab", { "nav-tab--active": isActive })}
               aria-current={isActive ? 'page' : undefined}
+              onPointerEnter={routePreload}
+              onFocus={routePreload}
               onClick={() => navigate(href)}
             >
               <span className="nav-tab-label">{label}</span>
@@ -320,6 +327,7 @@ function WelcomeHeader({
           const isActive =
             location.pathname === href ||
             (href !== '/' && location.pathname.startsWith(href));
+          const routePreload = href === "/machines" ? preloadMachinesPage : undefined;
 
           return (
             <button
@@ -327,6 +335,8 @@ function WelcomeHeader({
               type="button"
               className={clsx("mobile-nav-link", { "mobile-nav-link--active": isActive })}
               aria-current={isActive ? 'page' : undefined}
+              onPointerEnter={routePreload}
+              onFocus={routePreload}
               onClick={() => {
                 navigate(href);
                 closeMobileNav();
