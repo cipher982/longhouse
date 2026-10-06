@@ -262,15 +262,17 @@ export function projectionDeltaAnchor(
 }
 
 /**
- * Applies a delta (events after the anchor) to the held pages. Returns null
- * when the delta can't be trusted to continue them: another generation or
- * head session, or more new events than one page, which means start over
- * from the tail.
+ * Applies a delta (events after the anchor cursor) to the held pages, finding
+ * the anchor in the pages as they are now: another refresh may have changed
+ * them while this delta was in flight. Returns the pages unchanged when they
+ * already hold rows the delta doesn't (a newer refresh landed first), and null
+ * when the delta can't be trusted to continue them: another generation or head
+ * session, more new events than one page, or the anchor no longer in the tail.
  */
 export function applyProjectionDelta(
   data: InfiniteData<AgentSessionProjectionResponse>,
   delta: AgentSessionProjectionResponse,
-  index: number,
+  anchorCursor: string,
 ): InfiniteData<AgentSessionProjectionResponse> | null {
   const tail = data.pages[data.pages.length - 1];
   if (
@@ -282,10 +284,16 @@ export function applyProjectionDelta(
   ) {
     return null;
   }
+  const anchorAt = tail.items.findIndex((item) => item.event?.cursor === anchorCursor);
+  if (anchorAt < 0) return null;
+  const kept = tail.items.slice(0, anchorAt + 1);
+  const deltaKeys = new Set(delta.items.map(projectionItemKey));
+  const heldNewer = tail.items.slice(anchorAt + 1).some((item) => !deltaKeys.has(projectionItemKey(item)));
+  if (heldNewer && delta.items.length <= tail.items.length - kept.length) return data;
   // The tail page keeps its own older-direction cursor; the delta's points newer.
   const freshTail: AgentSessionProjectionResponse = {
     ...tail,
-    items: [...tail.items.slice(0, index), ...delta.items],
+    items: [...kept, ...delta.items],
     total: delta.total,
     abandoned_events: delta.abandoned_events,
   };
@@ -365,7 +373,7 @@ export async function refreshAgentSessionProjectionTail(
       let applied = false;
       queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
         if (!current) return current;
-        const next = applyProjectionDelta(current, delta, anchor.index);
+        const next = applyProjectionDelta(current, delta, anchor.cursor);
         applied = next !== null;
         return next ?? current;
       });

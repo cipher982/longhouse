@@ -77,18 +77,34 @@ describe("projectionDeltaAnchor", () => {
 });
 
 describe("applyProjectionDelta", () => {
-  const held = { pages: [page(range(1, 3), { hasMore: true, nextCursor: "older" }), page(range(4, 25))], pageParams: [{ anchor: "tail" }, { anchor: "tail" }] };
+  const held = {
+    pages: [page(range(1, 3), { hasMore: true, nextCursor: "older" }), page(range(4, 25))],
+    pageParams: [{ anchor: "tail" }, { anchor: "tail" }],
+  };
 
-  it("splices new rows onto the tail and keeps older pages and the tail's own cursor", () => {
-    const next = applyProjectionDelta(held, page(range(10, 27)), 6);
+  it("splices new rows after the anchor and keeps older pages and the tail's own cursor", () => {
+    const next = applyProjectionDelta(held, page(range(10, 27)), "c-9");
     const ids = next?.pages.flatMap((p) => p.items.map((item) => item.event?.id));
     expect(ids).toEqual(range(1, 27));
     expect(next?.pages[0]).toBe(held.pages[0]);
+    expect(next?.pages[1].next_cursor).toBeNull();
   });
 
-  it("refuses a delta from another generation or one that didn't reach the newest event", () => {
-    expect(applyProjectionDelta(held, page(range(10, 27), { generationId: "gen-2" }), 6)).toBeNull();
-    expect(applyProjectionDelta(held, page(range(10, 27), { hasMore: true }), 6)).toBeNull();
+  it("finds the anchor where it is now, after another refresh moved the tail", () => {
+    const moved = { pages: [page(range(4, 30))], pageParams: [{ anchor: "tail" }] };
+    const next = applyProjectionDelta(moved, page(range(10, 31)), "c-9");
+    expect(next?.pages[0].items.map((item) => item.event?.id)).toEqual(range(4, 31));
+  });
+
+  it("keeps newer rows a later refresh already landed instead of an older delta", () => {
+    const newer = { pages: [page(range(4, 30))], pageParams: [{ anchor: "tail" }] };
+    expect(applyProjectionDelta(newer, page(range(10, 26)), "c-9")).toBe(newer);
+  });
+
+  it("refuses a delta from another generation, one that didn't reach the newest event, or a lost anchor", () => {
+    expect(applyProjectionDelta(held, page(range(10, 27), { generationId: "gen-2" }), "c-9")).toBeNull();
+    expect(applyProjectionDelta(held, page(range(10, 27), { hasMore: true }), "c-9")).toBeNull();
+    expect(applyProjectionDelta(held, page(range(10, 27)), "c-999")).toBeNull();
   });
 });
 
