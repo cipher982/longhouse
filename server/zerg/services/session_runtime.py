@@ -931,10 +931,31 @@ def _optional_payload_int(value) -> int | None:
         return None
 
 
+# What a run's end reason may say for the presentation to call it failed.
+FAILED_RUN_END_REASONS = frozenset(
+    {
+        "failed",
+        "run_failed",
+        "provider_auth_required",
+        "provider_launch_failed",
+        "turn_start_process_gone",
+        "turn_start_ambiguous",
+        "turn_start_outcome_unknown",
+        "adapter_unavailable",
+    }
+)
+
+
 def _exit_status_for_terminal(terminal_state: str, payload: Mapping[str, Any]) -> str:
     explicit = _optional_payload_str(payload.get("exit_status"))
     if explicit:
         return explicit[:64]
+    if terminal_state == "run_failed":
+        # A failed run is a failure whatever the process exit code was (the
+        # adapter may have killed a finished provider: `exit_143`). The code
+        # alone reads as an ordinary end, with no hint that anything broke.
+        reason = _optional_payload_str(payload.get("terminal_reason"))
+        return reason if reason in FAILED_RUN_END_REASONS else "run_failed"
     exit_code = _optional_payload_int(payload.get("exit_code"))
     if exit_code is not None:
         return f"exit_{exit_code}"[:64]

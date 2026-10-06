@@ -1028,6 +1028,28 @@ impl OmpStreamProjection {
                         .get("stopReason")
                         .and_then(Value::as_str)
                         .map(str::to_string);
+                    // A provider refusal (a 401, a quota) ends the assistant
+                    // message with no content and its reason here.
+                    if self.final_stop_reason.as_deref() == Some("error") {
+                        if let Some(error) = message
+                            .get("errorMessage")
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.trim().is_empty())
+                        {
+                            self.native_error = Some(error.to_string());
+                        }
+                    }
+                }
+            }
+            Some("prompt_result") => {
+                if event.get("status").and_then(Value::as_str) == Some("error") {
+                    if let Some(error) = event
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                    {
+                        self.native_error = Some(error.to_string());
+                    }
                 }
             }
             Some("response") => {
@@ -1081,6 +1103,26 @@ impl OmpStreamProjection {
     }
     fn live_text(&self) -> Option<&str> {
         self.current_assistant.as_deref()
+    }
+}
+
+fn terminal_reason_code(terminal_state: &str, detail: Option<&str>) -> &'static str {
+    let auth_refused = terminal_state == "run_failed"
+        && detail.is_some_and(|text| {
+            let lower = text.to_ascii_lowercase();
+            lower.starts_with("401 ")
+                || lower.starts_with("403 ")
+                || lower.contains("incorrect api key")
+                || lower.contains("invalid api key")
+                || lower.contains("invalid_api_key")
+                || lower.contains("authentication_error")
+                || lower.contains("unauthorized")
+        });
+    match (terminal_state, auth_refused) {
+        (_, true) => "provider_auth_required",
+        ("run_completed", _) => "run_completed",
+        ("run_cancelled", _) => "run_cancelled",
+        _ => "run_failed",
     }
 }
 
@@ -1427,7 +1469,9 @@ impl OmpPrintSink {
         reason: Option<String>,
     ) {
         self.persist_local_phase("finished", None, Utc::now());
-        let terminal_reason = reason.clone().unwrap_or_else(|| terminal_state.to_string());
+        // The reason is a code the served state keys on; the sentence is the
+        // detail. A sentence in this field reads as no known reason: "Ended".
+        let terminal_reason = terminal_reason_code(terminal_state, reason.as_deref());
         self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "terminal_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id), "payload": {"managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot", "terminal_state": terminal_state, "terminal_reason": terminal_reason, "terminal_source": OMP_PRINT_ADAPTER, "exit_code": exit_code, "stderr_tail": reason, "provider_thread_id": self.provider_thread_id, "source_path": self.session_file.to_string_lossy(), "turn_id": self.turn_id, "client_request_id": self.client_request_id}})]).await;
         crate::turn_claims::mark_terminal(
             &self.run_id,
@@ -1800,6 +1844,40 @@ mod tests {
         assert!(!help_advertises_no_ui(old));
         // A mention in prose is not the flag.
         assert!(!help_advertises_no_ui("use --no-ui to hide dialogs"));
+    }
+
+    /// The stream of a console run whose OpenAI key was refused (recorded
+    /// 2026-10-06): an empty assistant message that ended in `error`, then a
+    /// settled session. The run failed because of the key, and says so.
+    #[test]
+    fn a_provider_refusal_is_the_run_failure_and_an_auth_reason() {
+        let mut projection = OmpStreamProjection::default();
+        let refusal = "401 Incorrect API key provided: sk-proj-****q1AA. (type=invalid_request_error param=invalid_api_key)";
+        for event in [
+            json!({"type":"agent_start"}),
+            json!({"type":"message_start","message":{"role":"assistant","content":[]}}),
+            json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":refusal}}),
+            json!({"type":"agent_end","messages":[]}),
+            json!({"type":"prompt_result","id":"longhouse-prompt","status":"error","sessionSettled":true,"error":{"message":refusal}}),
+            json!({"type":"session_settled"}),
+        ] {
+            projection.apply(None, &event).unwrap();
+        }
+        // Even when the native session file did not drain, the provider's own
+        // refusal is the reason, not the drain.
+        let (state, detail) =
+            terminal_state_for_projection(&projection, Some(true), false, None, true, true, false);
+        assert_eq!(state, "run_failed");
+        assert_eq!(detail.as_deref(), Some(refusal));
+        assert_eq!(
+            terminal_reason_code(state, detail.as_deref()),
+            "provider_auth_required"
+        );
+        assert_eq!(
+            terminal_reason_code("run_failed", Some("OMP process exited unsuccessfully")),
+            "run_failed"
+        );
+        assert_eq!(terminal_reason_code("run_completed", None), "run_completed");
     }
 
     #[test]

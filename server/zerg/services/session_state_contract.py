@@ -25,6 +25,7 @@ from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.console_control_projection import project_console_control
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
+from zerg.services.session_runtime import FAILED_RUN_END_REASONS
 from zerg.services.session_runtime import RUN_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime_display import compact_runtime_tool_label
@@ -1161,16 +1162,7 @@ def _primary(
     if activity.state == "quiescent":
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if run is not None and run.lifecycle == "ended":
-        failed = run.end_reason in {
-            "failed",
-            "run_failed",
-            "provider_auth_required",
-            "provider_launch_failed",
-            "turn_start_process_gone",
-            "turn_start_ambiguous",
-            "turn_start_outcome_unknown",
-            "adapter_unavailable",
-        }
+        failed = run.end_reason in FAILED_RUN_END_REASONS
         return SessionPresentationLabel(
             key="ended",
             label="Run failed" if failed else "Ended",
