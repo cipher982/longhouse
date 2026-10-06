@@ -185,9 +185,9 @@ interface SessionChatProps {
    */
   timelineItems?: TimelineItem[];
   /**
-   * Rendered at the right of the composer's own head row (dock layout
-   * only) — the runtime strip's evidence-disclosure icon lives here now,
-   * not as a separate heading above the composer.
+   * The runtime strip's evidence-disclosure icon (dock layout only). It
+   * rides along the input's bottom edge, and in the head row while the
+   * composer is unavailable.
    */
   composerHeaderAccessory?: ReactNode;
   /**
@@ -2239,9 +2239,9 @@ export function SessionChat({
     ? "Send update reaches the active turn. Queue next waits for its boundary. Enter does not send while a turn is active."
     : "Queue next waits for the next turn boundary. Enter does not queue while a turn is active.";
 
-  // Composer header: ember + the server's working label + a mono timer while
-  // a turn is active, ember + the server's attention copy when a provider question is
-  // pending, or a cool dot + "Idle" + when the last turn ended. Shares its
+  // Composer status line: ember + the server's working label + a mono timer
+  // while a turn is active, ember + the server's attention copy when a
+  // provider question is pending; at rest it folds into the placeholder. Shares its
   // tone read with the session header (sessionHeaderState.ts) so the two
   // never disagree about live/attention/cool, but keeps its own mono clock
   // timer rather than a word-based duration, matching the instrument
@@ -2267,18 +2267,16 @@ export function SessionChat({
   // The server's label, verbatim, exactly as the session header shows it. It
   // only renders while the header's freshness gate calls the session live.
   const composerWorkingLabel = workingStatusLabel(session.session_state);
-  const composerLastTurnMs = Date.parse(
-    session.session_state.last_result_at ?? "",
-  );
-  const composerIdleClock = formatClockTime(composerLastTurnMs);
   const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
   // Dock: the status line shows only while something runs or needs a
   // decision; at rest the placeholder carries it ("Idle since 2:21 AM —
   // message to continue").
   const composerHeadVisible =
     showComposerUnavailableState || composerState.tone !== "cool";
+  // Only an open, resting session continues from here; an ended one that
+  // still accepts input keeps the caller's own placeholder.
   const dockPlaceholder =
-    composerState.tone === "cool"
+    composerState.tone === "cool" && session.session_state.disposition.state !== "closed"
       ? `${composerState.text} — message to continue`
       : composerPlaceholder || "Message";
 
