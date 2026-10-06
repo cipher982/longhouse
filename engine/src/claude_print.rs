@@ -227,12 +227,22 @@ pub async fn start_claude_print_turn(
                 Err(error) => return Err(error).context("binding Claude Console wake"),
             }
         }
+        if let Some(invocation) =
+            crate::console_lifecycle::lookup_retained_wake(invocation_id, wake_id)
+        {
+            match bind_retained_wake_turn(&config, invocation, wake_id).await {
+                Ok(summary) => return Ok(summary),
+                Err(error) if error.is::<crate::console_lifecycle::WakeTargetGone>() => {}
+                Err(error) => return Err(error).context("binding retained Claude Console wake"),
+            }
+        }
         return cancel_missing_wake(&config).await;
     }
 
     let resume_provider_thread_id = normalized_optional(&config.resume_provider_thread_id);
     if let Some(provider_thread_id) = resume_provider_thread_id.as_deref() {
         validate_uuid(provider_thread_id, "resume_provider_thread_id")?;
+        crate::console_lifecycle::discard_retained_wakes("claude", provider_thread_id);
         if let Some(invocation) = crate::console_lifecycle::lookup("claude", provider_thread_id) {
             match invocation.state() {
                 InvocationState::Parked => {
@@ -320,8 +330,8 @@ pub async fn start_claude_print_turn(
         &config,
         &provider_thread_id,
         &launch_id,
-        pid,
-        process_group_id,
+        Some(pid),
+        Some(process_group_id),
         &stdout_path,
         &stderr_path,
         &argv,
@@ -492,8 +502,8 @@ async fn adopt_parked_turn(
         config,
         &invocation.provider_thread_id,
         &invocation.launch_id,
-        pid,
-        process_group_id,
+        Some(pid),
+        Some(process_group_id),
         Path::new(stdout_path),
         Path::new(stderr_path),
         &argv,
@@ -584,8 +594,8 @@ async fn bind_wake_turn(
         config,
         &invocation.provider_thread_id,
         &invocation.launch_id,
-        pid,
-        process_group_id,
+        Some(pid),
+        Some(process_group_id),
         Path::new(stdout_path),
         Path::new(stderr_path),
         &argv,
@@ -652,6 +662,125 @@ async fn bind_wake_turn(
         launch_id: invocation.launch_id.clone(),
         pid: Some(pid),
         process_group_id: Some(process_group_id),
+        stdout_path: stdout_path.to_string(),
+        stderr_path: stderr_path.to_string(),
+        argv,
+    })
+}
+
+async fn bind_retained_wake_turn(
+    config: &ClaudePrintRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+    wake_id: &str,
+) -> Result<ClaudePrintRunSummary> {
+    let latest_run = invocation.latest_turn().run_id;
+    let claims = crate::turn_claims::default_registry()?;
+    let previous = claims.read(&latest_run)?;
+    let stdout_path = previous
+        .stdout_path
+        .as_deref()
+        .context("retained Claude wake has no stdout path")?;
+    let stderr_path = previous
+        .stderr_path
+        .as_deref()
+        .context("retained Claude wake has no stderr path")?;
+    let argv = previous
+        .result
+        .as_ref()
+        .and_then(|result| result.get("argv"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let (pid, process_group_id) = invocation.process_identity();
+    let sink = make_sink(
+        config,
+        &invocation.provider_thread_id,
+        &invocation.launch_id,
+        None,
+    )?;
+    let binding = turn_binding(config, TurnOrigin::Wake);
+    let wake =
+        invocation.bind_retained_wake(&invocation.launch_id, wake_id, binding, |source_state| {
+            if source_state == InvocationState::Parked {
+                let result = spawn_record(
+                    config,
+                    &invocation.provider_thread_id,
+                    &invocation.launch_id,
+                    Some(pid),
+                    Some(process_group_id),
+                    Path::new(stdout_path),
+                    Path::new(stderr_path),
+                    &argv,
+                );
+                claims.mark_spawned_invocation(
+                    &config.run_id,
+                    pid,
+                    process_group_id,
+                    crate::turn_claims::process_start_time_for_pid(Some(pid)),
+                    CLAUDE_PRINT_ADAPTER,
+                    &invocation.launch_id,
+                    Some(&invocation.provider_thread_id),
+                    stdout_path,
+                    stderr_path,
+                    result,
+                )?;
+            } else {
+                let result = spawn_record(
+                    config,
+                    &invocation.provider_thread_id,
+                    &invocation.launch_id,
+                    None,
+                    None,
+                    Path::new(stdout_path),
+                    Path::new(stderr_path),
+                    &argv,
+                );
+                claims.mark_spawned(
+                    &config.run_id,
+                    None,
+                    None,
+                    None,
+                    CLAUDE_PRINT_ADAPTER,
+                    result,
+                )?;
+            }
+            claims.record_invocation_turn(&config.run_id, TurnOrigin::Wake.as_str(), true)?;
+            claims.mark_provider_binding(&config.run_id, &invocation.provider_thread_id, None)?;
+            Ok(())
+        })?;
+    sink.post_phase("thinking", None).await;
+    for event in wake.buffered_events {
+        sink.post_stream_event(event.sequence, event.value).await;
+    }
+    if let Some((_, snapshot)) = invocation.delegation_snapshot() {
+        sink.post_delegation_snapshot(snapshot).await;
+    }
+    if let Some(outcome) = wake.deferred_idle {
+        let closed = complete_idle(&invocation, &sink, outcome).await;
+        if closed {
+            invocation.close_input().await.ok();
+        }
+    }
+    let monitor = crate::turn_claims::register_monitor(&config.run_id);
+    let monitored_invocation = invocation.clone();
+    tokio::spawn(async move {
+        while monitored_invocation.state() != InvocationState::Closed {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        drop(monitor);
+    });
+    let process_active = invocation.state() == InvocationState::Parked;
+    Ok(ClaudePrintRunSummary {
+        session_id: config.session_id.clone(),
+        thread_id: config.thread_id.clone(),
+        run_id: config.run_id.clone(),
+        provider_thread_id: invocation.provider_thread_id.clone(),
+        launch_id: invocation.launch_id.clone(),
+        pid: process_active.then_some(pid),
+        process_group_id: process_active.then_some(process_group_id),
         stdout_path: stdout_path.to_string(),
         stderr_path: stderr_path.to_string(),
         argv,
@@ -1329,8 +1458,8 @@ async fn respawn_claude(
         &config,
         &sink.provider_thread_id,
         &sink.launch_id,
-        pid,
-        process_group_id,
+        Some(pid),
+        Some(process_group_id),
         &retry.stdout_path,
         &retry.stderr_path,
         &argv,
@@ -1410,8 +1539,8 @@ fn spawn_record(
     config: &ClaudePrintRunConfig,
     provider_thread_id: &str,
     launch_id: &str,
-    pid: u32,
-    process_group_id: i32,
+    pid: Option<u32>,
+    process_group_id: Option<i32>,
     stdout_path: &Path,
     stderr_path: &Path,
     argv: &[String],
@@ -2470,6 +2599,9 @@ if prompt.startswith("scenario=background") or prompt.startswith("scenario=park"
             emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
             emit({"type": "result", "subtype": "success", "is_error": False})
             break
+    elif prompt.startswith("scenario=wake_immediate"):
+        assistant("background task completed")
+        emit({"type": "result", "subtype": "success", "is_error": False})
     elif prompt.startswith("scenario=wake") or prompt.startswith("scenario=drain"):
         time.sleep(0.15)
         emit({"type": "system", "subtype": "task_notification", "task": dict(task, status="completed")})
@@ -2711,6 +2843,7 @@ for _ in sys.stdin:
         WakeDrained,
         WakeUserSend,
         WakeUnboundDrained,
+        WakeImmediateUnbound,
         Restart,
     }
 
@@ -2735,6 +2868,7 @@ for _ in sys.stdin:
                 "scenario=drain"
             }
             LifecycleScenario::WakeUserSend => "scenario=wake_user",
+            LifecycleScenario::WakeImmediateUnbound => "scenario=wake_immediate",
             LifecycleScenario::Restart => "scenario=restart",
         };
         let first = start_fake_turn(
@@ -2964,6 +3098,11 @@ for _ in sys.stdin:
                     assert!(tokio::time::Instant::now() < deadline);
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
+                assert!(crate::console_lifecycle::lookup_retained_wake(
+                    &first.launch_id,
+                    wake["payload"]["wake_id"].as_str().unwrap(),
+                )
+                .is_some());
 
                 let events = home.events();
                 assert!(!events.iter().any(|event| {
@@ -2971,6 +3110,44 @@ for _ in sys.stdin:
                         && event["payload"]["event"]["message"]["content"][0]["text"]
                             == "background task completed"
                 }));
+                let wake_run = start_fake_turn(
+                    &home,
+                    &fake,
+                    &session_id,
+                    &thread_id,
+                    "",
+                    Some(first.provider_thread_id.clone()),
+                    "wake",
+                    wake["payload"]["wake_id"].as_str().map(str::to_string),
+                    wake["payload"]["invocation_id"]
+                        .as_str()
+                        .map(str::to_string),
+                )
+                .await;
+                assert_eq!(wake_run.pid, None);
+                assert_eq!(wake_run.process_group_id, None);
+                let wake_claim = wait_for_terminal(&wake_run.run_id).await;
+                assert_eq!(wake_claim.origin.as_deref(), Some("wake"));
+                assert!(wake_claim.adopted_parked_invocation);
+                assert_eq!(wake_claim.invocation_state.as_deref(), Some("closed"));
+                assert_eq!(
+                    wake_claim.result.as_ref().unwrap()["terminal_state"],
+                    "run_completed"
+                );
+                let events = home.events();
+                assert!(events.iter().any(|event| {
+                    event["run_id"] == wake_run.run_id
+                        && event["kind"] == "progress_signal"
+                        && event["payload"]["event"]["type"] == "assistant"
+                        && event["payload"]["event"]["message"]["content"][0]["text"]
+                            == "background task completed"
+                }));
+                assert_eq!(
+                    terminal_event(&events, &session_id, &wake_run.run_id)["payload"]
+                        ["terminal_state"],
+                    "run_completed"
+                );
+
                 let stale_wake = start_fake_turn(
                     &home,
                     &fake,
@@ -2985,8 +3162,6 @@ for _ in sys.stdin:
                         .map(str::to_string),
                 )
                 .await;
-                assert_eq!(stale_wake.pid, None);
-                assert_eq!(stale_wake.process_group_id, None);
                 let stale_claim = wait_for_terminal(&stale_wake.run_id).await;
                 assert_eq!(stale_claim.state, "terminal");
                 let events = home.events();
@@ -3015,6 +3190,83 @@ for _ in sys.stdin:
                 let resumed_claim = wait_for_terminal(&resumed.run_id).await;
                 assert_eq!(resumed_claim.invocation_state.as_deref(), Some("closed"));
                 assert_eq!(fake.pids().len(), 2);
+                assert_fake_groups_gone(&fake).await;
+            }
+            LifecycleScenario::WakeImmediateUnbound => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                let invocation = crate::console_lifecycle::lookup_launch(&first.launch_id).unwrap();
+                let wake = wait_for_event(&home, &session_id, "wake_signal").await;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                while invocation.state() == InvocationState::Responding
+                    || invocation.pending_wake_id().is_some()
+                {
+                    assert!(tokio::time::Instant::now() < deadline);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                assert_eq!(invocation.state(), InvocationState::Parked);
+                let wake_id = wake["payload"]["wake_id"].as_str().unwrap();
+                assert!(
+                    crate::console_lifecycle::lookup_retained_wake(&first.launch_id, wake_id)
+                        .is_some()
+                );
+
+                let wake_run = start_fake_turn(
+                    &home,
+                    &fake,
+                    &session_id,
+                    &thread_id,
+                    "",
+                    Some(first.provider_thread_id.clone()),
+                    "wake",
+                    Some(wake_id.to_string()),
+                    wake["payload"]["invocation_id"]
+                        .as_str()
+                        .map(str::to_string),
+                )
+                .await;
+                assert_eq!(wake_run.pid, first.pid);
+                assert_eq!(wake_run.process_group_id, first.process_group_id);
+                let wake_claim = wait_for_terminal(&wake_run.run_id).await;
+                assert_eq!(wake_claim.origin.as_deref(), Some("wake"));
+                assert!(wake_claim.adopted_parked_invocation);
+                assert_eq!(wake_claim.invocation_state.as_deref(), Some("parked"));
+                assert_eq!(
+                    wake_claim.result.as_ref().unwrap()["terminal_state"],
+                    "run_completed"
+                );
+                let events = home.events();
+                assert!(events.iter().any(|event| {
+                    event["run_id"] == wake_run.run_id
+                        && event["kind"] == "progress_signal"
+                        && event["payload"]["event"]["type"] == "assistant"
+                        && event["payload"]["event"]["message"]["content"][0]["text"]
+                            == "background task completed"
+                }));
+                assert_eq!(
+                    terminal_event(&events, &session_id, &wake_run.run_id)["payload"]
+                        ["terminal_state"],
+                    "run_completed"
+                );
+                assert!(
+                    crate::console_lifecycle::lookup_retained_wake(&first.launch_id, wake_id)
+                        .is_none()
+                );
+
+                let cleanup = start_fake_turn(
+                    &home,
+                    &fake,
+                    &session_id,
+                    &thread_id,
+                    "finish pending work",
+                    Some(first.provider_thread_id.clone()),
+                    "user",
+                    None,
+                    None,
+                )
+                .await;
+                assert_eq!(cleanup.pid, first.pid);
+                let cleanup_claim = wait_for_terminal(&cleanup.run_id).await;
+                assert_eq!(cleanup_claim.invocation_state.as_deref(), Some("closed"));
                 assert_fake_groups_gone(&fake).await;
             }
             LifecycleScenario::Restart => {
@@ -3051,6 +3303,7 @@ for _ in sys.stdin:
             ("8", LifecycleScenario::Restart),
             ("9", LifecycleScenario::WakeUserSend),
             ("10", LifecycleScenario::WakeUnboundDrained),
+            ("11", LifecycleScenario::WakeImmediateUnbound),
         ];
         let adapters: [(&str, ScenarioRunner); 1] = [("claude", run_claude_scenario)];
         for (provider, run) in adapters {

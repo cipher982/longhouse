@@ -34,11 +34,12 @@ Background evidence stays separate from parent activity. Claude registry
 snapshots and exact child lifecycle callbacks retain independent clocks; a
 completion callback can retire its matching task without renewing other work.
 
-For Claude Console, an unbound wake response that idles is not kept alive for a
-later runtime bind: buffered projection is left to the native transcript and the
-invocation follows its parked/closed registry state. A late wake is cancelled
-as `wake_target_gone`; a user turn arriving first binds the response and queues
-input on the same process.
+An unbound Claude Console wake response retains its buffered projection and
+terminal outcome by `wake_id` for at most ten minutes. The invocation still
+parks or closes according to pending work, so retained state alone never keeps
+the provider process or conversation lock alive. A matching late wake bind
+flushes the projection and terminal outcome; a later user turn, newer retained
+wake, or expiry makes the old wake `wake_target_gone`.
 OMP Helm observes the stock owner-scoped async manager and preserves native
 progress separately from child archive counters. Native handles never become
 child session IDs; navigation requires exact provider-authored lineage.
