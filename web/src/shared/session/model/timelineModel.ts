@@ -141,7 +141,9 @@ export function getShellSalience(interaction: ToolInteraction): ShellSalience | 
     !isToolInteractionRunning(interaction)
   ) {
     const exitCode = getToolExitCode(interaction);
-    if (exitCode == null || exitCode === 0) {
+    // A lite page cuts long commands; a mutating tail past the cut must not
+    // let the head demote the call, so a cut command never demotes.
+    if ((exitCode == null || exitCode === 0) && !interaction.callEvent?.tool_input_truncated) {
       const projectedInput = interactionInput(interaction);
       const input = projectedInput
         ? getToolInputRecord(projectedInput)

@@ -10,6 +10,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { classifyShellCommand, isShellTool } from "../shellSalience";
 import { buildTimelineModel } from "..";
+import { getShellSalience } from "../timelineModel";
 import type { AgentEvent, AgentSessionProjectionItem } from "@/shared/api/agents";
 
 interface FixtureCase {
@@ -99,6 +100,14 @@ function projection(events: AgentEvent[]): AgentSessionProjectionItem[] {
 
 describe("timeline grouping with shell salience", () => {
   const t = "2026-01-01T00:00:00Z";
+
+  it("never demotes a command a lite page cut short", () => {
+    const [call, result] = toolPair(1, "Bash", "cat package.json", t);
+    const cut = buildTimelineModel(projection([{ ...call, tool_input_truncated: true }, result])).items[0];
+    const whole = buildTimelineModel(projection([call, result])).items[0];
+    expect(cut.kind === "tool" && getShellSalience(cut.interaction)).toBeNull();
+    expect(whole.kind === "tool" && getShellSalience(whole.interaction)?.tier).toBe("noise");
+  });
 
   it("collapses consecutive read-only Bash commands into one exploration run", () => {
     const events = [
