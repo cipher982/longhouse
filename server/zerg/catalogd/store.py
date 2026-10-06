@@ -1006,15 +1006,24 @@ def _create_console_turn_rows(
     return turn, receipt, source_path
 
 
+_WAKE_TRIGGER_LABELS = {
+    "monitor_event": "Monitor event",
+    "task_completed": "Background task finished",
+    "subagent_result": "Background agent finished",
+    "scheduled": "Scheduled wake-up",
+}
+
+
 def _wake_trigger_summary(trigger: Mapping[str, Any]) -> str:
+    label = _WAKE_TRIGGER_LABELS.get(str(trigger.get("kind") or "").strip(), "Background work update")
     summary = str(trigger.get("summary") or "").strip()
     if not summary:
         task_ids = trigger.get("task_ids")
         if isinstance(task_ids, list):
             summary = ", ".join(str(task_id).strip() for task_id in task_ids[:8] if str(task_id).strip())
     if not summary:
-        summary = "background work"
-    return f"Background task finished: {summary[:512]}"
+        return label
+    return f"{label}: {summary[:512]}"
 
 
 def _enqueue_console_wake_turn(orm: Session, event: Any, *, observed_at: datetime) -> dict[str, Any] | None:

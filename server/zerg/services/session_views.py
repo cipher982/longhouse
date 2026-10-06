@@ -928,7 +928,7 @@ class SessionInputReceiptResponse(BaseModel):
     client_request_id: Optional[str] = Field(None, description="Client idempotency key supplied with the send")
     intent: str = Field(..., description="auto|steer|queue")
     status: str = Field(..., description="queued|delivering|delivered|cancelled|failed")
-    text: str = Field(..., description="Accepted input text")
+    text: Optional[str] = Field(None, description="Accepted input text; absent from older Runtime Hosts")
     origin: str = Field("user", description="Turn origin: user|wake")
     created_at: Optional[datetime] = Field(None, description="When the send was accepted")
     event_id: Optional[str] = Field(None, description="Durable transcript event this send became, once linked")

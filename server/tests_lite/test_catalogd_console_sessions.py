@@ -1269,7 +1269,7 @@ async def test_console_wake_signal_is_idempotent_fifo_and_dispatches_wake_payloa
         assert wake_turns[0].wake_id == wake_id
         assert wake_turns[0].invocation_id == invocation_id
         receipt = db.get(LiveSessionInputReceipt, wake_turns[0].receipt_id)
-        assert receipt.text == "Background task finished: the branch is ready"
+        assert receipt.text == "Monitor event: the branch is ready"
 
     terminal = _console_runtime_terminal(
         session_id=session_id,

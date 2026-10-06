@@ -7787,9 +7787,9 @@ export interface components {
             status: string;
             /**
              * Text
-             * @description Accepted input text
+             * @description Accepted input text; absent from older Runtime Hosts
              */
-            text: string;
+            text?: string | null;
             /**
              * Origin
              * @description Turn origin: user|wake

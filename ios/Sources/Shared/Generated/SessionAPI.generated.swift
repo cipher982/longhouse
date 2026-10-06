@@ -134,7 +134,7 @@ struct APISessionInputReceiptResponse: Codable, Hashable, Sendable {
     let clientRequestId: String?
     let intent: String
     let status: String
-    let text: String
+    let text: String?
     let origin: String?
     let createdAt: String?
     let eventId: String?

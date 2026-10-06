@@ -408,7 +408,7 @@ def test_catalog_mode_http_wake_signal_dispatches_once_after_completed_turn(tmp_
             detail_receipts = store.list_session_input_receipts(session_id=session_id)["receipts"]
             wake_detail = next(row for row in detail_receipts if row["client_request_id"] == wake_request_id)
             assert wake_detail["origin"] == "wake"
-            assert wake_detail["text"] == "Background task finished: the branch is ready"
+            assert wake_detail["text"] == "Monitor event: the branch is ready"
             live_receipts = store.list_recent_input_receipts(session_id=session_id)["receipts"]
             wake_live = next(row for row in live_receipts if row["client_request_id"] == wake_request_id)
             assert wake_live["turn"]["origin"] == "wake"
