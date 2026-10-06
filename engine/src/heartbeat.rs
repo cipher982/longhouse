@@ -6,6 +6,8 @@
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use std::fs;
 use std::path::Path;
@@ -529,7 +531,10 @@ pub struct MachineEvidence {
     /// v1 fact payloads remain readable during the compatibility window.
     #[serde(default)]
     pub identities: Vec<EvidenceIdentity>,
-    #[serde(default)]
+    /// Full identity candidate set used only to prioritize this POST. Kept out
+    /// of the local status file and wire envelope.
+    #[serde(skip)]
+    pub(crate) candidate_identities: Arc<[EvidenceIdentity]>,
     pub run: Vec<RunEvidence>,
     #[serde(default)]
     pub process: Vec<ProcessEvidence>,
@@ -580,6 +585,131 @@ pub struct EvidenceIdentity {
     pub dedupe_key: String,
     pub evidence_hash: String,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvidenceIdentityKey {
+    fact_family: String,
+    subject_key: String,
+    source: String,
+    source_epoch: Option<String>,
+}
+
+type EvidenceIdentityKeyRef<'a> = (&'a str, &'a str, &'a str, Option<&'a str>);
+
+impl EvidenceIdentityKey {
+    fn from_identity(identity: &EvidenceIdentity) -> Self {
+        Self {
+            fact_family: identity.fact_family.clone(),
+            subject_key: identity.subject_key.clone(),
+            source: identity.source.clone(),
+            source_epoch: identity.source_epoch.clone(),
+        }
+    }
+
+    fn as_ref_tuple(&self) -> EvidenceIdentityKeyRef<'_> {
+        (
+            &self.fact_family,
+            &self.subject_key,
+            &self.source,
+            self.source_epoch.as_deref(),
+        )
+    }
+
+    fn matches_identity(&self, identity: &EvidenceIdentity) -> bool {
+        self.fact_family == identity.fact_family
+            && self.subject_key == identity.subject_key
+            && self.source == identity.source
+            && self.source_epoch == identity.source_epoch
+    }
+}
+
+fn evidence_identity_key_ref(identity: &EvidenceIdentity) -> EvidenceIdentityKeyRef<'_> {
+    (
+        &identity.fact_family,
+        &identity.subject_key,
+        &identity.source,
+        identity.source_epoch.as_deref(),
+    )
+}
+
+fn evidence_identity_key_fingerprint(
+    identity: &EvidenceIdentity,
+    hash_builder: &impl BuildHasher,
+) -> u64 {
+    let mut hasher = hash_builder.build_hasher();
+    evidence_identity_key_ref(identity).hash(&mut hasher);
+    hasher.finish()
+}
+
+fn acknowledged_evidence_hash<'a>(
+    hashes: &'a HashMap<u64, Vec<(EvidenceIdentityKey, String)>>,
+    identity: &EvidenceIdentity,
+) -> Option<&'a str> {
+    let fingerprint = evidence_identity_key_fingerprint(identity, hashes.hasher());
+    hashes.get(&fingerprint)?.iter().find_map(|(key, hash)| {
+        key.matches_identity(identity).then_some(hash.as_str())
+    })
+}
+
+/// Content hashes acknowledged by the Runtime Host, bounded to rows still
+/// present in the latest machine-evidence projection.
+#[derive(Debug, Default)]
+pub(crate) struct AcknowledgedEvidenceHashes {
+    hashes: HashMap<u64, Vec<(EvidenceIdentityKey, String)>>,
+}
+
+impl AcknowledgedEvidenceHashes {
+    pub(crate) fn prune_to_current(&mut self, candidates: &[EvidenceIdentity]) {
+        let current = candidates
+            .iter()
+            .map(evidence_identity_key_ref)
+            .collect::<HashSet<_>>();
+        self.hashes.retain(|_, bucket| {
+            bucket.retain(|(key, _)| current.contains(&key.as_ref_tuple()));
+            !bucket.is_empty()
+        });
+    }
+
+    pub(crate) fn record_send_result(
+        &mut self,
+        acknowledged: bool,
+        identities: &[EvidenceIdentity],
+    ) {
+        if !acknowledged {
+            return;
+        }
+        for identity in identities {
+            let fingerprint =
+                evidence_identity_key_fingerprint(identity, self.hashes.hasher());
+            let bucket = self.hashes.entry(fingerprint).or_default();
+            if let Some((_, hash)) = bucket
+                .iter_mut()
+                .find(|(key, _)| key.matches_identity(identity))
+            {
+                *hash = identity.evidence_hash.clone();
+            } else {
+                bucket.push((
+                    EvidenceIdentityKey::from_identity(identity),
+                    identity.evidence_hash.clone(),
+                ));
+            }
+        }
+    }
+
+    pub(crate) fn prioritize(&mut self, evidence: &mut MachineEvidence, rotation: usize) {
+        evidence.identities = changed_first_evidence_identities(
+            &evidence.candidate_identities,
+            &self.hashes,
+            rotation,
+        );
+    }
+
+    #[cfg(test)]
+    fn identity_changed(&self, identity: &EvidenceIdentity) -> bool {
+        acknowledged_evidence_hash(&self.hashes, identity)
+            != Some(identity.evidence_hash.as_str())
+    }
+}
+
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ProcessSnapshotScope {
@@ -2562,7 +2692,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     readiness.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     continuation.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
 
-    let identities = reducer_evidence_identities(
+    let identity_families = reducer_evidence_identity_families(
         machine_id,
         &run,
         &process,
@@ -2571,13 +2701,20 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
         &transcript,
         &readiness,
         &continuation,
-        evidence_rotation,
     );
+    let identities = select_rotating_identity_window(
+        &identity_families,
+        evidence_rotation,
+        MAX_REDUCER_EVIDENCE_FACTS,
+    );
+    let candidate_identities =
+        Arc::from(identity_families.into_iter().flatten().collect::<Vec<_>>());
 
     MachineEvidence {
         schema_version: 3,
         observed_at: envelope_observed_at.clone(),
         identities,
+        candidate_identities,
         run,
         process,
         activity,
@@ -2608,7 +2745,7 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     }
 }
 
-fn reducer_evidence_identities(
+fn reducer_evidence_identity_families(
     machine_id: &str,
     run: &[RunEvidence],
     process: &[ProcessEvidence],
@@ -2617,8 +2754,7 @@ fn reducer_evidence_identities(
     transcript: &[TranscriptEvidence],
     readiness: &[ReadinessEvidence],
     continuation: &[ContinuationEvidence],
-    rotation: usize,
-) -> Vec<EvidenceIdentity> {
+) -> [Vec<EvidenceIdentity>; 7] {
     let mut families = [
         Vec::new(),
         Vec::new(),
@@ -2756,61 +2892,48 @@ fn reducer_evidence_identities(
         ));
     }
 
-    // Reserve capacity across independent families. A process-heavy machine
-    // must not starve transcript or readiness evidence merely because process
-    // facts sort first.
-    //
-    // Each family is also entered at a rotating offset. Every family is sorted
-    // identically before every heartbeat, so a fixed start index published the
-    // same prefix forever: on a laptop with 432 retained launch contracts the
-    // entries past the budget were never shipped once, and their served
-    // continuation heads stayed permanently absent or expired. The offset makes
-    // the budget a moving window instead of a permanent cut.
-    //
-    // `rotation` is a heartbeat counter, not wall time. A wall-clock offset
-    // steps by however many seconds elapsed, which can alias against a periodic
-    // cadence and starve the same entries forever — the bug this rotation
-    // exists to fix, in a subtler form.
-    //
-    // Each family advances by *its own* share, so consecutive heartbeats
-    // publish adjacent, non-overlapping windows and a family of any length is
-    // swept in `ceil(len / share)` heartbeats. Advancing every family by the
-    // whole budget instead would move a family further than its window is wide
-    // whenever it shares the budget with another, leaving gaps that a common
-    // factor can freeze in place permanently.
-    let shares = family_shares(&families);
-    let mut identities = Vec::new();
-    let mut index = 0;
-    while identities.len() < MAX_REDUCER_EVIDENCE_FACTS {
-        let before = identities.len();
-        for (family, share) in families.iter().zip(shares.iter()) {
-            if index >= family.len() {
-                continue;
-            }
-            let offset = rotation.wrapping_mul(*share) % family.len();
-            let position = (offset + index) % family.len();
-            identities.push(family[position].clone());
-            if identities.len() == MAX_REDUCER_EVIDENCE_FACTS {
-                break;
-            }
-        }
-        if identities.len() == before {
-            break;
-        }
-        index += 1;
-    }
-    identities
+    families
+}
+
+#[cfg(test)]
+fn reducer_evidence_identities(
+    machine_id: &str,
+    run: &[RunEvidence],
+    process: &[ProcessEvidence],
+    activity: &[ActivityEvidence],
+    control: &[ControlEvidence],
+    transcript: &[TranscriptEvidence],
+    readiness: &[ReadinessEvidence],
+    continuation: &[ContinuationEvidence],
+    rotation: usize,
+) -> Vec<EvidenceIdentity> {
+    let families = reducer_evidence_identity_families(
+        machine_id,
+        run,
+        process,
+        activity,
+        control,
+        transcript,
+        readiness,
+        continuation,
+    );
+    select_rotating_identity_window(&families, rotation, MAX_REDUCER_EVIDENCE_FACTS)
 }
 
 /// How many identities each family contributes to one heartbeat.
 ///
 /// This is the interleave loop run as a count. Knowing it up front is what lets
 /// each family advance by exactly its own window width.
+#[cfg(test)]
 fn family_shares<T>(families: &[Vec<T>]) -> Vec<usize> {
+    family_shares_for_budget(families, MAX_REDUCER_EVIDENCE_FACTS)
+}
+
+fn family_shares_for_budget<T>(families: &[Vec<T>], budget: usize) -> Vec<usize> {
     let mut shares = vec![0usize; families.len()];
     let mut total = 0;
     let mut index = 0;
-    while total < MAX_REDUCER_EVIDENCE_FACTS {
+    while total < budget {
         let before = total;
         for (slot, family) in shares.iter_mut().zip(families.iter()) {
             if index >= family.len() {
@@ -2818,7 +2941,7 @@ fn family_shares<T>(families: &[Vec<T>]) -> Vec<usize> {
             }
             *slot += 1;
             total += 1;
-            if total == MAX_REDUCER_EVIDENCE_FACTS {
+            if total == budget {
                 break;
             }
         }
@@ -2829,6 +2952,219 @@ fn family_shares<T>(families: &[Vec<T>]) -> Vec<usize> {
     }
     shares
 }
+
+fn select_rotating_identity_window<T: Clone>(
+    families: &[Vec<T>],
+    rotation: usize,
+    budget: usize,
+) -> Vec<T> {
+    let shares = family_shares_for_budget(families, budget);
+    let mut identities = Vec::with_capacity(budget);
+    let mut index = 0;
+    while identities.len() < budget {
+        let before = identities.len();
+        for (family, share) in families.iter().zip(shares.iter()) {
+            if identities.len() == budget {
+                break;
+            }
+            if index >= family.len() {
+                continue;
+            }
+            let offset = rotation.wrapping_mul(*share) % family.len();
+            let position = (offset + index) % family.len();
+            identities.push(family[position].clone());
+        }
+        if identities.len() == before {
+            break;
+        }
+        index += 1;
+    }
+    identities
+}
+
+fn evidence_family_index(family: &str) -> Option<usize> {
+    match family {
+        "process" => Some(0),
+        "activity" => Some(1),
+        "control" => Some(2),
+        "transcript" => Some(3),
+        "readiness" => Some(4),
+        "run" => Some(5),
+        "continuation" => Some(6),
+        _ => None,
+    }
+}
+
+fn select_rotating_identity_refs<'a>(
+    families: &[Vec<&'a EvidenceIdentity>],
+    rotation: usize,
+    budget: usize,
+    shares: &[usize],
+) -> Vec<&'a EvidenceIdentity> {
+    let mut identities = Vec::with_capacity(budget);
+    let mut index = 0;
+    while identities.len() < budget {
+        let before = identities.len();
+        for (family, share) in families.iter().zip(shares.iter()) {
+            if identities.len() == budget {
+                break;
+            }
+            if index >= family.len() {
+                continue;
+            }
+            let offset = rotation.wrapping_mul(*share) % family.len();
+            let position = (offset + index) % family.len();
+            identities.push(family[position]);
+        }
+        if identities.len() == before {
+            break;
+        }
+        index += 1;
+    }
+    identities
+}
+
+fn changed_first_evidence_identities(
+    candidates: &[EvidenceIdentity],
+    acknowledged: &HashMap<u64, Vec<(EvidenceIdentityKey, String)>>,
+    rotation: usize,
+) -> Vec<EvidenceIdentity> {
+    let mut changed_families: [Vec<&EvidenceIdentity>; 7] =
+        std::array::from_fn(|_| Vec::new());
+    let mut unchanged_families: [Vec<&EvidenceIdentity>; 7] =
+        std::array::from_fn(|_| Vec::new());
+    for identity in candidates {
+        let Some(family_index) = evidence_family_index(&identity.fact_family) else {
+            continue;
+        };
+        if acknowledged_evidence_hash(acknowledged, identity)
+            != Some(identity.evidence_hash.as_str())
+        {
+            changed_families[family_index].push(identity);
+        } else {
+            unchanged_families[family_index].push(identity);
+        }
+    }
+
+    let changed_count = changed_families.iter().map(Vec::len).sum::<usize>();
+    let changed_budget = changed_count.min(MAX_REDUCER_EVIDENCE_FACTS);
+    let changed_shares = family_shares_for_budget(&changed_families, changed_budget);
+    let mut selected = select_rotating_identity_refs(
+        &changed_families,
+        rotation,
+        changed_budget,
+        &changed_shares,
+    );
+    if selected.len() < MAX_REDUCER_EVIDENCE_FACTS {
+        let remaining_budget = MAX_REDUCER_EVIDENCE_FACTS - selected.len();
+        let unchanged_shares = family_shares_for_budget(&unchanged_families, remaining_budget);
+        selected.extend(select_rotating_identity_refs(
+            &unchanged_families,
+            rotation,
+            remaining_budget,
+            &unchanged_shares,
+        ));
+    }
+    selected
+        .into_iter()
+        .map(|identity| (*identity).clone())
+        .collect()
+}
+pub(crate) fn prepare_machine_evidence_for_send(
+    payload: &mut HeartbeatPayload,
+    acknowledged: &mut AcknowledgedEvidenceHashes,
+    rotation: usize,
+) -> Result<(), String> {
+    if let Some(evidence) = payload.machine_evidence.as_mut() {
+        acknowledged.prioritize(evidence, rotation);
+        compact_machine_evidence_for_send(evidence)?;
+    }
+    Ok(())
+}
+
+fn compact_machine_evidence_for_send(evidence: &mut MachineEvidence) -> Result<(), String> {
+    for identity in &evidence.identities {
+        if evidence_family_index(&identity.fact_family).is_none() {
+            return Err(format!(
+                "unsupported machine-evidence family {}",
+                identity.fact_family
+            ));
+        }
+    }
+    compact_evidence_family("run", &mut evidence.run, &mut evidence.identities)?;
+    compact_evidence_family("process", &mut evidence.process, &mut evidence.identities)?;
+    compact_evidence_family(
+        "activity",
+        &mut evidence.activity,
+        &mut evidence.identities,
+    )?;
+    compact_evidence_family("control", &mut evidence.control, &mut evidence.identities)?;
+    compact_evidence_family(
+        "transcript",
+        &mut evidence.transcript,
+        &mut evidence.identities,
+    )?;
+    compact_evidence_family(
+        "readiness",
+        &mut evidence.readiness,
+        &mut evidence.identities,
+    )?;
+    compact_evidence_family(
+        "continuation",
+        &mut evidence.continuation,
+        &mut evidence.identities,
+    )?;
+    Ok(())
+}
+
+fn compact_evidence_family<T>(
+    family: &str,
+    facts: &mut Vec<T>,
+    identities: &mut [EvidenceIdentity],
+) -> Result<(), String> {
+    let mut remapped_indexes = vec![None; facts.len()];
+    for identity in identities
+        .iter()
+        .filter(|identity| identity.fact_family == family)
+    {
+        let Some(index) = remapped_indexes.get_mut(identity.fact_index) else {
+            return Err(format!(
+                "machine-evidence identity index {} is out of bounds for {}",
+                identity.fact_index, family
+            ));
+        };
+        *index = Some(usize::MAX);
+    }
+
+    let mut old_index = 0;
+    let mut compacted_index = 0;
+    facts.retain(|_| {
+        let keep = remapped_indexes[old_index].is_some();
+        if keep {
+            remapped_indexes[old_index] = Some(compacted_index);
+            compacted_index += 1;
+        }
+        old_index += 1;
+        keep
+    });
+    for identity in identities
+        .iter_mut()
+        .filter(|identity| identity.fact_family == family)
+    {
+        let Some(index) = remapped_indexes
+            .get(identity.fact_index)
+            .and_then(|index| *index)
+        else {
+            return Err(format!(
+                "machine-evidence identity index {} is missing from {}",
+                identity.fact_index, family
+            ));
+        };
+        identity.fact_index = index;
+    }
+    Ok(())
+}
+
 
 fn evidence_identity<T: Serialize>(
     fact_family: &str,
@@ -3970,6 +4306,7 @@ pub struct HeartbeatPostMetrics {
 pub struct HeartbeatSendAttempt {
     pub result: std::result::Result<HeartbeatPostAck, String>,
     pub metrics: HeartbeatPostMetrics,
+    pub sent_evidence_identities: Vec<EvidenceIdentity>,
 }
 
 /// Send heartbeat to server via the existing authenticated client and return
@@ -3989,12 +4326,12 @@ pub struct HeartbeatSendAttempt {
 )]
 pub async fn send_heartbeat(
     client: &ShipperClient,
-    payload: &HeartbeatPayload,
+    mut payload: HeartbeatPayload,
 ) -> HeartbeatSendAttempt {
     const MACHINE_EVIDENCE_ACK_HEADER: &str = "X-Longhouse-Machine-Evidence";
     const MACHINE_FRESH_HORIZON_HEADER: &str = "X-Longhouse-Machine-Fresh-Horizon";
     let started = Instant::now();
-    let json = match serde_json::to_vec(payload) {
+    let json = match serde_json::to_vec(&payload) {
         Ok(json) => json,
         Err(error) => {
             return HeartbeatSendAttempt {
@@ -4003,9 +4340,16 @@ pub async fn send_heartbeat(
                     latency_ms: started.elapsed().as_millis() as u64,
                     ..HeartbeatPostMetrics::default()
                 },
+                sent_evidence_identities: Vec::new(),
             };
         }
     };
+    let sent_evidence_identities = payload
+        .machine_evidence
+        .as_mut()
+        .map(|evidence| std::mem::take(&mut evidence.identities))
+        .unwrap_or_default();
+    drop(payload);
     match client
         .post_heartbeat_json(json, Some(HEARTBEAT_POST_TIMEOUT))
         .await
@@ -4031,6 +4375,7 @@ pub async fn send_heartbeat(
                     latency_ms: started.elapsed().as_millis() as u64,
                     retry_after: None,
                 },
+                sent_evidence_identities,
             }
         }
         Err(error) => HeartbeatSendAttempt {
@@ -4041,6 +4386,7 @@ pub async fn send_heartbeat(
                 latency_ms: started.elapsed().as_millis() as u64,
                 retry_after: error.error.retry_after(),
             },
+            sent_evidence_identities,
         },
     }
 }
@@ -7227,6 +7573,357 @@ mod tests {
         }
 
         assert_eq!(seen.len(), contracts.len());
+    }
+
+    fn compactable_machine_evidence() -> MachineEvidence {
+        let run = (0..2)
+            .map(|index| RunEvidence {
+                authority_class: "terminal_state".to_string(),
+                provider: "codex".to_string(),
+                session_id: format!("session-{index}"),
+                run_id: format!("run-{index}"),
+                state: "completed".to_string(),
+                end_reason: "provider_exit".to_string(),
+                process_role: "provider".to_string(),
+                pid: 100 + index,
+                process_start_time: format!("start-{index}"),
+                boot_id: "boot".to_string(),
+                source: "run_scan".to_string(),
+                observed_at: format!("2026-05-08T12:00:0{index}Z"),
+            })
+            .collect::<Vec<_>>();
+        let process = (0..2)
+            .map(|index| ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
+                provider: "codex".to_string(),
+                session_id: Some(format!("session-{index}")),
+                provider_session_id: Some(format!("thread-{index}")),
+                role: "provider".to_string(),
+                pid: Some(200 + index),
+                process_start_time: Some(format!("start-{index}")),
+                boot_id: Some("boot".to_string()),
+                cwd: Some("/repo".to_string()),
+                alive: true,
+                source: "process_scan".to_string(),
+                observed_at: format!("2026-05-08T12:00:0{index}Z"),
+            })
+            .collect::<Vec<_>>();
+        let activity = (0..2)
+            .map(|index| ActivityEvidence {
+                authority_class: "provider_runtime".to_string(),
+                provider: "codex".to_string(),
+                session_id: format!("session-{index}"),
+                run_id: Some(format!("run-{index}")),
+                kind: "thinking".to_string(),
+                raw_kind: "thinking".to_string(),
+                tool_name: None,
+                detail: None,
+                source: "phase_ledger".to_string(),
+                observed_at: format!("2026-05-08T12:00:0{index}Z"),
+                valid_until: format!("2026-05-08T12:01:0{index}Z"),
+                raw_locator: None,
+                reason_codes: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let control = (0..2)
+            .map(|index| ControlEvidence {
+                authority_class: "managed_control".to_string(),
+                provider: "codex".to_string(),
+                session_id: format!("session-{index}"),
+                run_id: Some(format!("run-{index}")),
+                provider_session_id: Some(format!("thread-{index}")),
+                connection_id: Some(format!("connection-{index}")),
+                lease_generation: Some(format!("generation-{index}")),
+                ownership: "machine_owned".to_string(),
+                state: "attached".to_string(),
+                terminal_attached: Some(true),
+                bridge_status: None,
+                thread_subscription_status: None,
+                lease_ttl_ms: 30_000,
+                granted_operations: Vec::new(),
+                source: "control_scan".to_string(),
+                observed_at: format!("2026-05-08T12:00:0{index}Z"),
+            })
+            .collect::<Vec<_>>();
+        let transcript = (0..2)
+            .map(|index| TranscriptEvidence {
+                authority_class: "source_cursor".to_string(),
+                provider: "codex".to_string(),
+                session_id: Some(format!("session-{index}")),
+                provider_session_id: format!("thread-{index}"),
+                source_path: Some(format!("/tmp/thread-{index}.jsonl")),
+                source_inode: Some(index as u64 + 1),
+                source_device: Some(1),
+                source_offset: Some(index as u64 + 10),
+                source_mtime: Some(format!("2026-05-08T12:00:0{index}Z")),
+                source: "transcript_scan".to_string(),
+                observed_at: format!("2026-05-08T12:00:0{index}Z"),
+            })
+            .collect::<Vec<_>>();
+        let readiness = (0..2)
+            .map(|index| ReadinessEvidence {
+                authority_class: "operation_proof".to_string(),
+                provider: "antigravity".to_string(),
+                session_id: format!("session-{index}"),
+                operation: "send".to_string(),
+                hook_installed: true,
+                recent_hook_observed: true,
+                claim_observed: true,
+                response_observed: false,
+                continuation_observed: false,
+                hook_event: None,
+                hook_observed_at: None,
+                claim_message_id: Some(format!("claim-{index}")),
+                claimed_at: None,
+                response_event: None,
+                response_at: None,
+                response_status: None,
+                observed_at: format!("2026-05-08T12:00:0{index}Z"),
+                valid_until: format!("2026-05-08T12:01:0{index}Z"),
+                source: "readiness_scan".to_string(),
+                raw_locator: None,
+                reason_codes: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let continuation = (0..2)
+            .map(|index| ContinuationEvidence {
+                authority_class: "retained_launch_contract".to_string(),
+                provider: "codex".to_string(),
+                session_id: format!("session-{index}"),
+                provider_session_id: Some(format!("thread-{index}")),
+                cwd: Some("/repo".to_string()),
+                contract_state: "valid".to_string(),
+                unavailable_reason: None,
+                observed_at: format!("2026-05-08T12:00:0{index}Z"),
+                valid_until: format!("2026-05-08T12:20:0{index}Z"),
+                source: "resume_scan".to_string(),
+                raw_locator: format!("codex/session-{index}"),
+            })
+            .collect::<Vec<_>>();
+        let identities = vec![
+            evidence_identity(
+                "run",
+                1,
+                "run:run-1".to_string(),
+                "run_scan",
+                Some("run-1".to_string()),
+                None,
+                &run[1],
+            ),
+            evidence_identity(
+                "process",
+                1,
+                "process:process-1".to_string(),
+                "process_scan",
+                Some("process-1".to_string()),
+                None,
+                &process[1],
+            ),
+            evidence_identity(
+                "activity",
+                1,
+                "run:run-1".to_string(),
+                "phase_ledger",
+                Some("run-1".to_string()),
+                None,
+                &activity[1],
+            ),
+            evidence_identity(
+                "control",
+                1,
+                "connection:connection-1:generation-1".to_string(),
+                "control_scan",
+                Some("generation-1".to_string()),
+                None,
+                &control[1],
+            ),
+            evidence_identity(
+                "transcript",
+                1,
+                "thread:thread-1".to_string(),
+                "transcript_scan",
+                Some("transcript-1".to_string()),
+                None,
+                &transcript[1],
+            ),
+            evidence_identity(
+                "readiness",
+                1,
+                "readiness:session-1:send".to_string(),
+                "readiness_scan",
+                Some("readiness-1".to_string()),
+                None,
+                &readiness[1],
+            ),
+            evidence_identity(
+                "continuation",
+                1,
+                "resume:session-1".to_string(),
+                "resume_scan",
+                Some("continuation-1".to_string()),
+                None,
+                &continuation[1],
+            ),
+        ];
+        MachineEvidence {
+            schema_version: 3,
+            observed_at: "2026-05-08T12:00:00Z".to_string(),
+            candidate_identities: Arc::from(identities.clone()),
+            identities,
+            run,
+            process,
+            activity,
+            control,
+            transcript,
+            process_snapshot_scopes: vec![ProcessSnapshotScope {
+                scope: "managed_state_files".to_string(),
+                complete: true,
+                captured_at: "2026-05-08T12:00:00Z".to_string(),
+                machine_boot_id: Some("boot".to_string()),
+                source: "managed_provider_scan".to_string(),
+                failure_reason: None,
+            }],
+            readiness,
+            continuation,
+        }
+    }
+
+    fn canonical_evidence_hash<T: Serialize>(fact: &T) -> String {
+        let value = serde_json::to_value(fact).unwrap();
+        let bytes =
+            serde_json::to_vec(&canonical_evidence_value(value).unwrap()).unwrap();
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn compacted_evidence_keeps_only_referenced_rows_and_preserves_hashes() {
+        let mut evidence = compactable_machine_evidence();
+        let original = evidence.clone();
+        let mut expected_identities = original.identities.clone();
+        for identity in &mut expected_identities {
+            identity.fact_index = 0;
+        }
+
+        compact_machine_evidence_for_send(&mut evidence).unwrap();
+
+        assert_eq!(evidence.schema_version, original.schema_version);
+        assert_eq!(evidence.observed_at, original.observed_at);
+        assert_eq!(
+            evidence.process_snapshot_scopes,
+            original.process_snapshot_scopes
+        );
+        assert_eq!(evidence.identities, expected_identities);
+        assert_eq!(evidence.run, vec![original.run[1].clone()]);
+        assert_eq!(evidence.process, vec![original.process[1].clone()]);
+        assert_eq!(evidence.activity, vec![original.activity[1].clone()]);
+        assert_eq!(evidence.control, vec![original.control[1].clone()]);
+        assert_eq!(evidence.transcript, vec![original.transcript[1].clone()]);
+        assert_eq!(evidence.readiness, vec![original.readiness[1].clone()]);
+        assert_eq!(
+            evidence.continuation,
+            vec![original.continuation[1].clone()]
+        );
+        for identity in &evidence.identities {
+            let row_hash = match identity.fact_family.as_str() {
+                "run" => canonical_evidence_hash(&evidence.run[identity.fact_index]),
+                "process" => canonical_evidence_hash(&evidence.process[identity.fact_index]),
+                "activity" => canonical_evidence_hash(&evidence.activity[identity.fact_index]),
+                "control" => canonical_evidence_hash(&evidence.control[identity.fact_index]),
+                "transcript" => canonical_evidence_hash(&evidence.transcript[identity.fact_index]),
+                "readiness" => canonical_evidence_hash(&evidence.readiness[identity.fact_index]),
+                "continuation" => {
+                    canonical_evidence_hash(&evidence.continuation[identity.fact_index])
+                }
+                family => panic!("unexpected evidence family {family}"),
+            };
+            assert_eq!(identity.evidence_hash, row_hash);
+        }
+        assert!(serde_json::to_value(&evidence)
+            .unwrap()
+            .get("candidate_identities")
+            .is_none());
+    }
+
+    fn test_evidence_identity(index: usize, hash: &str) -> EvidenceIdentity {
+        EvidenceIdentity {
+            fact_family: "continuation".to_string(),
+            fact_index: index,
+            subject_key: format!("resume:session-{index:04}"),
+            source: "resume_scan".to_string(),
+            source_epoch: Some(format!("epoch-{index:04}")),
+            source_seq: None,
+            sequenced: false,
+            dedupe_key: format!("dedupe-{index:04}"),
+            evidence_hash: hash.to_string(),
+        }
+    }
+
+    #[test]
+    fn changed_evidence_is_selected_before_unchanged_rows() {
+        let mut candidates = (0..300)
+            .map(|index| test_evidence_identity(index, &format!("hash-{index:04}")))
+            .collect::<Vec<_>>();
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+        acknowledged.record_send_result(true, &candidates);
+        candidates[299].evidence_hash = "changed-hash".to_string();
+
+        let selected = changed_first_evidence_identities(&candidates, &acknowledged.hashes, 0);
+
+        assert_eq!(selected.len(), MAX_REDUCER_EVIDENCE_FACTS);
+        assert_eq!(selected[0].subject_key, candidates[299].subject_key);
+        assert_eq!(
+            selected,
+            changed_first_evidence_identities(&candidates, &acknowledged.hashes, 0)
+        );
+    }
+
+    #[test]
+    fn unacknowledged_evidence_is_not_marked_as_sent() {
+        let identity = test_evidence_identity(0, "current");
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+
+        acknowledged.record_send_result(false, std::slice::from_ref(&identity));
+        assert!(acknowledged.identity_changed(&identity));
+
+        acknowledged.record_send_result(true, std::slice::from_ref(&identity));
+        assert!(!acknowledged.identity_changed(&identity));
+    }
+
+    #[test]
+    fn acknowledged_identity_hashes_are_pruned_when_rows_disappear() {
+        let identities = (0..3)
+            .map(|index| test_evidence_identity(index, &format!("hash-{index}")))
+            .collect::<Vec<_>>();
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+        acknowledged.record_send_result(true, &identities);
+
+        acknowledged.prune_to_current(&identities[..1]);
+
+        assert_eq!(
+            acknowledged.hashes.values().map(Vec::len).sum::<usize>(),
+            1
+        );
+        assert!(!acknowledged.identity_changed(&identities[0]));
+        assert!(acknowledged.identity_changed(&identities[1]));
+    }
+
+    #[test]
+    fn acknowledged_unchanged_rows_still_rotate_to_every_family_row() {
+        let identities = (0..600)
+            .map(|index| test_evidence_identity(index, &format!("hash-{index:04}")))
+            .collect::<Vec<_>>();
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+        acknowledged.record_send_result(true, &identities);
+        let mut seen = HashSet::new();
+
+        for rotation in 0..=identities.len().div_ceil(MAX_REDUCER_EVIDENCE_FACTS) {
+            let selected =
+                changed_first_evidence_identities(&identities, &acknowledged.hashes, rotation);
+            assert_eq!(selected.len(), MAX_REDUCER_EVIDENCE_FACTS);
+            seen.extend(selected.into_iter().map(|identity| identity.subject_key));
+        }
+
+        assert_eq!(seen.len(), identities.len());
     }
 
     #[test]

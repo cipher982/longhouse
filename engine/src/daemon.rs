@@ -340,6 +340,7 @@ struct HeartbeatPostResult {
     reason: &'static str,
     result: Result<heartbeat::HeartbeatPostAck, String>,
     metrics: heartbeat::HeartbeatPostMetrics,
+    sent_evidence_identities: Vec<heartbeat::EvidenceIdentity>,
     join_elapsed_ms: u64,
     task_elapsed_ms: u64,
 }
@@ -1468,6 +1469,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_consecutive_failures: u32 = 0;
     let mut runtime_outbox_retry_after: Option<Instant> = None;
+    let mut acknowledged_machine_evidence = heartbeat::AcknowledgedEvidenceHashes::default();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut host_link_changed = host_link.subscribe();
     let mut last_serving_generation = 0_u64;
@@ -2271,6 +2273,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         }
+                        acknowledged_machine_evidence.record_send_result(
+                            result.result.is_ok(),
+                            &result.sent_evidence_identities,
+                        );
+                        if let Some(evidence) = last_status_projection
+                            .as_ref()
+                            .and_then(|projection| projection.payload.machine_evidence.as_ref())
+                        {
+                            acknowledged_machine_evidence
+                                .prune_to_current(&evidence.candidate_identities);
+                        } else {
+                            acknowledged_machine_evidence.prune_to_current(&[]);
+                        }
                         match result.result {
                             Ok(ack) => {
                                 let evidence_was_refused = heartbeat_transport.evidence_refused();
@@ -3057,6 +3072,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             projection.set_host_link(host_link.snapshot());
                             projection
                                 .set_runtime_event_outbox(latest_runtime_event_outbox.clone());
+                            if let Some(evidence) =
+                                projection.payload.machine_evidence.as_ref()
+                            {
+                                acknowledged_machine_evidence
+                                    .prune_to_current(&evidence.candidate_identities);
+                            } else {
+                                acknowledged_machine_evidence.prune_to_current(&[]);
+                            }
                             heartbeat::write_status_file(
                                 &mut projection,
                                 serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -3095,6 +3118,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                             payload,
                                             signature.clone(),
                                             "runtime_truth_change",
+                                            &mut acknowledged_machine_evidence,
                                         );
                                         last_truth_heartbeat_at = Some(now);
                                         last_runtime_truth_signature = Some(signature);
@@ -3782,6 +3806,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             pending.payload,
                             pending.signature.clone(),
                             "runtime_truth_change",
+                            &mut acknowledged_machine_evidence,
                         );
                         last_truth_heartbeat_at = Some(now);
                         last_runtime_truth_signature = Some(pending.signature);
@@ -3826,6 +3851,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 payload,
                                 signature,
                                 "periodic_heartbeat",
+                                &mut acknowledged_machine_evidence,
                             );
                         } else {
                             tracing::debug!("Skipping periodic heartbeat while a heartbeat POST is still in flight");
@@ -5563,10 +5589,29 @@ fn publish_heartbeat_transport_status(
 fn spawn_heartbeat_post(
     tasks: &mut JoinSet<HeartbeatPostResult>,
     client: ShipperClient,
-    payload: heartbeat::HeartbeatPayload,
+    mut payload: heartbeat::HeartbeatPayload,
     signature: String,
     reason: &'static str,
+    acknowledged: &mut heartbeat::AcknowledgedEvidenceHashes,
 ) {
+    if let Err(error) = heartbeat::prepare_machine_evidence_for_send(
+        &mut payload,
+        acknowledged,
+        current_evidence_rotation(),
+    ) {
+        tasks.spawn_local(async move {
+            HeartbeatPostResult {
+                signature,
+                reason,
+                result: Err(error),
+                metrics: heartbeat::HeartbeatPostMetrics::default(),
+                sent_evidence_identities: Vec::new(),
+                join_elapsed_ms: 0,
+                task_elapsed_ms: 0,
+            }
+        });
+        return;
+    }
     // This payload's identity window is now committed to the wire, so the next
     // projection may choose the next one. See `EVIDENCE_ROTATION`.
     advance_evidence_rotation();
@@ -5574,7 +5619,7 @@ fn spawn_heartbeat_post(
         let join_started = Instant::now();
         let heartbeat_task = tokio::spawn(async move {
             let task_started = Instant::now();
-            let attempt = heartbeat::send_heartbeat(&client, &payload).await;
+            let attempt = heartbeat::send_heartbeat(&client, payload).await;
             (attempt, task_started.elapsed().as_millis() as u64)
         });
         let (attempt, task_elapsed_ms) = match heartbeat_task.await {
@@ -5588,6 +5633,7 @@ fn spawn_heartbeat_post(
                             latency_ms: elapsed_ms,
                             ..heartbeat::HeartbeatPostMetrics::default()
                         },
+                        sent_evidence_identities: Vec::new(),
                     },
                     elapsed_ms,
                 )
@@ -5598,6 +5644,7 @@ fn spawn_heartbeat_post(
             reason,
             result: attempt.result,
             metrics: attempt.metrics,
+            sent_evidence_identities: attempt.sent_evidence_identities,
             join_elapsed_ms: join_started.elapsed().as_millis() as u64,
             task_elapsed_ms,
         }
@@ -8039,6 +8086,9 @@ mod tests {
             schema_version: 3,
             observed_at: "2026-05-05T12:00:00Z".to_string(),
             identities: Vec::new(),
+            candidate_identities: std::sync::Arc::<[heartbeat::EvidenceIdentity]>::from(
+                Vec::new(),
+            ),
             run: Vec::new(),
             process: Vec::new(),
             activity: vec![heartbeat::ActivityEvidence {
@@ -8166,6 +8216,9 @@ mod tests {
             schema_version: 3,
             observed_at: "2026-08-03T12:00:00Z".to_string(),
             identities: Vec::new(),
+            candidate_identities: std::sync::Arc::<[heartbeat::EvidenceIdentity]>::from(
+                Vec::new(),
+            ),
             run: Vec::new(),
             process: Vec::new(),
             activity: Vec::new(),

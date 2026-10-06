@@ -130,6 +130,14 @@ session snapshot. It keeps the periodic 60-second heartbeat; meaning changes
 trigger at most one immediate heartbeat per second, while observation timestamps
 do not. Gzip is used only after the host advertises it; a 400/415/413 refusal is
 retried once as identity and disables gzip until the engine process restarts.
+
+The status file keeps the complete machine-evidence family arrays for local
+health. Each POST includes only the rows referenced by that send's identity
+budget, with `fact_index` remapped and row content (therefore canonical hashes)
+unchanged. The 256 identities prioritize rows whose canonical hash differs from
+the last 2xx-acknowledged send for `(family, subject_key, source, source_epoch)`;
+the rotating per-family shares fill the remaining slots. Failed sends do not
+update remembered hashes, and hashes for disappeared rows are pruned.
 `engine-status.json.host_link` records the host's planned-update claim. The
 engine derives `updating` before `expected_back_by`, `slow_update` until the
 lease `deadline` or attempt `cutoff`, and `unreachable` after expiry without a
