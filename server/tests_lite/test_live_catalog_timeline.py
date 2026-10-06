@@ -750,7 +750,7 @@ def test_canonical_detail_projects_truncated_heads_as_no_state_evidence(monkeypa
     assert seen["heads"] == [], "a truncated head set is no evidence, never a partial one"
 
 
-def test_one_over_limit_session_degrades_only_its_own_card(tmp_path):
+def test_one_over_limit_session_degrades_only_its_own_card(tmp_path, caplog):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_catalog_schema(engine)
     LiveSession = make_sessionmaker(engine)
@@ -803,8 +803,10 @@ def test_one_over_limit_session_degrades_only_its_own_card(tmp_path):
     overflowing["heads_truncated"] = True
     overflowing["heads"] = [{"family": "activity", "bogus": True}] * 300
 
-    response = project_catalog_timeline_snapshot(snapshot)
+    with caplog.at_level("WARNING", logger="zerg.services.live_catalog_timeline"):
+        response = project_catalog_timeline_snapshot(snapshot)
 
+    assert str(ids[1]) in caplog.text, "operators must see which session overflowed"
     by_id = {card.head.id: card for card in response.sessions}
     assert set(by_id) == {str(ids[0]), str(ids[1])}, "the healthy session must still be served"
     degraded = by_id[str(ids[1])].head

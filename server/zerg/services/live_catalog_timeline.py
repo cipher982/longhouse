@@ -664,8 +664,12 @@ def _bounded_heads(row: Mapping[str, Any], *, surface: str) -> Any:
     if row.get("heads_truncated") is not True:
         return row.get("heads")
     facts = row.get("facts") if isinstance(row.get("facts"), Mapping) else row.get("legacy_facts")
-    session_facts = facts.get("session") if isinstance(facts, Mapping) else None
-    session_id = session_facts.get("session_id") if isinstance(session_facts, Mapping) else None
+    session_id = None
+    for family in ("catalog", "session"):
+        family_facts = facts.get(family) if isinstance(facts, Mapping) else None
+        if isinstance(family_facts, Mapping) and family_facts.get("session_id"):
+            session_id = family_facts["session_id"]
+            break
     logger.warning(
         "shadow_fact_head_limit_exceeded: projecting %s session %s without state evidence",
         surface,
