@@ -102,6 +102,8 @@ describe("MachinesPage", () => {
     renderPage();
 
     expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
+    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
     expect(document.body).not.toHaveAttribute("data-ready", "true");
     expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
 
@@ -200,21 +202,6 @@ describe("MachinesPage", () => {
     renderPage();
 
     expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
-    expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
-  });
-
-  it("shows first-machine setup as soon as the directory is empty", async () => {
-    let resolveSummary!: (value: MachinesSummaryResponse) => void;
-    api.listMachineSummaries.mockImplementation(
-      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
-    );
-    api.listMachines.mockResolvedValue({ machines: [] });
-    renderPage();
-
-    expect(await screen.findByTestId("machines-connect-first-button")).toBeInTheDocument();
-    expect(screen.queryByRole("status")).toBeNull();
-
-    await act(async () => resolveSummary(response([])));
     expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
   });
 
