@@ -2743,39 +2743,41 @@ export function SessionChat({
                   />
                 ) : null}
                 <div className="session-chat-composer-input">
-                  <textarea
-                    ref={composerTextareaRef}
-                    value={draft}
-                    onChange={(e) => {
-                      handleDraftChange(e.target.value);
-                      autoResizeDockTextarea(e.target);
-                    }}
-                    onKeyDown={handleKeyDown}
-                    placeholder={dockPlaceholder}
-                    aria-label="Next instruction"
-                    disabled={isSubmitting}
-                    rows={1}
-                  />
-                  {session.session_state.mode === "console" || composerHeaderAccessory ? (
+                  <div className="session-chat-composer-line">
+                    <textarea
+                      ref={composerTextareaRef}
+                      value={draft}
+                      onChange={(e) => {
+                        handleDraftChange(e.target.value);
+                        autoResizeDockTextarea(e.target);
+                      }}
+                      onKeyDown={handleKeyDown}
+                      placeholder={dockPlaceholder}
+                      aria-label="Next instruction"
+                      disabled={isSubmitting}
+                      rows={1}
+                    />
+                    {/* The info button rides the input's own line; a second
+                        row appears only for a control the user can change. */}
+                    {composerHeaderAccessory ? (
+                      <span className="session-chat-composer__head-accessory">
+                        {composerHeaderAccessory}
+                      </span>
+                    ) : null}
+                  </div>
+                  {session.session_state.mode === "console" ? (
                     <div
                       className="session-chat-composer-chips"
                       data-testid="session-chat-composer-chips"
                     >
-                      {session.session_state.mode === "console" ? (
-                        <ModelPicker
-                          deviceId={session.device_id}
-                          provider={session.provider}
-                          value={selectedModel}
-                          onChange={handleSelectedModelChange}
-                          compact
-                          testId="session-model-select"
-                        />
-                      ) : null}
-                      {composerHeaderAccessory ? (
-                        <span className="session-chat-composer__head-accessory">
-                          {composerHeaderAccessory}
-                        </span>
-                      ) : null}
+                      <ModelPicker
+                        deviceId={session.device_id}
+                        provider={session.provider}
+                        value={selectedModel}
+                        onChange={handleSelectedModelChange}
+                        compact
+                        testId="session-model-select"
+                      />
                     </div>
                   ) : null}
                 </div>

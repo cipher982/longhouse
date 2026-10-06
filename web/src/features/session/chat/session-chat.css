@@ -653,11 +653,28 @@
   color: var(--color-text-muted);
 }
 
-.session-chat-composer-chips .session-chat-composer__head-accessory {
-  margin-left: auto;
+.session-chat-composer-line {
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
 }
 
-.session-chat-attachment-tray--add-only {
+.session-chat-composer-line textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.session-chat-composer-line .session-chat-composer__head-accessory {
+  flex: none;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+/* Two classes so this beats the base tray's 6px padding declared further
+   down; otherwise the add button makes the one-row composer 12px taller. */
+.session-chat-attachment-tray.session-chat-attachment-tray--add-only {
   flex: none;
   padding: 0;
 }
