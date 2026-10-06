@@ -2244,8 +2244,9 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::future::Future;
-    use std::pin::Pin;
+    use crate::console_lifecycle::conformance::{
+        self, LifecycleScenario, ScenarioFuture, ScenarioOutcome, ScenarioRunner,
+    };
 
     #[test]
     fn fresh_and_resume_argv_use_stream_json_stdin_without_embedding_prompts() {
@@ -2834,25 +2835,11 @@ for _ in sys.stdin:
         }
     }
 
-    #[derive(Clone, Copy, Debug)]
-    enum LifecycleScenario {
-        Plain,
-        Background,
-        WakePending,
-        UserSend,
-        WakeDrained,
-        WakeUserSend,
-        WakeUnboundDrained,
-        WakeImmediateUnbound,
-        Restart,
-    }
-
-    type ScenarioRunner = fn(LifecycleScenario) -> Pin<Box<dyn Future<Output = ()> + 'static>>;
-
-    fn run_claude_scenario(
-        scenario: LifecycleScenario,
-    ) -> Pin<Box<dyn Future<Output = ()> + 'static>> {
-        Box::pin(run_claude_scenario_inner(scenario))
+    fn run_claude_scenario(scenario: LifecycleScenario) -> ScenarioFuture {
+        Box::pin(async move {
+            run_claude_scenario_inner(scenario).await;
+            ScenarioOutcome::Passed
+        })
     }
 
     async fn run_claude_scenario_inner(scenario: LifecycleScenario) {
@@ -3294,23 +3281,14 @@ for _ in sys.stdin:
 
     #[tokio::test]
     async fn console_lifecycle_conformance_runs_phase_one_scenarios() {
-        let scenarios = [
-            ("1", LifecycleScenario::Plain),
-            ("2", LifecycleScenario::Background),
-            ("3", LifecycleScenario::WakePending),
-            ("4", LifecycleScenario::UserSend),
-            ("5", LifecycleScenario::WakeDrained),
-            ("8", LifecycleScenario::Restart),
-            ("9", LifecycleScenario::WakeUserSend),
-            ("10", LifecycleScenario::WakeUnboundDrained),
-            ("11", LifecycleScenario::WakeImmediateUnbound),
-        ];
         let adapters: [(&str, ScenarioRunner); 1] = [("claude", run_claude_scenario)];
-        for (provider, run) in adapters {
-            for (scenario_id, scenario) in scenarios {
-                let _case = format!("{provider} scenario {scenario_id}");
-                run(scenario).await;
-            }
+        conformance::run_phase_one(&adapters).await;
+        for scenario in [
+            LifecycleScenario::WakeUserSend,
+            LifecycleScenario::WakeUnboundDrained,
+            LifecycleScenario::WakeImmediateUnbound,
+        ] {
+            assert_eq!(run_claude_scenario(scenario).await, ScenarioOutcome::Passed);
         }
     }
 

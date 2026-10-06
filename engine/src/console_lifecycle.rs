@@ -1143,3 +1143,57 @@ mod tests {
         assert!(error.is::<WakeTargetGone>());
     }
 }
+#[cfg(test)]
+pub(crate) mod conformance {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum LifecycleScenario {
+        Plain,
+        Background,
+        WakePending,
+        UserSend,
+        WakeDrained,
+        Restart,
+        WakeUserSend,
+        WakeUnboundDrained,
+        WakeImmediateUnbound,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum ScenarioOutcome {
+        Passed,
+        Unsupported(&'static str),
+    }
+
+    pub(crate) type ScenarioFuture = Pin<Box<dyn Future<Output = ScenarioOutcome> + 'static>>;
+    pub(crate) type ScenarioRunner = fn(LifecycleScenario) -> ScenarioFuture;
+
+    const PHASE_ONE_SCENARIOS: [(u8, LifecycleScenario); 6] = [
+        (1, LifecycleScenario::Plain),
+        (2, LifecycleScenario::Background),
+        (3, LifecycleScenario::WakePending),
+        (4, LifecycleScenario::UserSend),
+        (5, LifecycleScenario::WakeDrained),
+        (8, LifecycleScenario::Restart),
+    ];
+
+    pub(crate) async fn run_phase_one(adapters: &[(&'static str, ScenarioRunner)]) {
+        for (provider, run) in adapters {
+            for (scenario_id, scenario) in PHASE_ONE_SCENARIOS {
+                let case = format!("{provider} console lifecycle scenario {scenario_id}");
+                match run(scenario).await {
+                    ScenarioOutcome::Passed => {}
+                    ScenarioOutcome::Unsupported(disposition) => {
+                        assert!(
+                            !disposition.trim().is_empty(),
+                            "{case} has no unsupported disposition"
+                        );
+                        eprintln!("{case}: disposition={disposition}");
+                    }
+                }
+            }
+        }
+    }
+}
