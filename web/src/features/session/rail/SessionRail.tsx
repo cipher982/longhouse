@@ -94,6 +94,19 @@ const TONE_FOR_LAMP: Record<StatusLampState, RailActiveSession["tone"]> = {
   failed: "attention",
 };
 
+/**
+ * The one word a row spends width on, and only when the session needs the
+ * user. Every other state is the dot alone; the full status is in the row's
+ * tooltip and accessible name.
+ */
+export function railStatusFlag(lamp: StatusLampState, statusTone?: string): string | null {
+  if (lamp === "failed") return "Failed";
+  // "Needs your answer" arrives as a blocked tone while the live signal can
+  // still read idle; the Timeline shows that word, so the rail does too.
+  if (lamp === "waiting" || statusTone === "blocked") return "Needs you";
+  return null;
+}
+
 function rowFromCard(
   card: TimelineSessionCard,
   group: RailGroup,
@@ -109,6 +122,7 @@ function rowFromCard(
     stateText: status.statusLabel,
     tone: TONE_FOR_LAMP[status.lampState],
     lamp: status.lampState,
+    statusTone: status.statusTone,
     group,
   };
 }
@@ -210,14 +224,12 @@ function SessionRail({
     () => buildRailRows(data?.sessions ?? [], nowMs, activeSession, { includeAutomation: true }),
     [data?.sessions, nowMs, activeSession],
   );
-  // Most sessions run on one machine; name the machine only on the rows that
-  // run somewhere else, so the common case spends its width on the title.
-  const usualHost = useMemo(() => {
+  // The machine lives in the tooltip. A row shows it only when another row
+  // has the same title, where it is the one thing telling them apart.
+  const sharedTitles = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const row of rows) if (row.host) counts.set(row.host, (counts.get(row.host) ?? 0) + 1);
-    let best: string | null = null;
-    for (const [host, count] of counts) if (best == null || count > (counts.get(best) ?? 0)) best = host;
-    return best;
+    for (const row of rows) counts.set(row.title, (counts.get(row.title) ?? 0) + 1);
+    return new Set([...counts].filter(([, count]) => count > 1).map(([title]) => title));
   }, [rows]);
 
   useRailPrefetch(
@@ -261,7 +273,10 @@ function SessionRail({
   const renderRow = (row: RailRow, index: number) => {
     const active = row.id === activeSessionId;
     const hotkey = index < RAIL_HOTKEY_COUNT ? railHotkeyLabel(index, mac) : null;
-    const host = row.host && row.host !== usualHost ? row.host : null;
+    const host = row.host && sharedTitles.has(row.title) ? row.host : null;
+    const flag = railStatusFlag(row.lamp, row.statusTone);
+    const dotState = flag ? (row.lamp === "failed" ? "failed" : "waiting") : row.lamp;
+    const fullStatus = row.stateText || "status unknown";
     return (
       <li key={row.id}>
         <button
@@ -269,7 +284,7 @@ function SessionRail({
           className={`session-rail__row${active ? " is-active" : ""}`}
           aria-current={active ? "page" : undefined}
           aria-keyshortcuts={hotkey ? (mac ? `Control+${index + 1}` : `Alt+${index + 1}`) : undefined}
-          aria-label={strip ? `${row.title}, ${row.stateText || "status unknown"}` : undefined}
+          aria-label={[row.title, row.host, fullStatus].filter(Boolean).join(", ")}
           data-testid="session-rail-row"
           data-session-id={row.id}
           data-group={row.group}
@@ -282,16 +297,16 @@ function SessionRail({
           <span className="session-rail__glyph">
             {row.provider ? <ProviderGlyph provider={row.provider} size={14} /> : null}
             {strip ? (
-              <span className="session-rail__dot" data-state={row.lamp} aria-hidden="true" />
+              <span className="session-rail__dot" data-state={dotState} aria-hidden="true" />
             ) : null}
           </span>
           {strip ? null : (
             <>
               <span className="session-rail__title">{row.title}</span>
               {host ? <span className="session-rail__host">{host}</span> : null}
-              <span className="hearth-lamp session-rail__status" data-state={row.lamp}>
-                <span className="session-rail__dot" data-state={row.lamp} aria-hidden="true" />
-                <span className="hearth-lamp__label">{row.stateText}</span>
+              <span className="session-rail__status" data-state={dotState} aria-hidden="true">
+                {flag ? <span className="session-rail__flag">{flag}</span> : null}
+                <span className="session-rail__dot" data-state={dotState} />
               </span>
             </>
           )}

@@ -16,6 +16,8 @@ export interface RailActiveSession {
 export type RailRow = RailActiveSession & {
   lamp: StatusLampState;
   group: "live" | "attention" | "recent";
+  /** The Timeline row's status tone ("blocked" when it asks the user). */
+  statusTone?: string;
 };
 
 export interface SessionRailContextValue {

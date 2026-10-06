@@ -4,7 +4,14 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, TimelineSessionsListResponse } from "@/shared/api/agents";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
-import { SessionRailFrame, buildRailRows, isSwitcherHotkey, railHotkeyIndex, railHotkeyLabel } from "../SessionRail";
+import {
+  SessionRailFrame,
+  buildRailRows,
+  isSwitcherHotkey,
+  railHotkeyIndex,
+  railHotkeyLabel,
+  railStatusFlag,
+} from "../SessionRail";
 import { filterSwitcherRows, previewFromWorkspace, trimPreviewMarkdown } from "../SessionSwitcher";
 import type { AgentSessionWorkspaceResponse } from "@/shared/api/agents";
 import { RAIL_PREFETCH_COUNT, railPrefetchAllowed } from "../useRailPrefetch";
@@ -107,6 +114,18 @@ describe("rail hotkeys", () => {
   });
 });
 
+describe("rail status word", () => {
+  it("names only the states that need the user; the rest are a dot", () => {
+    expect(railStatusFlag("waiting")).toBe("Needs you");
+    expect(railStatusFlag("failed")).toBe("Failed");
+    for (const lamp of ["working", "idle", "ended", "done", "unknown"] as const) {
+      expect(railStatusFlag(lamp)).toBeNull();
+    }
+    // A question can arrive as a blocked tone while the live signal is idle.
+    expect(railStatusFlag("idle", "blocked")).toBe("Needs you");
+  });
+});
+
 describe("rail prefetch gate", () => {
   it("stands down on Data Saver and 2G-class links", () => {
     expect(railPrefetchAllowed({ connection: { saveData: true } } as unknown as Navigator)).toBe(false);
@@ -130,6 +149,24 @@ describe("SessionRailFrame", () => {
     vi.clearAllMocks();
     if (platform) Object.defineProperty(window.navigator, "platform", platform);
     else delete (window.navigator as { platform?: string }).platform;
+  });
+
+  it("spends the row on the title: status in the name, machine only to tell twins apart", async () => {
+    const twins = list(["a", "b", "c"]);
+    twins.sessions[1].head = { ...session("b", "Deploy the proxy"), device_id: "cinder" } as AgentSession;
+    twins.sessions[2].head = { ...session("c", "Deploy the proxy"), device_id: "cube" } as AgentSession;
+    fetchAgentSessionsMock.mockResolvedValue(twins);
+    renderRail("a");
+    const rows = await screen.findAllByTestId("session-rail-row");
+    const byId = (id: string) => rows.find((row) => row.getAttribute("data-session-id") === id)!;
+
+    // An idle session shows no status word; its name still says it.
+    expect(byId("a").querySelector(".session-rail__flag")).toBeNull();
+    expect(byId("a").querySelector(".session-rail__host")).toBeNull();
+    expect(byId("a").getAttribute("aria-label")).toMatch(/^Session a, cinder, \S/);
+    // Same title on two machines: the machine is what tells them apart.
+    expect(byId("b").querySelector(".session-rail__host")).toHaveTextContent("cinder");
+    expect(byId("c").querySelector(".session-rail__host")).toHaveTextContent("cube");
   });
 
   it("lists recent sessions, marks the open one, and switches on Control-number", async () => {

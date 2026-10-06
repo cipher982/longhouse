@@ -161,12 +161,23 @@
   color: var(--color-text-muted);
 }
 
-/* The Timeline's status word in the Timeline's colours (instruments.css
-   .hearth-lamp[data-state]), without the fire. */
-.session-rail__status.hearth-lamp {
-  gap: 5px;
-  max-width: 78px;
-  font-size: 11.5px;
+/* Status is the dot. A word appears only when the session needs the user,
+   in the Timeline's attention colour; the full status is in the tooltip. */
+.session-rail__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-rail__flag {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--color-signal-attention-text);
+}
+
+.session-rail__status[data-state="failed"] .session-rail__flag {
+  color: var(--color-signal-fault-text);
 }
 
 .session-rail__dot {
@@ -180,12 +191,30 @@
 .session-rail__dot[data-state="working"] {
   background: var(--color-signal-live);
   box-shadow: 0 0 6px rgba(70, 214, 140, 0.6);
+  animation: session-rail-dot-pulse 1.6s ease-in-out infinite;
 }
 
-.session-rail__dot[data-state="waiting"],
-.session-rail__dot[data-state="failed"] {
+@keyframes session-rail-dot-pulse {
+  50% {
+    opacity: 0.45;
+    box-shadow: 0 0 2px rgba(70, 214, 140, 0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-rail__dot[data-state="working"] {
+    animation: none;
+  }
+}
+
+.session-rail__dot[data-state="waiting"] {
   background: var(--color-signal-attention);
   box-shadow: 0 0 6px rgba(245, 163, 59, 0.6);
+}
+
+.session-rail__dot[data-state="failed"] {
+  background: var(--color-signal-fault);
+  box-shadow: 0 0 6px rgba(240, 96, 90, 0.6);
 }
 
 .session-rail__dot[data-state="unknown"] {
@@ -213,8 +242,14 @@
 }
 
 .session-rail__turns .session-turn-outline__item {
+  gap: 6px;
   padding: 4px 8px;
   font-size: 11.5px;
+}
+
+.session-rail__turns .session-turn-outline__time {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
 }
 
 /* Phones: the rail sits in the menu drawer, full width. */

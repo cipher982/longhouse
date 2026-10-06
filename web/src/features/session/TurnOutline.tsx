@@ -8,6 +8,7 @@
 import { useEffect, useRef } from "react";
 import type { TimelineItem } from "@/shared/session/model";
 import { formatTime } from "@/shared/session/model";
+import { parseUTC } from "@/shared/lib/dateUtils";
 import type { AgentEventId } from "@/shared/api/agents";
 import { cleanPromptPreview } from "@/shared/session/promptPreview";
 
@@ -20,6 +21,19 @@ export function turnRowId(eventId: AgentEventId | string): string {
 
 export function turnKeyForEventId(eventId: AgentEventId | string): string {
   return `turn-${eventId}`;
+}
+
+/**
+ * "8:39" rather than "08:39 AM": an outline row spends its width on the ask.
+ * The day period is dropped; the row's tooltip carries the full time.
+ */
+export function formatTurnTime(dateStr: string): string {
+  const parts = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).formatToParts(
+    parseUTC(dateStr),
+  );
+  const hour = parts.find((part) => part.type === "hour")?.value;
+  const minute = parts.find((part) => part.type === "minute")?.value;
+  return hour && minute ? `${hour}:${minute}` : formatTime(dateStr);
 }
 
 /** How much of the user's ask shows on one outline row. */
@@ -113,9 +127,10 @@ export function TurnOutline({
                 data-testid="session-turn-outline-item"
                 aria-current={isCurrent ? "true" : undefined}
                 onClick={() => onSelectTurn(turn)}
+                title={`${formatTime(turn.timestamp)} · ${turn.askPreview || "(empty message)"}`}
               >
                 {isRunning ? <span className="session-turn-outline__ember" aria-hidden="true" /> : null}
-                <span className="session-turn-outline__time">{formatTime(turn.timestamp)}</span>
+                <span className="session-turn-outline__time">{formatTurnTime(turn.timestamp)}</span>
                 <span className="session-turn-outline__ask">{turn.askPreview || "(empty message)"}</span>
               </button>
             </li>

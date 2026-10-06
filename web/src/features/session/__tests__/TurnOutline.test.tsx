@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { TimelineItem } from "@/shared/session/model";
-import { deriveTurnOutline, TurnOutline, type TurnOutlineTurn } from "../TurnOutline";
+import { deriveTurnOutline, formatTurnTime, TurnOutline, type TurnOutlineTurn } from "../TurnOutline";
 
 function userMessageItem(id: number, timestamp: string, text: string): TimelineItem {
   return {
@@ -37,6 +37,14 @@ function assistantMessageItem(id: number, timestamp: string, text: string): Time
     },
   };
 }
+
+describe("formatTurnTime", () => {
+  it("prints hour and minute without a day period", () => {
+    const text = formatTurnTime("2026-10-06T13:39:00Z");
+    expect(text).toMatch(/^\d{1,2}:\d{2}$/);
+    expect(text.endsWith(":39")).toBe(true);
+  });
+});
 
 describe("deriveTurnOutline", () => {
   it("starts one turn per user message, ignoring assistant/tool rows", () => {
