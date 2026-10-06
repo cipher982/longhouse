@@ -368,7 +368,12 @@ impl ConsoleInvocation {
         state.input_pending = false;
         state.deferred_idle = None;
         state.buffered_events.clear();
-        let invocation_state = if state.pending.is_empty() {
+        // A process that already exited stays closed: a late bind only
+        // delivers the retained response, it never revives the invocation.
+        let invocation_state = if state.phase == InvocationState::Closed
+            || self.stopped.load(Ordering::Acquire)
+            || state.pending.is_empty()
+        {
             InvocationState::Closed
         } else {
             InvocationState::Parked
@@ -880,6 +885,51 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.is::<WakeTargetGone>());
+    }
+
+    #[tokio::test]
+    async fn a_late_wake_bind_never_revives_an_exited_invocation() {
+        let invocation = invocation();
+        let pending = vec![PendingItem {
+            id: "task-1".to_string(),
+            kind: "monitor".to_string(),
+            status: "running".to_string(),
+            description: None,
+        }];
+        invocation.replace_pending(pending, vec![]);
+        invocation.idle(IdleSignal {
+            terminal_state: "run_completed".to_string(),
+            exit_code: Some(0),
+            stderr: None,
+        });
+        let wake = invocation
+            .response_started(serde_json::json!({"kind": "monitor_event"}))
+            .unwrap();
+        invocation.idle(IdleSignal {
+            terminal_state: "run_completed".to_string(),
+            exit_code: Some(0),
+            stderr: None,
+        });
+        // The provider exits while its registry still lists the monitor.
+        invocation.mark_stopped();
+        let binding = invocation
+            .bind_retained_wake(
+                &wake.invocation_id,
+                &wake.wake_id,
+                TurnBinding {
+                    run_id: "late-wake-after-exit".to_string(),
+                    turn_id: None,
+                    client_request_id: None,
+                    origin: TurnOrigin::Wake,
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(
+            binding.deferred_idle.unwrap().invocation_state,
+            InvocationState::Closed
+        );
+        assert_eq!(invocation.state(), InvocationState::Closed);
     }
 
     #[tokio::test]
