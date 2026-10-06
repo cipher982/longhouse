@@ -72,11 +72,40 @@ def test_schema_observation_does_not_authorize_candidate(evidence_runtime):
     runtime.mark_candidate_consistent(attempt_id="owned-attempt")
 
 
+
+def test_health_exposes_runtime_epoch_and_admission_to_untrusted_callers(evidence_runtime, monkeypatch):
+    client, runtime, _ping = evidence_runtime
+    import zerg.services.runtime_admission as admission_module
+
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    response = client.get("/health")
+
+    assert response.json()["runtime"] == {"epoch": runtime.runtime_epoch, "admission": "pending"}
+
 def test_non_ascii_internal_token_is_401_not_a_server_error(evidence_runtime):
     client, _runtime, _ping = evidence_runtime
     # A non-ASCII header value reaches the app as latin-1 text; compare_digest on str raises TypeError for it.
     response = client.get("/internal/deployments/evidence", headers={"X-Internal-Token": "caf\u00e9".encode("latin-1")})
     assert response.status_code == 401
+
+
+def test_readiness_claim_deadline_renewal_is_capped_by_cutoff(evidence_runtime):
+    client, runtime, ping = evidence_runtime
+    cutoff = runtime.host_lifecycle()["cutoff"]
+    requested_deadline = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+
+    response = client.get(
+        "/internal/deployments/owned-attempt/readiness",
+        params={
+            "expected_generation": "7",
+            "expected_schema_version": str(ping["schema_version"]),
+            "claim_deadline": requested_deadline,
+        },
+        headers={"X-Internal-Token": "evidence-test-only"},
+    )
+
+    assert response.status_code == 200
+    assert runtime.host_lifecycle()["deadline"] == cutoff
 
 
 def test_unknown_catalog_schema_is_not_ready(evidence_runtime):

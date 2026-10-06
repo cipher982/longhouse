@@ -6,6 +6,7 @@ for routing messages to runners.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from typing import Dict
@@ -130,6 +131,21 @@ class RunnerConnectionManager:
             return len(self._connections)
 
         return sum(1 for (oid, _) in self._connections.keys() if oid == owner_id)
+
+    async def close_all_for_host(self, *, code: int = 1012, reason: str = "host.lifecycle") -> int:
+        """Close live runner links during a Runtime Host handoff."""
+        connections = tuple(self._connections.values())
+
+        async def close(ws: WebSocket) -> bool:
+            try:
+                await asyncio.wait_for(ws.close(code=code, reason=reason), timeout=0.5)
+                return True
+            except Exception as exc:
+                logger.debug("Could not close runner WebSocket for host lifecycle: %s", exc)
+                return False
+
+        results = await asyncio.gather(*(close(ws) for ws in connections))
+        return sum(results)
 
 
 # Global singleton instance

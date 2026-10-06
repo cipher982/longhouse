@@ -207,6 +207,28 @@ class MachineControlChannelRegistry:
         """Return infos for every currently-connected machine belonging to owner."""
         return [connection.info for (conn_owner, _device), connection in self._connections.items() if conn_owner == owner_id]
 
+    async def broadcast_host_lifecycle(self, frame: Mapping[str, Any], *, close_after: bool = False) -> int:
+        """Send a host.lifecycle text frame to every connected Machine Agent."""
+        async with self._lock:
+            connections = tuple(self._connections.values())
+
+        async def send(connection: _MachineControlConnection) -> bool:
+            try:
+                async with connection.send_lock:
+                    await asyncio.wait_for(connection.websocket.send_json(dict(frame)), timeout=1.0)
+                    if close_after:
+                        await asyncio.wait_for(
+                            connection.websocket.close(code=1012, reason="host.lifecycle"),
+                            timeout=1.0,
+                        )
+                return True
+            except Exception as exc:
+                logger.debug("Could not publish host.lifecycle to machine control channel: %s", exc)
+                return False
+
+        results = await asyncio.gather(*(send(connection) for connection in connections))
+        return sum(results)
+
     def is_online(self, *, owner_id: int, device_id: str) -> bool:
         return (owner_id, device_id) in self._connections
 

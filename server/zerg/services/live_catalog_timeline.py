@@ -927,7 +927,21 @@ async def stream_live_catalog_machine_sessions(
     bus = get_pubsub()
     sequence = bus.peek_latest_seq(TOPIC_TIMELINE)
     previous: dict[str, str] = {}
-    yield {"event": "connected", "data": json.dumps({"source": "runtime_host", "stream_epoch": bus.stream_epoch})}
+    from zerg.services.runtime_admission import runtime_admission
+
+    runtime = runtime_admission()
+    yield {
+        "event": "connected",
+        "data": json.dumps(
+            {
+                "source": "runtime_host",
+                "stream_epoch": bus.stream_epoch,
+                "runtime_epoch": runtime.runtime_epoch,
+                "admission": runtime.admission,
+            }
+        ),
+    }
+    yield {"event": "host_lifecycle", "data": json.dumps(runtime.host_lifecycle())}
 
     if not skip_initial_replay:
         while True:
@@ -964,6 +978,14 @@ async def stream_live_catalog_machine_sessions(
                     "event": "heartbeat",
                     "data": json.dumps({"source": "runtime_host"}),
                 }
+                continue
+            lifecycle_event = message.payload
+            if lifecycle_event.get("kind") == "runtime_lifecycle":
+                lifecycle = lifecycle_event.get("host_lifecycle")
+                if isinstance(lifecycle, dict):
+                    yield {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
+                if lifecycle_event.get("drain_complete"):
+                    return
                 continue
             session_id = str(message.payload.get("session_id") or "")
             if not session_id:
@@ -1022,10 +1044,21 @@ async def stream_live_catalog_timeline(
     previous: dict[str, str] = {}
     previous_total: int | None = None
     last_heartbeat = monotonic()
+    from zerg.services.runtime_admission import runtime_admission
+
+    runtime = runtime_admission()
     yield {
         "event": "connected",
-        "data": json.dumps({"message": "Timeline session stream connected", "stream_epoch": bus.stream_epoch}),
+        "data": json.dumps(
+            {
+                "message": "Timeline session stream connected",
+                "stream_epoch": bus.stream_epoch,
+                "runtime_epoch": runtime.runtime_epoch,
+                "admission": runtime.admission,
+            }
+        ),
     }
+    yield {"event": "host_lifecycle", "data": json.dumps(runtime.host_lifecycle())}
 
     with bus.subscribe(TOPIC_TIMELINE, since_seq=sequence) as subscription:
         # The first snapshot either seeds the signatures behind an already
@@ -1079,6 +1112,14 @@ async def stream_live_catalog_timeline(
                         ),
                     }
                     last_heartbeat = now
+                continue
+            lifecycle_event = message.payload
+            if lifecycle_event.get("kind") == "runtime_lifecycle":
+                lifecycle = lifecycle_event.get("host_lifecycle")
+                if isinstance(lifecycle, dict):
+                    yield {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
+                if lifecycle_event.get("drain_complete"):
+                    return
                 continue
 
             # A timeline message is an invalidation, not a per-row delta. A

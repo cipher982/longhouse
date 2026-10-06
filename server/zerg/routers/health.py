@@ -290,6 +290,10 @@ def health_check(request: Request):
     _settings = get_settings()
     trusted = _request_is_trusted(request)
     health_status = {"status": "healthy", "message": "Longhouse API is running"}
+    from zerg.services.runtime_admission import runtime_admission
+
+    runtime = runtime_admission()
+    health_status["runtime"] = {"epoch": runtime.runtime_epoch, "admission": runtime.admission}
 
     # `critical_failure` drives the HTTP 503: only hard infra failures (catalog,
     # environment, single-tenant) make the service "down". A missing build
@@ -600,6 +604,8 @@ def health_check(request: Request):
         }
         if "build" in health_status:
             minimal["build"] = health_status["build"]
+        if "runtime" in health_status:
+            minimal["runtime"] = health_status["runtime"]
         health_status = minimal
 
     # Return 503 only on a critical infra failure (db/fts5/environment/

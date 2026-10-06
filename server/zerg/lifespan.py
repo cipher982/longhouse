@@ -56,6 +56,80 @@ def _timed_startup_step(name: str):
         logger.info("Startup step complete: %s elapsed_ms=%.1f", name, elapsed_ms)
 
 
+async def _start_non_gating_runtime_services(app: FastAPI) -> None:
+    """Start derived search and storage lanes without making readiness wait for them."""
+    with _timed_startup_step("searchd_supervisor"):
+        try:
+            from zerg.services.searchd_supervisor import start_searchd_supervisor
+
+            app.state.searchd_ping = await start_searchd_supervisor()
+            if app.state.searchd_ping is None:
+                logger.warning("searchd is degraded; hot Runtime Host readiness is unaffected")
+        except Exception:  # search is derived and never gates the launch loop
+            app.state.searchd_ping = None
+            logger.exception("Failed to start searchd supervisor (non-fatal)")
+
+    with _timed_startup_step("storage_v2_workers"):
+        from zerg.services.raw_object_workers import get_raw_object_worker_pool
+        from zerg.services.render_object_workers import get_render_object_worker_pool
+
+        results = await asyncio.gather(
+            get_raw_object_worker_pool().start(),
+            get_render_object_worker_pool().start(),
+            return_exceptions=True,
+        )
+        worker_errors = [result for result in results if isinstance(result, Exception)]
+        if worker_errors:
+            app.state.storage_v2_workers_started = False
+            for error in worker_errors:
+                logger.error(
+                    "Storage-v2 worker startup failed (non-fatal): %s",
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+        else:
+            app.state.storage_v2_workers_started = True
+            logger.info("Storage-v2 live and repair worker lanes are ready")
+
+    try:
+        from zerg.services.semantic_v2_projector import start_semantic_v2_projector
+
+        app.state.semantic_v2_projector_started = start_semantic_v2_projector()
+        if not app.state.semantic_v2_projector_started:
+            logger.warning("Semantic-v2 projector is degraded; hot Runtime Host readiness is unaffected")
+    except Exception:
+        app.state.semantic_v2_projector_started = False
+        logger.exception("Failed to start semantic-v2 projector (non-fatal)")
+    try:
+        from zerg.services.search_v2_projector import start_search_v2_projector
+
+        app.state.search_v2_projector_started = start_search_v2_projector()
+        if not app.state.search_v2_projector_started:
+            logger.warning("Search-v2 projector is degraded; hot Runtime Host readiness is unaffected")
+    except Exception:
+        app.state.search_v2_projector_started = False
+        logger.exception("Failed to start search-v2 projector (non-fatal)")
+    _start_local_embedding_projector(app)
+    try:
+        from zerg.services.storage_telemetry_snapshot import run_storage_telemetry_refresh_loop
+
+        app.state.storage_telemetry_task = asyncio.create_task(run_storage_telemetry_refresh_loop())
+        logger.info("Storage telemetry refresh loop started")
+    except Exception:
+        logger.exception("Failed to start storage telemetry refresh loop (non-fatal)")
+
+
+async def _timed_shutdown_step(name: str, operation) -> None:
+    started = time.monotonic()
+    logger.info("Shutdown step starting: %s", name)
+    try:
+        await operation()
+    except Exception:
+        logger.exception("Shutdown step failed: %s", name)
+    finally:
+        logger.info("Shutdown step complete: %s elapsed_ms=%.1f", name, (time.monotonic() - started) * 1000)
+
+
 def _enforce_single_tenant_startup(app: FastAPI) -> None:
     """Validate and bootstrap the single-tenant owner or fail fast."""
     if not _settings.single_tenant or _settings.testing:
@@ -184,51 +258,24 @@ async def lifespan(app: FastAPI):
                 # runtime closed; it must not prevent read-only startup.
                 logger.exception("Failed to recover runtime activation")
             logger.info("Live catalog schema is owned by catalogd")
-            with _timed_startup_step("searchd_supervisor"):
-                try:
-                    from zerg.services.searchd_supervisor import start_searchd_supervisor
+            from zerg.services.runtime_admission import runtime_admission
 
-                    app.state.searchd_ping = await start_searchd_supervisor()
-                    if app.state.searchd_ping is None:
-                        logger.warning("searchd is degraded; hot Runtime Host readiness is unaffected")
-                except Exception:  # search is derived and never gates the launch loop
-                    app.state.searchd_ping = None
-                    logger.exception("Failed to start searchd supervisor (non-fatal)")
-            with _timed_startup_step("storage_v2_workers"):
-                from zerg.services.raw_object_workers import get_raw_object_worker_pool
-                from zerg.services.render_object_workers import get_render_object_worker_pool
+            runtime = runtime_admission()
+            if runtime.admission != "open":
 
-                await asyncio.gather(
-                    get_raw_object_worker_pool().start(),
-                    get_render_object_worker_pool().start(),
+                async def start_non_gating_services_after_reopen() -> None:
+                    await runtime.wait_until_initial_open()
+                    if getattr(app.state, "runtime_shutdown_started", False):
+                        return
+                    await _start_non_gating_runtime_services(app)
+
+                app.state.deferred_non_gating_startup_task = asyncio.create_task(
+                    start_non_gating_services_after_reopen(),
+                    name="runtime-post-reopen-startup",
                 )
-            logger.info("Storage-v2 live and repair worker lanes are ready")
-            try:
-                from zerg.services.semantic_v2_projector import start_semantic_v2_projector
-
-                app.state.semantic_v2_projector_started = start_semantic_v2_projector()
-                if not app.state.semantic_v2_projector_started:
-                    logger.warning("Semantic-v2 projector is degraded; hot Runtime Host readiness is unaffected")
-            except Exception:
-                app.state.semantic_v2_projector_started = False
-                logger.exception("Failed to start semantic-v2 projector (non-fatal)")
-            try:
-                from zerg.services.search_v2_projector import start_search_v2_projector
-
-                app.state.search_v2_projector_started = start_search_v2_projector()
-                if not app.state.search_v2_projector_started:
-                    logger.warning("Search-v2 projector is degraded; hot Runtime Host readiness is unaffected")
-            except Exception:
-                app.state.search_v2_projector_started = False
-                logger.exception("Failed to start search-v2 projector (non-fatal)")
-            _start_local_embedding_projector(app)
-            try:
-                from zerg.services.storage_telemetry_snapshot import run_storage_telemetry_refresh_loop
-
-                app.state.storage_telemetry_task = asyncio.create_task(run_storage_telemetry_refresh_loop())
-                logger.info("Storage telemetry refresh loop started")
-            except Exception:
-                logger.exception("Failed to start storage telemetry refresh loop (non-fatal)")
+                logger.info("Deferred derived search and storage worker startup until runtime reopen")
+            else:
+                await _start_non_gating_runtime_services(app)
         elif owns_test_catalog:
             # The hermetic title oracle and browser E2E runtime need the real
             # catalog owner and storage lanes, but none of the unrelated
@@ -329,6 +376,10 @@ async def lifespan(app: FastAPI):
         logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
+        deferred_task = getattr(app.state, "deferred_non_gating_startup_task", None)
+        if deferred_task is not None and not deferred_task.done():
+            deferred_task.cancel()
+            await asyncio.gather(deferred_task, return_exceptions=True)
         if not _settings.testing or owns_test_catalog:
             await _stop_storage_title_services(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
@@ -383,82 +434,103 @@ async def lifespan(app: FastAPI):
 
     yield  # Application is running
 
-    # Shutdown
+    shutdown_started = time.monotonic()
+    app.state.runtime_shutdown_started = True
     try:
-        if not _settings.testing:
-            try:
-                from zerg.database import stop_wal_checkpoint_loop
 
-                await stop_wal_checkpoint_loop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop WAL checkpoint loop")
+        async def stop_deferred_runtime_startup() -> None:
+            task = getattr(app.state, "deferred_non_gating_startup_task", None)
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
-            try:
-                from zerg.services.maintenance import stop_maintenance_loop
+        async def stop_wal_checkpoints() -> None:
+            from zerg.database import stop_wal_checkpoint_loop
 
-                await stop_maintenance_loop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop maintenance loop")
+            await stop_wal_checkpoint_loop()
 
-        from zerg.utils.async_runner import get_shared_runner
+        async def stop_maintenance() -> None:
+            from zerg.services.maintenance import stop_maintenance_loop
 
-        get_shared_runner().stop()
+            await stop_maintenance_loop()
 
-        from zerg.websocket.manager import topic_manager
+        async def stop_shared_runner() -> None:
+            from zerg.utils.async_runner import get_shared_runner
 
-        await topic_manager.shutdown()
+            get_shared_runner().stop()
 
-        if not _settings.testing or owns_test_catalog:
+        async def stop_websocket_topic_manager() -> None:
+            from zerg.websocket.manager import topic_manager
+
+            await topic_manager.shutdown()
+
+        async def stop_storage_title() -> None:
             await _stop_storage_title_services(app)
-            telemetry_task = getattr(app.state, "storage_telemetry_task", None)
-            if telemetry_task is not None:
-                telemetry_task.cancel()
-                await asyncio.gather(telemetry_task, return_exceptions=True)
-            try:
-                from zerg.services.semantic_v2_projector import stop_semantic_v2_projector
 
-                await stop_semantic_v2_projector()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop semantic-v2 projector")
-            try:
-                from zerg.services.search_v2_projector import stop_search_v2_projector
+        async def stop_storage_telemetry() -> None:
+            task = getattr(app.state, "storage_telemetry_task", None)
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
-                await stop_search_v2_projector()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop search-v2 projector")
+        async def stop_semantic_projector() -> None:
+            from zerg.services.semantic_v2_projector import stop_semantic_v2_projector
+
+            await stop_semantic_v2_projector()
+
+        async def stop_search_projector() -> None:
+            from zerg.services.search_v2_projector import stop_search_v2_projector
+
+            await stop_search_v2_projector()
+
+        async def stop_embedding_projector() -> None:
             try:
                 from zerg.services.embeddings_v2_projector import stop_embeddings_v2_projector
 
                 await stop_embeddings_v2_projector()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop embeddings-v2 projector")
             finally:
                 from zerg.services.local_embedder import stop_local_embedder_initialization
 
                 await stop_local_embedder_initialization()
-            try:
-                from zerg.services.raw_object_workers import close_raw_object_worker_pool
-                from zerg.services.render_object_workers import close_render_object_worker_pool
 
-                await asyncio.gather(
-                    close_raw_object_worker_pool(),
-                    close_render_object_worker_pool(),
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop storage-v2 workers")
-            try:
-                from zerg.services.searchd_supervisor import stop_searchd_supervisor
+        async def stop_storage_workers() -> None:
+            from zerg.services.raw_object_workers import close_raw_object_worker_pool
+            from zerg.services.render_object_workers import close_render_object_worker_pool
 
-                await stop_searchd_supervisor()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop searchd supervisor")
-            try:
-                from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
+            results = await asyncio.gather(
+                close_raw_object_worker_pool(),
+                close_render_object_worker_pool(),
+                return_exceptions=True,
+            )
+            for error in results:
+                if isinstance(error, Exception):
+                    logger.error("Storage worker shutdown failed: %s", error)
 
-                await stop_catalogd_supervisor()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop catalogd supervisor")
+        async def stop_searchd() -> None:
+            from zerg.services.searchd_supervisor import stop_searchd_supervisor
 
-        logger.info("Background services stopped")
+            await stop_searchd_supervisor()
+
+        async def stop_catalogd() -> None:
+            from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
+
+            await stop_catalogd_supervisor()
+
+        await _timed_shutdown_step("deferred_runtime_startup", stop_deferred_runtime_startup)
+        if not _settings.testing:
+            await _timed_shutdown_step("wal_checkpoint_loop", stop_wal_checkpoints)
+            await _timed_shutdown_step("maintenance_loop", stop_maintenance)
+        await _timed_shutdown_step("shared_async_runner", stop_shared_runner)
+        await _timed_shutdown_step("websocket_topic_manager", stop_websocket_topic_manager)
+        if not _settings.testing or owns_test_catalog:
+            await _timed_shutdown_step("storage_title_services", stop_storage_title)
+            await _timed_shutdown_step("storage_telemetry", stop_storage_telemetry)
+            await _timed_shutdown_step("semantic_v2_projector", stop_semantic_projector)
+            await _timed_shutdown_step("search_v2_projector", stop_search_projector)
+            await _timed_shutdown_step("embeddings_v2_projector", stop_embedding_projector)
+            await _timed_shutdown_step("storage_v2_workers", stop_storage_workers)
+            await _timed_shutdown_step("searchd_supervisor", stop_searchd)
+            await _timed_shutdown_step("catalogd_supervisor", stop_catalogd)
+        logger.info("Background services stopped elapsed_ms=%.1f", (time.monotonic() - shutdown_started) * 1000)
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")

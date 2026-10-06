@@ -20,7 +20,14 @@ class _Runtime:
 
     async def try_admit(self, *, path):
         if not self.open:
-            return False, {"code": "runtime_draining", "path": path, "retryable": True}
+            return False, {
+                "code": "runtime_restarting",
+                "retryable": True,
+                "runtime_epoch": "runtime-test",
+                "admission": "draining",
+                "claim": {"type": "host.lifecycle", "state": "updating"},
+                "path": path,
+            }
         self.in_flight += 1
         self.admitted += 1
         return True, {}
@@ -66,8 +73,62 @@ def test_draining_runtime_refuses_writes_and_still_serves_reads(monkeypatch):
     client, _ = _client(monkeypatch, runtime)
     refused = client.post("/big")
     assert refused.status_code == 503
-    assert refused.json()["code"] == "runtime_draining"
+    assert refused.json()["code"] == "runtime_restarting"
+    assert refused.headers["retry-after"] == "2"
+    assert refused.json()["admission"] == "draining"
     assert client.get("/big").status_code == 200
+
+
+def test_rejected_asgi_request_consumes_a_still_sending_body_before_k1_response(monkeypatch):
+    import asyncio
+    import json
+
+    runtime = _Runtime(open_=False)
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    incoming = [
+        {"type": "http.request", "body": b'{"first":', "more_body": True},
+        {"type": "http.request", "body": b'"part","last":true}', "more_body": False},
+    ]
+    receive_count = 0
+    sent = []
+
+    async def endpoint(scope, receive, send):
+        raise AssertionError("a fenced request must not reach the app")
+
+    async def receive():
+        nonlocal receive_count
+        if receive_count < len(incoming):
+            message = incoming[receive_count]
+            receive_count += 1
+            return message
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            assert receive_count == len(incoming)
+        sent.append(message)
+
+    middleware = RuntimeWriteAdmissionMiddleware(endpoint)
+    asyncio.run(
+        middleware(
+            {"type": "http", "method": "POST", "path": "/write", "headers": []},
+            receive,
+            send,
+        )
+    )
+
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    body = b"".join(message.get("body", b"") for message in sent if message["type"] == "http.response.body")
+    headers = dict(start["headers"])
+    assert start["status"] == 503
+    assert headers[b"content-type"] == b"application/json"
+    assert headers[b"retry-after"] == b"2"
+    payload = json.loads(body)
+    assert payload["code"] == "runtime_restarting"
+    assert payload["retryable"] is True
+    assert payload["runtime_epoch"] == "runtime-test"
+    assert payload["admission"] == "draining"
+    assert payload["claim"]["type"] == "host.lifecycle"
 
 
 def test_a_streamed_write_stops_counting_once_its_response_starts(monkeypatch):

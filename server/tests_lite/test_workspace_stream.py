@@ -182,6 +182,10 @@ def test_live_catalog_workspace_stream_does_not_skip_unverified_initial_snapshot
     assert len(grouped.get("workspace_changed", [])) == 1
     assert grouped["workspace_changed"][0]["session_id"] == str(session_id)
     assert grouped["workspace_changed"][0]["pubsub_seq"] == 0
+    connected = grouped["connected"][0]
+    assert connected["runtime_epoch"]
+    assert connected["admission"] in {"open", "pending", "draining"}
+    assert grouped["host_lifecycle"][0]["type"] == "host.lifecycle"
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / "schemas" / "host_link.yml"
+RUNTIME_ADMISSION = ROOT / "server" / "zerg" / "services" / "runtime_admission.py"
 
 EXPECTED = {
     "schema_version": 1,
@@ -110,6 +112,30 @@ def validate(path: Path = SCHEMA) -> list[str]:
         return ["schema must contain a YAML object"]
     errors: list[str] = []
     _matches(value, EXPECTED, "schema", errors)
+    try:
+        module = ast.parse(RUNTIME_ADMISSION.read_text(encoding="utf-8"), filename=str(RUNTIME_ADMISSION))
+        runtime_horizons: dict[str, object] = {}
+        for node in module.body:
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if not isinstance(target, ast.Name) or target.id not in {
+                "DEFAULT_DRAIN_HORIZONS_SECONDS",
+                "DEFAULT_PENDING_HORIZONS_SECONDS",
+            }:
+                continue
+            runtime_horizons[target.id] = ast.literal_eval(node.value)
+    except (OSError, SyntaxError, ValueError) as exc:
+        errors.append(f"cannot read runtime claim defaults: {exc}")
+    else:
+        schema_horizons = value.get("default_horizons_seconds")
+        if isinstance(schema_horizons, dict):
+            for runtime_name, schema_name in (
+                ("DEFAULT_DRAIN_HORIZONS_SECONDS", "draining"),
+                ("DEFAULT_PENDING_HORIZONS_SECONDS", "pending"),
+            ):
+                if runtime_horizons.get(runtime_name) != schema_horizons.get(schema_name):
+                    errors.append(f"runtime {schema_name} claim defaults differ from schema")
     return errors
 
 

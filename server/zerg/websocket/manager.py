@@ -395,6 +395,31 @@ class TopicConnectionManager:
                 except Exception:
                     pass
 
+    async def close_all_for_host(self, *, code: int = 1012, reason: str = "host.lifecycle") -> int:
+        """Flush queued lifecycle envelopes, then close WebSockets before host stop."""
+        async with self._get_lock():
+            connections = tuple(self.active_connections.items())
+            queues = tuple(self.client_queues[client_id] for client_id, _ in connections if client_id in self.client_queues)
+
+        if queues:
+            try:
+                await asyncio.wait_for(asyncio.gather(*(queue.join() for queue in queues)), timeout=0.5)
+            except TimeoutError:
+                logger.warning("System WebSocket lifecycle envelopes did not flush before host close")
+
+        async def close(client_id: str, websocket: WebSocket) -> bool:
+            try:
+                await asyncio.wait_for(websocket.close(code=code, reason=reason), timeout=0.5)
+                return True
+            except Exception as exc:
+                logger.debug("Could not close system WebSocket for host lifecycle: %s", exc)
+                return False
+            finally:
+                await self.disconnect(client_id)
+
+        results = await asyncio.gather(*(close(client_id, websocket) for client_id, websocket in connections))
+        return sum(results)
+
     async def broadcast_to_topic(self, topic: str, message: Dict[str, Any]) -> None:
         """Broadcast a message to all clients subscribed to a topic.
 

@@ -4398,6 +4398,12 @@ export interface components {
             deadline_utc: string;
             /** Grace Seconds */
             grace_seconds: number;
+            /** Expected Back By */
+            expected_back_by?: string | null;
+            /** Claim Deadline */
+            claim_deadline?: string | null;
+            /** Claim Cutoff */
+            claim_cutoff?: string | null;
             /** Runtime Epoch */
             runtime_epoch?: string | null;
         };
@@ -17404,6 +17410,7 @@ export interface operations {
                 expected_generation?: string | null;
                 expected_schema_version?: string | null;
                 runtime_epoch?: string | null;
+                claim_deadline?: string | null;
             };
             header?: {
                 "X-Internal-Token"?: string | null;
@@ -17439,6 +17446,7 @@ export interface operations {
         parameters: {
             query: {
                 runtime_epoch: string;
+                claim_deadline?: string | null;
             };
             header?: {
                 "X-Internal-Token"?: string | null;

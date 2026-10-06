@@ -1485,7 +1485,7 @@ def _receipt_error_code(value: object) -> str | None:
 
 def _runtime_draining_error(value: object) -> bool:
     """Return whether a receipt records a known pre-dispatch drain refusal."""
-    return _receipt_error_code(value) == "runtime_draining"
+    return _receipt_error_code(value) in {"runtime_draining", "runtime_restarting"}
 
 
 def _input_error_detail(

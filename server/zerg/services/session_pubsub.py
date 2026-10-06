@@ -273,6 +273,7 @@ def topic_session(session_id: str) -> str:
 
 
 TOPIC_TIMELINE = "timeline"
+TOPIC_HOST_LIFECYCLE = "host_lifecycle"
 
 
 def publish_session_runtime_update(

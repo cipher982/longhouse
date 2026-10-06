@@ -14,6 +14,7 @@ os.environ.setdefault("AUTH_DISABLED", "1")
 
 import zerg.routers.agents_sessions as agents_sessions
 import zerg.services.live_catalog_timeline as live_catalog_timeline
+import zerg.services.runtime_admission as runtime_admission_module
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import project_machine_session_delta
 from zerg.services.session_state_contract import SessionStateFacts
@@ -57,6 +58,40 @@ def test_machine_session_stream_uses_commit_driven_catalog_projection(monkeypatc
     assert captured["params"].limit == 8
     assert captured["skip_initial_replay"] is False
     assert captured["owner_id"] == 1
+
+
+def test_machine_session_stream_connected_frame_includes_runtime_and_host_lifecycle(monkeypatch):
+    lifecycle = {
+        "type": "host.lifecycle",
+        "state": "serving",
+        "runtime_epoch": "runtime-test",
+        "attempt_id": None,
+        "phase": None,
+        "expected_back_by": None,
+        "deadline": None,
+        "cutoff": None,
+    }
+    runtime = SimpleNamespace(runtime_epoch="runtime-test", admission="open", host_lifecycle=lambda: lifecycle)
+    monkeypatch.setattr(runtime_admission_module, "runtime_admission", lambda: runtime)
+
+    async def collect():
+        stream = live_catalog_timeline.stream_live_catalog_machine_sessions(
+            _Request(),
+            params=None,
+            skip_initial_replay=True,
+            owner_id=1,
+        )
+        connected = await anext(stream)
+        host_lifecycle = await anext(stream)
+        await stream.aclose()
+        return connected, host_lifecycle
+
+    connected, host_lifecycle = asyncio.run(collect())
+    connected_data = json.loads(connected["data"])
+    assert connected["event"] == "connected"
+    assert connected_data["runtime_epoch"] == "runtime-test"
+    assert connected_data["admission"] == "open"
+    assert host_lifecycle == {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
 
 
 def test_machine_session_delta_is_small_and_contains_no_browser_card_copies():
@@ -187,10 +222,11 @@ def test_canonical_machine_stream_initial_replay_preserves_commit_coordinate(mon
             skip_initial_replay=False,
             owner_id=1,
         )
-        return await anext(stream), await anext(stream)
+        return await anext(stream), await anext(stream), await anext(stream)
 
-    connected, delta = asyncio.run(read_initial_events())
+    connected, lifecycle, delta = asyncio.run(read_initial_events())
     assert connected["event"] == "connected"
+    assert lifecycle["event"] == "host_lifecycle"
     assert delta["event"] == "session_delta"
     assert json.loads(delta["data"])["commit_seq"] == "91"
 
@@ -258,13 +294,14 @@ def test_machine_stream_survives_transient_catalog_saturation(monkeypatch):
             owner_id=1,
         )
         try:
-            return await anext(stream), await anext(stream)
+            return await anext(stream), await anext(stream), await anext(stream)
         finally:
             await stream.aclose()
 
-    connected, delta = asyncio.run(read_events())
+    connected, lifecycle, delta = asyncio.run(read_events())
 
     assert connected["event"] == "connected"
+    assert lifecycle["event"] == "host_lifecycle"
     assert delta["event"] == "session_delta"
     assert json.loads(delta["data"])["session_id"] == session_id
     assert calls == 2
@@ -314,13 +351,14 @@ def test_machine_stream_retries_initial_replay_when_catalog_is_unavailable(monke
             owner_id=1,
         )
         try:
-            return await anext(stream), await anext(stream)
+            return await anext(stream), await anext(stream), await anext(stream)
         finally:
             await stream.aclose()
 
-    connected, delta = asyncio.run(read_events())
+    connected, lifecycle, delta = asyncio.run(read_events())
 
     assert connected["event"] == "connected"
+    assert lifecycle["event"] == "host_lifecycle"
     assert delta["event"] == "session_delta"
     assert json.loads(delta["data"])["session_id"] == session_id
     assert calls == 2

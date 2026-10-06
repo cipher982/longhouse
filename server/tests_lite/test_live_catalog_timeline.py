@@ -19,6 +19,7 @@ os.environ.setdefault("TESTING", "1")
 import zerg.routers.agents_search as agents_search
 import zerg.routers.timeline as timeline_router
 import zerg.services.live_catalog_timeline as live_catalog_timeline
+import zerg.services.runtime_admission as runtime_admission_module
 from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import initialize_catalog_schema
@@ -133,6 +134,21 @@ def test_live_catalog_timeline_does_not_rescan_on_pubsub_timeout(monkeypatch):
         return SimpleNamespace(sessions=[], total=0, has_real_sessions=False)
 
     monkeypatch.setattr(live_catalog_timeline, "get_pubsub", lambda: Bus())
+    runtime = SimpleNamespace(
+        runtime_epoch="runtime-test",
+        admission="open",
+        host_lifecycle=lambda: {
+            "type": "host.lifecycle",
+            "state": "serving",
+            "runtime_epoch": "runtime-test",
+            "attempt_id": None,
+            "phase": None,
+            "expected_back_by": None,
+            "deadline": None,
+            "cutoff": None,
+        },
+    )
+    monkeypatch.setattr(runtime_admission_module, "runtime_admission", lambda: runtime)
     monkeypatch.setattr(live_catalog_timeline, "list_live_catalog_timeline", list_snapshot)
 
     async def collect():
@@ -146,7 +162,12 @@ def test_live_catalog_timeline_does_not_rescan_on_pubsub_timeout(monkeypatch):
 
     events = asyncio.run(collect())
 
-    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected", "stream_epoch": "epoch-1"}'}]
+    assert events[0]["event"] == "connected"
+    connected = json.loads(events[0]["data"])
+    assert connected["runtime_epoch"] == "runtime-test"
+    assert connected["admission"] == "open"
+    assert events[1]["event"] == "host_lifecycle"
+    assert json.loads(events[1]["data"]) == runtime.host_lifecycle()
     assert calls == 1
 
 
@@ -210,7 +231,12 @@ def test_live_catalog_timeline_coalesces_queued_pubsub_wakes(monkeypatch):
 
     events = asyncio.run(collect())
 
-    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected", "stream_epoch": "epoch-1"}'}]
+    assert events[0]["event"] == "connected"
+    connected = json.loads(events[0]["data"])
+    assert connected["message"] == "Timeline session stream connected"
+    assert connected["runtime_epoch"]
+    assert connected["admission"] in {"open", "pending", "draining"}
+    assert events[1]["event"] == "host_lifecycle"
     assert calls == 2
     assert subscription.drained == 2
 
@@ -276,7 +302,12 @@ def test_live_catalog_timeline_survives_catalog_pressure_after_headers(monkeypat
 
     events = asyncio.run(collect())
 
-    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected", "stream_epoch": "epoch-1"}'}]
+    assert events[0]["event"] == "connected"
+    connected = json.loads(events[0]["data"])
+    assert connected["message"] == "Timeline session stream connected"
+    assert connected["runtime_epoch"]
+    assert connected["admission"] in {"open", "pending", "draining"}
+    assert events[1]["event"] == "host_lifecycle"
     assert calls == 3
     assert sleeps == [1.0]
 

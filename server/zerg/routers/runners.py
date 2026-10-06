@@ -1058,6 +1058,8 @@ async def _runner_websocket_with_db(
     runner_id: int | None = None
     owner_id: int | None = None
 
+    runtime = None
+    runtime_admission_held = False
     try:
         # Wait for hello message
         try:
@@ -1113,6 +1115,14 @@ async def _runner_websocket_with_db(
         runner_id = runner.id  # Ensure runner_id is set for name-based auth
 
         owner_id = runner.owner_id
+        from zerg.services.runtime_admission import runtime_admission
+
+        runtime = runtime_admission()
+        admitted, _details = await runtime.try_admit(path="/api/runners/ws")
+        if not admitted:
+            await _safe_close_runner_websocket(websocket, code=1012, reason="host.lifecycle")
+            return
+        runtime_admission_held = True
 
         # Register connection
         connection_manager.register(owner_id, runner_id, websocket)
@@ -1149,6 +1159,8 @@ async def _runner_websocket_with_db(
         # it carries owner_id, which the access-log principal vocabulary
         # (user:/device:/managed-session:) has no slot for.
         log_ws_principal(websocket.scope, f"runner:{runner_id}")
+        await runtime.release()
+        runtime_admission_held = False
 
         # Enter message loop
         while True:
@@ -1185,6 +1197,8 @@ async def _runner_websocket_with_db(
         logger.error(f"Error in runner websocket handler: {e}")
 
     finally:
+        if runtime_admission_held and runtime is not None:
+            await runtime.release()
         # Cleanup: only unregister and mark offline if this is still the registered connection
         if runner_id and owner_id:
             # Only unregister if this websocket is still the current connection

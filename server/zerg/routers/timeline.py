@@ -1522,6 +1522,26 @@ async def _wait_for_session_change(subscription):
     return await subscription.next_message(timeout=WORKSPACE_STREAM_CHANGE_WAIT_SECONDS)
 
 
+async def _wait_for_workspace_stream_messages(session_subscription, lifecycle_subscription):
+    async def next_message(subscription):
+        return await _wait_for_session_change(subscription)
+
+    session_task = asyncio.create_task(next_message(session_subscription))
+    lifecycle_task = asyncio.create_task(next_message(lifecycle_subscription))
+    done, pending = await asyncio.wait(
+        {session_task, lifecycle_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    return (
+        session_task.result() if session_task in done else None,
+        lifecycle_task.result() if lifecycle_task in done else None,
+    )
+
+
 def _canary_workspace_marker_fields(payload: dict | None) -> dict[str, int]:
     if not isinstance(payload, dict) or payload.get("provider") != "canary" or payload.get("source") != "canary_producer":
         return {}
@@ -1556,12 +1576,17 @@ async def _live_catalog_workspace_stream(
     entering this generator; ``owner_id`` here is only a commit-seq hint.
     """
 
+    from zerg.services.session_pubsub import TOPIC_HOST_LIFECYCLE
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import topic_session
 
     bus = get_pubsub()
     topic = topic_session(str(session_id))
     current_stream_epoch = bus.stream_epoch
+    lifecycle_sequence = bus.peek_latest_seq(TOPIC_HOST_LIFECYCLE)
+    from zerg.services.runtime_admission import runtime_admission
+
+    runtime = runtime_admission()
     yield {
         "event": "connected",
         "data": json.dumps(
@@ -1569,12 +1594,18 @@ async def _live_catalog_workspace_stream(
                 "session_id": str(session_id),
                 "stream_epoch": current_stream_epoch,
                 "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                "runtime_epoch": runtime.runtime_epoch,
+                "admission": runtime.admission,
             }
         ),
     }
+    yield {"event": "host_lifecycle", "data": json.dumps(runtime.host_lifecycle())}
     replay_gap = bus.replay_gap(topic, since_seq=last_event_id, stream_epoch=stream_epoch)
     subscribe_since_seq = None if replay_gap else last_event_id
-    with bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription:
+    with (
+        bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription,
+        bus.subscribe(TOPIC_HOST_LIFECYCLE, since_seq=lifecycle_sequence) as lifecycle_subscription,
+    ):
         if skip_initial and last_event_id is None:
             # Keep the snapshot-to-stream handoff safe until both surfaces use
             # one comparable live workspace coordinate. The fingerprint is
@@ -1611,7 +1642,13 @@ async def _live_catalog_workspace_stream(
             }
         last_heartbeat = monotonic()
         while not await request.is_disconnected():
-            message = await _wait_for_session_change(subscription)
+            message, lifecycle_message = await _wait_for_workspace_stream_messages(subscription, lifecycle_subscription)
+            if lifecycle_message is not None and lifecycle_message.payload.get("kind") == "runtime_lifecycle":
+                lifecycle = lifecycle_message.payload.get("host_lifecycle")
+                if isinstance(lifecycle, dict):
+                    yield {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
+                if lifecycle_message.payload.get("drain_complete"):
+                    return
             if message is None:
                 if heartbeat_interval_seconds is None or monotonic() - last_heartbeat >= heartbeat_interval_seconds:
                     yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}

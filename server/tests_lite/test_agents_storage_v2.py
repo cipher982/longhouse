@@ -848,7 +848,7 @@ async def test_storage_v2_timeline_read_does_not_repair_stale_semantic_projectio
 
 
 @pytest.mark.asyncio
-async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch):
+async def test_storage_v2_envelope_is_accepted_before_worker_warmup_and_replayed(monkeypatch):
     tempdir = TemporaryDirectory(prefix="lh2-", dir="/tmp")
     root = Path(tempdir.name)
     database_path = root / "catalog.db"
@@ -859,7 +859,7 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
     catalog = CatalogClient(socket_path)
     workers = RawObjectWorkerPool(object_root, live_workers=1, repair_workers=1, queue_multiplier=1)
     render_workers = _InlineRenderPool(object_root)
-    await workers.start()
+    # The HTTP ingest must not depend on lifespan's optional warm-up call.
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
     monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
     monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)

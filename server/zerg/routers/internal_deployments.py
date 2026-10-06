@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -32,6 +33,8 @@ from zerg.config import get_settings
 from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.runtime_admission import runtime_admission
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/internal/deployments", tags=["internal-deployments"])
 
 
@@ -42,6 +45,9 @@ class DeploymentFenceRequest(BaseModel):
     generation: str = Field(..., min_length=1, max_length=255)
     deadline_utc: str = Field(..., min_length=1, max_length=80)
     grace_seconds: float = Field(..., ge=0, le=300)
+    expected_back_by: str | None = Field(None, max_length=80)
+    claim_deadline: str | None = Field(None, max_length=80)
+    claim_cutoff: str | None = Field(None, max_length=80)
     runtime_epoch: str | None = Field(None, max_length=128)
 
 
@@ -66,19 +72,45 @@ def _require_internal_token(token: str | None) -> None:
         raise HTTPException(status_code=401, detail="internal authentication required")
 
 
-async def _signal_runtime_lifecycle(payload: dict[str, Any]) -> None:
-    """Wake SSE and WebSocket clients without pretending this is durable data."""
-    from zerg.generated.ws_messages import Envelope
+async def _signal_runtime_lifecycle(
+    payload: dict[str, Any],
+    *,
+    lifecycle: dict[str, Any] | None = None,
+    drain_complete: bool = False,
+) -> None:
+    """Publish one lifecycle update on the control, timeline, and system channels."""
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+    from zerg.services.runner_connection_manager import get_runner_connection_manager
+    from zerg.services.session_pubsub import TOPIC_HOST_LIFECYCLE
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
     from zerg.websocket.manager import topic_manager
 
-    event = {"kind": "runtime_lifecycle", **payload}
-    get_pubsub().publish(TOPIC_TIMELINE, event)
-    await topic_manager.broadcast_to_topic(
-        "system",
-        Envelope.create(message_type="runtime_lifecycle", topic="system", data=event).model_dump(),
-    )
+    runtime = runtime_admission()
+    host_lifecycle = lifecycle or runtime.host_lifecycle()
+    event = {"kind": "runtime_lifecycle", **payload, "host_lifecycle": host_lifecycle}
+    if drain_complete:
+        event["drain_complete"] = True
+    pubsub = get_pubsub()
+    pubsub.publish(TOPIC_TIMELINE, event)
+    pubsub.publish(TOPIC_HOST_LIFECYCLE, event)
+    await get_machine_control_channel_registry().broadcast_host_lifecycle(host_lifecycle, close_after=drain_complete)
+    if drain_complete:
+        await get_runner_connection_manager().close_all_for_host(code=1012, reason="host.lifecycle")
+    try:
+        from zerg.generated.ws_messages import Envelope
+
+        await topic_manager.broadcast_to_topic(
+            "system",
+            Envelope.create(message_type="runtime_lifecycle", topic="system", data=event).model_dump(),
+        )
+    except Exception:
+        logger.exception("Could not publish runtime_lifecycle system event")
+    if drain_complete:
+        try:
+            await topic_manager.close_all_for_host(code=1012, reason="host.lifecycle")
+        except Exception:
+            logger.exception("Could not close system WebSockets after host lifecycle")
 
 
 def _fence_response(payload: dict[str, Any]) -> JSONResponse:
@@ -226,12 +258,22 @@ async def drain_runtime(
     x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
 ):
     _require_internal_token(x_internal_token)
-    result = await runtime_admission().drain(
+    runtime = runtime_admission()
+
+    async def publish_drain_start(lifecycle: dict[str, Any]) -> None:
+        await _signal_runtime_lifecycle(
+            {"state": "draining", "attempt_id": attempt_id},
+            lifecycle=lifecycle,
+        )
+
+    result = await runtime.drain(
         body.model_dump(mode="json"),
         attempt_id=attempt_id,
         catalog_probe=_catalog_admission_probe,
+        on_drain_start=publish_drain_start,
     )
-    await _signal_runtime_lifecycle(result)
+    if result.get("state") == "drained":
+        await _signal_runtime_lifecycle(result, drain_complete=True)
     return _fence_response(result)
 
 
@@ -284,19 +326,20 @@ async def get_runtime_drain(
     state = runtime.state
     if state == "drained" and not catalog_quiescent:
         state = "draining"
-    return _fence_response(
-        {
-            **snapshot,
-            "state": state,
-            "attempt_id": fence.attempt_id,
-            "request_id": fence.request_id,
-            "deployment_id": fence.deployment_id,
-            "target_id": fence.target_id,
-            "generation": fence.generation,
-            "deadline_utc": fence.deadline_utc,
-            "grace_seconds": fence.grace_seconds,
-        }
-    )
+    result = {
+        **snapshot,
+        "state": state,
+        "attempt_id": fence.attempt_id,
+        "request_id": fence.request_id,
+        "deployment_id": fence.deployment_id,
+        "target_id": fence.target_id,
+        "generation": fence.generation,
+        "deadline_utc": fence.deadline_utc,
+        "grace_seconds": fence.grace_seconds,
+    }
+    if state == "drained":
+        await _signal_runtime_lifecycle(result, drain_complete=True)
+    return _fence_response(result)
 
 
 @router.post("/{attempt_id}/reopen")
@@ -315,7 +358,8 @@ async def reopen_runtime(
         catalog_probe=_catalog_admission_probe,
         activation_probe=_catalog_activation_probe,
     )
-    await _signal_runtime_lifecycle(result)
+    if result.get("state") == "reopened":
+        await _signal_runtime_lifecycle(result)
     return _fence_response(result)
 
 
@@ -376,6 +420,7 @@ async def runtime_readiness(
     expected_generation: str | None = Query(None, max_length=255),
     expected_schema_version: str | None = Query(None, max_length=255),
     runtime_epoch: str | None = Query(None, max_length=128),
+    claim_deadline: str | None = Query(None, max_length=80),
     x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
 ):
     _require_internal_token(x_internal_token)
@@ -408,6 +453,14 @@ async def runtime_readiness(
                     "detail": str(exc),
                 },
             )
+    await runtime.renew_claim(claim_deadline=claim_deadline, attempt_id=attempt_id, phase="readiness")
+    snapshot = await runtime.snapshot()
+    lifecycle = runtime.host_lifecycle()
+    if lifecycle.get("attempt_id") == attempt_id:
+        await _signal_runtime_lifecycle(
+            {"state": snapshot.get("state"), "attempt_id": attempt_id},
+            lifecycle=lifecycle,
+        )
     evidence = _runtime_evidence()
     schema_version = evidence["schema_version"]
     schema_ok = expected_schema_version is None or str(schema_version) == str(expected_schema_version)
@@ -491,6 +544,7 @@ async def _catalog_reads_for_cutover(catalog_socket) -> tuple[dict[str, Any], di
 async def read_consistency(
     attempt_id: str,
     runtime_epoch: str = Query(..., min_length=1, max_length=128),
+    claim_deadline: str | None = Query(None, max_length=80),
     x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
 ):
     """Concrete authenticated catalog read used by cutover verification.
@@ -519,6 +573,13 @@ async def read_consistency(
     if runtime_epoch != runtime.runtime_epoch:
         base["detail"] = "runtime epoch is no longer served by this process"
         return JSONResponse(status_code=409, content=base)
+    await runtime.renew_claim(claim_deadline=claim_deadline, attempt_id=attempt_id, phase="probe")
+    lifecycle = runtime.host_lifecycle()
+    if lifecycle.get("attempt_id") == attempt_id:
+        await _signal_runtime_lifecycle(
+            {"state": runtime.state, "attempt_id": attempt_id},
+            lifecycle=lifecycle,
+        )
     try:
         from zerg.build_info import load as load_build_identity
 

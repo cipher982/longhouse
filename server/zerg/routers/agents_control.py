@@ -22,6 +22,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.runtime_admission import runtime_admission
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,8 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
     owner_id: int | None = None
     device_id: str | None = None
     console_reconcile_task: asyncio.Task[None] | None = None
+    runtime = None
+    runtime_admission_held = False
 
     try:
         if not settings.testing and not settings.single_tenant:
@@ -192,6 +195,12 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
         if token is None and not settings.auth_disabled:
             await _close_control_ws(websocket, code=4401, reason="Invalid or missing device token")
             return
+        runtime = runtime_admission()
+        admitted, _details = await runtime.try_admit(path="/api/agents/control/ws")
+        if not admitted:
+            await _close_control_ws(websocket, code=1012, reason="host.lifecycle")
+            return
+        runtime_admission_held = True
 
         # Name the caller for the access log, in the same format the HTTP
         # machine surface stamps (dependencies/agents_auth.py). The owner-bound
@@ -223,17 +232,23 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             return
         owner_id, device_id = identity
 
-        supports_raw = hello.get("supports") or []
-        supports = [str(item) for item in supports_raw] if isinstance(supports_raw, list) else []
-        await registry.register(
-            owner_id=owner_id,
-            device_id=device_id,
-            machine_name=str(hello.get("machine_name") or device_id),
-            engine_build=str(hello.get("engine_build") or "") or None,
-            supports=supports,
-            provider_readiness=hello.get("provider_readiness"),
-            websocket=websocket,
-        )
+        try:
+            supports_raw = hello.get("supports") or []
+            supports = [str(item) for item in supports_raw] if isinstance(supports_raw, list) else []
+            await registry.register(
+                owner_id=owner_id,
+                device_id=device_id,
+                machine_name=str(hello.get("machine_name") or device_id),
+                engine_build=str(hello.get("engine_build") or "") or None,
+                supports=supports,
+                provider_readiness=hello.get("provider_readiness"),
+                websocket=websocket,
+            )
+            await websocket.send_json(runtime.host_lifecycle())
+            await websocket.send_json({"type": "hello_ack", "runtime_epoch": runtime.runtime_epoch, "admission": runtime.admission})
+        finally:
+            await runtime.release()
+            runtime_admission_held = False
         console_reconcile_task = asyncio.create_task(
             _reconcile_console_turns_after_register(
                 owner_id=owner_id,
@@ -297,6 +312,8 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             else:
                 logger.warning("Unknown machine control message type from %s: %s", device_id, message_type)
     finally:
+        if runtime_admission_held and runtime is not None:
+            await runtime.release()
         if console_reconcile_task is not None and not console_reconcile_task.done():
             console_reconcile_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

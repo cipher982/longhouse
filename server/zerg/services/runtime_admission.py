@@ -15,6 +15,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Awaitable
@@ -33,6 +34,48 @@ class RuntimeFence:
     grace_seconds: float
     runtime_epoch: str
     fingerprint: str
+    claim_expected_back_by: str | None = None
+    claim_deadline: str | None = None
+    claim_cutoff: str | None = None
+
+
+DEFAULT_DRAIN_HORIZONS_SECONDS = {"expected_back_by": 30, "deadline": 360, "cutoff": 960}
+DEFAULT_PENDING_HORIZONS_SECONDS = {"expected_back_by": 15, "deadline": 300, "cutoff": 960}
+PENDING_REOPEN_MAX_WAIT_SECONDS = 10.0
+_DEPLOYER_PHASES = frozenset(
+    {
+        "prepare",
+        "drain",
+        "stop",
+        "recovery_point",
+        "migrate",
+        "start",
+        "readiness",
+        "probe",
+        "reopen",
+        "rollback_stop",
+        "rollback_start",
+        "rollback_readiness",
+        "rollback_probe",
+        "rollback_reopen",
+    }
+)
+
+
+def _parse_claim_time(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_claim_time(value: datetime | None) -> str | None:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if value is not None else None
 
 
 CatalogAdmissionProbe = Callable[[str], Awaitable[dict[str, Any]]]
@@ -59,6 +102,11 @@ class RuntimeAdmission:
             "detail": "catalog writer admission has not been observed",
         }
         self._lock = asyncio.Lock()
+        self._reopen_event = asyncio.Event()
+        self._initial_open_event = asyncio.Event()
+        if not self._startup_closed:
+            self._reopen_event.set()
+            self._initial_open_event.set()
         self._candidate_attempt: str | None = None
         self._candidate_generation: str | None = None
         self._candidate_ready_attempt: str | None = None
@@ -67,6 +115,104 @@ class RuntimeAdmission:
         self._process_image_digest = os.getenv("LONGHOUSE_IMAGE_DIGEST", "").strip() or None
         self.deployment_id = os.getenv("LONGHOUSE_DEPLOYMENT_ID") or None
         self.target_id = os.getenv("LONGHOUSE_TARGET_ID") or None
+        self._claim_attempt_id = os.getenv("LONGHOUSE_DEPLOYMENT_ATTEMPT_ID", "").strip() or None
+        self._claim_phase: str | None = None
+        self._claim_expected_back_by: datetime | None = None
+        self._claim_deadline: datetime | None = None
+        self._claim_cutoff: datetime | None = None
+        if self._startup_closed:
+            self._set_default_claim_horizons(DEFAULT_PENDING_HORIZONS_SECONDS)
+        env_horizons = {
+            "expected_back_by": _parse_claim_time(os.getenv("LONGHOUSE_CLAIM_EXPECTED_BACK_BY")),
+            "deadline": _parse_claim_time(os.getenv("LONGHOUSE_CLAIM_DEADLINE")),
+            "cutoff": _parse_claim_time(os.getenv("LONGHOUSE_CLAIM_CUTOFF")),
+        }
+        if any(value is not None for value in env_horizons.values()):
+            self._set_claim_horizons(env_horizons, DEFAULT_PENDING_HORIZONS_SECONDS)
+
+    def _set_default_claim_horizons(self, defaults: dict[str, int]) -> None:
+        now = datetime.now(timezone.utc)
+        self._claim_expected_back_by = now + timedelta(seconds=defaults["expected_back_by"])
+        self._claim_deadline = now + timedelta(seconds=defaults["deadline"])
+        self._claim_cutoff = now + timedelta(seconds=defaults["cutoff"])
+
+    def _set_claim_horizons(self, values: dict[str, datetime | None], defaults: dict[str, int]) -> None:
+        now = datetime.now(timezone.utc)
+        self._claim_expected_back_by = values.get("expected_back_by") or now + timedelta(seconds=defaults["expected_back_by"])
+        self._claim_deadline = values.get("deadline") or now + timedelta(seconds=defaults["deadline"])
+        self._claim_cutoff = values.get("cutoff") or now + timedelta(seconds=defaults["cutoff"])
+        if self._claim_deadline > self._claim_cutoff:
+            self._claim_deadline = self._claim_cutoff
+
+    def _admission_unlocked(self) -> str:
+        if self._state in {"open", "reopened"} and not self._startup_closed:
+            return "open"
+        if self._startup_closed or self._state == "closed":
+            return "pending"
+        return "draining"
+
+    def _host_lifecycle_unlocked(self) -> dict[str, Any]:
+        serving = self._admission_unlocked() == "open"
+        phase = self._claim_phase
+        if serving and phase is None and self._state == "reopened":
+            phase = "reopen"
+        return {
+            "type": "host.lifecycle",
+            "state": "serving" if serving else "updating",
+            "runtime_epoch": self.runtime_epoch,
+            "attempt_id": self._claim_attempt_id or (self._fence.attempt_id if self._fence else None),
+            "phase": phase,
+            "expected_back_by": None if serving else _format_claim_time(self._claim_expected_back_by),
+            "deadline": None if serving else _format_claim_time(self._claim_deadline),
+            "cutoff": None if serving else _format_claim_time(self._claim_cutoff),
+        }
+
+    def host_lifecycle(self) -> dict[str, Any]:
+        return self._host_lifecycle_unlocked()
+
+    async def renew_claim(self, *, claim_deadline: str | None, attempt_id: str, phase: str) -> dict[str, Any]:
+        async with self._lock:
+            current_attempt = self._claim_attempt_id or (self._fence.attempt_id if self._fence else None)
+            if current_attempt not in {None, attempt_id}:
+                return self._snapshot_unlocked()
+            self._claim_attempt_id = attempt_id
+            self._claim_phase = phase if phase in _DEPLOYER_PHASES else self._claim_phase
+            requested_deadline = _parse_claim_time(claim_deadline)
+            if requested_deadline is not None:
+                if self._claim_cutoff is None:
+                    self._claim_cutoff = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_PENDING_HORIZONS_SECONDS["cutoff"])
+                self._claim_deadline = min(requested_deadline, self._claim_cutoff)
+            return self._snapshot_unlocked()
+
+    async def wait_for_reopen(self, *, max_wait_seconds: float = PENDING_REOPEN_MAX_WAIT_SECONDS) -> bool:
+        async with self._lock:
+            admission = self._admission_unlocked()
+            if admission == "open":
+                return True
+            if admission != "pending":
+                return False
+            now = datetime.now(timezone.utc)
+            claim_remaining = (
+                max(0.0, (self._claim_deadline - now).total_seconds()) if self._claim_deadline is not None else max_wait_seconds
+            )
+            timeout = min(max_wait_seconds, claim_remaining)
+            event = self._reopen_event
+        if timeout <= 0:
+            return False
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        async with self._lock:
+            return self._admission_unlocked() == "open"
+
+    async def wait_until_initial_open(self) -> None:
+        """Wait for the first successful reopen; used only by deferred startup work."""
+        await self._initial_open_event.wait()
+
+    @property
+    def admission(self) -> str:
+        return self._admission_unlocked()
 
     @property
     def state(self) -> str:
@@ -87,10 +233,17 @@ class RuntimeAdmission:
             raise ValueError("candidate generation is unavailable from process startup metadata")
         if candidate_generation != self._process_generation:
             raise ValueError("candidate generation does not match this runtime")
+        if self._claim_attempt_id not in {None, attempt_id}:
+            raise ValueError("candidate readiness fence conflicts with the deployment attempt")
         if self._candidate_attempt is None:
             self._candidate_attempt = attempt_id
             self._candidate_generation = candidate_generation
             self._startup_closed = True
+            self._claim_attempt_id = attempt_id
+            self._claim_phase = "readiness"
+            if self._claim_deadline is None:
+                self._set_default_claim_horizons(DEFAULT_PENDING_HORIZONS_SECONDS)
+            self._reopen_event.clear()
             if self._state == "open":
                 self._state = "closed"
             return
@@ -183,6 +336,9 @@ class RuntimeAdmission:
                 return result
             self._state = "reopened"
             self._startup_closed = False
+            self._claim_phase = "reopen"
+            self._reopen_event.set()
+            self._initial_open_event.set()
             result = self._snapshot_unlocked()
             result.update(
                 {
@@ -234,6 +390,8 @@ class RuntimeAdmission:
         return {
             "runtime_epoch": self.runtime_epoch,
             "state": state,
+            "admission": self._admission_unlocked(),
+            "claim": None if self._admission_unlocked() == "open" else self._host_lifecycle_unlocked(),
             "active_writers": active_writers,
             "queued_side_effects": queued_side_effects,
             "runtime_in_flight": self._in_flight,
@@ -261,19 +419,29 @@ class RuntimeAdmission:
 
     async def try_admit(self, *, path: str) -> tuple[bool, dict[str, Any]]:
         async with self._lock:
-            if self._state in {"draining", "drained", "closed"} or self._startup_closed:
-                payload = self._snapshot_unlocked()
-                payload.update(
-                    {
-                        "retryable": True,
-                        "code": "runtime_draining",
-                        "message": "Runtime is restarting; retry after reopen with the same request identity.",
-                        "path": path,
-                    }
-                )
-                return False, payload
-            self._in_flight += 1
-            return True, self._snapshot_unlocked()
+            admission = self._admission_unlocked()
+            if admission == "open":
+                self._in_flight += 1
+                return True, self._snapshot_unlocked()
+            should_wait = admission == "pending"
+
+        if should_wait and await self.wait_for_reopen():
+            async with self._lock:
+                if self._admission_unlocked() == "open":
+                    self._in_flight += 1
+                    return True, self._snapshot_unlocked()
+
+        async with self._lock:
+            payload = self._snapshot_unlocked()
+            payload.update(
+                {
+                    "retryable": True,
+                    "code": "runtime_restarting",
+                    "message": "Runtime is restarting; retry after reopen with the same request identity.",
+                    "path": path,
+                }
+            )
+            return False, payload
 
     async def release(self) -> None:
         async with self._lock:
@@ -295,6 +463,7 @@ class RuntimeAdmission:
         *,
         attempt_id: str,
         catalog_probe: CatalogAdmissionProbe | None = None,
+        on_drain_start: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         required = ("request_id", "deployment_id", "target_id", "generation", "deadline_utc", "grace_seconds")
         if any(not str(payload.get(key) or "").strip() for key in required[:-1]):
@@ -331,6 +500,23 @@ class RuntimeAdmission:
                 "message": "deadline_utc must be timezone-aware ISO-8601",
                 "runtime_epoch": self.runtime_epoch,
             }
+        defaults = DEFAULT_DRAIN_HORIZONS_SECONDS
+        claim_values: dict[str, datetime | None] = {}
+        for field, key in (
+            ("expected_back_by", "expected_back_by"),
+            ("claim_deadline", "deadline"),
+            ("claim_cutoff", "cutoff"),
+        ):
+            raw_value = payload.get(field)
+            parsed_value = _parse_claim_time(raw_value)
+            if raw_value is not None and str(raw_value).strip() and parsed_value is None:
+                return {
+                    "state": "conflict",
+                    "code": "invalid_fence",
+                    "message": f"{field} must be a timezone-aware RFC 3339 timestamp",
+                    "runtime_epoch": self.runtime_epoch,
+                }
+            claim_values[key] = parsed_value
         runtime_epoch = str(payload.get("runtime_epoch") or "").strip()
         if runtime_epoch and runtime_epoch != self.runtime_epoch:
             return {
@@ -341,7 +527,18 @@ class RuntimeAdmission:
             }
         canonical = {
             key: payload.get(key)
-            for key in ("request_id", "deployment_id", "target_id", "generation", "deadline_utc", "grace_seconds", "runtime_epoch")
+            for key in (
+                "request_id",
+                "deployment_id",
+                "target_id",
+                "generation",
+                "deadline_utc",
+                "grace_seconds",
+                "runtime_epoch",
+                "expected_back_by",
+                "claim_deadline",
+                "claim_cutoff",
+            )
         }
         fingerprint = self._fingerprint(canonical)
         request_id = str(payload["request_id"])
@@ -379,6 +576,10 @@ class RuntimeAdmission:
                     "message": "another deployment fence is active",
                     "runtime_epoch": self.runtime_epoch,
                 }
+            self._set_claim_horizons(claim_values, defaults)
+            self._claim_attempt_id = attempt_id
+            self._claim_phase = "drain"
+            self._reopen_event.clear()
             self._fence = RuntimeFence(
                 attempt_id=attempt_id,
                 request_id=request_id,
@@ -389,6 +590,9 @@ class RuntimeAdmission:
                 grace_seconds=grace,
                 runtime_epoch=self.runtime_epoch,
                 fingerprint=fingerprint,
+                claim_expected_back_by=_format_claim_time(self._claim_expected_back_by),
+                claim_deadline=_format_claim_time(self._claim_deadline),
+                claim_cutoff=_format_claim_time(self._claim_cutoff),
             )
             self._state = "draining"
             self._request_fingerprints[request_id] = fingerprint
@@ -405,6 +609,8 @@ class RuntimeAdmission:
                 }
             )
             self._request_results[request_id] = dict(result)
+        if on_drain_start is not None:
+            await on_drain_start(self.host_lifecycle())
         # The control-plane deadline is UTC; turn its remaining duration into a
         # single monotonic deadline before waiting. Mixing the UTC timestamp
         # directly with monotonic time collapses the bound to "now".
@@ -624,6 +830,10 @@ class RuntimeAdmission:
                 self._request_fingerprints[request_id] = fingerprint
                 self._state = "reopened"
                 self._startup_closed = False
+                self._claim_attempt_id = attempt_id
+                self._claim_phase = "reopen"
+                self._reopen_event.set()
+                self._initial_open_event.set()
                 result = self._snapshot_unlocked()
                 result.update(
                     {
@@ -700,6 +910,10 @@ class RuntimeAdmission:
                     return result
             self._state = "reopened"
             self._startup_closed = False
+            self._claim_attempt_id = attempt_id
+            self._claim_phase = "reopen"
+            self._reopen_event.set()
+            self._initial_open_event.set()
             result = self._snapshot_unlocked()
             result.update(
                 {

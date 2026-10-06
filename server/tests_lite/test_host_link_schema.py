@@ -61,3 +61,15 @@ def test_host_link_contract_checker_requires_exact_scalar_types(tmp_path: Path) 
 
         assert result.returncode == 1
         assert "schema.k1.retry_after_min_seconds" in result.stderr
+
+
+def test_host_link_contract_checker_reports_malformed_horizons(tmp_path: Path) -> None:
+    schema = yaml.safe_load(SCHEMA.read_text(encoding="utf-8"))
+    schema["default_horizons_seconds"] = []
+    invalid_schema = tmp_path / "host_link.yml"
+    invalid_schema.write_text(yaml.safe_dump(schema, sort_keys=False), encoding="utf-8")
+
+    result = _check(invalid_schema)
+
+    assert result.returncode == 1
+    assert "schema.default_horizons_seconds must be a YAML object" in result.stderr

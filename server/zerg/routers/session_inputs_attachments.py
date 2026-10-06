@@ -928,7 +928,7 @@ async def create_session_input_with_attachments(
             payload = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
         except Exception:
             payload = {}
-        if isinstance(payload, dict) and payload.get("error_code") == "runtime_draining":
+        if isinstance(payload, dict) and payload.get("error_code") in {"runtime_draining", "runtime_restarting"}:
             marked = await _set_catalog_live_receipt_error(
                 receipt_id=catalog_receipt_id,
                 source_session=source_session,
