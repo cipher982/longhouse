@@ -727,26 +727,57 @@ def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):
 
 
 @pytest.mark.parametrize("flag", ["hidden_from_default_timeline", "user_hidden_from_timeline"])
-def test_detail_read_without_hidden_suppresses_a_hidden_card(monkeypatch, flag):
+def test_detail_read_without_hidden_suppresses_a_hidden_session(tmp_path, monkeypatch, flag):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'hidden.db'}")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
     session_id = str(uuid4())
-    snapshot = {
-        "found": True,
-        "commit_seq": "23",
-        "observed_at": datetime.now(timezone.utc).isoformat(),
-        "legacy_facts": {"catalog": {"session_id": session_id}, "card": {flag: 1}},
-        "heads": [],
-        "heads_truncated": False,
-    }
-    monkeypatch.setattr(live_catalog_timeline, "shadow_session_state_snapshot", lambda *_args, **_kwargs: snapshot)
+    thread_id = str(uuid4())
+    with LiveSession() as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.add(
+            LiveSessionCatalog(
+                session_id=session_id,
+                provider="claude",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+                primary_thread_id=thread_id,
+                created_at=now,
+                updated_at=now,
+                **{flag: 1},
+            )
+        )
+        db.add(
+            LiveSessionRow(
+                session_id=session_id,
+                owner_id="1",
+                provider="claude",
+                device_id="cinder",
+                state="running",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        _add_live_kernel(db, session_id=session_id, thread_id=thread_id, now=now, provider="claude")
+        db.commit()
     monkeypatch.setattr(
         live_catalog_timeline,
-        "project_catalog_session_facts",
-        lambda *_args, **_kwargs: pytest.fail("a hidden card must not be projected for the timeline stream"),
+        "shadow_session_state_snapshot",
+        lambda session_id, *, owner_id: store.read_shadow_session_state(session_id=session_id, owner_id=owner_id),
     )
 
-    result, alias, commit_seq = read_live_catalog_session(session_id, owner_id=3, include_hidden=False)
+    hidden, _alias, _seq = read_live_catalog_session(session_id, owner_id=1, include_hidden=False)
+    shown, _alias, _seq = read_live_catalog_session(session_id, owner_id=1, include_hidden=True)
 
-    assert (result, alias, commit_seq) == (None, None, "23")
+    assert hidden is None, "the timeline stream must not push a hidden session"
+    assert shown is not None and shown.id == session_id
 
 
 def test_canonical_detail_projects_truncated_heads_as_no_state_evidence(monkeypatch):
