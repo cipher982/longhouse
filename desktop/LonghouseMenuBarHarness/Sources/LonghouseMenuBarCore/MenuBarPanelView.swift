@@ -300,6 +300,14 @@ public struct MenuBarPanelView: View {
                 }
             }
 
+            if let detail = presentation.detail {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 40)
+            }
+
             let chips = [snapshot.updateAvailableChipLabel, snapshot.restartPendingChipLabel].compactMap { $0 }
             if !chips.isEmpty {
                 HStack(spacing: 6) {
@@ -933,7 +941,8 @@ public struct MenuBarPanelView: View {
 
     /// Whether the machine needs a card with an action rather than one line.
     var showsTroubleCard: Bool {
-        presentation.promotion == .repair
+        guard snapshot.hostLink?.isUpdateInProgress != true else { return false }
+        return presentation.promotion == .repair
             || shouldOfferNativeRepair
             || !dataTrust.isCurrent
             || !projectionTrust.isCurrent

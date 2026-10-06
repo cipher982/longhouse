@@ -62,6 +62,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let launchReadiness: LaunchReadinessSnapshot?
     public let build: BuildIdentitySnapshot?
     public let updateInfo: UpdateInfoSnapshot?
+    public let hostLink: HostLinkSnapshot?
 
     public init(
         schemaVersion: Int?,
@@ -86,7 +87,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         orphanBridges: [OrphanBridgeSnapshot]? = nil,
         launchReadiness: LaunchReadinessSnapshot?,
         build: BuildIdentitySnapshot? = nil,
-        updateInfo: UpdateInfoSnapshot? = nil
+        updateInfo: UpdateInfoSnapshot? = nil,
+        hostLink: HostLinkSnapshot? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.collectedAt = collectedAt
@@ -111,6 +113,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.launchReadiness = launchReadiness
         self.build = build
         self.updateInfo = updateInfo
+        self.hostLink = hostLink
     }
 
     public var parsedSeverity: HarnessSeverity {
@@ -151,7 +154,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             orphanBridges: orphanBridges,
             launchReadiness: launchReadiness,
             build: build,
-            updateInfo: updateInfo
+            updateInfo: updateInfo,
+            hostLink: hostLink
         )
     }
 
@@ -225,7 +229,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                 orphanBridges: orphanBridges,
                 launchReadiness: launchReadiness,
                 build: build,
-                updateInfo: updateInfo
+                updateInfo: updateInfo,
+                hostLink: hostLink
             )
             let presentation = projectedSnapshot.menuBarPresentation(relativeTo: Date())
             projectedHealthState = "degraded"
@@ -272,7 +277,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             orphanBridges: orphanBridges,
             launchReadiness: launchReadiness,
             build: build,
-            updateInfo: updateInfo
+            updateInfo: updateInfo,
+            hostLink: hostLink
         )
     }
 
@@ -440,7 +446,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             activitySummary: activitySummary, managedSummary: managedSummary, managedSessions: sessions,
             realtime: realtime, transport: transport, heartbeatTransport: heartbeatTransport,
             unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
-            launchReadiness: launchReadiness, build: build, updateInfo: updateInfo
+            launchReadiness: launchReadiness, build: build, updateInfo: updateInfo,
+            hostLink: hostLink
         )
     }
 
@@ -1659,6 +1666,72 @@ public struct ServiceSnapshot: Codable, Equatable, Sendable {
     public let serviceName: String?
     public let serviceFile: String?
     public let logPath: String?
+}
+
+public struct HostLifecycleSnapshot: Codable, Equatable, Sendable {
+    public let type: String?
+    public let state: String
+    public let runtimeEpoch: String?
+    public let attemptId: String?
+    public let phase: String?
+    public let expectedBackBy: String?
+    public let deadline: String?
+    public let cutoff: String?
+
+    public init(
+        type: String? = nil,
+        state: String,
+        runtimeEpoch: String? = nil,
+        attemptId: String? = nil,
+        phase: String? = nil,
+        expectedBackBy: String? = nil,
+        deadline: String? = nil,
+        cutoff: String? = nil
+    ) {
+        self.type = type
+        self.state = state
+        self.runtimeEpoch = runtimeEpoch
+        self.attemptId = attemptId
+        self.phase = phase
+        self.expectedBackBy = expectedBackBy
+        self.deadline = deadline
+        self.cutoff = cutoff
+    }
+}
+
+public struct HostLinkSnapshot: Codable, Equatable, Sendable {
+    public let state: String
+    public let since: String
+    public let claim: HostLifecycleSnapshot?
+    public let claimStartedAt: String?
+    public let lastAcknowledgedAt: String?
+    public let freshHorizonSecs: Int?
+    public let lastServingAt: String?
+    public let runtimeEpoch: String?
+
+    public var isUpdateInProgress: Bool {
+        state == "updating" || state == "slow_update"
+    }
+
+    public init(
+        state: String,
+        since: String,
+        claim: HostLifecycleSnapshot? = nil,
+        claimStartedAt: String? = nil,
+        lastAcknowledgedAt: String? = nil,
+        freshHorizonSecs: Int? = nil,
+        lastServingAt: String? = nil,
+        runtimeEpoch: String? = nil
+    ) {
+        self.state = state
+        self.since = since
+        self.claim = claim
+        self.claimStartedAt = claimStartedAt
+        self.lastAcknowledgedAt = lastAcknowledgedAt
+        self.freshHorizonSecs = freshHorizonSecs
+        self.lastServingAt = lastServingAt
+        self.runtimeEpoch = runtimeEpoch
+    }
 }
 
 public struct EngineStatusSnapshot: Codable, Equatable, Sendable {

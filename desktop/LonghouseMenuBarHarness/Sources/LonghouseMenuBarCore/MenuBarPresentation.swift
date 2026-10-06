@@ -1,4 +1,17 @@
 import SwiftUI
+
+private enum HostLinkCopy {
+    static let updatingHeadline = "Longhouse is updating"
+    static let updatingDetail = "Your agents keep running on this Mac. Nothing is lost; updates resume in a few seconds."
+    static let slowUpdateHeadline = "Update is taking longer than usual"
+}
+
+private struct HostLinkDisplay {
+    let headline: String
+    let detail: String
+    let promotion: MenuBarPromotion
+}
+
 private let menuBarUnavailableReasons: Set<String> = [
     "engine_status_missing", "engine_status_unreadable", "engine_status_stale",
     "engine_projection_stale",
@@ -71,6 +84,7 @@ public struct MenuBarPresentation: Equatable, Sendable {
     /// a system warning.
     public let systemPromotion: MenuBarPromotion
     public let systemHeadline: String
+    public let detail: String?
     public let facts: [MenuBarSystemFact]
     public let backgroundActivity: String?
 
@@ -78,14 +92,53 @@ public struct MenuBarPresentation: Equatable, Sendable {
 }
 
 extension HealthSnapshot {
+    // A host update is stronger evidence than a failed heartbeat from before its claim.
     private var heartbeatPostFailed: Bool {
-        heartbeatTransport?.state == "degraded" || reasons.contains("heartbeat_post_failed")
+        guard hostLink?.isUpdateInProgress != true else { return false }
+        return heartbeatTransport?.state == "degraded" || reasons.contains("heartbeat_post_failed")
     }
 
     private var heartbeatEvidenceRejected: Bool {
         reasons.contains("heartbeat_evidence_rejected")
             || ["disabled", "failed", "oversize_evidence", "rejected", "unsupported_schema"]
                 .contains(heartbeatTransport?.evidenceState ?? "")
+    }
+
+    private func hostLinkDisplay(relativeTo referenceDate: Date) -> HostLinkDisplay? {
+        guard let hostLink else { return nil }
+        switch hostLink.state {
+        case "updating":
+            guard let elapsed = hostLinkElapsedSeconds(relativeTo: referenceDate), elapsed >= 2 else {
+                return nil
+            }
+            return HostLinkDisplay(
+                headline: HostLinkCopy.updatingHeadline,
+                detail: HostLinkCopy.updatingDetail,
+                promotion: .unavailable
+            )
+        case "slow_update":
+            let elapsed = hostLinkElapsedSeconds(relativeTo: referenceDate)
+                .map { Self.compactSeconds(UInt64($0)) }
+            let headline = elapsed.map { "\(HostLinkCopy.slowUpdateHeadline) · \($0)" }
+                ?? HostLinkCopy.slowUpdateHeadline
+            return HostLinkDisplay(
+                headline: headline,
+                detail: HostLinkCopy.updatingDetail,
+                promotion: .inspect
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func hostLinkElapsedSeconds(relativeTo referenceDate: Date) -> Int? {
+        guard let raw = hostLink?.claimStartedAt,
+              let startedAt = Self.parseISO8601(raw) else {
+            return nil
+        }
+        let elapsed = referenceDate.timeIntervalSince(startedAt)
+        guard elapsed.isFinite, elapsed >= 0 else { return nil }
+        return Int(elapsed)
     }
 
     public func menuBarPresentation(
@@ -134,6 +187,12 @@ extension HealthSnapshot {
         let localStatusStale = engineStatus?.fresh == false
             || reasons.contains("engine_status_stale")
             || reasons.contains("engine_projection_stale")
+        let hostUpdate: HostLinkDisplay?
+        if localEvidenceUnavailable || engineStatus?.fresh == false {
+            hostUpdate = nil
+        } else {
+            hostUpdate = hostLinkDisplay(relativeTo: referenceDate)
+        }
         // preserved the session, but the phase contract is newer than this
         // client. Keep it visible in the session row without turning an
         // otherwise healthy local machine into a repair alarm. Discovery
@@ -147,7 +206,14 @@ extension HealthSnapshot {
             reasons.contains("spool_dead") || reasons.contains("spool_dead_letters") ? 1 : 0
         )
         let hasDeadLetters = deadLetterCount > 0
+        // Ignore a red severity inherited from an earlier heartbeat failure during a valid claim.
+        let heartbeatFailureIsOnlyReason = hostLink?.isUpdateInProgress == true
+            && reasons.contains("heartbeat_post_failed")
+            && reasons.allSatisfy {
+                $0 == "heartbeat_post_failed" || $0 == "host_updating" || $0 == "host_update_slow"
+            }
         let nativeRedRequiresRepair = parsedSeverity == .red
+            && !heartbeatFailureIsOnlyReason
             && rowLevelRedReasons.isDisjoint(with: reasons)
             && !reasons.contains("engine_status_stale")
             && !reasons.contains("engine_projection_stale")
@@ -170,6 +236,8 @@ extension HealthSnapshot {
             || engineStatus?.error != nil
             || engineStatus?.fresh == false {
             systemPromotion = .unavailable
+        } else if let hostUpdate {
+            systemPromotion = hostUpdate.promotion
         } else if projectionUnavailable {
             // Runtime Host session projection is a separate evidence lane.
             // Losing it must not make a healthy local Machine Agent look
@@ -244,16 +312,27 @@ extension HealthSnapshot {
                 return "No sessions running"
             }
         }
-        let headline = headlineText(for: promotion)
+        let systemHeadline: String
+        let detail: String?
+        if let hostUpdate, hostUpdate.promotion == systemPromotion {
+            systemHeadline = hostUpdate.headline
+            detail = hostUpdate.detail
+        } else {
+            systemHeadline = headlineText(for: systemPromotion)
+            detail = nil
+        }
+        let headline = systemPromotion == promotion ? systemHeadline : headlineText(for: promotion)
         return MenuBarPresentation(
             promotion: promotion,
             headline: headline,
             systemPromotion: systemPromotion,
-            systemHeadline: systemPromotion == promotion ? headline : headlineText(for: systemPromotion),
+            systemHeadline: systemHeadline,
+            detail: detail,
             facts: menuBarSystemFacts(
                 relativeTo: referenceDate,
                 localEvidenceTrust: localEvidenceTrust,
-                projectionTrust: projectionTrust
+                projectionTrust: projectionTrust,
+                hostUpdate: hostUpdate
             ),
             backgroundActivity: archiveBackgroundActivity
         )
@@ -262,7 +341,8 @@ extension HealthSnapshot {
     private func menuBarSystemFacts(
         relativeTo referenceDate: Date,
         localEvidenceTrust: DataTrust,
-        projectionTrust: DataTrust
+        projectionTrust: DataTrust,
+        hostUpdate: HostLinkDisplay?
     ) -> [MenuBarSystemFact] {
         let localEvidenceUnavailable = !localEvidenceTrust.isCurrent
         let projectionUnavailable = !projectionTrust.isCurrent
@@ -437,7 +517,11 @@ extension HealthSnapshot {
             let value: String
             let detail: String?
             let promotion: MenuBarPromotion
-            if localEngineEvidenceUnavailable {
+            if let hostUpdate {
+                value = "Paused · updating"
+                detail = hostUpdate.detail
+                promotion = hostUpdate.promotion
+            } else if localEngineEvidenceUnavailable {
                 value = "Unknown"
                 detail = "Local status evidence is unavailable"
                 promotion = .unavailable
@@ -464,6 +548,17 @@ extension HealthSnapshot {
             }
             facts.insert(
                 MenuBarSystemFact(id: "heartbeat", label: "Status reporting", value: value, detail: detail, promotion: promotion),
+                at: facts.count - 1
+            )
+        } else if let hostUpdate {
+            facts.insert(
+                MenuBarSystemFact(
+                    id: "heartbeat",
+                    label: "Status reporting",
+                    value: "Paused · updating",
+                    detail: hostUpdate.detail,
+                    promotion: hostUpdate.promotion
+                ),
                 at: facts.count - 1
             )
         }

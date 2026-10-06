@@ -138,6 +138,14 @@ informational and have no suggested action. `heartbeat_post_failed` appears
 only when no acknowledged heartbeat falls within the host's freshness horizon
 (120 seconds if unknown) and no valid claim remains.
 
+The macOS menu bar decodes `host_link` from local health, keeps an update claim
+out of the headline until it reaches two seconds, then uses the copy in
+`schemas/host_link.yml`. A slow update stays amber and adds elapsed time since
+`claim_started_at`; while a claim is displayed, Status reporting says
+`Paused · updating` and no trouble card is shown. Swift tests compare the
+rendered copy with the schema to catch drift.
+
+
 ## Realtime canary
 
 The producer commits a canary session through storage-v2 and emits numbered runtime
