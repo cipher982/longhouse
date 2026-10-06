@@ -80,6 +80,14 @@ function renderPane(queryClient: QueryClient) {
 describe("a tool row from a lite page", () => {
   beforeEach(() => apiMocks.fetchSessionEventBodies.mockReset());
 
+  it("says search sees long tool output only by its preview", async () => {
+    renderPane(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+
+    fireEvent.change(screen.getByPlaceholderText("Search messages..."), { target: { value: "passed" } });
+
+    expect(await screen.findByTestId("search-preview-note")).toBeTruthy();
+  });
+
   it("says it is showing the preview when the server no longer has the body", async () => {
     apiMocks.fetchSessionEventBodies.mockResolvedValue({ events: [], missing: ["c3"] });
     renderPane(new QueryClient({ defaultOptions: { queries: { retry: false } } }));

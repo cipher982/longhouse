@@ -134,7 +134,9 @@ def has_structured_failure(text: str | None) -> bool:
         return False
     if not isinstance(parsed, dict):
         return False
-    exit_code = parsed.get("exit_code", parsed.get("exitCode"))
+    exit_code = parsed.get("exit_code")
+    if exit_code is None:  # the web's `??`: a null exit_code falls through too
+        exit_code = parsed.get("exitCode")
     return (
         parsed.get("ok") is False
         or parsed.get("success") is False
@@ -232,10 +234,16 @@ def _lite_event(event: dict[str, Any], *, item_timestamp: Any, presentations: di
         if presentation.get("shell_summary") is not None:
             out["tool_presentation_shell_summary"] = presentation["shell_summary"]
         if presentation.get("children"):
-            out["tool_presentation_children"] = [
-                {**child, "tool_input_json": truncate_tool_input(child.get("tool_input_json"))[0]} if isinstance(child, dict) else child
-                for child in presentation["children"]
-            ]
+            children = []
+            for child in presentation["children"]:
+                if isinstance(child, dict):
+                    child_input, child_cut = truncate_tool_input(child.get("tool_input_json"))
+                    children.append({**child, "tool_input_json": child_input})
+                    if child_cut:
+                        out["tool_input_truncated"] = True
+                else:
+                    children.append(child)
+            out["tool_presentation_children"] = children
     return out
 
 

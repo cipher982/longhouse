@@ -1427,6 +1427,19 @@ export function TimelinePane({
       });
     });
   }, [items, eventFilter, debouncedSearch]);
+  // A lite page holds long tool output as its preview, so search can't see its
+  // elided middle; say so beside the match count rather than imply full coverage.
+  const searchCoversPreviewsOnly = useMemo(
+    () =>
+      items.some((item) =>
+        item.kind === "tool"
+          ? hasLiteBodies(item.interaction)
+          : item.kind === "activity_group"
+            ? item.group.interactions.some(hasLiteBodies)
+            : false,
+      ),
+    [items],
+  );
 
   const visibleSelectedKey = useMemo(() => {
     if (!selectedKey) return null;
@@ -1644,6 +1657,9 @@ export function TimelinePane({
             {debouncedSearch.trim() ? (
               <div className="timeline-pane__match-count">
                 {filteredItems.length} match{filteredItems.length === 1 ? "" : "es"}
+                {searchCoversPreviewsOnly ? (
+                  <span data-testid="search-preview-note"> · long tool output searched by its preview</span>
+                ) : null}
               </div>
             ) : null}
             <div className="timeline-pane__search">

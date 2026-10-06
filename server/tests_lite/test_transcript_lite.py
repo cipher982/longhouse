@@ -52,6 +52,8 @@ def test_structured_failure_matches_the_client_rule():
     assert not has_structured_failure('{"ok": true}')
     assert not has_structured_failure('{"exit_code": true}')
     assert not has_structured_failure("plain text")
+    # A null exit_code falls through to exitCode, as the web's `??` does.
+    assert has_structured_failure('{"exit_code": null, "exitCode": 2}')
 
 
 def test_tool_input_truncation_reports_what_it_cut():
@@ -372,4 +374,29 @@ def test_a_cut_wrapper_input_marks_the_event_for_a_full_body():
     event = lite_projection(projection)["items"][0]["event"]
 
     assert len(event["tool_presentation_input"]["value"]["cmd"]) == 300
+    assert event["tool_input_truncated"] is True
+
+
+def test_a_cut_presentation_child_marks_the_event_for_a_full_body():
+    projection = {
+        "focus_session_id": "s-1",
+        "items": [
+            _item(
+                "9",
+                tool_name="exec",
+                tool_input_json="const r = await tools.many()",
+                tool_presentation={
+                    "version": 2,
+                    "label": "Parsed",
+                    "disposition": "parsed",
+                    "tool_input_json": None,
+                    "children": [{"label": "Shell", "tool_name": "exec_command", "tool_input_json": {"cmd": "y" * 900}}],
+                },
+            )
+        ],
+    }
+
+    event = lite_projection(projection)["items"][0]["event"]
+
+    assert len(event["tool_presentation_children"][0]["tool_input_json"]["cmd"]) == 300
     assert event["tool_input_truncated"] is True
