@@ -39,6 +39,7 @@ import type {
 import { useComposerAttachments } from "./useComposerAttachments";
 import { Badge, Button } from "@/shared/ui";
 import { AttachmentTray } from "./AttachmentTray";
+import { isSessionClosed } from "@/shared/session/sessionRuntime";
 import { ManagedLaunchHintCard } from "../ManagedLaunchHintCard";
 import type { OutboxEntry } from "../OutboxRow";
 import { Nixie } from "@/shared/instruments/Nixie";
@@ -2241,7 +2242,8 @@ export function SessionChat({
 
   // Composer status line: ember + the server's working label + a mono timer
   // while a turn is active, ember + the server's attention copy when a
-  // provider question is pending; at rest it folds into the placeholder. Shares its
+  // provider question is pending; at rest on an open session it folds into
+  // the placeholder (a closed one keeps the caller's). Shares its
   // tone read with the session header (sessionHeaderState.ts) so the two
   // never disagree about live/attention/cool, but keeps its own mono clock
   // timer rather than a word-based duration, matching the instrument
@@ -2269,14 +2271,15 @@ export function SessionChat({
   const composerWorkingLabel = workingStatusLabel(session.session_state);
   const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
   // Dock: the status line shows only while something runs or needs a
-  // decision; at rest the placeholder carries it ("Idle since 2:21 AM —
-  // message to continue").
+  // decision; at rest on an open session the placeholder carries it ("Idle
+  // since 2:21 AM — message to continue"). A closed session that still takes
+  // input keeps the caller's placeholder rather than "Ended … — continue".
   const composerHeadVisible =
     showComposerUnavailableState || composerState.tone !== "cool";
   // Only an open, resting session continues from here; an ended one that
   // still accepts input keeps the caller's own placeholder.
   const dockPlaceholder =
-    composerState.tone === "cool" && session.session_state.disposition.state !== "closed"
+    composerState.tone === "cool" && !isSessionClosed(session)
       ? `${composerState.text} — message to continue`
       : composerPlaceholder || "Message";
 

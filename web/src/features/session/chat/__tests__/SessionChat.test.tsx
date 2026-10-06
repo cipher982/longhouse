@@ -3666,6 +3666,25 @@ describe("SessionChat composer status", () => {
     );
   });
 
+  it("keeps the caller's placeholder on a closed session that still takes input", () => {
+    renderSessionChat({
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          activity: "quiescent",
+          closed: true,
+          lastResultAt: "2026-10-06T02:21:00Z",
+        }),
+      }),
+      composerPlaceholder: "Message the ended run",
+    });
+
+    expect(screen.getByLabelText("Next instruction")).toHaveAttribute(
+      "placeholder",
+      "Message the ended run",
+    );
+  });
+
   it("demotes an expired work claim instead of repeating the cached label", () => {
     const now = Date.now();
     renderSessionChat(
