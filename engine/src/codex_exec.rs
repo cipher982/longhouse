@@ -3,8 +3,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -18,6 +18,10 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::io::{AsyncWriteExt, Lines};
 use tokio::process::Command;
 
+use crate::console_lifecycle::{
+    ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationState, PendingItem,
+    TurnBinding, TurnOrigin, WakeRequest,
+};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use tokio::process::{Child, ChildStdin, ChildStdout};
@@ -57,6 +61,100 @@ enum ConsoleControl {
     Steer { text: String, reply: ConsoleReply },
     /// Stop the turn now (`turn/interrupt`); it completes as `interrupted`.
     Interrupt { reply: ConsoleReply },
+}
+
+struct ParkedTurnStart {
+    config: CodexExecRunConfig,
+    reply: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+}
+
+enum CodexConsoleInputControl {
+    Start(ParkedTurnStart),
+    Close,
+}
+
+struct CodexConsoleInput {
+    sender: mpsc::UnboundedSender<CodexConsoleInputControl>,
+    next_turn: Mutex<Option<CodexExecRunConfig>>,
+    wake_inputs: Mutex<HashMap<String, Vec<(String, CompletedCommandExecution)>>>,
+}
+
+impl CodexConsoleInput {
+    fn set_next_turn(&self, config: CodexExecRunConfig) {
+        *self.next_turn.lock().expect("Codex input lock poisoned") = Some(config);
+    }
+
+    fn add_wake_completions(
+        &self,
+        wake_id: String,
+        completions: Vec<(String, CompletedCommandExecution)>,
+    ) {
+        self.wake_inputs
+            .lock()
+            .expect("Codex input lock poisoned")
+            .entry(wake_id)
+            .or_default()
+            .extend(completions);
+    }
+
+    fn take_wake_input(&self, wake_id: &str) -> Option<String> {
+        self.wake_inputs
+            .lock()
+            .expect("Codex input lock poisoned")
+            .remove(wake_id)
+            .map(|items| command_completion_input(&items))
+    }
+}
+
+impl ConsoleInput for CodexConsoleInput {
+    fn send_input<'a>(
+        &'a self,
+        text: &'a str,
+        images: &'a [PathBuf],
+    ) -> crate::console_lifecycle::InputFuture<'a> {
+        Box::pin(async move {
+            let mut config = self
+                .next_turn
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Codex input lock poisoned"))?
+                .take()
+                .context("Codex Console turn context was not queued")?;
+            config.prompt = text.to_string();
+            config.image_paths = images.to_vec();
+            let (reply, outcome) = tokio::sync::oneshot::channel();
+            self.sender
+                .send(CodexConsoleInputControl::Start(ParkedTurnStart {
+                    config,
+                    reply,
+                }))
+                .map_err(|_| anyhow::anyhow!("Codex Console invocation is closed"))?;
+            outcome
+                .await
+                .context("Codex Console invocation stopped before turn/start")?
+                .map_err(anyhow::Error::msg)
+        })
+    }
+
+    fn close_input(&self) -> crate::console_lifecycle::InputFuture<'_> {
+        Box::pin(async move {
+            let _ = self.sender.send(CodexConsoleInputControl::Close);
+            Ok(())
+        })
+    }
+}
+
+fn codex_console_input_registry() -> &'static Mutex<HashMap<String, Arc<CodexConsoleInput>>> {
+    static REGISTRY: LazyLock<Mutex<HashMap<String, Arc<CodexConsoleInput>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    &REGISTRY
+}
+
+fn codex_console_input(launch_id: &str) -> Option<Arc<CodexConsoleInput>> {
+    codex_console_input_registry()
+        .lock()
+        .ok()?
+        .get(launch_id)
+        .cloned()
 }
 
 /// The turn ended because Longhouse interrupted it: a cancellation, not a failure.
@@ -283,6 +381,14 @@ fn console_worker_pool() -> &'static tokio::sync::Mutex<CodexConsoleWorkerPool> 
     CODEX_CONSOLE_WORKER_POOL.get_or_init(Default::default)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CompletedCommandExecution {
+    command: String,
+    status: String,
+    exit_code: Option<i32>,
+    output: String,
+}
+
 #[derive(Default)]
 struct AppServerProjection {
     item_text: BTreeMap<String, String>,
@@ -290,6 +396,8 @@ struct AppServerProjection {
     tool_command: BTreeMap<String, String>,
     tool_output: BTreeMap<String, String>,
     tool_seq: BTreeMap<String, u64>,
+    active_commands: BTreeMap<String, String>,
+    completed_commands: BTreeMap<String, CompletedCommandExecution>,
     transcript_seq: u64,
 }
 
@@ -371,6 +479,9 @@ impl AppServerProjection {
                 let command = json_string(params, &["item", "command"]).unwrap_or_default();
                 self.tool_command.insert(item_id.clone(), command.clone());
                 self.tool_seq.insert(item_id.clone(), 1);
+                self.active_commands
+                    .insert(item_id.clone(), command.clone());
+                self.completed_commands.remove(&item_id);
                 vec![
                     // `running` is the managed phase contract's name for tool
                     // execution (see config/managed_phase_contract.json), and the
@@ -405,6 +516,10 @@ impl AppServerProjection {
                 let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
                 let output = self.tool_output.entry(item_id.to_string()).or_default();
                 output.push_str(delta);
+                if output.len() > 4 * 1024 {
+                    let tail = bounded_output_tail(output);
+                    *output = tail;
+                }
                 let seq = self.tool_seq.entry(item_id.to_string()).or_default();
                 *seq += 1;
                 vec![ProjectedAppServerEvent::ToolItem {
@@ -430,16 +545,36 @@ impl AppServerProjection {
                     .unwrap_or_default();
                 let status = json_string(params, &["item", "status"])
                     .unwrap_or_else(|| "completed".to_string());
+                let exit_code = params
+                    .get("item")
+                    .and_then(|item| item.get("exitCode"))
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok());
+                self.active_commands.remove(&item_id);
+                self.completed_commands.insert(
+                    item_id.clone(),
+                    CompletedCommandExecution {
+                        command: command.clone(),
+                        status: status.clone(),
+                        exit_code,
+                        output: bounded_output_tail(&output),
+                    },
+                );
                 let seq = self.tool_seq.entry(item_id.clone()).or_default();
                 *seq += 1;
-                vec![ProjectedAppServerEvent::ToolItem {
-                    item_id,
+                let seq = *seq;
+                let projected = ProjectedAppServerEvent::ToolItem {
+                    item_id: item_id.clone(),
                     command,
                     output,
                     status,
-                    seq: *seq,
+                    seq,
                     completed: true,
-                }]
+                };
+                self.tool_command.remove(&item_id);
+                self.tool_output.remove(&item_id);
+                self.tool_seq.remove(&item_id);
+                vec![projected]
             }
             "item/completed"
                 if matches!(
@@ -469,18 +604,28 @@ impl AppServerProjection {
                             .find_map(|part| part.get("text").and_then(Value::as_str))
                             .map(str::to_string)
                     });
-                let Some(text) = text else { return Vec::new() };
-                let item_seq = self.item_seq.entry(item_id.clone()).or_default();
-                *item_seq += 1;
+                let Some(text) = text else {
+                    self.item_text.remove(&item_id);
+                    self.item_seq.remove(&item_id);
+                    return Vec::new();
+                };
+                let item_seq = {
+                    let item_seq = self.item_seq.entry(item_id.clone()).or_default();
+                    *item_seq += 1;
+                    *item_seq
+                };
                 self.transcript_seq += 1;
-                vec![ProjectedAppServerEvent::AssistantItem {
-                    item_id,
-                    item_seq: *item_seq,
+                let projected = ProjectedAppServerEvent::AssistantItem {
+                    item_id: item_id.clone(),
+                    item_seq,
                     seq: self.transcript_seq,
                     delta: String::new(),
                     text,
                     completed: true,
-                }]
+                };
+                self.item_text.remove(&item_id);
+                self.item_seq.remove(&item_id);
+                vec![projected]
             }
             "turn/started" => vec![ProjectedAppServerEvent::Phase {
                 phase: "thinking",
@@ -491,6 +636,117 @@ impl AppServerProjection {
     }
 }
 
+fn bounded_output_tail(output: &str) -> String {
+    bounded_output_tail_with_limits(output, 4 * 1024, 40)
+}
+
+fn bounded_output_tail_with_limits(output: &str, max_bytes: usize, max_lines: usize) -> String {
+    if max_bytes == 0 || max_lines == 0 {
+        return String::new();
+    }
+    let mut byte_start = output.len().saturating_sub(max_bytes);
+    while !output.is_char_boundary(byte_start) {
+        byte_start += 1;
+    }
+    let mut end = output.len();
+    while end > byte_start && output.as_bytes()[end - 1] == b'\n' {
+        end -= 1;
+    }
+    let tail = &output[byte_start..end];
+    let mut line_start = 0;
+    let mut lines = 0;
+    for (index, byte) in tail.bytes().enumerate().rev() {
+        if byte == b'\n' {
+            lines += 1;
+            if lines == max_lines {
+                line_start = index + 1;
+                break;
+            }
+        }
+    }
+    output[byte_start + line_start..].to_string()
+}
+
+fn pending_command_items(projection: &AppServerProjection, response: &Value) -> Vec<PendingItem> {
+    let mut items = BTreeMap::new();
+    for (id, command) in &projection.active_commands {
+        items.insert(
+            id.clone(),
+            PendingItem {
+                id: id.clone(),
+                kind: "shell".to_string(),
+                status: "running".to_string(),
+                description: Some(command.clone()),
+            },
+        );
+    }
+    if let Some(terminals) = response.get("data").and_then(Value::as_array) {
+        for terminal in terminals {
+            let Some(id) = terminal.get("itemId").and_then(Value::as_str) else {
+                continue;
+            };
+            let command = terminal
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            items.insert(
+                id.to_string(),
+                PendingItem {
+                    id: id.to_string(),
+                    kind: "shell".to_string(),
+                    status: "running".to_string(),
+                    description: Some(command.to_string()),
+                },
+            );
+        }
+    }
+    items.into_values().collect()
+}
+
+fn command_completion_summary(item: &CompletedCommandExecution) -> String {
+    format!(
+        "{} (exit code {})",
+        item.command,
+        item.exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    )
+}
+
+fn command_completion_input(items: &[(String, CompletedCommandExecution)]) -> String {
+    let mut input = String::from(
+        "Longhouse background-task completion (not typed by the user):\nLast output is bounded to 40 lines / 4 KB total.\n",
+    );
+    let mut output_bytes = 4 * 1024;
+    let mut output_lines = 40;
+    for (_, item) in items {
+        let exit_code = item
+            .exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        input.push_str(&format!(
+            "Command: {}\nExit code: {}\nStatus: {}\nOutput:\n",
+            item.command, exit_code, item.status
+        ));
+        if item.output.is_empty() {
+            input.push_str("(no output)\n");
+            continue;
+        }
+        let output = bounded_output_tail_with_limits(&item.output, output_bytes, output_lines);
+        if output.is_empty() {
+            input.push_str("(omitted: shared output bound reached)\n");
+            continue;
+        }
+        output_bytes = output_bytes.saturating_sub(output.len());
+        output_lines = output_lines.saturating_sub(output.lines().count());
+        input.push_str(&output);
+        if !output.ends_with('\n') {
+            input.push('\n');
+        }
+    }
+    input
+}
+
 #[derive(Clone, Debug)]
 pub struct CodexExecRunConfig {
     pub session_id: String,
@@ -498,6 +754,9 @@ pub struct CodexExecRunConfig {
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub client_request_id: Option<String>,
+    pub origin: String,
+    pub wake_id: Option<String>,
+    pub invocation_id: Option<String>,
     pub cwd: PathBuf,
     pub api_url: String,
     pub api_token: String,
@@ -726,6 +985,9 @@ async fn spawn_initialized_codex_worker(
         thread_id: None,
         turn_id: None,
         client_request_id: None,
+        origin: "user".to_string(),
+        wake_id: None,
+        invocation_id: None,
         cwd: process_cwd.to_path_buf(),
         api_url: String::new(),
         api_token: String::new(),
@@ -908,36 +1170,12 @@ async fn start_console_worker_by(
     }
 }
 
-pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
-    // Held until the turn task ends (moved into it below), so a Stop that lands
-    // while the worker is leased or `turn/start` is in flight waits for the turn.
-    let starting = ConsoleStartingGuard::new(&config.run_id);
-    let warm_compatible = warm_pool_compatible(&config);
-    let (mut worker, warm_hit) = start_console_worker_by(
-        &config,
-        warm_compatible,
-        tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET,
-    )
-    .await?;
-    if !warm_hit && !register_active_worker(&worker).await {
-        shutdown_worker_process_group(&mut worker.child, worker.pgid).await?;
-        anyhow::bail!("Codex Console worker rejected because the Machine Agent is shutting down");
-    }
-    let pid = worker.pid;
-    let process_group_id = worker.pgid;
-    let argv = worker.argv.clone();
-    let leased_at = std::time::Instant::now();
-    eprintln!(
-        "[codex-exec] latency stage=warm_worker_lease session={} run={} hit={} pid={} ready_age_ms={}",
-        config.session_id,
-        config.run_id,
-        warm_hit,
-        pid.unwrap_or(0),
-        worker.ready_at.elapsed().as_millis()
-    );
-    if warm_compatible {
-        tokio::spawn(prewarm_codex_console_workers());
-    }
+struct CodexRuntimeTurn {
+    sink: CodexExecRuntimeSink,
+    event_pump: tokio::task::JoinHandle<()>,
+}
+
+fn start_runtime_turn(config: &CodexExecRunConfig) -> Result<CodexRuntimeTurn> {
     let (event_tx, event_rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
     let (critical_event_tx, critical_event_rx) = mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY);
     let queued_events = Arc::new(AtomicUsize::new(0));
@@ -964,95 +1202,178 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         queued_events,
         crate::config::get_agent_runtime_events_outbox_dir()?,
     ));
-    let monitor_sink = sink.clone();
-    let stderr_tail = worker.stderr_tail.clone();
+    Ok(CodexRuntimeTurn { sink, event_pump })
+}
 
-    let prompt = config.prompt.clone();
-    let image_paths = config.image_paths.clone();
-    let cwd = config.cwd.clone();
-    let approval_policy = config.approval_policy.clone();
-    let sandbox = config.sandbox.clone();
-    let model = normalized_optional(&config.model);
-    let resume_thread_id = config.resume_thread_id.clone();
-    let fork_thread_id = config.fork_thread_id.clone();
-    tokio::spawn(async move {
-        let _starting = starting;
-        let mut run_result = run_app_server_turn(
-            &mut worker.child,
-            worker.rpc,
-            &monitor_sink,
-            &prompt,
-            &image_paths,
-            &cwd,
-            approval_policy.as_deref(),
-            sandbox.as_deref(),
-            model.as_deref(),
-            resume_thread_id.as_deref(),
-            fork_thread_id.as_deref(),
-            warm_hit,
-            leased_at,
+async fn finish_runtime_turn(runtime: CodexRuntimeTurn, session_id: &str, run_id: &str) {
+    let CodexRuntimeTurn {
+        sink,
+        mut event_pump,
+    } = runtime;
+    drop(sink);
+    match tokio::time::timeout(EVENT_PUMP_DRAIN_BUDGET, &mut event_pump).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => eprintln!("[codex-exec] runtime event pump join failed: {err}"),
+        Err(_) => {
+            event_pump.abort();
+            eprintln!(
+                "[codex-exec] runtime event pump drain timed out session={session_id} run={run_id}"
+            );
+        }
+    }
+}
+
+fn turn_binding(config: &CodexExecRunConfig) -> TurnBinding {
+    TurnBinding {
+        run_id: config.run_id.clone(),
+        turn_id: config.turn_id.clone(),
+        client_request_id: config.client_request_id.clone(),
+        origin: if config.origin == "wake" {
+            TurnOrigin::Wake
+        } else {
+            TurnOrigin::User
+        },
+    }
+}
+
+fn record_codex_run(
+    config: &CodexExecRunConfig,
+    launch_id: &str,
+    pid: u32,
+    process_group_id: i32,
+    provider_thread_id: &str,
+    argv: &[String],
+    adopted_parked_invocation: bool,
+) -> Result<()> {
+    let registry = crate::turn_claims::default_registry()?;
+    registry.mark_spawned_invocation(
+        &config.run_id,
+        pid,
+        process_group_id,
+        crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        CODEX_EXEC_ADAPTER,
+        launch_id,
+        Some(provider_thread_id),
+        "",
+        "",
+        json!({"argv": argv}),
+    )?;
+    registry.record_invocation_turn(&config.run_id, &config.origin, adopted_parked_invocation)?;
+    Ok(())
+}
+
+async fn complete_codex_idle(
+    invocation: &ConsoleInvocation,
+    sink: &CodexExecRuntimeSink,
+    outcome: IdleOutcome,
+) {
+    if outcome.has_active_turn {
+        sink.post_terminal(
+            &outcome.signal.terminal_state,
+            outcome.signal.exit_code,
+            outcome.signal.stderr,
+            &invocation.launch_id,
+            outcome.invocation_state,
+            outcome.pending_count,
         )
         .await;
-        if let Err(kill_error) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await
-        {
-            run_result = match run_result {
-                Err(original) => Err(original.context(format!(
-                    "also failed to stop Codex app-server process group: {kill_error}"
-                ))),
-                Ok(value) => {
-                    eprintln!(
-                        "[codex-exec] worker process-group cleanup failed pid={} error={kill_error}",
-                        worker.pid.unwrap_or(0)
-                    );
-                    Ok(value)
+    }
+    if outcome.invocation_state == InvocationState::Parked {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            if binding.run_id == sink.run_id {
+                sink.post_delegation_snapshot(&invocation.launch_id, snapshot)
+                    .await;
+            }
+        }
+    }
+    if outcome.invocation_state == InvocationState::Closed {
+        let _ = invocation.close_input().await;
+    }
+}
+pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
+    if config.origin == "wake" {
+        let Some(invocation_id) = config.invocation_id.as_deref() else {
+            return cancel_missing_codex_wake(config).await;
+        };
+        let Some(invocation) = crate::console_lifecycle::lookup_launch(invocation_id) else {
+            return cancel_missing_codex_wake(config).await;
+        };
+        return bind_codex_wake_turn(config, invocation).await;
+    }
+    if config.origin == "user" && config.fork_thread_id.is_none() {
+        if let Some(provider_thread_id) = config.resume_thread_id.as_deref() {
+            if let Some(invocation) = crate::console_lifecycle::lookup("codex", provider_thread_id)
+            {
+                if invocation.state() == InvocationState::Parked {
+                    return adopt_parked_codex_turn(config, invocation).await;
                 }
-            };
+            }
+        }
+    }
+
+    let starting = ConsoleStartingGuard::new(&config.run_id);
+    let warm_compatible = warm_pool_compatible(&config);
+    let (mut worker, warm_hit) = start_console_worker_by(
+        &config,
+        warm_compatible,
+        tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET,
+    )
+    .await?;
+    if !register_active_worker(&worker).await {
+        shutdown_worker_process_group(&mut worker.child, worker.pgid).await?;
+        unregister_active_worker(worker.pid).await;
+        anyhow::bail!("Codex Console worker rejected because the Machine Agent is shutting down");
+    }
+    let pid = worker.pid;
+    let process_group_id = worker.pgid;
+    let argv = worker.argv.clone();
+    let leased_at = std::time::Instant::now();
+    eprintln!(
+        "[codex-exec] latency stage=warm_worker_lease session={} run={} hit={} pid={} ready_age_ms={}",
+        config.session_id,
+        config.run_id,
+        warm_hit,
+        pid.unwrap_or(0),
+        worker.ready_at.elapsed().as_millis()
+    );
+    if warm_compatible {
+        tokio::spawn(prewarm_codex_console_workers());
+    }
+    let runtime = match start_runtime_turn(&config) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            shutdown_worker_process_group(&mut worker.child, worker.pgid).await?;
+            unregister_active_worker(worker.pid).await;
+            return Err(error);
+        }
+    };
+    let launch_id = uuid::Uuid::new_v4().to_string();
+    let task_config = config.clone();
+    tokio::spawn(async move {
+        let mut worker = worker;
+        if let Err(error) = run_codex_invocation(
+            &mut worker,
+            task_config.clone(),
+            launch_id.clone(),
+            runtime,
+            warm_hit,
+            leased_at,
+            starting,
+        )
+        .await
+        {
+            tracing::error!(run_id = %task_config.run_id, %error, "Codex Console invocation failed");
+        }
+        if let Err(error) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await {
+            tracing::warn!(pid = worker.pid.unwrap_or_default(), %error, "Codex Console worker shutdown failed");
         }
         unregister_active_worker(worker.pid).await;
+        crate::console_lifecycle::unregister(&launch_id);
+        if let Ok(mut inputs) = codex_console_input_registry().lock() {
+            inputs.remove(&launch_id);
+        }
         if let Some(task) = worker.stderr_task {
             let _ = task.await;
-        }
-        let (terminal_state, exit_code, detail) = match run_result {
-            Ok(exit_code) if exit_code == Some(0) => (
-                "run_completed",
-                exit_code,
-                stderr_tail_snapshot(&stderr_tail),
-            ),
-            Ok(exit_code) => (
-                "run_failed",
-                exit_code,
-                Some(format!("Codex app-server exited with code {exit_code:?}")),
-            ),
-            Err(err) if err.chain().any(|cause| cause.is::<CodexTurnInterrupted>()) => {
-                ("run_cancelled", None, None)
-            }
-            Err(err) => (
-                "run_failed",
-                worker
-                    .child
-                    .try_wait()
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.code()),
-                Some(err.to_string()),
-            ),
-        };
-        monitor_sink
-            .post_terminal(terminal_state, exit_code, detail)
-            .await;
-        let terminal_session_id = monitor_sink.session_id.clone();
-        let terminal_run_id = monitor_sink.run_id.clone();
-        drop(monitor_sink);
-        let mut event_pump = event_pump;
-        match tokio::time::timeout(EVENT_PUMP_DRAIN_BUDGET, &mut event_pump).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => eprintln!("[codex-exec] runtime event pump join failed: {err}"),
-            Err(_) => {
-                event_pump.abort();
-                eprintln!(
-                    "[codex-exec] runtime event pump drain timed out session={terminal_session_id} run={terminal_run_id}"
-                );
-            }
         }
     });
 
@@ -1065,22 +1386,157 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     })
 }
 
+async fn adopt_parked_codex_turn(
+    config: CodexExecRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+) -> Result<CodexExecRunSummary> {
+    let input = codex_console_input(&invocation.launch_id)
+        .context("parked Codex invocation has no app-server input channel")?;
+    let previous =
+        crate::turn_claims::default_registry()?.read(&invocation.latest_turn().run_id)?;
+    let argv = claim_argv(&previous);
+    let (pid, process_group_id) = invocation.process_identity();
+    record_codex_run(
+        &config,
+        &invocation.launch_id,
+        pid,
+        process_group_id,
+        &invocation.provider_thread_id,
+        &argv,
+        true,
+    )?;
+    let starting = ConsoleStartingGuard::new(&config.run_id);
+    input.set_next_turn(config.clone());
+    invocation
+        .send_user_input(turn_binding(&config), &config.prompt, &config.image_paths)
+        .await?;
+    drop(starting);
+    Ok(CodexExecRunSummary {
+        session_id: config.session_id,
+        run_id: config.run_id,
+        pid: Some(pid),
+        process_group_id: Some(process_group_id),
+        argv,
+    })
+}
+
+async fn bind_codex_wake_turn(
+    mut config: CodexExecRunConfig,
+    invocation: Arc<ConsoleInvocation>,
+) -> Result<CodexExecRunSummary> {
+    let wake_id = config
+        .wake_id
+        .as_deref()
+        .context("Codex wake turn omitted wake_id")?;
+    let input = codex_console_input(&invocation.launch_id)
+        .context("parked Codex invocation has no app-server input channel")?;
+    let wake_prompt = input
+        .take_wake_input(wake_id)
+        .context("Codex wake completion details expired before the wake bound")?;
+    config.prompt = wake_prompt;
+    let previous =
+        crate::turn_claims::default_registry()?.read(&invocation.latest_turn().run_id)?;
+    let argv = claim_argv(&previous);
+    let (pid, process_group_id) = invocation.process_identity();
+    let starting = ConsoleStartingGuard::new(&config.run_id);
+    let claims = crate::turn_claims::default_registry()?;
+    let binding = turn_binding(&config);
+    let _wake_binding = invocation.bind_wake(&invocation.launch_id, wake_id, binding, || {
+        claims.mark_spawned_invocation(
+            &config.run_id,
+            pid,
+            process_group_id,
+            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+            CODEX_EXEC_ADAPTER,
+            &invocation.launch_id,
+            Some(&invocation.provider_thread_id),
+            "",
+            "",
+            json!({"argv": argv}),
+        )?;
+        claims.record_invocation_turn(&config.run_id, "wake", true)?;
+        Ok(())
+    })?;
+    input.set_next_turn(config.clone());
+    invocation
+        .write_input(&config.prompt, &config.image_paths)
+        .await?;
+    drop(starting);
+    Ok(CodexExecRunSummary {
+        session_id: config.session_id,
+        run_id: config.run_id,
+        pid: Some(pid),
+        process_group_id: Some(process_group_id),
+        argv,
+    })
+}
+
+async fn cancel_missing_codex_wake(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
+    let runtime = start_runtime_turn(&config)?;
+    let invocation_id = config
+        .invocation_id
+        .as_deref()
+        .unwrap_or("missing-invocation");
+    runtime
+        .sink
+        .post_terminal(
+            "run_cancelled",
+            None,
+            Some("wake_target_gone".to_string()),
+            invocation_id,
+            InvocationState::Closed,
+            0,
+        )
+        .await;
+    finish_runtime_turn(runtime, &config.session_id, &config.run_id).await;
+    Ok(CodexExecRunSummary {
+        session_id: config.session_id,
+        run_id: config.run_id,
+        pid: None,
+        process_group_id: None,
+        argv: Vec::new(),
+    })
+}
+
+fn claim_argv(claim: &crate::turn_claims::TurnClaim) -> Vec<String> {
+    claim
+        .result
+        .as_ref()
+        .and_then(|result| result.get("argv"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
 /// Reconcile Codex Console claims left behind by an engine restart.
 ///
-/// Codex app-server has no stdout file that can be replayed. A claim is
-/// terminalized only when process identity proves that the recorded worker is
-/// gone. A matching live worker is an orphan from the previous engine and is
-/// deliberately left alone: this engine has no stdio handles with which to
-/// observe or safely take it over. Missing identity evidence is also left
-/// alone; silence is not completion.
+/// Codex app-server has no stdout file to replay or stdio connection to adopt.
+/// Recovery therefore kills only a process group whose recorded boot, PID,
+/// start time, and group identity still match, then closes the invocation.
+/// Unknown process identity is left untouched; silence is not completion.
 pub async fn recover_codex_exec_turns(
     machine_name: &str,
     _local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
     let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
-    let process_facts = crate::process_identity::try_collect_process_facts_by_pid();
-    reconcile_codex_exec_claims(&registry, &outbox_dir, machine_name, process_facts)
+    let Some(process_facts) = crate::process_identity::try_collect_process_facts_by_pid() else {
+        tracing::warn!("Process inventory unavailable; leaving Codex Console claims untouched");
+        return Ok(0);
+    };
+    let stopped =
+        recover_live_codex_exec_claims(&registry, &outbox_dir, machine_name, &process_facts)
+            .await?;
+    let reconciled = reconcile_codex_exec_claims(
+        &registry,
+        &outbox_dir,
+        machine_name,
+        crate::process_identity::try_collect_process_facts_by_pid(),
+    )?;
+    Ok(stopped + reconciled)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1090,13 +1546,146 @@ enum CodexExecProcessIdentity {
     Unknown(&'static str),
 }
 
+fn codex_recovery_claims(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+) -> Result<Vec<crate::turn_claims::TurnClaim>> {
+    let mut seen_invocations = HashSet::new();
+    let mut recoverable = Vec::new();
+    for claim in registry.list_all()?.into_iter().rev() {
+        if claim.provider != "codex" || claim.adapter.as_deref() != Some(CODEX_EXEC_ADAPTER) {
+            continue;
+        }
+        let invocation_key = claim
+            .launch_id
+            .as_deref()
+            .unwrap_or(&claim.run_id)
+            .to_string();
+        if !seen_invocations.insert(invocation_key) {
+            continue;
+        }
+        let invocation_state = claim.invocation_state.as_deref();
+        if invocation_state == Some("closed")
+            || (claim.state != "spawned" && invocation_state != Some("parked"))
+        {
+            continue;
+        }
+        recoverable.push(claim);
+    }
+    Ok(recoverable)
+}
+
+async fn recover_live_codex_exec_claims(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    machine_name: &str,
+    process_facts: &std::collections::HashMap<u32, crate::process_identity::ProcessFact>,
+) -> Result<usize> {
+    let mut recovered = 0;
+    for claim in codex_recovery_claims(registry)? {
+        if codex_exec_process_identity(&claim, process_facts) != CodexExecProcessIdentity::Alive {
+            continue;
+        }
+        let Some(pid) = claim.pid else {
+            continue;
+        };
+        let Some(process_group_id) = claim.process_group_id else {
+            tracing::warn!(
+                run_id = %claim.run_id,
+                "Leaving live orphaned Codex Console worker without a recorded process group"
+            );
+            continue;
+        };
+        let group_identity_matches = claim.process_group_is_from_this_boot()
+            && process_group_id > 0
+            && pid == process_group_id as u32
+            && claim.owned_processes.iter().any(|owned| {
+                owned.pid == pid
+                    && owned.process_group_id == process_group_id
+                    && owned.process_start_time.as_deref() == claim.process_start_time.as_deref()
+            })
+            && crate::process_group::group_is_alive(process_group_id)
+            && codex_process_is_group_leader(pid, process_group_id);
+        if !group_identity_matches {
+            tracing::warn!(
+                run_id = %claim.run_id,
+                pid,
+                process_group_id,
+                "Leaving live Codex Console worker whose exact process-group identity is unverified"
+            );
+            continue;
+        }
+        let outcome = crate::process_group::shutdown_group(
+            process_group_id,
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+        if !outcome.is_gone() {
+            tracing::error!(
+                run_id = %claim.run_id,
+                process_group_id,
+                outcome = outcome.as_str(),
+                "Codex Console worker survived Machine Agent recovery shutdown"
+            );
+            continue;
+        }
+        let detail =
+            "Codex Console closed during Machine Agent restart; app-server stdio cannot be reattached";
+        if settle_codex_restart_claim(registry, outbox_dir, machine_name, &claim, detail)? {
+            recovered += 1;
+        }
+    }
+    Ok(recovered)
+}
+
+fn codex_process_is_group_leader(pid: u32, process_group_id: i32) -> bool {
+    crate::process_group::leader_group_for(pid) == Some(process_group_id)
+}
+
+fn settle_codex_restart_claim(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    machine_name: &str,
+    claim: &crate::turn_claims::TurnClaim,
+    detail: &str,
+) -> Result<bool> {
+    let event = codex_exec_recovery_terminal_event(claim, machine_name, "run_cancelled", detail);
+    if let Err(error) = crate::outbox::enqueue_runtime_event(outbox_dir, &event) {
+        tracing::warn!(
+            %error,
+            run_id = %claim.run_id,
+            "Failed to enqueue recovered Codex Console terminal event"
+        );
+        return Ok(false);
+    }
+    if let Err(error) =
+        registry.mark_terminal(&claim.run_id, "run_cancelled", Some(detail.to_string()))
+    {
+        tracing::warn!(
+            %error,
+            run_id = %claim.run_id,
+            "Failed to mark recovered Codex Console turn terminal"
+        );
+        return Ok(false);
+    }
+    if let Err(error) =
+        registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
+    {
+        tracing::warn!(
+            %error,
+            run_id = %claim.run_id,
+            "Failed to mark recovered Codex Console invocation closed"
+        );
+    }
+    Ok(true)
+}
+
 fn reconcile_codex_exec_claims(
     registry: &crate::turn_claims::TurnClaimRegistry,
     outbox_dir: &Path,
     machine_name: &str,
     process_facts: Option<std::collections::HashMap<u32, crate::process_identity::ProcessFact>>,
 ) -> Result<usize> {
-    let claims = registry.list_nonterminal()?;
+    let claims = codex_recovery_claims(registry)?;
     // One coherent inventory for the whole pass. `try_collect_process_fact` per
     // claim cannot tell an absent pid from a `ps` that failed to run or parse,
     // and this is a caller reconciling durable state -- exactly what
@@ -1112,12 +1701,6 @@ fn reconcile_codex_exec_claims(
     };
     let mut recovered = 0;
     for claim in claims {
-        if claim.provider != "codex"
-            || claim.adapter.as_deref() != Some(CODEX_EXEC_ADAPTER)
-            || claim.state != "spawned"
-        {
-            continue;
-        }
         match codex_exec_process_identity(&claim, &process_facts) {
             CodexExecProcessIdentity::Alive => {
                 tracing::warn!(
@@ -1135,37 +1718,12 @@ fn reconcile_codex_exec_claims(
                 );
             }
             CodexExecProcessIdentity::Gone(reason) => {
-                let detail = format!(
-                    "Codex Console process is gone ({reason}); terminalized during engine recovery"
-                );
-                let event = codex_exec_recovery_terminal_event(
-                    &claim,
-                    machine_name,
-                    "process_gone",
-                    &detail,
-                );
-                // Publish the durable runtime fact before changing the claim.
-                // If this write fails, the claim remains non-terminal so the
-                // next engine start can retry rather than hiding the outage.
-                if let Err(error) = crate::outbox::enqueue_runtime_event(outbox_dir, &event) {
-                    tracing::warn!(
-                        %error,
-                        run_id = %claim.run_id,
-                        "Failed to enqueue recovered Codex Console terminal event"
-                    );
-                    continue;
-                }
-                if let Err(error) =
-                    registry.mark_terminal(&claim.run_id, "process_gone", Some(detail))
+                let detail =
+                    format!("Codex Console worker stopped during Machine Agent restart ({reason})");
+                if settle_codex_restart_claim(registry, outbox_dir, machine_name, &claim, &detail)?
                 {
-                    tracing::warn!(
-                        %error,
-                        run_id = %claim.run_id,
-                        "Failed to mark recovered Codex Console turn terminal"
-                    );
-                    continue;
+                    recovered += 1;
                 }
-                recovered += 1;
             }
         }
     }
@@ -1230,14 +1788,19 @@ fn codex_exec_recovery_terminal_event(
         "dedupe_key": format!("codex-exec:{}:{}:terminal", claim.session_id, claim.run_id),
         "payload": {
             "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
-            "execution_lifetime": "one_shot",
+            "execution_lifetime": "persistent",
             "terminal_state": terminal_state,
-            "terminal_reason": terminal_state,
+            "terminal_reason": "machine_agent_restart",
             "terminal_source": CODEX_EXEC_RUNTIME_SOURCE,
             "exit_code": Value::Null,
             "stderr_tail": detail,
             "turn_id": claim.turn_id,
             "client_request_id": claim.client_request_id,
+            "invocation": {
+                "id": claim.launch_id,
+                "state": "closed",
+                "pending_count": claim.pending_count,
+            },
         }
     })
 }
@@ -1278,48 +1841,410 @@ fn ensure_fork_produced_a_new_thread(
     Ok(())
 }
 
+async fn start_app_server_thread(
+    rpc: &mut AppServerRpc,
+    sink: &CodexExecRuntimeSink,
+    projection: &mut AppServerProjection,
+    config: &CodexExecRunConfig,
+) -> Result<(String, Option<String>)> {
+    let method = app_server_thread_method(
+        config.fork_thread_id.as_deref(),
+        config.resume_thread_id.as_deref(),
+    );
+    let mut thread_params = json!({
+        "cwd": config.cwd.to_string_lossy(),
+        "approvalPolicy": normalized_optional(&config.approval_policy),
+        "sandbox": normalized_optional(&config.sandbox),
+    });
+    if let Some(thread_id) = config
+        .fork_thread_id
+        .as_deref()
+        .or(config.resume_thread_id.as_deref())
+    {
+        thread_params["threadId"] = Value::String(thread_id.to_string());
+    }
+    let response = rpc.request(method, thread_params, sink, projection).await?;
+    let provider_thread_id = json_string(&response, &["thread", "id"])
+        .context("Codex app-server thread response omitted thread.id")?;
+    ensure_fork_produced_a_new_thread(config.fork_thread_id.as_deref(), &provider_thread_id)?;
+    let thread_path = json_string(&response, &["thread", "path"])
+        .or_else(|| codex_rollout_path(&provider_thread_id).map(|path| path.display().to_string()));
+    Ok((provider_thread_id, thread_path))
+}
+
+async fn run_codex_invocation(
+    worker: &mut InitializedCodexWorker,
+    config: CodexExecRunConfig,
+    launch_id: String,
+    mut runtime: CodexRuntimeTurn,
+    warm_hit: bool,
+    leased_at: std::time::Instant,
+    starting: ConsoleStartingGuard,
+) -> Result<()> {
+    let mut projection = AppServerProjection::default();
+    let (provider_thread_id, thread_path) =
+        match start_app_server_thread(&mut worker.rpc, &runtime.sink, &mut projection, &config)
+            .await
+        {
+            Ok(binding) => binding,
+            Err(error) => {
+                runtime
+                    .sink
+                    .post_terminal(
+                        "run_failed",
+                        None,
+                        Some(error.to_string()),
+                        &launch_id,
+                        InvocationState::Closed,
+                        0,
+                    )
+                    .await;
+                finish_runtime_turn(runtime, &config.session_id, &config.run_id).await;
+                return Err(error);
+            }
+        };
+    let pid = worker
+        .pid
+        .context("Codex app-server worker has no process id")?;
+    let process_group_id = worker
+        .pgid
+        .context("Codex app-server worker has no process-group id")?;
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+    let input = Arc::new(CodexConsoleInput {
+        sender: control_tx,
+        next_turn: Mutex::new(None),
+        wake_inputs: Mutex::new(HashMap::new()),
+    });
+    let invocation = Arc::new(ConsoleInvocation::new(
+        "codex",
+        provider_thread_id.clone(),
+        launch_id.clone(),
+        pid,
+        process_group_id,
+        turn_binding(&config),
+        input.clone(),
+    ));
+    if let Err(error) = crate::console_lifecycle::register(invocation.clone()) {
+        runtime
+            .sink
+            .post_terminal(
+                "run_failed",
+                None,
+                Some(error.to_string()),
+                &launch_id,
+                InvocationState::Closed,
+                0,
+            )
+            .await;
+        finish_runtime_turn(runtime, &config.session_id, &config.run_id).await;
+        return Err(error);
+    }
+    if let Err(error) = record_codex_run(
+        &config,
+        &launch_id,
+        pid,
+        process_group_id,
+        &provider_thread_id,
+        &worker.argv,
+        false,
+    ) {
+        crate::console_lifecycle::unregister(&launch_id);
+        runtime
+            .sink
+            .post_terminal(
+                "run_failed",
+                None,
+                Some(error.to_string()),
+                &launch_id,
+                InvocationState::Closed,
+                0,
+            )
+            .await;
+        finish_runtime_turn(runtime, &config.session_id, &config.run_id).await;
+        return Err(error);
+    }
+    codex_console_input_registry()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Codex input registry poisoned"))?
+        .insert(launch_id.clone(), input.clone());
+
+    let mut current_config = config;
+    let mut current_warm_hit = warm_hit;
+    let mut current_leased_at = leased_at;
+    let mut next_start_reply = None;
+    let mut next_starting = Some(starting);
+    'turns: loop {
+        let turn_result = run_app_server_turn(
+            &mut worker.rpc,
+            &provider_thread_id,
+            thread_path.as_deref(),
+            &runtime.sink,
+            &current_config.prompt,
+            &current_config.image_paths,
+            normalized_optional(&current_config.model).as_deref(),
+            &mut projection,
+            current_warm_hit,
+            current_leased_at,
+            next_start_reply.take(),
+            next_starting.take(),
+        )
+        .await;
+        if let Err(error) = turn_result {
+            let interrupted = error
+                .chain()
+                .any(|cause| cause.is::<CodexTurnInterrupted>());
+            let terminal_state = if interrupted {
+                "run_cancelled"
+            } else {
+                "run_failed"
+            };
+            let pending_count = invocation.pending_count();
+            invocation.take_active_turn();
+            runtime
+                .sink
+                .post_terminal(
+                    terminal_state,
+                    None,
+                    (!interrupted).then(|| error.to_string()),
+                    &launch_id,
+                    InvocationState::Closed,
+                    pending_count,
+                )
+                .await;
+            finish_runtime_turn(runtime, &current_config.session_id, &current_config.run_id).await;
+            invocation.process_exited();
+            if let Ok(registry) = crate::turn_claims::default_registry() {
+                let _ = registry.record_invocation_state(
+                    &current_config.run_id,
+                    "closed",
+                    pending_count,
+                );
+            }
+            crate::console_lifecycle::unregister(&launch_id);
+            return Ok(());
+        }
+
+        let pending_at_idle = projection
+            .active_commands
+            .iter()
+            .map(|(id, command)| PendingItem {
+                id: id.clone(),
+                kind: "shell".to_string(),
+                status: "running".to_string(),
+                description: Some(command.clone()),
+            })
+            .collect::<Vec<_>>();
+        let terminal_response = worker
+            .rpc
+            .request_quiet(
+                "thread/backgroundTerminals/list",
+                json!({"threadId": provider_thread_id}),
+                &mut projection,
+            )
+            .await
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, "Codex background-terminal listing unavailable");
+                Value::Null
+            });
+        let mut pending_by_id = BTreeMap::new();
+        for item in pending_at_idle
+            .into_iter()
+            .chain(pending_command_items(&projection, &terminal_response))
+        {
+            pending_by_id.insert(item.id.clone(), item);
+        }
+        projection
+            .completed_commands
+            .retain(|id, _| pending_by_id.contains_key(id));
+        let pending = pending_by_id.values().cloned().collect::<Vec<_>>();
+        invocation.replace_pending(pending, Vec::new());
+        let outcome = invocation
+            .idle(IdleSignal {
+                terminal_state: "run_completed".to_string(),
+                exit_code: Some(0),
+                stderr: None,
+            })
+            .context("Codex Console idle arrived without an active turn")?;
+        let invocation_state = outcome.invocation_state;
+        complete_codex_idle(&invocation, &runtime.sink, outcome).await;
+        if invocation_state == InvocationState::Closed {
+            invocation.process_exited();
+            crate::console_lifecycle::unregister(&launch_id);
+            finish_runtime_turn(runtime, &current_config.session_id, &current_config.run_id).await;
+            return Ok(());
+        }
+
+        let mut known_pending = pending_by_id;
+        trigger_codex_wake(
+            &invocation,
+            &input,
+            &runtime.sink,
+            &mut known_pending,
+            &mut projection,
+        )
+        .await;
+        loop {
+            tokio::select! {
+                message = control_rx.recv() => {
+                    match message {
+                        Some(CodexConsoleInputControl::Start(start)) => {
+                            finish_runtime_turn(runtime, &current_config.session_id, &current_config.run_id).await;
+                            current_config = start.config;
+                            runtime = match start_runtime_turn(&current_config) {
+                                Ok(runtime) => runtime,
+                                Err(error) => {
+                                    let _ = start.reply.send(Err(error.to_string()));
+                                    return Err(error);
+                                }
+                            };
+                            current_warm_hit = false;
+                            current_leased_at = std::time::Instant::now();
+                            next_start_reply = Some(start.reply);
+                            continue 'turns;
+                        }
+                        Some(CodexConsoleInputControl::Close) | None => {
+                            let pending_count = invocation.pending_count();
+                            invocation.process_exited();
+                            if let Ok(registry) = crate::turn_claims::default_registry() {
+                                let _ = registry.record_invocation_state(
+                                    &invocation.latest_turn().run_id,
+                                    "closed",
+                                    pending_count,
+                                );
+                            }
+                            crate::console_lifecycle::unregister(&launch_id);
+                            finish_runtime_turn(runtime, &current_config.session_id, &current_config.run_id).await;
+                            return Ok(());
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                    match worker.rpc.request_quiet(
+                        "thread/backgroundTerminals/list",
+                        json!({"threadId": provider_thread_id}),
+                        &mut projection,
+                    ).await {
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::debug!(%error, "Codex background-terminal polling failed");
+                        }
+                    }
+                    if worker.child.try_wait().ok().flatten().is_some() {
+                        let pending_count = invocation.pending_count();
+                        invocation.process_exited();
+                        if let Ok(registry) = crate::turn_claims::default_registry() {
+                            let _ = registry.record_invocation_state(
+                                &invocation.latest_turn().run_id,
+                                "closed",
+                                pending_count,
+                            );
+                        }
+                        crate::console_lifecycle::unregister(&launch_id);
+                        finish_runtime_turn(
+                            runtime,
+                            &current_config.session_id,
+                            &current_config.run_id,
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                    trigger_codex_wake(
+                        &invocation,
+                        &input,
+                        &runtime.sink,
+                        &mut known_pending,
+                        &mut projection,
+                    ).await;
+                }
+            }
+        }
+    }
+}
+
+async fn trigger_codex_wake(
+    invocation: &ConsoleInvocation,
+    input: &CodexConsoleInput,
+    sink: &CodexExecRuntimeSink,
+    pending: &mut BTreeMap<String, PendingItem>,
+    projection: &mut AppServerProjection,
+) {
+    let completed = pending
+        .iter()
+        .filter_map(|(id, pending_item)| {
+            projection
+                .completed_commands
+                .get(id)
+                .map(|completion| (id.clone(), pending_item.clone(), completion.clone()))
+        })
+        .collect::<Vec<_>>();
+    if completed.is_empty() {
+        return;
+    }
+    let existing_wake_id = invocation.pending_wake_id();
+    let wake = if existing_wake_id.is_none() {
+        let task_ids = completed
+            .iter()
+            .map(|(id, _, _)| id.clone())
+            .collect::<Vec<_>>();
+        let summary = completed
+            .iter()
+            .map(|(_, _, item)| command_completion_summary(item))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Some(invocation.response_started(json!({
+            "kind": "task_completed",
+            "task_ids": task_ids,
+            "summary": summary,
+        })))
+    } else {
+        None
+    };
+    let wake_id = wake
+        .as_ref()
+        .and_then(|wake| wake.as_ref().map(|wake| wake.wake_id.clone()))
+        .or(existing_wake_id);
+    let Some(wake_id) = wake_id else {
+        return;
+    };
+    let prompt_items = completed
+        .iter()
+        .map(|(id, _, item)| (id.clone(), item.clone()))
+        .collect::<Vec<_>>();
+    input.add_wake_completions(wake_id, prompt_items);
+    for (id, pending_item, completion) in completed {
+        invocation.update_pending_item(
+            PendingItem {
+                id: pending_item.id.clone(),
+                kind: "shell".to_string(),
+                status: completion.status,
+                description: Some(completion.command),
+            },
+            false,
+        );
+        pending.remove(&id);
+        projection.completed_commands.remove(&id);
+    }
+    if let Some(Some(wake)) = wake {
+        sink.post_wake_signal(&wake).await;
+    }
+}
+
 async fn run_app_server_turn(
-    child: &mut Child,
-    mut rpc: AppServerRpc,
+    rpc: &mut AppServerRpc,
+    provider_thread_id: &str,
+    thread_path: Option<&str>,
     sink: &CodexExecRuntimeSink,
     prompt: &str,
     image_paths: &[PathBuf],
-    cwd: &std::path::Path,
-    approval_policy: Option<&str>,
-    sandbox: Option<&str>,
     model: Option<&str>,
-    resume_thread_id: Option<&str>,
-    fork_thread_id: Option<&str>,
+    projection: &mut AppServerProjection,
     warm_hit: bool,
     leased_at: std::time::Instant,
-) -> Result<Option<i32>> {
-    let mut projection = AppServerProjection::default();
-
-    let method = app_server_thread_method(fork_thread_id, resume_thread_id);
-    let mut thread_params = json!({
-        "cwd": cwd.to_string_lossy(),
-        "approvalPolicy": approval_policy,
-        "sandbox": sandbox,
-    });
-    // Console's model contract is per-turn even though a thread belongs to a
-    // session. Keep it off thread/start and thread/resume so a resumed thread
-    // can receive a different model on each turn; turn/start is the boundary
-    // that applies this run's selected model.
-    if let Some(thread_id) = fork_thread_id.or(resume_thread_id) {
-        thread_params["threadId"] = Value::String(thread_id.to_string());
-    }
-    let thread_response = rpc
-        .request(method, thread_params, sink, &mut projection)
-        .await?;
-    let provider_thread_id = json_string(&thread_response, &["thread", "id"])
-        .context("Codex app-server thread response omitted thread.id")?;
-
-    ensure_fork_produced_a_new_thread(fork_thread_id, &provider_thread_id)?;
-    let thread_path = json_string(&thread_response, &["thread", "path"])
-        .or_else(|| codex_rollout_path(&provider_thread_id).map(|path| path.display().to_string()));
-    sink.post_provider_binding(&provider_thread_id, thread_path.as_deref())
+    mut start_reply: Option<tokio::sync::oneshot::Sender<std::result::Result<(), String>>>,
+    starting: Option<ConsoleStartingGuard>,
+) -> Result<()> {
+    sink.post_provider_binding(provider_thread_id, thread_path)
         .await;
-
     sink.post_latency_stage(
         "turn_start_write",
         json!({
@@ -1336,9 +2261,18 @@ async fn run_app_server_turn(
     if let Some(model) = model {
         turn_params["model"] = Value::String(model.to_string());
     }
-    let turn_response = rpc
-        .request("turn/start", turn_params, sink, &mut projection)
-        .await?;
+    let turn_response = match rpc
+        .request("turn/start", turn_params, sink, projection)
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(reply) = start_reply.take() {
+                let _ = reply.send(Err(error.to_string()));
+            }
+            return Err(error);
+        }
+    };
     sink.post_latency_stage(
         "turn_start_ack",
         json!({
@@ -1347,8 +2281,16 @@ async fn run_app_server_turn(
         }),
     )
     .await;
-    let expected_turn_id = json_string(&turn_response, &["turn", "id"])
-        .context("Codex app-server turn/start omitted turn.id")?;
+    let expected_turn_id = match json_string(&turn_response, &["turn", "id"]) {
+        Some(turn_id) => turn_id,
+        None => {
+            let error = anyhow::anyhow!("Codex app-server turn/start omitted turn.id");
+            if let Some(reply) = start_reply.take() {
+                let _ = reply.send(Err(error.to_string()));
+            }
+            return Err(error);
+        }
+    };
     sink.post_phase("thinking", None).await;
     sink.post_live_user_item(prompt).await;
 
@@ -1358,9 +2300,10 @@ async fn run_app_server_turn(
         registry.insert(sink.run_id.clone(), steer_tx);
     }
     let _steer_registration = ConsoleSteerRegistration(sink.run_id.clone());
-    // A steer's reply arrives on the same stream as the turn's events, so it
-    // is matched here instead of through `request`, which would swallow a
-    // `turn/completed` that lands before the reply.
+    if let Some(reply) = start_reply.take() {
+        let _ = reply.send(Ok(()));
+    }
+    drop(starting);
     let mut pending_steers: HashMap<
         u64,
         (
@@ -1435,12 +2378,10 @@ async fn run_app_server_turn(
                 continue;
             }
             rpc.seq += 1;
-            sink.post_app_server_event(rpc.seq, &value, &mut projection)
-                .await;
+            sink.post_app_server_event(rpc.seq, &value, projection).await;
             if value.get("method").and_then(Value::as_str) == Some("turn/completed") {
-                let completed_turn_id = json_string(&value, &["params", "turn", "id"]);
-                let completed_turn_id =
-                    completed_turn_id.context("Codex turn/completed omitted params.turn.id")?;
+                let completed_turn_id = json_string(&value, &["params", "turn", "id"])
+                    .context("Codex turn/completed omitted params.turn.id")?;
                 if completed_turn_id != expected_turn_id {
                     anyhow::bail!(
                         "Codex completed unexpected turn {completed_turn_id}; expected {expected_turn_id}"
@@ -1449,7 +2390,7 @@ async fn run_app_server_turn(
                 let status = json_string(&value, &["params", "turn", "status"])
                     .unwrap_or_else(|| "completed".to_string());
                 if status == "interrupted" && interrupt_requested {
-                    if let Some(path) = thread_path.as_deref() {
+                    if let Some(path) = thread_path {
                         sink.wake_transcript_shipper(path, &completed_turn_id, "turn_interrupted")
                             .await;
                     }
@@ -1458,7 +2399,7 @@ async fn run_app_server_turn(
                 if status != "completed" {
                     anyhow::bail!("Codex turn ended with status {status}");
                 }
-                if let Some(path) = thread_path.as_deref() {
+                if let Some(path) = thread_path {
                     sink.wake_transcript_shipper(path, &completed_turn_id, "turn_completed")
                         .await;
                 } else {
@@ -1482,22 +2423,8 @@ async fn run_app_server_turn(
         let _ = reply.send(Err("turn_ended".to_string()));
     }
     turn_outcome.context("Codex app-server turn timed out")??;
-
-    rpc.stdin.shutdown().await?;
-    drop(rpc);
-    let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
-        Ok(status) => status?,
-        Err(_) => {
-            child.kill().await?;
-            let status = child.wait().await?;
-            anyhow::bail!(
-                "Codex app-server did not exit after turn completion; killed with status {status}"
-            );
-        }
-    };
-    Ok(status.code())
+    Ok(())
 }
-
 async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
     let outcome = crate::process_group::shutdown_owned_child(
         child,
@@ -1659,6 +2586,34 @@ impl AppServerRpc {
         }
     }
 
+    async fn request_quiet(
+        &mut self,
+        method: &str,
+        params: Value,
+        projection: &mut AppServerProjection,
+    ) -> Result<Value> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write(&json!({"id": id, "method": method, "params": params}))
+            .await?;
+        loop {
+            let value = self.next_value().await?;
+            if value.get("id").and_then(Value::as_u64) == Some(id) && value.get("method").is_none()
+            {
+                if let Some(error) = value.get("error") {
+                    anyhow::bail!("{method} failed: {error}");
+                }
+                return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+            }
+            if value.get("id").is_some() && value.get("method").is_some() {
+                self.respond_to_server_request(&value).await?;
+            } else {
+                self.seq += 1;
+                projection.apply(&value);
+            }
+        }
+    }
+
     async fn next_value(&mut self) -> Result<Value> {
         loop {
             let line = self
@@ -1774,7 +2729,7 @@ impl CodexExecRuntimeSink {
             phase,
             tool_name.as_deref(),
             json!({
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
                 "thread_id": self.thread_id,
                 "device_id": self.machine_name,
                 "turn_id": self.turn_id,
@@ -1798,7 +2753,7 @@ impl CodexExecRuntimeSink {
             "payload": {
                 "progress_kind": "console_live_user_item",
                 "managed_transport": "codex_app_server",
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
                 "text": text,
@@ -1808,6 +2763,49 @@ impl CodexExecRuntimeSink {
                     "turn_id": self.turn_id,
                     "run_id": self.run_id,
                 },
+            }
+        })])
+        .await;
+    }
+
+    async fn post_delegation_snapshot(&self, invocation_id: &str, snapshot: Value) {
+        let observed_at = snapshot
+            .get("observed_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": CODEX_EXEC_RUNTIME_SOURCE,
+            "kind": "delegation_signal",
+            "occurred_at": if observed_at.is_empty() { Utc::now().to_rfc3339() } else { observed_at.to_string() },
+            "dedupe_key": format!("codex-console:{invocation_id}:{}:delegation:{observed_at}", self.run_id),
+            "payload": {"delegation": snapshot}
+        })])
+        .await;
+    }
+
+    async fn post_wake_signal(&self, wake: &WakeRequest) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": CODEX_EXEC_RUNTIME_SOURCE,
+            "kind": "wake_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("wake:{}", wake.wake_id),
+            "payload": {
+                "invocation_id": wake.invocation_id,
+                "wake_id": wake.wake_id,
+                "provider_thread_id": wake.provider_thread_id,
+                "trigger": wake.trigger,
             }
         })])
         .await;
@@ -1880,7 +2878,7 @@ impl CodexExecRuntimeSink {
             "payload": {
                 "progress_kind": "console_live_tool_item",
                 "managed_transport": "codex_app_server",
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
                 "item_id": item_id,
@@ -1917,7 +2915,7 @@ impl CodexExecRuntimeSink {
             "payload": {
                 "progress_kind": "bridge_live_transcript_delta",
                 "managed_transport": "codex_app_server",
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
                 "item_id": item_id,
@@ -2051,7 +3049,7 @@ impl CodexExecRuntimeSink {
             );
             obj.insert(
                 "execution_lifetime".to_string(),
-                Value::String("one_shot".to_string()),
+                Value::String("persistent".to_string()),
             );
         }
         let mut events = vec![json!({
@@ -2096,8 +3094,18 @@ impl CodexExecRuntimeSink {
         terminal_state: &str,
         exit_code: Option<i32>,
         stderr_tail: Option<String>,
+        invocation_id: &str,
+        invocation_state: InvocationState,
+        pending_count: usize,
     ) {
         crate::turn_claims::mark_terminal(&self.run_id, terminal_state, stderr_tail.clone());
+        if let Ok(registry) = crate::turn_claims::default_registry() {
+            let _ = registry.record_invocation_state(
+                &self.run_id,
+                invocation_state.as_str(),
+                pending_count,
+            );
+        }
         let observed_at = Utc::now();
         self.persist_local_phase("finished", None, observed_at);
         self.post_events(vec![json!({
@@ -2115,7 +3123,7 @@ impl CodexExecRuntimeSink {
             "dedupe_key": format!("codex-exec:{}:{}:terminal", self.session_id, self.run_id),
             "payload": {
                 "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
                 "terminal_state": terminal_state,
                 "terminal_reason": terminal_state,
                 "terminal_source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -2123,6 +3131,11 @@ impl CodexExecRuntimeSink {
                 "stderr_tail": stderr_tail,
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
+                "invocation": {
+                    "id": invocation_id,
+                    "state": invocation_state.as_str(),
+                    "pending_count": pending_count,
+                }
             }
         })])
         .await;
@@ -2374,15 +3387,15 @@ async fn run_runtime_event_pump(
 
 /// Is losing this event a loss of state rather than a loss of liveness?
 ///
-/// Terminal and binding signals are the two facts nothing else can reconstruct:
-/// the hosted console turn settles on the terminal signal, and the session binds
-/// to its provider thread on the binding signal. Everything else on this channel
-/// is preview — the archive ships the same content durably on its own path — so
-/// it may be dropped when delivery fails.
+/// Terminal, binding, wake, and delegation signals cannot be reconstructed from previews:
+/// the hosted console turn settles on the terminal signal, the session binds to
+/// its provider thread, and wake/delegation facts drive the parked lifecycle.
+/// Everything else on this channel is preview — the archive ships the same
+/// content durably on its own path — so it may be dropped when delivery fails.
 fn event_is_state_bearing(event: &Value) -> bool {
     matches!(
         event.get("kind").and_then(Value::as_str),
-        Some("terminal_signal" | "binding_signal")
+        Some("terminal_signal" | "binding_signal" | "wake_signal" | "delegation_signal")
     )
 }
 
@@ -2620,6 +3633,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
     use std::thread;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, UnixListener};
@@ -2632,6 +3646,9 @@ mod tests {
             thread_id: Some("44444444-4444-4444-8444-444444444444".to_string()),
             turn_id: Some("55555555-5555-4555-8555-555555555555".to_string()),
             client_request_id: Some("request-1".to_string()),
+            origin: "user".to_string(),
+            wake_id: None,
+            invocation_id: None,
             cwd: PathBuf::from("/tmp/project"),
             api_url: "http://localhost:8080".to_string(),
             api_token: "token".to_string(),
@@ -3115,7 +4132,7 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn bounded_preview_queue_preserves_critical_terminal_lane() {
+    async fn bounded_preview_queue_preserves_critical_state_lane() {
         let (event_tx, _event_rx) = mpsc::channel(1);
         let (critical_event_tx, mut critical_event_rx) =
             mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY);
@@ -3132,10 +4149,14 @@ for line in sys.stdin:
             .await;
         sink.post_events(vec![json!({"kind": "terminal_signal"})])
             .await;
+        sink.post_events(vec![json!({"kind": "wake_signal"})]).await;
 
-        let critical = critical_event_rx.recv().await.unwrap();
-        assert_eq!(critical[0]["kind"], "terminal_signal");
-        assert_eq!(sink.queued_events.load(Ordering::Relaxed), 2);
+        let terminal = critical_event_rx.recv().await.unwrap();
+        assert_eq!(terminal[0]["kind"], "terminal_signal");
+        let wake = critical_event_rx.recv().await.unwrap();
+        assert_eq!(wake[0]["kind"], "wake_signal");
+        // One queued preview plus both critical events remain in the sink.
+        assert_eq!(sink.queued_events.load(Ordering::Relaxed), 3);
     }
 
     /// `RuntimeEventIngest.tool_name` caps at 128 characters and rejects the
@@ -3271,7 +4292,7 @@ for line in sys.stdin:
             "dedupe_key": "test",
             "payload": {
                 "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
-                "execution_lifetime": "one_shot",
+                "execution_lifetime": "persistent",
                 "terminal_state": "run_completed",
                 "terminal_reason": "run_completed",
                 "terminal_source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -3293,12 +4314,22 @@ for line in sys.stdin:
         );
         obj.insert(
             "execution_lifetime".to_string(),
-            Value::String("one_shot".to_string()),
+            Value::String("persistent".to_string()),
         );
         assert_eq!(obj["managed_transport"], "codex_app_server");
-        assert_eq!(obj["execution_lifetime"], "one_shot");
+        assert_eq!(obj["execution_lifetime"], "persistent");
     }
 
+    #[test]
+    fn codex_wake_output_tail_is_bounded() {
+        let output = (0..100)
+            .map(|line| format!("line-{line} {}\n", "x".repeat(100)))
+            .collect::<String>();
+        let tail = bounded_output_tail(&output);
+        assert!(tail.len() <= 4 * 1024);
+        assert!(tail.lines().count() <= 40);
+        assert!(tail.contains("line-99"));
+    }
     #[test]
     fn real_app_server_shapes_keep_message_boundaries_and_failed_tools() {
         let mut projection = AppServerProjection::default();
@@ -3374,6 +4405,8 @@ for line in sys.stdin:
         if msg.get("params", {}).get("threadId") != "provider-thread":
             sys.exit(8)
         emit({"id": msg["id"], "result": {"thread": {"id": "provider-thread", "path": "/tmp/rollout-provider-thread.jsonl"}}})
+    elif method == "thread/backgroundTerminals/list":
+        emit({"id": msg["id"], "result": {"data": [], "nextCursor": None}})
     elif method == "turn/start":
         if msg.get("params", {}).get("model") != "gpt-5.3-codex-low":
             sys.exit(9)
@@ -3393,12 +4426,28 @@ for line in sys.stdin:
 
         let (api_url, mut received) = spawn_runtime_capture_server().await;
         let mut run_config = config();
+        run_config.session_id = uuid::Uuid::new_v4().to_string();
+        run_config.run_id = uuid::Uuid::new_v4().to_string();
+        run_config.thread_id = Some(uuid::Uuid::new_v4().to_string());
+        run_config.turn_id = Some(uuid::Uuid::new_v4().to_string());
+        run_config.client_request_id = Some(uuid::Uuid::new_v4().to_string());
         run_config.cwd = temp.path().join("workspace");
         fs::create_dir_all(&run_config.cwd).unwrap();
         run_config.codex_bin = fake_codex.display().to_string();
         run_config.api_url = api_url;
         run_config.resume_thread_id = Some("provider-thread".to_string());
         run_config.model = Some("gpt-5.3-codex-low".to_string());
+        crate::turn_claims::default_registry()
+            .unwrap()
+            .claim(
+                &run_config.run_id,
+                &run_config.session_id,
+                run_config.thread_id.as_deref().unwrap(),
+                run_config.turn_id.as_deref(),
+                run_config.client_request_id.as_deref(),
+                "codex",
+            )
+            .unwrap();
         let summary = start_codex_exec_once(run_config).await.unwrap();
         assert!(
             summary
@@ -3449,6 +4498,414 @@ for line in sys.stdin:
                 && json_string(event, &["payload", "terminal_state"]).as_deref()
                     == Some("run_completed")
         }));
+    }
+
+    fn fake_app_server_for_scenario(temp: &Path, scenario: &str) -> (PathBuf, PathBuf) {
+        let codex_bin = temp.join("codex");
+        let input_log = temp.join("turn-inputs.txt");
+        let script = r#"#!/usr/bin/env python3
+import json, sys
+scenario = "__SCENARIO__"
+input_log = __INPUT_LOG__
+pending = {}
+turn_count = 0
+list_count = 0
+
+def emit(value):
+    print(json.dumps(value), flush=True)
+
+def start_item(item_id, command):
+    pending[item_id] = command
+    emit({"method": "item/started", "params": {"item": {
+        "id": item_id, "type": "commandExecution", "command": command,
+        "status": "inProgress"
+    }}})
+
+def complete_item(item_id):
+    command = pending.pop(item_id, None)
+    if command is None:
+        return
+    emit({"method": "item/completed", "params": {"item": {
+        "id": item_id, "type": "commandExecution", "command": command,
+        "aggregatedOutput": "completed output for " + item_id + "\n",
+        "status": "completed", "exitCode": 0
+    }}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        emit({"id": msg["id"], "result": {"userAgent": "fake/1"}})
+    elif method == "initialized":
+        pass
+    elif method in ("thread/start", "thread/resume", "thread/fork"):
+        emit({"id": msg["id"], "result": {"thread": {
+            "id": "provider-thread", "path": "/tmp/fake-codex-rollout.jsonl"
+        }}})
+    elif method == "turn/start":
+        turn_count += 1
+        turn_id = "provider-turn-" + str(turn_count)
+        input_text = "\n".join(
+            item.get("text", "") for item in msg.get("params", {}).get("input", [])
+            if item.get("type") == "text"
+        )
+        with open(input_log, "a", encoding="utf-8") as stream:
+            stream.write(input_text + "\n")
+        emit({"id": msg["id"], "result": {"turn": {"id": turn_id, "status": "inProgress"}}})
+        emit({"method": "turn/started", "params": {"turn": {"id": turn_id, "status": "inProgress"}}})
+        if turn_count == 1 and scenario != "Plain":
+            start_item("exec-1", "python3 -c 'print(\"first\")'")
+            if scenario == "WakePending":
+                start_item("exec-2", "python3 -c 'print(\"second\")'")
+        elif scenario in ("Background", "UserSend") or (scenario == "WakePending" and turn_count >= 3):
+            for item_id in list(pending):
+                complete_item(item_id)
+        emit({"method": "item/agentMessage/delta", "params": {
+            "itemId": "message-" + str(turn_count), "delta": "fake response"
+        }})
+        emit({"method": "item/completed", "params": {"item": {
+            "id": "message-" + str(turn_count), "type": "agentMessage"
+        }}})
+        emit({"method": "turn/completed", "params": {
+            "turn": {"id": turn_id, "status": "completed"}
+        }})
+    elif method == "thread/backgroundTerminals/list":
+        list_count += 1
+        if scenario == "WakePending" and list_count == 2:
+            complete_item("exec-1")
+        elif scenario == "WakeDrained" and list_count == 2:
+            complete_item("exec-1")
+        data = [{
+            "itemId": item_id, "processId": "process-" + item_id,
+            "command": command, "cwd": "/tmp"
+        } for item_id, command in pending.items()]
+        emit({"id": msg["id"], "result": {"data": data, "nextCursor": None}})
+"#
+            .replace("__SCENARIO__", scenario)
+            .replace(
+                "__INPUT_LOG__",
+                &serde_json::to_string(&input_log.display().to_string()).unwrap(),
+            );
+        fs::write(&codex_bin, script).unwrap();
+        let mut permissions = fs::metadata(&codex_bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&codex_bin, permissions).unwrap();
+        (codex_bin, input_log)
+    }
+
+    fn claim_codex_test_run(config: &CodexExecRunConfig) {
+        let registry = crate::turn_claims::default_registry().unwrap();
+        assert!(matches!(
+            registry
+                .claim(
+                    &config.run_id,
+                    &config.session_id,
+                    config.thread_id.as_deref().unwrap(),
+                    config.turn_id.as_deref(),
+                    config.client_request_id.as_deref(),
+                    "codex",
+                )
+                .unwrap(),
+            crate::turn_claims::ClaimOutcome::Acquired
+        ));
+    }
+
+    fn scenario_run_config(
+        root: &Path,
+        api_url: &str,
+        codex_bin: &Path,
+        prompt: &str,
+    ) -> CodexExecRunConfig {
+        let mut run_config = config();
+        run_config.session_id = uuid::Uuid::new_v4().to_string();
+        run_config.run_id = uuid::Uuid::new_v4().to_string();
+        run_config.thread_id = Some(uuid::Uuid::new_v4().to_string());
+        run_config.turn_id = Some(uuid::Uuid::new_v4().to_string());
+        run_config.client_request_id = Some(uuid::Uuid::new_v4().to_string());
+        run_config.cwd = root.to_path_buf();
+        run_config.api_url = api_url.to_string();
+        run_config.codex_bin = codex_bin.display().to_string();
+        run_config.prompt = prompt.to_string();
+        run_config.resume_thread_id = None;
+        run_config.fork_thread_id = None;
+        run_config
+    }
+
+    async fn wait_for_captured_event(
+        receiver: &mut mpsc::UnboundedReceiver<Vec<Value>>,
+        events: &mut Vec<Value>,
+        predicate: impl Fn(&Value) -> bool,
+    ) -> Value {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(event) = events.iter().find(|event| predicate(event)).cloned() {
+                    return event;
+                }
+                let batch = receiver.recv().await.expect("runtime event stream closed");
+                events.extend(batch);
+            }
+        })
+        .await
+        .expect("timed out waiting for Codex runtime event")
+    }
+
+    async fn wait_for_codex_invocation_closed(launch_id: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while crate::console_lifecycle::lookup_launch(launch_id).is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Codex invocation did not close");
+    }
+
+    fn run_codex_scenario(
+        scenario: crate::console_lifecycle::conformance::LifecycleScenario,
+    ) -> crate::console_lifecycle::conformance::ScenarioFuture {
+        Box::pin(async move { run_codex_scenario_inner(scenario).await })
+    }
+
+    async fn run_codex_scenario_inner(
+        scenario: crate::console_lifecycle::conformance::LifecycleScenario,
+    ) -> crate::console_lifecycle::conformance::ScenarioOutcome {
+        use crate::console_lifecycle::conformance::{LifecycleScenario, ScenarioOutcome};
+
+        if scenario == LifecycleScenario::Restart {
+            run_codex_restart_scenario().await;
+            return ScenarioOutcome::Passed;
+        }
+        let _agent_state = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let scenario_name = format!("{scenario:?}");
+        let (fake_codex, input_log) = fake_app_server_for_scenario(temp.path(), &scenario_name);
+        let (api_url, mut received) = spawn_runtime_capture_server().await;
+        let mut first_config =
+            scenario_run_config(temp.path(), &api_url, &fake_codex, "scenario=background");
+        first_config.prompt = if scenario == LifecycleScenario::Plain {
+            "plain turn".to_string()
+        } else {
+            "start a background command".to_string()
+        };
+        claim_codex_test_run(&first_config);
+        let first = start_codex_exec_once(first_config.clone()).await.unwrap();
+        let mut events = Vec::new();
+        wait_for_captured_event(&mut received, &mut events, |event| {
+            event["run_id"] == first.run_id && event["kind"] == "terminal_signal"
+        })
+        .await;
+        let first_claim = crate::turn_claims::default_registry()
+            .unwrap()
+            .read(&first.run_id)
+            .unwrap();
+        let launch_id = first_claim.launch_id.clone().unwrap();
+        match scenario {
+            LifecycleScenario::Plain => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("closed"));
+                assert_eq!(first_claim.pending_count, 0);
+                assert_fake_process_group_gone(first.process_group_id.unwrap()).await;
+                return ScenarioOutcome::Passed;
+            }
+            LifecycleScenario::Background
+            | LifecycleScenario::UserSend
+            | LifecycleScenario::WakePending
+            | LifecycleScenario::WakeDrained => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                let expected_pending = if scenario == LifecycleScenario::WakePending {
+                    2
+                } else {
+                    1
+                };
+                assert_eq!(first_claim.pending_count, expected_pending);
+                let delegation = wait_for_captured_event(&mut received, &mut events, |event| {
+                    event["run_id"] == first.run_id && event["kind"] == "delegation_signal"
+                })
+                .await;
+                assert_eq!(
+                    delegation["payload"]["delegation"]["count"],
+                    expected_pending
+                );
+                assert_eq!(
+                    delegation["payload"]["delegation"]["items"][0]["kind"],
+                    "shell"
+                );
+                assert!(crate::process_group::group_is_alive(
+                    first.process_group_id.unwrap()
+                ));
+            }
+            LifecycleScenario::Restart => unreachable!(),
+            _ => return ScenarioOutcome::Unsupported("not_implemented:scenario_not_in_phase_one"),
+        }
+
+        if matches!(
+            scenario,
+            LifecycleScenario::WakePending | LifecycleScenario::WakeDrained
+        ) {
+            let wake = wait_for_captured_event(&mut received, &mut events, |event| {
+                event["session_id"] == first.session_id && event["kind"] == "wake_signal"
+            })
+            .await;
+            assert_eq!(wake["payload"]["invocation_id"], launch_id);
+            assert_eq!(wake["payload"]["trigger"]["kind"], "task_completed");
+            assert!(wake["payload"]["trigger"]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("exit code 0"));
+            let mut wake_config = scenario_run_config(temp.path(), &api_url, &fake_codex, "");
+            wake_config.session_id = first.session_id.clone();
+            wake_config.thread_id = first_config.thread_id.clone();
+            wake_config.origin = "wake".to_string();
+            wake_config.wake_id = wake["payload"]["wake_id"].as_str().map(str::to_string);
+            wake_config.invocation_id = Some(launch_id.clone());
+            wake_config.resume_thread_id = Some("provider-thread".to_string());
+            claim_codex_test_run(&wake_config);
+            let wake_run = start_codex_exec_once(wake_config).await.unwrap();
+            assert_eq!(wake_run.pid, first.pid);
+            let wake_terminal = wait_for_captured_event(&mut received, &mut events, |event| {
+                event["run_id"] == wake_run.run_id && event["kind"] == "terminal_signal"
+            })
+            .await;
+            let wake_claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(&wake_run.run_id)
+                .unwrap();
+            assert_eq!(wake_claim.origin.as_deref(), Some("wake"));
+            assert!(wake_claim.adopted_parked_invocation);
+            let wake_text = events.iter().find_map(|event| {
+                (event["run_id"] == wake_run.run_id
+                    && event["payload"]["progress_kind"] == "console_live_user_item")
+                    .then(|| event["payload"]["text"].as_str())
+                    .flatten()
+            });
+            let wake_text = wake_text.expect("wake turn must contain Longhouse-authored input");
+            assert!(wake_text.starts_with("Longhouse background-task completion"));
+            assert!(wake_text.contains("Command: python3"));
+            assert!(wake_text.contains("Exit code: 0"));
+            assert!(wake_text.contains("completed output for exec-1"));
+            assert_eq!(wake_terminal["payload"]["execution_lifetime"], "persistent");
+            if scenario == LifecycleScenario::WakePending {
+                assert_eq!(wake_claim.invocation_state.as_deref(), Some("parked"));
+                assert_eq!(wake_claim.pending_count, 1);
+            } else {
+                assert_eq!(wake_claim.invocation_state.as_deref(), Some("closed"));
+                assert_eq!(wake_claim.pending_count, 0);
+                wait_for_codex_invocation_closed(&launch_id).await;
+                assert_fake_process_group_gone(first.process_group_id.unwrap()).await;
+                return ScenarioOutcome::Passed;
+            }
+        }
+
+        let mut user_config = scenario_run_config(
+            temp.path(),
+            &api_url,
+            &fake_codex,
+            "continue from the parked invocation",
+        );
+        user_config.session_id = first.session_id.clone();
+        user_config.thread_id = first_config.thread_id.clone();
+        user_config.resume_thread_id = Some("provider-thread".to_string());
+        user_config.origin = "user".to_string();
+        claim_codex_test_run(&user_config);
+        let user_run = start_codex_exec_once(user_config.clone()).await.unwrap();
+        assert_eq!(user_run.pid, first.pid);
+        assert_eq!(user_run.process_group_id, first.process_group_id);
+        let user_terminal = wait_for_captured_event(&mut received, &mut events, |event| {
+            event["run_id"] == user_run.run_id && event["kind"] == "terminal_signal"
+        })
+        .await;
+        let user_claim = crate::turn_claims::default_registry()
+            .unwrap()
+            .read(&user_run.run_id)
+            .unwrap();
+        assert_eq!(user_claim.origin.as_deref(), Some("user"));
+        assert!(user_claim.adopted_parked_invocation);
+        assert_eq!(user_claim.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(user_terminal["payload"]["invocation"]["state"], "closed");
+        assert!(fs::read_to_string(input_log)
+            .unwrap()
+            .contains("continue from the parked invocation"));
+        wait_for_codex_invocation_closed(&launch_id).await;
+        assert_fake_process_group_gone(first.process_group_id.unwrap()).await;
+        ScenarioOutcome::Passed
+    }
+
+    async fn assert_fake_process_group_gone(process_group_id: i32) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while crate::process_group::group_is_alive(process_group_id) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fake Codex process group survived lifecycle close");
+    }
+
+    async fn run_codex_restart_scenario() {
+        let _agent_state = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let (mut child, start) = spawn_fake_codex_process(temp.path());
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let launch_id = uuid::Uuid::new_v4().to_string();
+        let pid = child.id();
+        let process_group_id = i32::try_from(pid).unwrap();
+        let child_reaper = thread::spawn(move || {
+            let mut child = child;
+            child.wait()
+        });
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "codex")
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                pid,
+                process_group_id,
+                Some(start),
+                CODEX_EXEC_ADAPTER,
+                &launch_id,
+                Some("provider-thread"),
+                "",
+                "",
+                json!({"argv": ["fake-codex"]}),
+            )
+            .unwrap();
+        registry
+            .record_invocation_state(&run_id, "parked", 1)
+            .unwrap();
+        let process_facts = crate::process_identity::try_collect_process_facts_by_pid().unwrap();
+        assert_eq!(
+            recover_live_codex_exec_claims(&registry, &outbox, "fake-box", &process_facts)
+                .await
+                .unwrap(),
+            1
+        );
+        let claim = registry.read(&run_id).unwrap();
+        assert_eq!(claim.state, "terminal");
+        assert_eq!(claim.result.unwrap()["terminal_state"], "run_cancelled");
+        assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(claim.pending_count, 1);
+        let status = child_reaper.join().unwrap().unwrap();
+        assert!(!status.success());
+        let event_path = fs::read_dir(&outbox)
+            .unwrap()
+            .flatten()
+            .find(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+            .expect("restart closure must be durable")
+            .path();
+        let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["payload"]["terminal_reason"], "machine_agent_restart");
+        assert_eq!(event["payload"]["invocation"]["state"], "closed");
+    }
+
+    #[tokio::test]
+    async fn codex_console_lifecycle_conformance_runs_phase_one_scenarios() {
+        let adapters: [(
+            &'static str,
+            crate::console_lifecycle::conformance::ScenarioRunner,
+        ); 1] = [("codex", run_codex_scenario)];
+        crate::console_lifecycle::conformance::run_phase_one(&adapters).await;
     }
 
     /// Drive one real turn and return (provider thread id, assistant text).
@@ -3687,7 +5144,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn codex_exec_process_gone_claim_is_reconciled_at_registry_and_outbox() {
+    fn codex_exec_process_gone_claim_is_closed_at_registry_and_outbox() {
         // Spawns a subprocess or reads the process table: hold the shared
         // agent-state lock, so a concurrent test cannot empty PATH or move a
         // global tree under it.
@@ -3729,7 +5186,7 @@ for line in sys.stdin:
         );
         let claim = registry.read(run_id).unwrap();
         assert_eq!(claim.state, "terminal");
-        assert_eq!(claim.result.unwrap()["terminal_state"], "process_gone");
+        assert_eq!(claim.result.unwrap()["terminal_state"], "run_cancelled");
         let event_path = fs::read_dir(&outbox)
             .unwrap()
             .flatten()
@@ -3738,16 +5195,24 @@ for line in sys.stdin:
             .path();
         let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
         assert_eq!(event["kind"], "terminal_signal");
-        assert_eq!(event["payload"]["terminal_state"], "process_gone");
+        assert_eq!(event["payload"]["terminal_state"], "run_cancelled");
+        assert_eq!(event["payload"]["terminal_reason"], "machine_agent_restart");
     }
 
     fn spawn_fake_codex_process(temp: &Path) -> (std::process::Child, String) {
         let fake_codex = temp.join("codex");
         std::os::unix::fs::symlink("/bin/sleep", &fake_codex).unwrap();
-        let child = std::process::Command::new(&fake_codex)
-            .arg("60")
-            .spawn()
-            .unwrap();
+        let mut command = std::process::Command::new(&fake_codex);
+        command.arg("60");
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().unwrap();
         let start = (0..20)
             .find_map(|_| {
                 let start = crate::turn_claims::process_start_time_for_pid(Some(child.id()));
@@ -3789,7 +5254,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn live_codex_exec_claim_is_left_active_without_re_adoption() {
+    fn reconcile_does_not_attach_live_codex_exec_workers() {
         // Spawns a subprocess or reads the process table: hold the shared
         // agent-state lock, so a concurrent test cannot empty PATH or move a
         // global tree under it.
@@ -3827,6 +5292,69 @@ for line in sys.stdin:
         child.wait().unwrap();
     }
 
+    #[tokio::test]
+    async fn live_codex_exec_invocation_is_killed_on_machine_agent_restart() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let (mut child, start) = spawn_fake_codex_process(temp.path());
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let launch_id = uuid::Uuid::new_v4().to_string();
+        let pid = child.id();
+        let process_group_id = i32::try_from(pid).unwrap();
+        let child_reaper = thread::spawn(move || {
+            let mut child = child;
+            child.wait()
+        });
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "codex")
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                pid,
+                process_group_id,
+                Some(start),
+                CODEX_EXEC_ADAPTER,
+                &launch_id,
+                Some("provider-thread"),
+                "",
+                "",
+                json!({"argv": ["fake-codex"]}),
+            )
+            .unwrap();
+        registry
+            .record_invocation_state(&run_id, "parked", 1)
+            .unwrap();
+        let process_facts = crate::process_identity::try_collect_process_facts_by_pid().unwrap();
+
+        assert_eq!(
+            recover_live_codex_exec_claims(&registry, &outbox, "fake-box", &process_facts)
+                .await
+                .unwrap(),
+            1
+        );
+        let claim = registry.read(&run_id).unwrap();
+        assert_eq!(claim.state, "terminal");
+        assert_eq!(claim.result.unwrap()["terminal_state"], "run_cancelled");
+        assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(claim.pending_count, 1);
+        assert!(!crate::process_group::group_is_alive(process_group_id));
+        assert!(!child_reaper.join().unwrap().unwrap().success());
+        let event_path = fs::read_dir(&outbox)
+            .unwrap()
+            .flatten()
+            .find(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+            .expect("restart closure must be durably queued")
+            .path();
+        let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["payload"]["terminal_reason"], "machine_agent_restart");
+        assert_eq!(event["payload"]["invocation"]["state"], "closed");
+    }
+
     #[test]
     fn rebooted_codex_exec_claim_is_process_gone_even_if_pid_is_alive() {
         // Spawns a subprocess or reads the process table: hold the shared
@@ -3859,7 +5387,7 @@ for line in sys.stdin:
         assert_eq!(registry.read(run_id).unwrap().state, "terminal");
         assert_eq!(
             registry.read(run_id).unwrap().result.unwrap()["terminal_state"],
-            "process_gone"
+            "run_cancelled"
         );
         child.kill().unwrap();
         child.wait().unwrap();
@@ -3898,7 +5426,7 @@ for line in sys.stdin:
                 .unwrap()
                 .result
                 .unwrap()["terminal_state"],
-            "process_gone"
+            "run_cancelled"
         );
         child.kill().unwrap();
         child.wait().unwrap();

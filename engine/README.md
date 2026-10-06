@@ -48,4 +48,11 @@ the active registry: they never add active work or a flame root. A newer
 complete registry is authoritative over older lifecycle edges; callbacks do
 not become permanent client-side completion tombstones.
 
+Codex Console keeps its app-server worker across turns while commandExecution
+items remain. It reconciles `thread/backgroundTerminals/list` with in-progress
+items and turns delayed `item/completed` notifications into Longhouse wake
+turns. Wake input is explicitly Longhouse-authored and carries the finished
+command and exit code plus at most 40 lines / 4 KB of output. Machine Agent
+recovery kills only the recorded process group because stdio cannot be reattached.
+
 Test: `make test-engine`. Install locally: `make install-engine`.
