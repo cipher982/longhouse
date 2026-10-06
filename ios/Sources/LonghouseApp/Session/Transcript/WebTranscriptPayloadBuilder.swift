@@ -804,7 +804,7 @@ struct WebTranscriptPayloadItem: Encodable {
     /// Cursors of this row's events that a lite page sent as previews.
     /// Expanding the row asks native to load them (`loadToolBodies`).
     var bodyCursors: [String]? = nil
-    /// `preview`, `loading` or `unavailable` while `bodyCursors` is set.
+    /// `preview`, `loading`, `failed` or `unavailable` while `bodyCursors` is set.
     var bodyState: String? = nil
 }
 

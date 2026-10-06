@@ -972,7 +972,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
 
     func sessionEventBodies(id: String, cursors: [String]) async throws -> SessionEventBodiesResponse {
         guard fixtureName == "lite-bodies" else { throw LonghouseAPIError.requestFailed }
-        // Long enough for the loading note to show in a capture.
+        // A real read takes time; the UI test waits for the loaded body.
         try await Task.sleep(nanoseconds: 600_000_000)
         return SessionEventBodiesResponse(
             events: cursors.filter { $0 == "lite-cursor-3" }.map {

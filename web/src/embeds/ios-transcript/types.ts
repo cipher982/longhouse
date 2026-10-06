@@ -69,7 +69,7 @@ export interface TranscriptItem {
   turnEnd?: TurnEnd | null;
   /** Cursors of events a lite page sent as previews; expanding asks native for the full bodies. */
   bodyCursors?: string[] | null;
-  /** "preview", "loading" or "unavailable" while bodyCursors is set. */
+  /** "preview", "loading", "failed" or "unavailable" while bodyCursors is set. */
   bodyState?: string | null;
 }
 

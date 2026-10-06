@@ -9,8 +9,17 @@ struct LiteBodyState: Sendable, Equatable {
     /// Cursors the server reported missing: the session was re-rendered since
     /// the page loaded. Those rows keep their preview and say so.
     var unavailable: Set<String> = []
-    /// Cursors whose last read failed. The row says so; opening it again retries.
+    /// Cursors whose last read failed, and when. The row says so; opening it
+    /// again after `retryCooldown` retries (a re-render reopening the row
+    /// fires the same toggle, so an immediate retry would loop).
     var failed: Set<String> = []
+    var failedAt: [String: Date] = [:]
+    static let retryCooldown: TimeInterval = 5
+
+    func mayRetry(_ cursor: String, now: Date = Date()) -> Bool {
+        guard let at = failedAt[cursor] else { return true }
+        return now.timeIntervalSince(at) >= Self.retryCooldown
+    }
 
     func merged(_ event: SessionEvent) -> SessionEvent {
         guard let cursor = event.liteBodyCursor, let body = bodies[cursor] else { return event }

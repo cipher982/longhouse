@@ -161,6 +161,42 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func aFailedBodyReadIsNotRetriedByTheReRenderThatReportsIt() async throws {
+        let base = try makeWorkspace(eventId: 10, content: "seed")
+        let call = SessionEvent(
+            id: "evt-cut", role: "tool", contentText: nil, toolName: "Bash", toolInputJSON: nil,
+            toolOutputText: "preview", toolCallId: "call-cut", toolCallState: .completed,
+            timestamp: "2026-05-02T20:00:00Z", inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+            cursor: "cursor-cut", toolOutputTruncated: true
+        )
+        let items = conversationItems(1...2) + [SessionProjectionItem(
+            kind: "event", sessionId: "session-1", timestamp: call.timestamp, event: call,
+            continuedFromSessionId: nil, continuationKind: nil, originLabel: nil,
+            parentOriginLabel: nil, parentContinuationKind: nil, branchedFromEventId: nil
+        )]
+        let workspace = SessionWorkspaceResponse(
+            session: base.session,
+            thread: base.thread,
+            projection: tail(from: base, items: items, total: 3).projection,
+            workspaceRevision: base.workspaceRevision
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
+        await model.start(sessionId: "session-1", appState: appState)
+
+        await model.loadToolBodies(cursors: ["cursor-cut", "not-held"], sessionId: "session-1", appState: appState)
+        #expect(await api.bodyRequests() == [["cursor-cut"]])
+        #expect(model.liteBodies.failed == ["cursor-cut"])
+        #expect(model.liteBodies.loading.isEmpty)
+
+        // The re-render that shows the failure reopens the row; that must not loop.
+        await model.loadToolBodies(cursors: ["cursor-cut"], sessionId: "session-1", appState: appState)
+        #expect(await api.bodyRequests().count == 1)
+    }
+
+    @Test
     func aDeltaFromAnotherRenderGenerationFallsBackToTheLatestWindow() async throws {
         let base = try makeWorkspace(eventId: 10, content: "seed")
         let held = tail(from: base, items: conversationItems(1...30), total: 30)
@@ -2957,6 +2993,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: String?, cursor: String?)] = []
     private var tailResponses = 0
     private var deltaResponses: [SessionMobileTailResponse?] = []
+    private var eventBodyRequests: [[String]] = []
     private var deltaRequestCursors: [String] = []
     private var pausedTailResponseCounts: [Int: Int] = [:]
     private var pausedTailContinuations: [CheckedContinuation<Void, Never>] = []
@@ -3087,6 +3124,13 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     }
 
     func deltaCursors() -> [String] { deltaRequestCursors }
+
+    func bodyRequests() -> [[String]] { eventBodyRequests }
+
+    func sessionEventBodies(id: String, cursors: [String]) async throws -> SessionEventBodiesResponse {
+        eventBodyRequests.append(cursors)
+        throw URLError(.cannotConnectToHost)
+    }
 
     func sessionMobileTailDelta(id: String, afterCursor: String, limit: Int) async throws -> SessionMobileTailResponse? {
         deltaRequestCursors.append(afterCursor)
