@@ -470,6 +470,8 @@ impl TurnClaimRegistry {
                 "terminal_state".to_string(),
                 Value::String(terminal_state.to_string()),
             );
+        } else {
+            claim.result = Some(serde_json::json!({"terminal_state": terminal_state}));
         }
         self.write(&claim)?;
         Ok(claim)
@@ -800,6 +802,33 @@ mod tests {
         assert_eq!(claim.process_group_id, Some(42));
         assert_eq!(claim.adapter.as_deref(), Some("codex_exec"));
         assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+    }
+
+    #[test]
+    fn terminal_claim_without_spawn_stores_terminal_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(24);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&run_id, &id(25), &id(26), None, None, "omp")
+            .unwrap();
+
+        let terminal = registry
+            .mark_terminal(&run_id, "run_failed", Some("not started".to_string()))
+            .unwrap();
+        assert_eq!(terminal.state, "terminal");
+        assert_eq!(
+            terminal.result.as_ref().unwrap()["terminal_state"],
+            "run_failed"
+        );
+        assert_eq!(
+            TurnClaimRegistry::new(temp.path().to_path_buf())
+                .read(&run_id)
+                .unwrap()
+                .result
+                .unwrap()["terminal_state"],
+            "run_failed"
+        );
     }
 
     #[test]

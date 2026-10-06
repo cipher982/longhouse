@@ -503,33 +503,16 @@ fn async_work_placeholder_item() -> PendingItem {
         description: Some("OMP reports pending asynchronous work".to_string()),
     }
 }
-fn async_placeholder_replacement_snapshot(
+fn should_replace_async_placeholder(
     state: InvocationState,
     placeholder_pending: bool,
     updates: &[(PendingItem, bool)],
-) -> Option<(Vec<PendingItem>, Vec<PendingItem>)> {
-    if !placeholder_pending
-        || !updates
+) -> bool {
+    placeholder_pending
+        && updates
             .iter()
             .any(|(item, _)| item.id != OMP_ASYNC_WORK_PLACEHOLDER_ID)
-    {
-        return None;
-    }
-    let parked = state == InvocationState::Parked;
-    if parked && updates.iter().all(|(_, is_pending)| !is_pending) {
-        return None;
-    }
-    let pending = updates
-        .iter()
-        .filter(|(_, is_pending)| *is_pending || parked)
-        .map(|(item, _)| item.clone())
-        .collect();
-    let recent = updates
-        .iter()
-        .filter(|(_, is_pending)| !*is_pending && !parked)
-        .map(|(item, _)| item.clone())
-        .collect();
-    Some((pending, recent))
+        && !(state == InvocationState::Parked && updates.iter().all(|(_, pending)| !pending))
 }
 
 async fn wait_for_rpc_response(
@@ -806,7 +789,43 @@ async fn queue_responding_turn(
     let run = existing_run(&invocation)?;
     let claims = crate::turn_claims::default_registry()?;
     let sink = sink_for_existing_run(config, &invocation, &run)?;
-    claims.mark_spawned_invocation(
+    claims.record_invocation_turn(&config.run_id, "user", false)?;
+    claims.mark_provider_binding(
+        &config.run_id,
+        &invocation.provider_thread_id,
+        Some(&run.session_file.to_string_lossy()),
+    )?;
+    let active_run_id = invocation.latest_turn().run_id;
+    let binding = turn_binding(config, TurnOrigin::User);
+    if let Err(error) = invocation
+        .queue_user_input(binding.clone(), &config.prompt, &config.image_paths)
+        .await
+    {
+        let pending_count = invocation.pending_count();
+        if !invocation.has_queued_user_turn(&config.run_id) {
+            sink.post_terminal_with_lifecycle(
+                "run_failed",
+                None,
+                Some(error.to_string()),
+                Some(invocation.state().as_str()),
+                Some(pending_count),
+            )
+            .await;
+            return Err(error).context("queueing user input in a responding OMP invocation");
+        }
+        let _ = invocation.close_input().await;
+        let cleanup_verified = cleanup_live_claim(&active_run_id).await;
+        let reason = if cleanup_verified {
+            error.to_string()
+        } else {
+            format!("{error}; OMP Console process-group cleanup was not verified")
+        };
+        settle_omp_invocation_turns(&invocation, &sink, "run_failed", &reason, None).await;
+        invocation.process_exited();
+        crate::console_lifecycle::unregister(&invocation.launch_id);
+        return Err(error).context("queueing user input in a responding OMP invocation");
+    }
+    if let Err(error) = claims.mark_spawned_invocation(
         &config.run_id,
         run.pid,
         run.process_group_id,
@@ -817,48 +836,32 @@ async fn queue_responding_turn(
         &run.stdout_path.to_string_lossy(),
         &run.stderr_path.to_string_lossy(),
         invocation_spawn_result(config, &invocation, &run),
-    )?;
-    claims.record_invocation_turn(&config.run_id, "user", false)?;
-    claims.mark_provider_binding(
-        &config.run_id,
-        &invocation.provider_thread_id,
-        Some(&run.session_file.to_string_lossy()),
-    )?;
-    sink.post_phase("thinking", None, 0).await;
-    if let Err(error) = invocation
-        .queue_user_input(
-            turn_binding(config, TurnOrigin::User),
-            &config.prompt,
-            &config.image_paths,
-        )
-        .await
-    {
-        let pending_count = invocation.pending_count();
+    ) {
         let _ = invocation.close_input().await;
-        let cleanup_verified = cleanup_live_claim(&config.run_id).await;
+        let cleanup_verified = cleanup_live_claim(&active_run_id).await;
         let reason = if cleanup_verified {
-            error.to_string()
+            format!("could not persist queued OMP invocation: {error}")
         } else {
             format!(
-                "{}; OMP Console process-group cleanup was not verified",
-                error
+                "could not persist queued OMP invocation: {error}; process-group cleanup was not verified"
             )
         };
         settle_omp_invocation_turns(&invocation, &sink, "run_failed", &reason, None).await;
         settle_omp_turn_claim(
             &claims,
-            &turn_binding(config, TurnOrigin::User),
+            &binding,
             &sink,
             "run_failed",
             &reason,
             None,
-            pending_count,
+            invocation.pending_count(),
         )
         .await;
         invocation.process_exited();
         crate::console_lifecycle::unregister(&invocation.launch_id);
-        return Err(error).context("queueing user input in a responding OMP invocation");
+        return Err(error).context("persisting queued OMP invocation identity");
     }
+    sink.post_phase("thinking", None, 0).await;
     hold_turn_monitor(&config.run_id, invocation.clone());
     Ok(existing_summary(config, &invocation, &run, true))
 }
@@ -1443,21 +1446,23 @@ async fn monitor_omp_print(
             if let Some(trigger) = omp_async_trigger(&event, &updates) {
                 last_trigger = trigger;
             }
-            if let Some((pending, recent)) = async_placeholder_replacement_snapshot(
+            let mut should_close = false;
+            if should_replace_async_placeholder(
                 invocation.state(),
                 async_work_placeholder,
                 &updates,
             ) {
-                apply_pending_snapshot(&invocation, &sink, pending, recent).await;
+                should_close =
+                    apply_pending_placeholder_replacement(&invocation, &sink, updates).await;
                 async_work_placeholder = false;
-            }
-            let mut should_close = false;
-            for (item, is_pending) in updates {
-                if !is_pending && invocation.state() == InvocationState::Parked {
-                    deferred_updates.push((item, is_pending));
-                } else if apply_pending_update(&invocation, &sink, item, is_pending).await {
-                    should_close = true;
-                    break;
+            } else {
+                for (item, is_pending) in updates {
+                    if !is_pending && invocation.state() == InvocationState::Parked {
+                        deferred_updates.push((item, is_pending));
+                    } else if apply_pending_update(&invocation, &sink, item, is_pending).await {
+                        should_close = true;
+                        break;
+                    }
                 }
             }
             if should_close {
@@ -1925,6 +1930,33 @@ async fn apply_pending_snapshot(
             sink,
             "run_failed",
             "OMP invocation closed while pending work was reconciled",
+            None,
+        )
+        .await;
+    }
+    close
+}
+async fn apply_pending_placeholder_replacement(
+    invocation: &ConsoleInvocation,
+    sink: &OmpPrintSink,
+    updates: Vec<(PendingItem, bool)>,
+) -> bool {
+    let (changed, close) =
+        invocation.replace_pending_placeholder(OMP_ASYNC_WORK_PLACEHOLDER_ID, updates);
+    if changed || close {
+        if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
+            sink.for_binding(&binding)
+                .post_delegation_snapshot(snapshot)
+                .await;
+        }
+        record_invocation_claim_state(invocation);
+    }
+    if close {
+        settle_omp_invocation_turns(
+            invocation,
+            sink,
+            "run_failed",
+            "OMP invocation closed while replacing its async-work placeholder",
             None,
         )
         .await;
@@ -2538,8 +2570,12 @@ fn omp_pending_item(
         .get("agent_id")
         .or_else(|| details.get("agentId"))
         .and_then(Value::as_str);
-    let normalized =
-        crate::omp_helm_launcher::normalize_async_job(job_type, agent_id, state, false)?;
+    let normalized = crate::omp_helm_launcher::normalize_async_job(
+        job_type,
+        agent_id,
+        state,
+        details.get("queued").and_then(Value::as_bool) == Some(true),
+    )?;
     let description = details
         .get("description")
         .or_else(|| details.get("label"))
@@ -3566,13 +3602,13 @@ mod tests {
         assert_eq!(refused.native_error.as_deref(), Some("no model"));
     }
     #[test]
-    fn async_placeholder_snapshot_uses_the_real_job_id() {
+    fn async_placeholder_replacement_merges_two_jobs() {
         let launch_id = Uuid::new_v4().to_string();
         let provider_thread_id = Uuid::new_v4().to_string();
         let invocation = Arc::new(ConsoleInvocation::new(
             "omp",
             provider_thread_id,
-            launch_id.clone(),
+            launch_id,
             1,
             1,
             TurnBinding {
@@ -3584,71 +3620,67 @@ mod tests {
             Arc::new(crate::console_rpc::ConsoleRpcInput::new(PathBuf::new())),
         ));
         invocation.replace_pending(vec![async_work_placeholder_item()], vec![]);
-
-        let job = PendingItem {
+        let job1 = PendingItem {
             id: "job-1".to_string(),
             kind: "shell".to_string(),
             status: "running".to_string(),
-            description: Some("background command".to_string()),
+            description: Some("first background command".to_string()),
         };
-        let (pending, recent) = async_placeholder_replacement_snapshot(
+        let job2 = PendingItem {
+            id: "job-2".to_string(),
+            kind: "shell".to_string(),
+            status: "running".to_string(),
+            description: Some("second background command".to_string()),
+        };
+        let updates = vec![(job1.clone(), true), (job2.clone(), true)];
+
+        assert!(should_replace_async_placeholder(
             InvocationState::Responding,
             true,
-            &[(job.clone(), true)],
-        )
-        .unwrap();
-        let (changed, close) = invocation.replace_pending(pending, recent);
+            &updates
+        ));
+        let (changed, close) =
+            invocation.replace_pending_placeholder(OMP_ASYNC_WORK_PLACEHOLDER_ID, updates);
         assert!(changed);
         assert!(!close);
-        assert_eq!(invocation.pending_count(), 1);
+        assert_eq!(invocation.pending_count(), 2);
         assert_eq!(
             invocation.remove_pending_item(OMP_ASYNC_WORK_PLACEHOLDER_ID),
             (false, false)
         );
 
-        let first_idle = invocation
+        let idle = invocation
             .idle(IdleSignal {
                 terminal_state: "run_completed".to_string(),
                 exit_code: Some(0),
                 stderr: None,
             })
             .unwrap();
-        assert_eq!(first_idle.invocation_state, InvocationState::Parked);
-        let wake = invocation
-            .response_started(json!({"kind": "async_job_completed"}))
-            .unwrap();
-        invocation
-            .bind_wake(
-                &wake.invocation_id,
-                &wake.wake_id,
-                TurnBinding {
-                    run_id: "run-2".to_string(),
-                    turn_id: None,
-                    client_request_id: None,
-                    origin: TurnOrigin::Wake,
-                },
-                || Ok(()),
-            )
-            .unwrap();
+        assert_eq!(idle.invocation_state, InvocationState::Parked);
+
         let (changed, close) = invocation.update_pending_item(
             PendingItem {
                 status: "completed".to_string(),
-                ..job
+                ..job1
             },
             false,
         );
         assert!(changed);
         assert!(!close);
+        assert_eq!(invocation.pending_count(), 1);
+        assert_eq!(invocation.state(), InvocationState::Parked);
 
-        let wake_idle = invocation
-            .idle(IdleSignal {
-                terminal_state: "run_completed".to_string(),
-                exit_code: Some(0),
-                stderr: None,
-            })
-            .unwrap();
-        assert_eq!(wake_idle.invocation_state, InvocationState::Closed);
-        assert_eq!(wake_idle.pending_count, 0);
+        let (changed, close) = invocation.update_pending_item(
+            PendingItem {
+                status: "completed".to_string(),
+                ..job2
+            },
+            false,
+        );
+        assert!(changed);
+        assert!(close);
+        assert_eq!(invocation.pending_count(), 0);
+        assert_eq!(invocation.state(), InvocationState::Closed);
     }
 
     #[test]
@@ -4738,6 +4770,127 @@ for line in sys.stdin:
             "{queued_claim:?}"
         );
         assert_eq!(queued_claim.invocation_state.as_deref(), Some("closed"));
+        wait_for_process_group_exit(first.process_group_id.unwrap()).await;
+        restore_test_longhouse_home(previous_home);
+    }
+    #[tokio::test]
+    async fn queue_precondition_failure_does_not_kill_the_active_omp_invocation() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
+        let fake_omp = temp.path().join("omp");
+        write_fake_omp(&fake_omp);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let first_run_id = Uuid::new_v4().to_string();
+        let queued_run_id = Uuid::new_v4().to_string();
+        let rejected_run_id = Uuid::new_v4().to_string();
+        let claims = crate::turn_claims::default_registry().unwrap();
+        claims
+            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+
+        let first = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &first_run_id,
+            "scenario=responding",
+            None,
+            None,
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        let active_marker = PathBuf::from(format!("{}.active", first.session_file));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !active_marker.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fake OMP did not start its in-flight response"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        claims
+            .claim(&queued_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let queued = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &queued_run_id,
+            "scenario=queued-closed",
+            first.provider_thread_id.clone(),
+            Some(PathBuf::from(&first.session_file)),
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(queued.pid, first.pid);
+        let queued_marker = PathBuf::from(format!("{}.queued", first.session_file));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !queued_marker.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fake OMP did not accept the queued prompt"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        let first_claim = wait_for_terminal(&first_run_id).await;
+        assert_eq!(first_claim.invocation_state.as_deref(), Some("responding"));
+        let invocation =
+            crate::console_lifecycle::lookup("omp", first.provider_thread_id.as_deref().unwrap())
+                .unwrap();
+        assert!(invocation.has_queued_user_turn(&queued_run_id));
+
+        claims
+            .claim(&rejected_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let rejected = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &rejected_run_id,
+            "third user turn",
+            first.provider_thread_id.clone(),
+            Some(PathBuf::from(&first.session_file)),
+            "user",
+            None,
+            None,
+        ))
+        .await;
+        assert!(rejected.is_err());
+        assert!(crate::process_group::group_is_alive(
+            first.process_group_id.unwrap()
+        ));
+        assert_eq!(invocation.state(), InvocationState::Responding);
+        assert!(invocation.has_queued_user_turn(&queued_run_id));
+
+        let rejected_claim = claims.read(&rejected_run_id).unwrap();
+        assert_eq!(rejected_claim.state, "terminal");
+        assert_eq!(
+            rejected_claim.result.as_ref().unwrap()["terminal_state"],
+            "run_failed"
+        );
+        assert!(rejected_claim.pid.is_none());
+        assert!(rejected_claim.process_group_id.is_none());
+        assert!(rejected_claim.owned_processes.is_empty());
+
+        assert!(invocation.take_active_turn().is_none());
+        let queued_claim = wait_for_terminal(&queued_run_id).await;
+        assert_eq!(
+            queued_claim.result.as_ref().unwrap()["terminal_state"],
+            "run_failed"
+        );
         wait_for_process_group_exit(first.process_group_id.unwrap()).await;
         restore_test_longhouse_home(previous_home);
     }

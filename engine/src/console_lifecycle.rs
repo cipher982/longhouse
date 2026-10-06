@@ -276,6 +276,14 @@ impl ConsoleInvocation {
         }
         self.write_input(text, images).await
     }
+    pub fn has_queued_user_turn(&self, run_id: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .queued_turn
+            .as_ref()
+            .is_some_and(|binding| binding.run_id == run_id)
+    }
     pub async fn write_input(&self, text: &str, images: &[PathBuf]) -> Result<()> {
         let input = self
             .input
@@ -495,29 +503,28 @@ impl ConsoleInvocation {
         }
         (changed, close)
     }
+    pub fn replace_pending_placeholder(
+        &self,
+        placeholder_id: &str,
+        updates: Vec<(PendingItem, bool)>,
+    ) -> (bool, bool) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut changed = state.pending.remove(placeholder_id).is_some();
+        let recent_len = state.recent_items.len();
+        state.recent_items.retain(|item| item.id != placeholder_id);
+        changed |= state.recent_items.len() != recent_len;
+        for (item, is_pending) in updates {
+            changed |= update_pending_item(&mut state, item, is_pending);
+        }
+        let close = state.phase == InvocationState::Parked && state.pending.is_empty();
+        if close {
+            state.phase = InvocationState::Closed;
+        }
+        (changed, close)
+    }
     pub fn update_pending_item(&self, item: PendingItem, is_pending: bool) -> (bool, bool) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let changed = if is_pending {
-            state.recent_items.retain(|recent| recent.id != item.id);
-            let id = item.id.clone();
-            state
-                .pending
-                .insert(id, item.clone())
-                .is_none_or(|previous| previous != item)
-        } else {
-            let was_pending = state.pending.remove(&item.id).is_some();
-            let previous = state
-                .recent_items
-                .iter()
-                .find(|recent| recent.id == item.id);
-            let changed = was_pending || previous != Some(&item);
-            state.recent_items.retain(|recent| recent.id != item.id);
-            state.recent_items.push(item);
-            if state.recent_items.len() > 32 {
-                state.recent_items.remove(0);
-            }
-            changed
-        };
+        let changed = update_pending_item(&mut state, item, is_pending);
         let close = state.phase == InvocationState::Parked && state.pending.is_empty();
         if close {
             state.phase = InvocationState::Closed;
@@ -642,6 +649,29 @@ impl ConsoleInvocation {
             }
             notified.await;
         }
+    }
+}
+fn update_pending_item(state: &mut State, item: PendingItem, is_pending: bool) -> bool {
+    if is_pending {
+        state.recent_items.retain(|recent| recent.id != item.id);
+        let id = item.id.clone();
+        state
+            .pending
+            .insert(id, item.clone())
+            .is_none_or(|previous| previous != item)
+    } else {
+        let was_pending = state.pending.remove(&item.id).is_some();
+        let previous = state
+            .recent_items
+            .iter()
+            .find(|recent| recent.id == item.id);
+        let changed = was_pending || previous != Some(&item);
+        state.recent_items.retain(|recent| recent.id != item.id);
+        state.recent_items.push(item);
+        if state.recent_items.len() > 32 {
+            state.recent_items.remove(0);
+        }
+        changed
     }
 }
 

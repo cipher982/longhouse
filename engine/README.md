@@ -47,6 +47,12 @@ Recent terminal jobs retain their status and native end time separately from
 the active registry: they never add active work or a flame root. A newer
 complete registry is authoritative over older lifecycle edges; callbacks do
 not become permanent client-side completion tombstones.
+OMP Console runs the stock OMP RPC process persistently: each terminal
+`agent_end` settles that response, while async jobs keep the invocation parked
+until OMP starts a follow-up wake or the user sends another prompt to the same
+process. `session_settled` closes the invocation after pending work drains.
+Pi Console also uses RPC mode but closes at `agent_settled`; upstream Pi has no
+background-job lifecycle to support the OMP wake scenarios.
 
 Codex Console keeps its app-server worker across turns while commandExecution
 items remain. It reconciles `thread/backgroundTerminals/list` with in-progress
