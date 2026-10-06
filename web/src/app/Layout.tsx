@@ -412,7 +412,8 @@ function WelcomeHeader({
 
 // Folded into the nav's right cluster. It says how many enrolled machines hold
 // a live connection, from the machine directory (never the optional Runner
-// count), and only names the API when a request the app tracks has failed.
+// count), and only names the API when a tracked request got no answer or a
+// server error (see apiHealth.ts for why a 4xx never counts).
 function NavStatus({ compact = false }: { compact?: boolean }) {
   const documentVisible = useDocumentVisible();
   const [queryEnabled, setQueryEnabled] = useState(false);
@@ -442,12 +443,12 @@ function NavStatus({ compact = false }: { compact?: boolean }) {
   if (!apiError && !directoryUnavailable && machines.length === 0) return null;
 
   const label = apiError
-    ? "Can't reach Longhouse"
+    ? apiError.label
     : directoryUnavailable
       ? directory ? `${online} of ${machines.length} machines online (last known)` : "Machine status unavailable"
       : `${online} of ${machines.length} ${machines.length === 1 ? "machine" : "machines"} online`;
   const title = apiError
-    ? apiError.message
+    ? apiError.detail
     : directoryUnavailable
       ? `${directoryError instanceof Error ? directoryError.message : "The machine directory could not be refreshed."}${directory ? `\nLast known at ${new Date(dataUpdatedAt).toLocaleTimeString()}.` : ""}`
       : machines.map((machine) => `${machine.machine_name}: ${machine.online ? "online" : "offline"}`).join("\n");
