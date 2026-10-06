@@ -344,6 +344,41 @@ describe("subagents and the native bridge", () => {
     expect(postMessage).toHaveBeenCalledWith({ type: "retrySubmitted", clientRequestId: "ios-unknown" });
   });
 
+  it("asks the app for a cut row's full bodies when it opens, and keeps it open when they arrive", () => {
+    const postMessage = vi.fn();
+    (window as unknown as { webkit: unknown }).webkit = { messageHandlers: { longhouse: { postMessage } } };
+    const preview: TranscriptItem = {
+      id: "tool:5",
+      kind: "tool",
+      title: "Bash",
+      output: "line 1\nline 2\n… 40 more lines …",
+      calls: [],
+      bodyCursors: ["c-call", "c-result"],
+      bodyState: "preview",
+    };
+    render({ items: [preview] });
+    const row = root().querySelector<HTMLDetailsElement>("details.tool")!;
+    expect(row.querySelector(".body-note")?.textContent).toBe("Loading the full output…");
+    row.open = true;
+    row.dispatchEvent(new Event("toggle"));
+    expect(postMessage).toHaveBeenCalledWith({ type: "loadToolBodies", cursors: ["c-call", "c-result"] });
+
+    render({ items: [{ ...preview, output: "the whole output", bodyCursors: null, bodyState: null }] });
+    const loaded = root().querySelector<HTMLDetailsElement>("details.tool")!;
+    expect(loaded.open).toBe(true);
+    expect(loaded.querySelector(".body-note")).toBeNull();
+    expect(loaded.textContent).toContain("the whole output");
+  });
+
+  it("says when a cut row's full body is gone", () => {
+    render({
+      items: [{ id: "tool:6", kind: "tool", title: "Read", calls: [], bodyCursors: ["c"], bodyState: "unavailable" }],
+    });
+    expect(root().querySelector(".body-note")?.textContent).toBe(
+      "The full output is no longer available; this is a preview.",
+    );
+  });
+
   it("keeps an opened worker list open across renders", () => {
     render({ items: [spawner] });
     root().querySelector<HTMLDetailsElement>("details.subagents")!.open = true;

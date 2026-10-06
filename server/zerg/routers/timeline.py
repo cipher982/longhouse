@@ -1086,7 +1086,11 @@ async def get_timeline_session_mobile_tail(
         None,
         description="Previous snapshot marker for older-page drift detection",
     ),
-    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
+    cursor: Optional[str] = Query(
+        None,
+        description="Exclusive storage-v2 cursor: older events with anchor=tail, newer events (a delta) with anchor=start",
+    ),
+    anchor: str = Query("tail", description="Page anchor: tail (the latest window, or older with cursor) or start (a delta after cursor)"),
     detail: str = Query(
         "full",
         description="full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies)",
@@ -1101,6 +1105,7 @@ async def get_timeline_session_mobile_tail(
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
+        anchor=anchor,
         timing=timing,
         detail=detail,
     )
@@ -1112,6 +1117,9 @@ async def get_timeline_session_mobile_tail(
         "projection": storage_workspace["projection"],
         "snapshot_event_id": storage_workspace["workspace_revision"]["latest_event_id"],
         "workspace_revision": storage_workspace["workspace_revision"],
+        # Clients accept a delta only when the server says it read one; an older
+        # server ignores `anchor` and answers with the latest window instead.
+        "page_anchor": anchor,
     }
 
 

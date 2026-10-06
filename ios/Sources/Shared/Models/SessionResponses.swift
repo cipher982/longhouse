@@ -130,6 +130,9 @@ struct SessionMobileTailResponse: Codable, Sendable {
     let projection: SessionProjectionResponse
     @FlexibleStringID var snapshotEventId: String?
     var workspaceRevision: SessionWorkspaceRevision? = nil
+    /// `start` when the server read a delta after the request cursor. An older
+    /// server ignores the request's anchor and leaves this nil.
+    var pageAnchor: String? = nil
 
     var events: [SessionEvent] {
         projection.items.compactMap(\.event)
@@ -147,4 +150,21 @@ struct SessionEventsPage: Codable, Sendable {
     let nextCursor: String?
     let hasMore: Bool
     let total: Int
+}
+
+/// One event's full tool body, for a row a lite transcript page sent as a
+/// preview (`/event-bodies`).
+struct SessionEventBody: Sendable, Equatable {
+    let id: String
+    let cursor: String
+    let toolInputJson: JSONValue?
+    let toolOutputText: String?
+    let toolPresentation: ToolPresentation?
+}
+
+struct SessionEventBodiesResponse: Sendable {
+    let events: [SessionEventBody]
+    /// Requested cursors that no longer name an event (the session was
+    /// re-rendered since the page loaded); those rows keep their preview.
+    let missing: [String]
 }

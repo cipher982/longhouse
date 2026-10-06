@@ -400,6 +400,47 @@ def test_timeline_session_mobile_tail_returns_the_catalog_tail(live_catalog, liv
     assert missing.status_code == 404, missing.text
 
 
+def test_timeline_session_mobile_tail_reads_a_lite_delta_after_a_cursor(live_catalog, live_catalog_client):  # noqa: F811
+    """iOS wakes read only events after a cursor it holds, with the header, in one request."""
+
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    seeded = live_catalog.commit_session(
+        owner_id=owner,
+        device_id="cinder",
+        project="timeline-auth",
+        texts=("turn one", "turn two", "turn three"),
+    )
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
+    path = f"/timeline/sessions/{seeded.session_id}/mobile-tail"
+
+    tail = live_catalog_client.get(path, params={"limit": 3, "detail": "lite"})
+    assert tail.status_code == 200, tail.text
+    tail_items = tail.json()["projection"]["items"]
+    assert tail.json()["projection"]["detail"] == "lite"
+    # Lite events still name their cursor, which is what a delta and /event-bodies need.
+    anchor_cursor = tail_items[0]["event"]["cursor"]
+    assert anchor_cursor
+
+    delta = live_catalog_client.get(
+        path,
+        params={"limit": 50, "detail": "lite", "anchor": "start", "cursor": anchor_cursor},
+    )
+
+    assert delta.status_code == 200, delta.text
+    payload = delta.json()
+    assert payload["session"]["id"] == str(seeded.session_id)
+    assert [item["event"]["content_text"] for item in payload["projection"]["items"]] == ["turn two", "turn three"]
+    assert payload["projection"]["has_more"] is False
+    assert payload["page_anchor"] == "start"
+    # The total is the whole projection's, not the delta's, so a client can keep its count.
+    assert payload["projection"]["total"] == tail.json()["projection"]["total"] == 3
+    assert tail.json()["page_anchor"] == "tail"
+    assert payload["workspace_revision"]["fingerprint"] == tail.json()["workspace_revision"]["fingerprint"]
+
+    bad_anchor = live_catalog_client.get(path, params={"anchor": "middle"})
+    assert bad_anchor.status_code == 400, bad_anchor.text
+
+
 def test_timeline_machine_workspaces_accept_browser_session_cookie(live_catalog, live_catalog_client):  # noqa: F811
     """The launch picker reads workspaces through the cookie surface.
 

@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 305,
+  "file_count": 306,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1937,6 +1937,13 @@
         "claude",
         "codex",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_timeline_api_auth_boundary.py",
+      "providers": [
+        "claude",
+        "cursor"
       ]
     },
     {

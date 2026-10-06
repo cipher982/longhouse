@@ -279,7 +279,8 @@ struct LonghouseAPI: Sendable {
         offset: Int = 0,
         branchMode: String = "head",
         snapshotEventId: String? = nil,
-        cursor: String? = nil
+        cursor: String? = nil,
+        anchor: String? = nil
     ) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/mobile-tail"),
@@ -289,12 +290,19 @@ struct LonghouseAPI: Sendable {
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset)),
             URLQueryItem(name: "branch_mode", value: branchMode),
+            // Tool bodies arrive as their collapsed previews; an expanded row
+            // fetches the whole body from /event-bodies. A server without lite
+            // ignores this and sends full pages, which decode unchanged.
+            URLQueryItem(name: "detail", value: "lite"),
         ]
         if let snapshotEventId {
             items.append(URLQueryItem(name: "snapshot_event_id", value: snapshotEventId))
         }
         if let cursor {
             items.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        if let anchor {
+            items.append(URLQueryItem(name: "anchor", value: anchor))
         }
         components.queryItems = items
         return components.url!
@@ -312,8 +320,54 @@ struct LonghouseAPI: Sendable {
 
     static func decodeSessionMobileTail(_ data: Data) throws -> SessionMobileTailResponse {
         try JSONDecoder.snakeCase
-            .decode(APISessionMobileTailResponse.self, from: data)
+            .decode(APISessionMobileTailResponse.self, from: LiteTranscript.hydrateMobileTail(data))
             .sessionMobileTailResponse
+    }
+
+    static func sessionEventBodiesURL(baseURL: URL, id: String, cursors: [String]) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/event-bodies"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = cursors.map { URLQueryItem(name: "cursor", value: $0) }
+        return components.url!
+    }
+
+    static func decodeSessionEventBodies(_ data: Data) throws -> SessionEventBodiesResponse {
+        try JSONDecoder.snakeCase
+            .decode(APISessionEventBodiesResponse.self, from: data)
+            .sessionEventBodiesResponse
+    }
+
+    /// Full tool bodies for rows a lite page sent as previews. The server
+    /// takes at most 20 cursors per request.
+    func sessionEventBodies(id: String, cursors: [String]) async throws -> SessionEventBodiesResponse {
+        var request = URLRequest(
+            url: Self.sessionEventBodiesURL(baseURL: baseURL, id: id, cursors: cursors),
+            cachePolicy: .reloadIgnoringLocalCacheData
+        )
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try Self.decodeSessionEventBodies(data)
+    }
+
+    /// Events after `afterCursor` plus the session header and revision, in one
+    /// request. Returns nil when the server did not read a delta (an older
+    /// server ignores `anchor` and answers with the latest window).
+    func sessionMobileTailDelta(id: String, afterCursor: String, limit: Int) async throws -> SessionMobileTailResponse? {
+        let tail = try await mobileTail(
+            id: id,
+            limit: limit,
+            offset: 0,
+            branchMode: "head",
+            snapshotEventId: nil,
+            cursor: afterCursor,
+            anchor: "start"
+        )
+        return tail.pageAnchor == "start" ? tail : nil
     }
     static func decodeSessionDetail(_ data: Data) throws -> SessionDetail {
         var detail = try JSONDecoder.snakeCase
@@ -476,6 +530,26 @@ struct LonghouseAPI: Sendable {
         snapshotEventId: String? = nil,
         cursor: String? = nil
     ) async throws -> SessionMobileTailResponse {
+        try await mobileTail(
+            id: id,
+            limit: limit,
+            offset: offset,
+            branchMode: branchMode,
+            snapshotEventId: snapshotEventId,
+            cursor: cursor,
+            anchor: nil
+        )
+    }
+
+    private func mobileTail(
+        id: String,
+        limit: Int,
+        offset: Int,
+        branchMode: String,
+        snapshotEventId: String?,
+        cursor: String?,
+        anchor: String?
+    ) async throws -> SessionMobileTailResponse {
         var request = URLRequest(
             url: Self.sessionMobileTailURL(
                 baseURL: baseURL,
@@ -484,7 +558,8 @@ struct LonghouseAPI: Sendable {
                 offset: offset,
                 branchMode: branchMode,
                 snapshotEventId: snapshotEventId,
-                cursor: cursor
+                cursor: cursor,
+                anchor: anchor
             ),
             cachePolicy: .reloadIgnoringLocalCacheData
         )

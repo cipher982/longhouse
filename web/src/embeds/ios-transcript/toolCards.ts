@@ -4,6 +4,24 @@ import { mediaStrip } from "./media";
 import { subagentNode } from "./subagents";
 import type { ToolCall, TranscriptItem } from "./types";
 
+/// A lite page sent this row's bodies as previews. Expanding asks native for
+/// the full ones (`liteBodies.ts`); the open key keeps the row open across the
+/// re-render that delivers them.
+function bodyAttributes(item: TranscriptItem): string {
+  const cursors = item.bodyCursors || [];
+  const openKey = ' data-open-key="row:' + escapeHtml(item.id) + '"';
+  return cursors.length ? openKey + ' data-body-cursors="' + escapeHtml(cursors.join(" ")) + '"' : openKey;
+}
+
+function bodyNote(item: TranscriptItem): string {
+  if (!(item.bodyCursors || []).length) return "";
+  const text =
+    item.bodyState === "unavailable"
+      ? "The full output is no longer available; this is a preview."
+      : "Loading the full output…";
+  return '<p class="body-note" role="status">' + escapeHtml(text) + "</p>";
+}
+
 export function toolDetails(item: TranscriptItem): string {
   // A failure is never hidden behind a duration: the exit chip wins (R4).
   const isFailure =
@@ -56,13 +74,13 @@ export function toolDetails(item: TranscriptItem): string {
       "</pre></div>"
     : "";
   return `
-        <details class="tool row">
+        <details class="tool row"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Tool")}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
             <span class="tool-meta ${meta}">${escapeHtml(status)}</span>
           </summary>
-          <div class="details-body">${input}${provenance}${output}${media}</div>
+          <div class="details-body">${input}${provenance}${output}${media}${bodyNote(item)}</div>
         </details>
         ${preview}
         ${subagentNode(item)}
@@ -97,12 +115,12 @@ export function activityGroup(item: TranscriptItem): string {
       ? `<button type="button" class="passive-earlier-btn" onclick="this.nextElementSibling.hidden=false;this.remove();">Show ${earlierCount} earlier</button><div class="passive-earlier" hidden>${earlierHtml}</div>`
       : "";
   return `
-        <details class="passive row">
+        <details class="passive row"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Activity")}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
           </summary>
-          <div class="details-body">${earlierControl}${latestHtml}</div>
+          <div class="details-body">${earlierControl}${latestHtml}${bodyNote(item)}</div>
         </details>
         ${subagentNode(item)}
       `;

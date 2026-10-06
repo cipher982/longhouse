@@ -76,6 +76,117 @@ struct SessionViewModelTests {
         #expect(firstTailRequest?.snapshotEventId == nil)
     }
 
+    private func conversationItems(_ range: ClosedRange<Int>) -> [SessionProjectionItem] {
+        range.map { index in
+            let timestamp = "2026-05-02T20:\(String(format: "%02d", index / 60)):\(String(format: "%02d", index % 60))Z"
+            let event = SessionEvent(
+                id: "evt-\(index)",
+                role: index.isMultiple(of: 2) ? "user" : "assistant",
+                contentText: "message \(index)",
+                toolName: nil,
+                toolInputJSON: nil,
+                toolOutputText: nil,
+                toolCallId: nil,
+                toolCallState: nil,
+                timestamp: timestamp,
+                inActiveContext: true,
+                isHeadBranch: true,
+                inputOrigin: nil,
+                eventOrigin: "durable",
+                cursor: "cursor-\(index)"
+            )
+            return SessionProjectionItem(
+                kind: "event", sessionId: "session-1", timestamp: timestamp, event: event,
+                continuedFromSessionId: nil, continuationKind: nil, originLabel: nil,
+                parentOriginLabel: nil, parentContinuationKind: nil, branchedFromEventId: nil
+            )
+        }
+    }
+
+    private func tail(
+        from base: SessionWorkspaceResponse,
+        items: [SessionProjectionItem],
+        total: Int,
+        generationId: String = "gen-1",
+        pageAnchor: String? = nil
+    ) -> SessionMobileTailResponse {
+        SessionMobileTailResponse(
+            session: base.session,
+            projection: SessionProjectionResponse(
+                rootSessionId: "session-1",
+                focusSessionId: "session-1",
+                headSessionId: "session-1",
+                pathSessionIds: ["session-1"],
+                items: items,
+                total: total,
+                pageOffset: 0,
+                branchMode: "head",
+                abandonedEvents: 0,
+                generationId: generationId,
+                nextCursor: nil,
+                hasMore: false
+            ),
+            snapshotEventId: items.last?.event?.id,
+            pageAnchor: pageAnchor
+        )
+    }
+
+    @Test
+    func aWakeReadsOnlyNewEventsAndKeepsTheHeldRows() async throws {
+        let base = try makeWorkspace(eventId: 10, content: "seed")
+        let held = tail(from: base, items: conversationItems(1...30), total: 30)
+        let workspace = SessionWorkspaceResponse(
+            session: base.session,
+            thread: base.thread,
+            projection: held.projection,
+            workspaceRevision: base.workspaceRevision
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
+        await model.start(sessionId: "session-1", appState: appState)
+        #expect(model.items.count == 30)
+
+        // Twenty rows back from the newest is evt-10; the delta re-reads 11...30 and adds 31.
+        await api.enqueueDelta(tail(from: base, items: conversationItems(11...31), total: 31, pageAnchor: "start"))
+        let fullReadsBefore = await api.tailRequestCount()
+        await model.reload(sessionId: "session-1", appState: appState)
+
+        #expect(await api.deltaCursors() == ["cursor-10"])
+        #expect(await api.tailRequestCount() == fullReadsBefore)
+        #expect(model.items.count == 31)
+        #expect(model.items.first?.id == "user:evt-1")
+        #expect(model.items.last?.id == "prose:evt-31")
+    }
+
+    @Test
+    func aDeltaFromAnotherRenderGenerationFallsBackToTheLatestWindow() async throws {
+        let base = try makeWorkspace(eventId: 10, content: "seed")
+        let held = tail(from: base, items: conversationItems(1...30), total: 30)
+        let workspace = SessionWorkspaceResponse(
+            session: base.session,
+            thread: base.thread,
+            projection: held.projection,
+            workspaceRevision: base.workspaceRevision
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
+        await model.start(sessionId: "session-1", appState: appState)
+
+        await api.enqueueDelta(
+            tail(from: base, items: conversationItems(11...31), total: 31, generationId: "gen-2", pageAnchor: "start")
+        )
+        let fullReadsBefore = await api.tailRequestCount()
+        await model.reload(sessionId: "session-1", appState: appState)
+
+        #expect(await api.deltaCursors() == ["cursor-10"])
+        #expect(await api.tailRequestCount() == fullReadsBefore + 1)
+        #expect(model.items.count == 30)
+    }
+
     @Test
     func laggingArchiveDoesNotAdvanceTranscriptReadThrough() async throws {
         let workspace = try makeWorkspace(
@@ -2845,6 +2956,8 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: String?, cursor: String?)] = []
     private var tailResponses = 0
+    private var deltaResponses: [SessionMobileTailResponse?] = []
+    private var deltaRequestCursors: [String] = []
     private var pausedTailResponseCounts: [Int: Int] = [:]
     private var pausedTailContinuations: [CheckedContinuation<Void, Never>] = []
     private var sentInputs: [String] = []
@@ -2967,6 +3080,19 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
             projection: workspace.projection,
             snapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
+    }
+
+    func enqueueDelta(_ response: SessionMobileTailResponse?) {
+        deltaResponses.append(response)
+    }
+
+    func deltaCursors() -> [String] { deltaRequestCursors }
+
+    func tailRequestCount() -> Int { tailRequests.count }
+
+    func sessionMobileTailDelta(id: String, afterCursor: String, limit: Int) async throws -> SessionMobileTailResponse? {
+        deltaRequestCursors.append(afterCursor)
+        return deltaResponses.isEmpty ? nil : deltaResponses.removeFirst()
     }
 
     private func nextWorkspace() throws -> SessionWorkspaceResponse {

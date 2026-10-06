@@ -1521,6 +1521,10 @@ class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
     id: int | str = Field(..., description="Stable legacy or storage-v2 event ID")
+    cursor: Optional[str] = Field(
+        None,
+        description="Opaque storage-v2 transcript cursor; names this event for /event-bodies and delta reads",
+    )
     role: str = Field(..., description="Message role")
     content_text: Optional[str] = Field(None, description="Message content")
     interaction_kind: Optional[str] = Field(
@@ -1544,6 +1548,14 @@ class EventResponse(UTCBaseModel):
     tool_output_text: Optional[str] = Field(None, description="Tool output")
     tool_output_truncated: bool = Field(False, description="True when tool_output_text was shortened for this response")
     tool_output_original_chars: Optional[int] = Field(None, description="Original tool output length when truncated")
+    tool_input_truncated: bool = Field(
+        False,
+        description="Lite pages: tool_input_json was cut to what its collapsed row needs; fetch the whole from /event-bodies",
+    )
+    tool_output_failed: bool = Field(
+        False,
+        description="Lite pages: the full output (not sent) reads as a structured failure",
+    )
     tool_call_id: Optional[str] = Field(None, description="Cross-provider call/result linkage ID")
     tool_presentation: Optional[ToolPresentationResponse] = Field(
         None,
@@ -1672,6 +1684,10 @@ class SessionMobileTailResponse(BaseModel):
         description="Durable event id anchoring older-page fetches: legacy integer or storage-v2 string",
     )
     workspace_revision: SessionWorkspaceRevisionResponse = Field(..., description="Durable viewport freshness revision")
+    page_anchor: Optional[str] = Field(
+        None,
+        description="The anchor this page was read with: tail, or start for a delta after the request cursor",
+    )
 
 
 class SessionEventBody(BaseModel):

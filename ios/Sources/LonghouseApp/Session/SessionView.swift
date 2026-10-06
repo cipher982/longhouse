@@ -537,6 +537,7 @@ struct SessionView: View {
                     retryRevision: viewModel.transcriptRenderRetryRevision,
                     sourceRevision: viewModel.benchmarkSourceRevision,
                     sourceOperation: viewModel.benchmarkSourceOperation,
+                    liteBodies: viewModel.liteBodies,
                     onNearTop: {
                         Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                     },
@@ -588,6 +589,11 @@ struct SessionView: View {
                                 sessionId: sessionId,
                                 appState: appState
                             )
+                        }
+                    },
+                    onLoadToolBodies: { cursors in
+                        Task {
+                            await viewModel.loadToolBodies(cursors: cursors, sessionId: sessionId, appState: appState)
                         }
                     },
                     onFrameFailed: { receipt in

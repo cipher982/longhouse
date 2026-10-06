@@ -51,6 +51,8 @@ final class SessionViewModel: ObservableObject {
     }
     /// Workers this session spawned, attached to the tool rows that spawned them.
     @Published var subagents: [SessionSubagent] = [] { didSet { transcriptRevision &+= 1 } }
+    /// Full tool bodies loaded for rows a lite page sent as previews.
+    @Published private(set) var liteBodies = LiteBodyState() { didSet { transcriptRevision &+= 1 } }
     /// Blocking load error: only set when there is genuinely nothing to show
     /// (no cache, never loaded). Drives the full-screen error overlay.
     @Published var errorMessage: String? { didSet { transcriptRevision &+= 1 } }
@@ -153,6 +155,11 @@ final class SessionViewModel: ObservableObject {
     private var activeAuthGeneration: String?
     private var lastWorkspaceEvents: [SessionEvent] = []
     private var lastWorkspaceProjectionItems: [SessionProjectionItem] = []
+    /// What the last full tail read: a delta continues the held pages only
+    /// from the same render generation and head session.
+    private var heldTailGenerationId: String?
+    private var heldTailHeadSessionId: String?
+    private var lastFullTailReadAt: Date?
     private var loadedProjectionItemCount = 0
     private var totalProjectionItemCount = 0
     private var tailSnapshotEventId: String?
@@ -222,7 +229,10 @@ final class SessionViewModel: ObservableObject {
     private var lastPubsubSeq: Int?
     private var lastWorkspaceRevisionFingerprint: String?
     private let initialTailLimit = 50
-    private let olderPageLimit = 50
+    /// Lite pages carry tool bodies as previews, so a 100-event older page
+    /// costs about what 40 full events did; fewer, larger pages mean fewer
+    /// walls on the way back through history.
+    private let olderPageLimit = 100
     init(
         apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
         streamFactory: @escaping (URL, String, Int?, String?) -> SessionWorkspaceStreamSource = { baseURL, sessionId, sinceSeq, fingerprint in
@@ -307,6 +317,8 @@ final class SessionViewModel: ObservableObject {
             activity.reset()
             transcriptRowsReconciled = false
             subagents = []
+            liteBodies = LiteBodyState()
+            liteBodyGeneration &+= 1
             transcriptRowsPublishedPreview = nil
             submittedInputs = []
             let pendingAuthGeneration = SharedAuthStore.authGeneration(for: normalizedServerURL)
@@ -335,6 +347,9 @@ final class SessionViewModel: ObservableObject {
             pendingRealtimeTelemetry = nil
             lastWorkspaceEvents = []
             lastWorkspaceProjectionItems = []
+            heldTailGenerationId = nil
+            heldTailHeadSessionId = nil
+            lastFullTailReadAt = nil
             realtimeRefreshTask?.cancel()
             realtimeRefreshTask = nil
             realtimeRefreshPending = false
@@ -2482,6 +2497,48 @@ final class SessionViewModel: ObservableObject {
         }
         startRealtimePreviewBuild(pending)
     }
+    /// Bumped on every route change so a body response for the previous
+    /// session can never land in this one.
+    private var liteBodyGeneration: UInt64 = 0
+    /// The server's per-request cap on `/event-bodies` cursors.
+    nonisolated static let liteBodyBatchLimit = 20
+
+    /// An expanded row asked for the full bodies of its cut events. Only
+    /// cursors of events this screen holds and that a lite page actually cut
+    /// are fetched; the rest of the message is ignored.
+    func loadToolBodies(cursors requested: [String], sessionId: String, appState: AppState) async {
+        guard activeSessionId == sessionId, let api = apiFactory(appState.serverURL) else { return }
+        let held = Set(
+            lastWorkspaceEvents.compactMap(\.liteBodyCursor)
+                + lastWorkspaceProjectionItems.compactMap { $0.event?.liteBodyCursor }
+        )
+        let wanted = requested.filter {
+            held.contains($0) && liteBodies.bodies[$0] == nil
+                && !liteBodies.loading.contains($0) && !liteBodies.unavailable.contains($0)
+        }
+        guard !wanted.isEmpty else { return }
+        let generation = liteBodyGeneration
+        liteBodies.loading.formUnion(wanted)
+        var start = 0
+        while start < wanted.count {
+            let batch = Array(wanted[start..<min(start + Self.liteBodyBatchLimit, wanted.count)])
+            start += batch.count
+            let response = try? await api.sessionEventBodies(id: sessionId, cursors: batch)
+            guard generation == liteBodyGeneration, activeSessionId == sessionId else { return }
+            var next = liteBodies
+            next.loading.subtract(batch)
+            if let response {
+                for body in response.events { next.bodies[body.cursor] = body }
+                next.unavailable.formUnion(response.missing)
+                openWaterfall?.mark("lite_bodies_loaded", "requested=\(batch.count) missing=\(response.missing.count)")
+            } else {
+                // A failed read is retried by the next expand; the row keeps its preview.
+                openWaterfall?.mark("lite_bodies_failed", "requested=\(batch.count)")
+            }
+            liteBodies = next
+        }
+    }
+
     func loadOlder(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
         await loadOlder(api: api, sessionId: sessionId)
@@ -2726,21 +2783,20 @@ final class SessionViewModel: ObservableObject {
         do {
             let requestStartedAt = Date()
             openWaterfall?.mark("request_start", "limit=\(initialTailLimit)")
-            let tail = try await api.sessionMobileTail(
-                id: sessionId,
-                limit: initialTailLimit,
-                offset: 0,
-                branchMode: "head",
-                snapshotEventId: nil,
-                cursor: nil
-            )
+            let read = try await readTail(api: api, sessionId: sessionId)
+            let tail = read.tail
             let requestMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
             guard isCurrentRoute(sessionId: sessionId, generation: generation) else {
                 throw CancellationError()
             }
+            if !read.isDelta {
+                heldTailGenerationId = tail.projection.generationId
+                heldTailHeadSessionId = tail.projection.headSessionId
+                lastFullTailReadAt = Date()
+            }
             openWaterfall?.mark(
                 "request_finished",
-                "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
+                "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total) delta=\(read.isDelta)"
             )
             if let observed = tail.workspaceRevision?.latestEventId.flatMap(Int.init) {
                 tailObservedEventId = max(tailObservedEventId ?? observed, observed)
@@ -2776,17 +2832,31 @@ final class SessionViewModel: ObservableObject {
             let clearingBlockingLoadError = !hasLoadedTranscript
             let acceptedTranscriptPreview = detail?.transcriptPreview
             let acceptedTranscriptReadThrough = self.acceptedTranscriptReadThrough(for: tail.session)
-            let mergedEvents = mergeRefreshedTail(tail.events)
+            let mergedEvents = mergeRefreshedTail(read.freshItems.compactMap(\.event))
             let mergedProjectionItems = mergeRefreshedProjectionItems(
-                freshTailItems: tail.projection.items,
+                freshTailItems: read.freshItems,
                 mergedEvents: mergedEvents
             )
-            let refreshedLoadedCount = min(
-                tail.projection.total,
-                max(0, max(tail.projection.total - tail.projection.pageOffset, mergedProjectionItems.count))
-            )
-            let keepPrefetchedOlderTail = prefetchedOlderCursor == tail.projection.nextCursor
-                && prefetchedOlderSnapshotEventId == tail.snapshotEventId
+            let refreshedLoadedCount: Int
+            if read.isDelta {
+                // A delta replaces only rows after its anchor; every older
+                // page already loaded stays loaded.
+                refreshedLoadedCount = min(
+                    tail.projection.total,
+                    max(0, loadedProjectionItemCount + mergedProjectionItems.count - lastWorkspaceProjectionItems.count)
+                )
+            } else {
+                refreshedLoadedCount = min(
+                    tail.projection.total,
+                    max(0, max(tail.projection.total - tail.projection.pageOffset, mergedProjectionItems.count))
+                )
+            }
+            // A delta leaves the older window alone: its cursor, snapshot
+            // marker and any prefetched older page all still apply.
+            let refreshedNextCursor = read.isDelta ? tailNextCursor : tail.projection.nextCursor
+            let refreshedSnapshotEventId = read.isDelta ? tailSnapshotEventId : tail.snapshotEventId
+            let keepPrefetchedOlderTail = prefetchedOlderCursor == refreshedNextCursor
+                && prefetchedOlderSnapshotEventId == refreshedSnapshotEventId
             let shouldPublishTranscript =
                 !transcriptRowsReconciled
                 || incomingWorkspaceRevisionFingerprint == nil
@@ -2842,8 +2912,8 @@ final class SessionViewModel: ObservableObject {
                 }
                 loadedProjectionItemCount = refreshedLoadedCount
                 totalProjectionItemCount = tail.projection.total
-                tailSnapshotEventId = tail.snapshotEventId
-                tailNextCursor = tail.projection.nextCursor
+                tailSnapshotEventId = refreshedSnapshotEventId
+                tailNextCursor = refreshedNextCursor
                 if let incomingWorkspaceRevisionFingerprint {
                     lastWorkspaceRevisionFingerprint = incomingWorkspaceRevisionFingerprint
                 }
@@ -2898,6 +2968,99 @@ final class SessionViewModel: ObservableObject {
             }
             throw error
         }
+    }
+
+    private struct TailRead {
+        let tail: SessionMobileTailResponse
+        /// The latest window, or for a delta the held rows from its anchor on
+        /// with the new rows spliced in, shaped for the tail merge below.
+        let freshItems: [SessionProjectionItem]
+        let isDelta: Bool
+    }
+
+    /// Rows a delta re-reads behind the newest one: tool calls near the tail
+    /// still change state (running -> completed) after newer rows land.
+    nonisolated static let deltaAnchorDepth = 20
+    /// A full tail read at least this often, as a correction for anything a
+    /// run of deltas could miss.
+    nonisolated static let fullTailReadInterval: TimeInterval = 60
+
+    private func readTail(api: SessionWorkspaceClient, sessionId: String) async throws -> TailRead {
+        if let delta = await readTailDelta(api: api, sessionId: sessionId) {
+            return delta
+        }
+        let tail = try await api.sessionMobileTail(
+            id: sessionId,
+            limit: initialTailLimit,
+            offset: 0,
+            branchMode: "head",
+            snapshotEventId: nil,
+            cursor: nil
+        )
+        return TailRead(tail: tail, freshItems: tail.projection.items, isDelta: false)
+    }
+
+    /// Events after a settled row this screen holds, with the header, in one
+    /// request. Nil means read the latest window instead: nothing held yet, a
+    /// correction is due, the server answered with something other than a
+    /// delta (an older server, 409 for a re-rendered generation, more than a
+    /// page of new rows), or the held rows moved while the request was out.
+    private func readTailDelta(api: SessionWorkspaceClient, sessionId: String) async -> TailRead? {
+        guard hasLoadedTranscript, transcriptRowsReconciled,
+              let generationId = heldTailGenerationId,
+              let headSessionId = heldTailHeadSessionId,
+              let lastFull = lastFullTailReadAt,
+              Date().timeIntervalSince(lastFull) < Self.fullTailReadInterval,
+              let anchorIndex = Self.deltaAnchorIndex(in: lastWorkspaceProjectionItems),
+              let anchorCursor = lastWorkspaceProjectionItems[anchorIndex].event?.cursor
+        else { return nil }
+        let delta: SessionMobileTailResponse
+        do {
+            guard let response = try await api.sessionMobileTailDelta(
+                id: sessionId,
+                afterCursor: anchorCursor,
+                limit: initialTailLimit
+            ) else { return nil }
+            delta = response
+        } catch {
+            openWaterfall?.mark("delta_fallback", "error=\(error)")
+            return nil
+        }
+        guard delta.projection.generationId == generationId,
+              delta.projection.headSessionId == headSessionId,
+              delta.projection.hasMore != true,
+              // Splice against the rows as they are now; an older page or
+              // another refresh may have landed while this was in flight.
+              let liveAnchor = lastWorkspaceProjectionItems.firstIndex(where: { $0.event?.cursor == anchorCursor })
+        else {
+            openWaterfall?.mark("delta_fallback", "reason=does_not_continue")
+            return nil
+        }
+        let combined = Array(lastWorkspaceProjectionItems[...liveAnchor]) + delta.projection.items
+        let tailWindow = min(initialTailLimit, totalProjectionItemCount)
+        let fresh = loadedProjectionItemCount > tailWindow ? Array(combined[liveAnchor...]) : combined
+        return TailRead(tail: delta, freshItems: fresh, isDelta: true)
+    }
+
+    /// The newest held row a delta can safely read after: `deltaAnchorDepth`
+    /// rows back, or before the oldest tool call still running, and always a
+    /// durable event with a cursor.
+    nonisolated static func deltaAnchorIndex(in items: [SessionProjectionItem]) -> Int? {
+        guard !items.isEmpty else { return nil }
+        var index = max(0, items.count - 1 - deltaAnchorDepth)
+        if let running = items.firstIndex(where: { $0.event?.toolCallState == .running }) {
+            index = min(index, running - 1)
+        }
+        while index >= 0 {
+            if let event = items[index].event,
+               event.eventOrigin != "live_provisional",
+               !event.isSynthetic,
+               event.cursor?.isEmpty == false {
+                return index
+            }
+            index -= 1
+        }
+        return nil
     }
 
     private func mergeRefreshedTail(_ freshTailEvents: [SessionEvent]) -> [SessionEvent] {

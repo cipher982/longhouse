@@ -10,6 +10,9 @@ extension WebTranscriptView {
         var onEditSubmittedInput: ((String) -> Void)?
         var onDiscardSubmittedInput: ((String) -> Void)?
         var onRetrySubmittedInput: ((String) -> Void)?
+        /// An expanded row asks for the full bodies a lite page cut. Native
+        /// checks every cursor against the rows it rendered before fetching.
+        var onLoadToolBodies: (([String]) -> Void)?
         var onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?
         var onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)?
         var onRefresh: (() async -> Void)?
@@ -42,11 +45,24 @@ extension WebTranscriptView {
                       !clientRequestId.isEmpty,
                       let handler = onRetrySubmittedInput {
                 Task { @MainActor in handler(clientRequestId) }
+            } else if type == "loadToolBodies",
+                      let raw = payload["cursors"] as? [Any],
+                      let handler = onLoadToolBodies {
+                let cursors = raw.compactMap { $0 as? String }.filter { !$0.isEmpty && $0.count <= 512 }
+                guard !cursors.isEmpty, cursors.count <= 200 else { return }
+                Task { @MainActor in handler(cursors) }
             }
         }
 
         weak var webView: WKWebView?
         private let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
+        /// Scroll-up waits as the reader feels them: the transcript sat at the
+        /// top of what is loaded until older rows arrived (`released`), or the
+        /// reader gave up and scrolled away (`left`, which also covers the real
+        /// start of the session). `scripts/ops/ios_scroll_up.sh` reads these.
+        private let scrollLogger = Logger(subsystem: "ai.longhouse.ios", category: "TranscriptScroll")
+        private var historyWallStartedAt: Date?
+        private var historyWallContentHeight: CGFloat = 0
         var isLoaded = false
         /// User intent only: false once the user deliberately scrolls toward
         /// older messages. Every change is pushed to the DOM, which owns the
@@ -348,6 +364,7 @@ extension WebTranscriptView {
         /// offset for that change, so observe the actual native geometry rather
         /// than assuming the JavaScript animation frame is the handoff point.
         func contentSizeDidChange(on webView: WKWebView) {
+            releaseHistoryWallIfGrown(webView.scrollView)
             scheduleGeometryReconciliation(on: webView, viewportChange: nil)
         }
 
@@ -416,6 +433,33 @@ extension WebTranscriptView {
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             emitNearTopIfNeeded(scrollView)
+            trackHistoryWall(scrollView)
+        }
+
+        private func trackHistoryWall(_ scrollView: UIScrollView) {
+            let atTop = scrollView.contentOffset.y <= 1
+            if atTop {
+                guard historyWallStartedAt == nil,
+                      userScrollInProgress || !shouldStickToBottom,
+                      scrollView.contentSize.height > scrollView.bounds.height
+                else { return }
+                historyWallStartedAt = Date()
+                historyWallContentHeight = scrollView.contentSize.height
+            } else if let startedAt = historyWallStartedAt,
+                      scrollView.contentSize.height <= historyWallContentHeight + 1 {
+                historyWallStartedAt = nil
+                let waitMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+                scrollLogger.info("history_wall outcome=left wait_ms=\(waitMs, privacy: .public)")
+            }
+        }
+
+        private func releaseHistoryWallIfGrown(_ scrollView: UIScrollView) {
+            guard let startedAt = historyWallStartedAt,
+                  scrollView.contentSize.height > historyWallContentHeight + 1
+            else { return }
+            historyWallStartedAt = nil
+            let waitMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            scrollLogger.info("history_wall outcome=released wait_ms=\(waitMs, privacy: .public)")
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -455,7 +499,10 @@ extension WebTranscriptView {
             guard userScrollInProgress || !shouldStickToBottom else { return }
             guard Date() >= suppressNearTopUntil else { return }
             guard scrollView.contentSize.height > scrollView.bounds.height + Self.historyFillSlack else { return }
-            guard scrollView.contentOffset.y < 180 else { return }
+            // Ask while the reader still has a screen and a half of loaded
+            // history above them, so the page lands before they reach the top
+            // instead of after (180 pt left a fast flick waiting at the wall).
+            guard scrollView.contentOffset.y < max(180, scrollView.bounds.height * 1.5) else { return }
             let now = Date()
             guard now.timeIntervalSince(lastNearTopRequestAt) > 0.75 else { return }
             lastNearTopRequestAt = now
@@ -463,6 +510,7 @@ extension WebTranscriptView {
         }
 
         func prepareForReuse() {
+            historyWallStartedAt = nil
             preparedIdentity = nil
             preparationTask?.cancel()
             preparationTask = nil

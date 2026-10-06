@@ -16,6 +16,7 @@ extension WebTranscriptView {
         let retryRevision: UInt64
         let sourceRevision: Int?
         let sourceOperation: String?
+        var liteBodies = LiteBodyState()
     }
 
     nonisolated static func preparedPayload(
@@ -28,7 +29,8 @@ extension WebTranscriptView {
         transcriptReadThrough: String? = nil,
         retryRevision: UInt64 = 0,
         sourceRevision: Int? = nil,
-        sourceOperation: String? = nil
+        sourceOperation: String? = nil,
+        liteBodies: LiteBodyState = LiteBodyState()
     ) -> WebTranscriptPreparedPayload {
         let startedAt = Date()
         let payload = WebTranscriptPayload(
@@ -37,7 +39,8 @@ extension WebTranscriptView {
                 serverURL: serverURL,
                 timelineItems: timelineItems,
                 subagents: subagents,
-                submittedInputs: submittedInputs
+                submittedInputs: submittedInputs,
+                liteBodies: liteBodies
             )
         )
         let encoder = JSONEncoder()
@@ -70,7 +73,8 @@ extension WebTranscriptView {
             transcriptReadThrough: input.transcriptReadThrough,
             retryRevision: input.retryRevision,
             sourceRevision: input.sourceRevision,
-            sourceOperation: input.sourceOperation
+            sourceOperation: input.sourceOperation,
+            liteBodies: input.liteBodies
         )
     }
 
@@ -87,12 +91,16 @@ extension WebTranscriptView {
         serverURL: String? = nil,
         timelineItems: [TimelineItem],
         subagents: [SessionSubagent] = [],
-        submittedInputs: [SubmittedInput]
+        submittedInputs: [SubmittedInput],
+        liteBodies: LiteBodyState = LiteBodyState()
     ) -> [WebTranscriptPayloadItem] {
         let durableUserInputs = durableUserInputIdentities(timelineItems)
         let visibleSubmittedInputs = submittedInputs.filter { !durableUserInputs.contains($0) }
+        let payloadItem: (TimelineItem) -> WebTranscriptPayloadItem = {
+            Self.payloadItem($0, serverURL: serverURL, subagents: subagents, liteBodies: liteBodies)
+        }
         guard !visibleSubmittedInputs.isEmpty else {
-            return timelineItems.map { payloadItem($0, serverURL: serverURL, subagents: subagents) }
+            return timelineItems.map(payloadItem)
         }
 
         var rows: [WebTranscriptPayloadItem] = []
@@ -109,7 +117,7 @@ extension WebTranscriptView {
                     remainingSubmittedInputs.removeAll { insertionIds.contains($0.id) }
                 }
             }
-            rows.append(payloadItem(item, serverURL: serverURL, subagents: subagents))
+            rows.append(payloadItem(item))
         }
 
         rows.append(contentsOf: remainingSubmittedInputs.map(payloadSubmittedInput))
@@ -164,10 +172,19 @@ extension WebTranscriptView {
     private nonisolated static func payloadItem(
         _ item: TimelineItem,
         serverURL: String?,
-        subagents: [SessionSubagent] = []
+        subagents: [SessionSubagent] = [],
+        liteBodies: LiteBodyState = LiteBodyState()
     ) -> WebTranscriptPayloadItem {
+        // Loaded full bodies replace a lite page's previews before anything
+        // is derived from them (summary, edit stat, failure, output).
+        let item = liteBodies.merged(item)
         var payload = payloadItemBody(item, serverURL: serverURL, subagents: subagents)
         payload.turnEnd = turnEndPayload(for: item)
+        let cursors = item.liteBodyCursors
+        if !cursors.isEmpty {
+            payload.bodyCursors = cursors
+            payload.bodyState = liteBodies.state(for: cursors)
+        }
         return payload
     }
 
@@ -460,7 +477,7 @@ extension WebTranscriptView {
                 status: "parsed",
                 input: prettyJSONValue(child.toolInputValue),
                 rawInput: nil,
-                output: presentation?.wrapperRecedes == true ? truncatedOutput(result?.toolOutputText) : nil,
+                output: presentation?.wrapperRecedes == true ? truncatedOutput(result) : nil,
                 media: nil
             )
         } ?? []
@@ -500,7 +517,7 @@ extension WebTranscriptView {
                     ? presentation?.toolInputValue
                     : call.toolInputValue
             ) ?? TimelineBuilder.inputSummary(for: call),
-            output: truncatedOutput(result?.toolOutputText),
+            output: truncatedOutput(result),
             calls: presentationCalls,
             origin: presentation?.disposition == "parsed"
                 ? "Parsed via \(presentation?.executionMethod ?? presentation?.sourceToolName ?? toolName)"
@@ -611,7 +628,7 @@ extension WebTranscriptView {
                 rawInput: passive.call.toolPresentation?.wrapperRecedes == true
                     ? prettyJSONValue(passive.call.toolInputValue)
                     : nil,
-                output: truncatedOutput(passive.result?.toolOutputText),
+                output: truncatedOutput(passive.result),
                 media: payloadMediaRefs(passive.call.mediaRefs + (passive.result?.mediaRefs ?? []), serverURL: serverURL)
             )
         }
@@ -706,11 +723,19 @@ extension WebTranscriptView {
         return rendered
     }
 
-    private nonisolated static func truncatedOutput(_ text: String?) -> String? {
-        guard let text, !text.isEmpty else { return nil }
-        let maxCharacters = 12_000
+    /// A lite preview is already the collapsed row's 2+8 lines, cut one past
+    /// 4,096 characters so this marks it; a loaded full body keeps the WebKit
+    /// guard of 12,000 characters.
+    nonisolated static let previewMaxCharacters = 4_096
+    nonisolated static let fullOutputMaxCharacters = 12_000
+
+    private nonisolated static func truncatedOutput(_ result: SessionEvent?) -> String? {
+        guard let text = result?.toolOutputText, !text.isEmpty else { return nil }
+        let isPreview = result?.toolOutputTruncated == true
+        let maxCharacters = isPreview ? previewMaxCharacters : fullOutputMaxCharacters
         guard text.count > maxCharacters else { return text }
-        return String(text.prefix(maxCharacters)) + "\n... truncated in iOS transcript ..."
+        return String(text.prefix(maxCharacters))
+            + (isPreview ? "\n… truncated …" : "\n... truncated in iOS transcript ...")
     }
 
     private nonisolated static func submittedStatus(_ phase: SubmittedInputPhase, lastError: String?) -> String {
@@ -776,6 +801,11 @@ struct WebTranscriptPayloadItem: Encodable {
     var subagentSummary: String? = nil
     /// "Worked for 2m 9s · Turn finished 9:15 AM" under the item a turn ended on.
     var turnEnd: WebTranscriptTurnEnd? = nil
+    /// Cursors of this row's events that a lite page sent as previews.
+    /// Expanding the row asks native to load them (`loadToolBodies`).
+    var bodyCursors: [String]? = nil
+    /// `preview`, `loading` or `unavailable` while `bodyCursors` is set.
+    var bodyState: String? = nil
 }
 
 struct WebTranscriptTurnEnd: Encodable, Equatable {

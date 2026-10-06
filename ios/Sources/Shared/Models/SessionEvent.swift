@@ -44,6 +44,14 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let mediaRefs: [SessionEventMediaRef]
     /// Set on the event a provider-reported turn ended on.
     let turnEnd: SessionTurnEnd?
+    /// Lite pages (`detail=lite`) send a tool body as the preview its collapsed
+    /// row shows. These say what was cut; `cursor` names the full body at
+    /// `/event-bodies`.
+    let toolInputTruncated: Bool
+    let toolOutputTruncated: Bool
+    let toolOutputOriginalChars: Int?
+    /// The full output (not sent) reads as a structured failure.
+    let toolOutputFailed: Bool
 
     init(
         id: String,
@@ -67,10 +75,18 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         cursor: String? = nil,
         orderTimeUs: Int64? = nil,
         threadId: String? = nil,
-        branchKind: String? = nil
+        branchKind: String? = nil,
+        toolInputTruncated: Bool = false,
+        toolOutputTruncated: Bool = false,
+        toolOutputOriginalChars: Int? = nil,
+        toolOutputFailed: Bool = false
     ) {
         self.id = id
         self.cursor = cursor
+        self.toolInputTruncated = toolInputTruncated
+        self.toolOutputTruncated = toolOutputTruncated
+        self.toolOutputOriginalChars = toolOutputOriginalChars
+        self.toolOutputFailed = toolOutputFailed
         self.orderTimeUs = orderTimeUs
         self.threadId = threadId
         self.branchKind = branchKind
@@ -182,6 +198,10 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         turnEnd = try container.decodeIfPresent(SessionTurnEnd.self, forKey: .turnEnd)
         eventOrigin = try container.decodeIfPresent(String.self, forKey: .eventOrigin)
         mediaRefs = try container.decodeIfPresent([SessionEventMediaRef].self, forKey: .mediaRefs) ?? []
+        toolInputTruncated = try container.decodeIfPresent(Bool.self, forKey: .toolInputTruncated) ?? false
+        toolOutputTruncated = try container.decodeIfPresent(Bool.self, forKey: .toolOutputTruncated) ?? false
+        toolOutputOriginalChars = try container.decodeIfPresent(Int.self, forKey: .toolOutputOriginalChars)
+        toolOutputFailed = try container.decodeIfPresent(Bool.self, forKey: .toolOutputFailed) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -206,6 +226,10 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(inputOrigin, forKey: .inputOrigin)
         try container.encodeIfPresent(eventOrigin, forKey: .eventOrigin)
         try container.encode(mediaRefs, forKey: .mediaRefs)
+        if toolInputTruncated { try container.encode(true, forKey: .toolInputTruncated) }
+        if toolOutputTruncated { try container.encode(true, forKey: .toolOutputTruncated) }
+        try container.encodeIfPresent(toolOutputOriginalChars, forKey: .toolOutputOriginalChars)
+        if toolOutputFailed { try container.encode(true, forKey: .toolOutputFailed) }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -231,9 +255,49 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case eventOrigin
         case mediaRefs
         case turnEnd
+        case toolInputTruncated
+        case toolOutputTruncated
+        case toolOutputOriginalChars
+        case toolOutputFailed
     }
 
     var legacyNumericId: Int? { Int(id) }
+
+    /// Where to fetch this event's full tool body, when a lite page cut it.
+    var liteBodyCursor: String? {
+        guard toolInputTruncated || toolOutputTruncated, let cursor, !cursor.isEmpty else { return nil }
+        return cursor
+    }
+
+    /// The same event with its full tool body from `/event-bodies`.
+    func withFullBody(_ body: SessionEventBody) -> SessionEvent {
+        let input = body.toolInputJson ?? toolInputValue
+        return SessionEvent(
+            id: id,
+            role: role,
+            contentText: contentText,
+            interactionKind: interactionKind,
+            toolName: toolName,
+            toolInputJSON: input?.objectValue,
+            toolInputValue: input,
+            toolOutputText: body.toolOutputText ?? toolOutputText,
+            toolCallId: toolCallId,
+            toolCallState: toolCallState,
+            toolPresentation: body.toolPresentation ?? toolPresentation,
+            timestamp: timestamp,
+            inActiveContext: inActiveContext,
+            isHeadBranch: isHeadBranch,
+            inputOrigin: inputOrigin,
+            eventOrigin: eventOrigin,
+            mediaRefs: mediaRefs,
+            turnEnd: turnEnd,
+            cursor: cursor,
+            orderTimeUs: orderTimeUs,
+            threadId: threadId,
+            branchKind: branchKind,
+            toolOutputFailed: toolOutputFailed
+        )
+    }
 
     var isSynthetic: Bool {
         id.hasPrefix("synthetic:") || (legacyNumericId.map { $0 < 0 } ?? false)

@@ -400,3 +400,32 @@ def test_a_cut_presentation_child_marks_the_event_for_a_full_body():
 
     assert len(event["tool_presentation_children"][0]["tool_input_json"]["cmd"]) == 300
     assert event["tool_input_truncated"] is True
+
+
+def test_a_final_answer_keeps_its_whole_input():
+    """The clients render a final-answer tool's input as the closing message; a cut would truncate the answer."""
+    answer = {"summary": "word " * 400, "next_steps": ["step"] * 80}
+    projection = {
+        "focus_session_id": "s-1",
+        "items": [_item("8", tool_name="StructuredOutput", tool_input_json=answer)],
+    }
+
+    event = lite_projection(projection)["items"][0]["event"]
+
+    assert event["tool_input_json"] == answer
+    assert "tool_input_truncated" not in event
+
+
+def test_the_ios_lite_fixture_is_what_the_server_sends():
+    """iOS decodes tests/fixtures/session-detail/lite-mobile-tail.json; keep it the server's own output."""
+    import json
+    from pathlib import Path
+
+    fixtures = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "session-detail"
+    full = json.loads((fixtures / "lite-mobile-tail.full.json").read_text())
+    lite = json.loads((fixtures / "lite-mobile-tail.json").read_text())
+
+    assert lite["projection"] == json.loads(json.dumps(lite_projection(full["projection"])))
+    assert {key: value for key, value in lite.items() if key != "projection"} == {
+        key: value for key, value in full.items() if key != "projection"
+    }

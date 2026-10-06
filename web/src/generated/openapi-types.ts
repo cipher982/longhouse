@@ -4541,6 +4541,11 @@ export interface components {
              */
             id: number | string;
             /**
+             * Cursor
+             * @description Opaque storage-v2 transcript cursor; names this event for /event-bodies and delta reads
+             */
+            cursor?: string | null;
+            /**
              * Role
              * @description Message role
              */
@@ -4590,6 +4595,18 @@ export interface components {
              * @description Original tool output length when truncated
              */
             tool_output_original_chars?: number | null;
+            /**
+             * Tool Input Truncated
+             * @description Lite pages: tool_input_json was cut to what its collapsed row needs; fetch the whole from /event-bodies
+             * @default false
+             */
+            tool_input_truncated: boolean;
+            /**
+             * Tool Output Failed
+             * @description Lite pages: the full output (not sent) reads as a structured failure
+             * @default false
+             */
+            tool_output_failed: boolean;
             /**
              * Tool Call Id
              * @description Cross-provider call/result linkage ID
@@ -7950,6 +7967,11 @@ export interface components {
             snapshot_event_id?: number | string | null;
             /** @description Durable viewport freshness revision */
             workspace_revision: components["schemas"]["SessionWorkspaceRevisionResponse"];
+            /**
+             * Page Anchor
+             * @description The anchor this page was read with: tail, or start for a delta after the request cursor
+             */
+            page_anchor?: string | null;
         };
         /** SessionNotificationWatchRequest */
         SessionNotificationWatchRequest: {
@@ -14038,8 +14060,10 @@ export interface operations {
                 offset?: number;
                 /** @description Previous snapshot marker for older-page drift detection */
                 snapshot_event_id?: string | null;
-                /** @description Exclusive storage-v2 cursor for the next older page */
+                /** @description Exclusive storage-v2 cursor: older events with anchor=tail, newer events (a delta) with anchor=start */
                 cursor?: string | null;
+                /** @description Page anchor: tail (the latest window, or older with cursor) or start (a delta after cursor) */
+                anchor?: string;
                 /** @description full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies) */
                 detail?: string;
             };

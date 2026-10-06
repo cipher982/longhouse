@@ -206,6 +206,8 @@ enum TimelineBuilder {
         if let exit = ShellSalienceClassifier.parseExitCode(result?.toolOutputText), exit != 0 {
             return true
         }
+        // A lite page cuts a long output to its preview; the server judged the whole.
+        if result?.toolOutputFailed == true { return true }
         return hasStructuredFailure(result?.toolOutputText)
     }
 
@@ -266,7 +268,7 @@ enum TimelineBuilder {
         if let exit = ShellSalienceClassifier.parseExitCode(result?.toolOutputText), exit != 0 {
             return false
         }
-        if hasStructuredFailure(result?.toolOutputText) { return false }
+        if result?.toolOutputFailed == true || hasStructuredFailure(result?.toolOutputText) { return false }
         let exactNames = [call.toolName, call.toolPresentation?.toolName]
             .compactMap { $0?.lowercased() }
         if exactNames.contains(where: humanInteractionTools.contains) { return false }
@@ -288,6 +290,9 @@ enum TimelineBuilder {
         guard let result else { return nil }
         if call.toolCallState == .dropped || call.toolCallState == .running { return nil }
         if let exit = ShellSalienceClassifier.parseExitCode(result.toolOutputText), exit != 0 { return nil }
+        // A lite page cuts long commands; a mutating tail past the cut must not
+        // let the head demote the call, so a cut command never demotes.
+        if call.toolInputTruncated { return nil }
         let command = presentedToolInputString(call, "command") ?? presentedToolInputString(call, "cmd")
         return ShellSalienceClassifier.classify(command)
     }

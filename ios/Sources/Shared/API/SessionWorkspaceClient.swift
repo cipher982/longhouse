@@ -60,6 +60,11 @@ protocol SessionWorkspaceClient: Sendable {
     func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
     func postClientDiagnostics(_ payload: ClientDiagnosticsPayload) async
+    /// Events after a cursor the client holds, with the session header. Nil
+    /// when the server answered with something other than a delta.
+    func sessionMobileTailDelta(id: String, afterCursor: String, limit: Int) async throws -> SessionMobileTailResponse?
+    /// Full tool bodies for rows a lite page sent as previews (at most 20).
+    func sessionEventBodies(id: String, cursors: [String]) async throws -> SessionEventBodiesResponse
 }
 
 extension SessionWorkspaceClient {
@@ -144,6 +149,18 @@ extension SessionWorkspaceClient {
         content: String?,
         message: String?
     ) async throws -> PauseRequestResponse {
+        throw LonghouseAPIError.requestFailed
+    }
+}
+
+extension SessionWorkspaceClient {
+    /// Doubles that model no delta reads answer with none, so the caller reads
+    /// the latest window as it always has.
+    func sessionMobileTailDelta(id: String, afterCursor: String, limit: Int) async throws -> SessionMobileTailResponse? {
+        nil
+    }
+
+    func sessionEventBodies(id: String, cursors: [String]) async throws -> SessionEventBodiesResponse {
         throw LonghouseAPIError.requestFailed
     }
 }

@@ -672,6 +672,7 @@ struct APITurnEndResponse: Codable, Hashable, Sendable {
 
 struct APIEventResponse: Codable, Hashable, Sendable {
     let id: JSONValue
+    let cursor: String?
     let role: String
     let contentText: String?
     let interactionKind: String?
@@ -683,6 +684,8 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let toolOutputText: String?
     let toolOutputTruncated: Bool?
     let toolOutputOriginalChars: Int?
+    let toolInputTruncated: Bool?
+    let toolOutputFailed: Bool?
     let toolCallId: String?
     let toolPresentation: APIToolPresentationResponse?
     let timestamp: String
@@ -763,6 +766,7 @@ struct APISessionMobileTailResponse: Codable, Hashable, Sendable {
     let projection: APISessionProjectionResponse
     let snapshotEventId: JSONValue?
     let workspaceRevision: APISessionWorkspaceRevisionResponse
+    let pageAnchor: String?
 }
 
 struct APIConsoleTurnReceiptResponse: Codable, Hashable, Sendable {

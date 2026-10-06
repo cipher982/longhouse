@@ -628,6 +628,13 @@ summary::-webkit-details-marker {
   font: 13px ui-monospace, "SF Mono", Menlo, monospace;
   margin-top: 2px;
 }
+
+/* Under an expanded row whose bodies a lite page sent as previews. */
+.body-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--secondary);
+}
   </style>
 </head>
 <body>
@@ -889,6 +896,15 @@ summary::-webkit-details-marker {
 	}
 	//#endregion
 	//#region src/embeds/ios-transcript/toolCards.ts
+	function bodyAttributes(item) {
+		const cursors = item.bodyCursors || [];
+		const openKey = " data-open-key=\"row:" + escapeHtml(item.id) + "\"";
+		return cursors.length ? openKey + " data-body-cursors=\"" + escapeHtml(cursors.join(" ")) + "\"" : openKey;
+	}
+	function bodyNote(item) {
+		if (!(item.bodyCursors || []).length) return "";
+		return "<p class=\"body-note\" role=\"status\">" + escapeHtml(item.bodyState === "unavailable" ? "The full output is no longer available; this is a preview." : "Loading the full output…") + "</p>";
+	}
 	function toolDetails(item) {
 		const isFailure = !!item.failurePreview || typeof item.status === "string" && (item.status.indexOf("exit ") === 0 || item.status === "failed");
 		const meta = item.status === "running" ? "running" : item.status === "dropped" ? "dropped" : item.status === "orphan" ? "orphan" : isFailure ? "failed" : "";
@@ -907,13 +923,13 @@ summary::-webkit-details-marker {
 		else if (item.status === "dropped") output = "<p>No result recorded, likely dropped during ingest.</p>";
 		const preview = item.failurePreview ? "<div class=\"failure-preview\" role=\"note\"><span class=\"sr-only\">Error output: </span><pre>" + escapeHtml(item.failurePreview) + "</pre></div>" : "";
 		return `
-        <details class="tool row">
+        <details class="tool row"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Tool")}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
             <span class="tool-meta ${meta}">${escapeHtml(status)}</span>
           </summary>
-          <div class="details-body">${input}${provenance}${output}${media}</div>
+          <div class="details-body">${input}${provenance}${output}${media}${bodyNote(item)}</div>
         </details>
         ${preview}
         ${subagentNode(item)}
@@ -939,12 +955,12 @@ summary::-webkit-details-marker {
 		const latestHtml = all.slice(earlierCount).map(renderCall).join("");
 		const earlierControl = earlierCount > 0 ? `<button type="button" class="passive-earlier-btn" onclick="this.nextElementSibling.hidden=false;this.remove();">Show ${earlierCount} earlier</button><div class="passive-earlier" hidden>${earlierHtml}</div>` : "";
 		return `
-        <details class="passive row">
+        <details class="passive row"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Activity")}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
           </summary>
-          <div class="details-body">${earlierControl}${latestHtml}</div>
+          <div class="details-body">${earlierControl}${latestHtml}${bodyNote(item)}</div>
         </details>
         ${subagentNode(item)}
       `;
@@ -1109,6 +1125,19 @@ summary::-webkit-details-marker {
 		});
 	}
 	//#endregion
+	//#region src/embeds/ios-transcript/liteBodies.ts
+	function attachToolBodyHandlers(scope = document) {
+		const rows = scope instanceof Element && scope.matches("details[data-body-cursors]") ? [scope] : Array.from(scope.querySelectorAll("details[data-body-cursors]"));
+		for (const row of rows) row.addEventListener("toggle", () => {
+			if (!row.open) return;
+			const cursors = (row.getAttribute("data-body-cursors") || "").split(" ").filter(Boolean);
+			if (cursors.length) postToNative({
+				type: "loadToolBodies",
+				cursors
+			});
+		});
+	}
+	//#endregion
 	//#region src/embeds/ios-transcript/render.ts
 	var currentItems = [];
 	var transcriptFrames = /* @__PURE__ */ new Map();
@@ -1128,6 +1157,7 @@ summary::-webkit-details-marker {
 	function attachExpandHandlers(scope = document) {
 		attachSubagentHandlers(scope);
 		attachSubmittedInputHandlers(scope);
+		attachToolBodyHandlers(scope);
 		for (const button of scope.querySelectorAll("[data-expand-index]")) button.addEventListener("click", () => {
 			const index = Number(button.getAttribute("data-expand-index"));
 			const item = currentItems[index];

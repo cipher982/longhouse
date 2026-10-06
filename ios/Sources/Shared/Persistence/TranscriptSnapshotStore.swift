@@ -67,11 +67,19 @@ struct TranscriptSnapshotStore: Sendable {
     ///     which is how a test forces the cold-relaunch path.
     ///   - memoryTTL: how long a snapshot stays warm. Shorter than `ttl`: RAM
     ///     is for the reopen you just navigated away from.
+    ///
+    /// Caps, from the 2026-10-06 measurement of nine real sessions (1,306
+    /// events; control-plane `session-view-terminal-parity.md` C3): a lite
+    /// page is ~1.3 KB of JSON per event against ~3.3 KB full, and a snapshot
+    /// stores each event twice (`events` and `projectionItems`), so ~2.6 KB
+    /// per lite event on disk. 8 MB per file keeps ~3,000 events (60 pages
+    /// of 50) where 6 MB of full events kept ~920. 30 files x 8 MB = 240 MB,
+    /// the same disk ceiling as the previous 40 x 6 MB.
     init(
         directory: URL? = nil,
         ttl: TimeInterval = 14 * 24 * 60 * 60,
-        maxFiles: Int = 40,
-        maxBytesPerFile: Int = 6 * 1024 * 1024,
+        maxFiles: Int = 30,
+        maxBytesPerFile: Int = 8 * 1024 * 1024,
         memoryMaxBytes: Int = 12 * 1024 * 1024,
         memoryTTL: TimeInterval = 60 * 60
     ) {

@@ -1,10 +1,12 @@
 // The one channel from the document to the app: WebKit's `longhouse` script
 // message handler. Native validates every message (a UUID for openSubagent,
-// a non-empty request id for submitted-input actions).
+// a non-empty request id for submitted-input actions, cursors it rendered for
+// loadToolBodies).
 
 type NativeMessage =
   | { type: "openSubagent"; sessionId: string }
-  | { type: "editSubmitted" | "discardSubmitted" | "retrySubmitted"; clientRequestId: string };
+  | { type: "editSubmitted" | "discardSubmitted" | "retrySubmitted"; clientRequestId: string }
+  | { type: "loadToolBodies"; cursors: string[] };
 
 interface WebKitBridgeWindow {
   webkit?: { messageHandlers?: { longhouse?: { postMessage(message: NativeMessage): void } } };

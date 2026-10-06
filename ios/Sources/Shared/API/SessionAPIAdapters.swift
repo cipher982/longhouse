@@ -310,7 +310,42 @@ extension APIEventResponse {
             inputOrigin: inputOrigin?.sessionInputOrigin,
             eventOrigin: eventOrigin,
             mediaRefs: mediaRefs ?? [],
-            turnEnd: turnEnd?.sessionTurnEnd
+            turnEnd: turnEnd?.sessionTurnEnd,
+            cursor: cursor,
+            toolInputTruncated: toolInputTruncated ?? false,
+            toolOutputTruncated: toolOutputTruncated ?? false,
+            toolOutputOriginalChars: toolOutputOriginalChars,
+            toolOutputFailed: toolOutputFailed ?? false
+        )
+    }
+}
+
+/// `/event-bodies` wire shape. Hand-written: the route is not one of the
+/// generated iOS root schemas, and only these fields are read.
+struct APISessionEventBodiesResponse: Decodable, Sendable {
+    struct Body: Decodable, Sendable {
+        let id: JSONValue
+        let cursor: String
+        let toolInputJson: JSONValue?
+        let toolOutputText: String?
+        let toolPresentation: APIToolPresentationResponse?
+    }
+
+    let events: [Body]
+    let missing: [String]?
+
+    var sessionEventBodiesResponse: SessionEventBodiesResponse {
+        SessionEventBodiesResponse(
+            events: events.map {
+                SessionEventBody(
+                    id: $0.id.sessionEventIdentifier,
+                    cursor: $0.cursor,
+                    toolInputJson: $0.toolInputJson,
+                    toolOutputText: $0.toolOutputText,
+                    toolPresentation: $0.toolPresentation?.sessionToolPresentation
+                )
+            },
+            missing: missing ?? []
         )
     }
 }
@@ -544,7 +579,8 @@ extension APISessionMobileTailResponse {
             session: session.sessionDetail,
             projection: projection.sessionProjectionResponse,
             snapshotEventId: snapshotEventId?.optionalEventIdentifier,
-            workspaceRevision: workspaceRevision.sessionWorkspaceRevision
+            workspaceRevision: workspaceRevision.sessionWorkspaceRevision,
+            pageAnchor: pageAnchor
         )
     }
 }

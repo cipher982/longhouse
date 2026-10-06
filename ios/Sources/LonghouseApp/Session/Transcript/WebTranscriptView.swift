@@ -26,6 +26,9 @@ struct WebTranscriptView: UIViewRepresentable {
     let retryRevision: UInt64
     let sourceRevision: Int?
     let sourceOperation: String?
+    /// Full bodies loaded for rows a lite page cut. Changes bump the view
+    /// model's transcript revision, so `contentRevision` covers them.
+    let liteBodies: LiteBodyState
     let onNearTop: (() -> Void)?
     /// A render left too little scroll range for the near-top callback; the
     /// owner can load older history so the transcript reaches the composer.
@@ -41,6 +44,8 @@ struct WebTranscriptView: UIViewRepresentable {
     let onEditSubmittedInput: ((String) -> Void)?
     let onDiscardSubmittedInput: ((String) -> Void)?
     let onRetrySubmittedInput: ((String) -> Void)?
+    /// An expanded row wants the full bodies of its cut events.
+    let onLoadToolBodies: (([String]) -> Void)?
     /// Fires when WebKit rejects the payload's frame acknowledgement.
     let onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?
     /// Fires only after this payload's DOM frame was acknowledged by WebKit.
@@ -57,6 +62,7 @@ struct WebTranscriptView: UIViewRepresentable {
         retryRevision: UInt64 = 0,
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil,
+        liteBodies: LiteBodyState = LiteBodyState(),
         onNearTop: (() -> Void)? = nil,
         onNeedsMoreHistory: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
@@ -66,6 +72,7 @@ struct WebTranscriptView: UIViewRepresentable {
         onEditSubmittedInput: ((String) -> Void)? = nil,
         onDiscardSubmittedInput: ((String) -> Void)? = nil,
         onRetrySubmittedInput: ((String) -> Void)? = nil,
+        onLoadToolBodies: (([String]) -> Void)? = nil,
         onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)? = nil,
         onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)? = nil
     ) {
@@ -77,6 +84,8 @@ struct WebTranscriptView: UIViewRepresentable {
         self.onEditSubmittedInput = onEditSubmittedInput
         self.onDiscardSubmittedInput = onDiscardSubmittedInput
         self.onRetrySubmittedInput = onRetrySubmittedInput
+        self.onLoadToolBodies = onLoadToolBodies
+        self.liteBodies = liteBodies
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
         self.contentRevision = contentRevision
@@ -107,6 +116,7 @@ struct WebTranscriptView: UIViewRepresentable {
         context.coordinator.onEditSubmittedInput = onEditSubmittedInput
         context.coordinator.onDiscardSubmittedInput = onDiscardSubmittedInput
         context.coordinator.onRetrySubmittedInput = onRetrySubmittedInput
+        context.coordinator.onLoadToolBodies = onLoadToolBodies
         context.coordinator.onRefresh = onRefresh
         context.coordinator.onFrameFailed = onFrameFailed
         context.coordinator.onFrameRendered = onFrameRendered
@@ -186,6 +196,7 @@ struct WebTranscriptView: UIViewRepresentable {
         context.coordinator.onEditSubmittedInput = onEditSubmittedInput
         context.coordinator.onDiscardSubmittedInput = onDiscardSubmittedInput
         context.coordinator.onRetrySubmittedInput = onRetrySubmittedInput
+        context.coordinator.onLoadToolBodies = onLoadToolBodies
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
         let preparationInput = WebTranscriptPayloadInput(
             serverURL: serverURL,
@@ -197,7 +208,8 @@ struct WebTranscriptView: UIViewRepresentable {
             transcriptReadThrough: transcriptReadThrough,
             retryRevision: retryRevision,
             sourceRevision: sourceRevision,
-            sourceOperation: sourceOperation
+            sourceOperation: sourceOperation,
+            liteBodies: liteBodies
         )
         context.coordinator.send(
             contentIdentity: ContentIdentity(

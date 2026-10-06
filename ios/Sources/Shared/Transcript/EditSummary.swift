@@ -87,6 +87,12 @@ enum EditSummary {
     /// The budget check below is what keeps the cost bounded.
     static func stat(for event: SessionEvent) -> Stat {
         let path = filePath(event)
+        // A lite page cut this input: counting the fragment would show a wrong
+        // stat. Name the file until the expanded row loads the whole input.
+        if event.toolInputTruncated {
+            guard let path else { return .none }
+            return Stat(filePath: path, fileName: basename(path))
+        }
         guard let patch = patch(for: event) else {
             // Known file, unknown shape: still name the file, without a stat.
             guard let path else { return .none }

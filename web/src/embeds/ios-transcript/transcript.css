@@ -622,3 +622,10 @@ summary::-webkit-details-marker {
   font: 13px ui-monospace, "SF Mono", Menlo, monospace;
   margin-top: 2px;
 }
+
+/* Under an expanded row whose bodies a lite page sent as previews. */
+.body-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--secondary);
+}

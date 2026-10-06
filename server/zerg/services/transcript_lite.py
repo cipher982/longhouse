@@ -20,6 +20,9 @@ import json
 import re
 from typing import Any
 
+from zerg.services.tool_presentation import DEFAULT_RULES_PATH
+from zerg.services.tool_presentation import _load_rules
+
 DETAIL_FULL = "full"
 DETAIL_LITE = "lite"
 DETAIL_MODES = frozenset({DETAIL_FULL, DETAIL_LITE})
@@ -175,13 +178,26 @@ def _is_edit(event: dict[str, Any]) -> bool:
     return bool(_EDIT_IDENTITY.search(re.sub(r"[^a-z0-9]+", " ", identity.lower()).strip()))
 
 
+def _final_answer_tools() -> frozenset[str]:
+    names = _load_rules(str(DEFAULT_RULES_PATH)).get("final_answer_tools") or []
+    return frozenset(str(name).lower() for name in names)
+
+
+def _is_final_answer(event: dict[str, Any]) -> bool:
+    """A final-answer tool's input IS the answer the clients render as prose, so it is never cut."""
+    presentation = event.get("tool_presentation") if isinstance(event.get("tool_presentation"), dict) else {}
+    names = {str(name).lower() for name in (event.get("tool_name"), presentation.get("tool_name")) if name}
+    return bool(names & _final_answer_tools())
+
+
 def _presentation_ref(base: dict[str, Any]) -> str:
     return hashlib.sha1(json.dumps(base, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
 
 
 def _lite_event(event: dict[str, Any], *, item_timestamp: Any, presentations: dict[str, dict[str, Any]]) -> dict[str, Any]:
     full_input = event.get("tool_input_json")
-    is_edit = _is_edit(event)
+    # Edits count +/- lines from the whole input; final answers render it as prose.
+    is_edit = _is_edit(event) or _is_final_answer(event)
     out: dict[str, Any] = {"id": event["id"], "cursor": event["cursor"], "role": event["role"]}
     for key, default in _EVENT_DEFAULTS.items():
         if key in {"tool_input_json", "tool_output_text", "tool_output_truncated", "tool_output_original_chars"}:

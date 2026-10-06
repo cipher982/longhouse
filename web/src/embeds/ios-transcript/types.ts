@@ -67,6 +67,10 @@ export interface TranscriptItem {
   subagents?: Subagent[] | null;
   subagentSummary?: string | null;
   turnEnd?: TurnEnd | null;
+  /** Cursors of events a lite page sent as previews; expanding asks native for the full bodies. */
+  bodyCursors?: string[] | null;
+  /** "preview", "loading" or "unavailable" while bodyCursors is set. */
+  bodyState?: string | null;
 }
 
 export interface TranscriptPayload {

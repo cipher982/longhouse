@@ -4,6 +4,7 @@ import { attachSubmittedInputHandlers, renderItem } from "./rows";
 import { isStickingToBottom, scrollToBottom, setStickToBottom } from "./scroll";
 import { captureOpenKeys, restoreOpenKeys } from "./openState";
 import { attachSubagentHandlers } from "./subagents";
+import { attachToolBodyHandlers } from "./liteBodies";
 import type { FrameMetrics, RenderMetrics, TranscriptItem, TranscriptPayload } from "./types";
 
 let currentItems: TranscriptItem[] = [];
@@ -40,6 +41,7 @@ export function decodePayload(base64: string): TranscriptPayload {
 function attachExpandHandlers(scope: ParentNode = document): void {
   attachSubagentHandlers(scope);
   attachSubmittedInputHandlers(scope);
+  attachToolBodyHandlers(scope);
   for (const button of scope.querySelectorAll("[data-expand-index]")) {
     button.addEventListener("click", () => {
       const index = Number(button.getAttribute("data-expand-index"));
