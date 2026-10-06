@@ -4727,179 +4727,6 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
-        /**
-         * HeartbeatIn
-         * @description Payload from the engine daemon.
-         */
-        HeartbeatIn: {
-            /** Version */
-            version?: string | null;
-            /** Daemon Pid */
-            daemon_pid?: number | null;
-            /** Last Ship At */
-            last_ship_at?: string | null;
-            /** Last Ship Attempt At */
-            last_ship_attempt_at?: string | null;
-            /** Last Ship Result */
-            last_ship_result?: string | null;
-            /** Last Ship Latency Ms */
-            last_ship_latency_ms?: number | null;
-            /** Last Ship Http Status */
-            last_ship_http_status?: number | null;
-            /** Last Ship Error Kind */
-            last_ship_error_kind?: string | null;
-            /** Last Ship Error Message */
-            last_ship_error_message?: string | null;
-            /**
-             * Spool Pending Count
-             * @default 0
-             */
-            spool_pending_count: number;
-            shipping_progress?: components["schemas"]["ShippingProgressIn"] | null;
-            /**
-             * Spool Dead Count
-             * @default 0
-             */
-            spool_dead_count: number;
-            /** Archive Backlog */
-            archive_backlog?: {
-                [key: string]: unknown;
-            };
-            /** Storage V2 Outbox */
-            storage_v2_outbox?: {
-                [key: string]: unknown;
-            };
-            /** Runtime Event Outbox */
-            runtime_event_outbox?: {
-                [key: string]: unknown;
-            };
-            /** Managed Launch Recovery */
-            managed_launch_recovery?: {
-                [key: string]: unknown;
-            };
-            /** Adaptive Backlog Limiter */
-            adaptive_backlog_limiter?: {
-                [key: string]: unknown;
-            } | null;
-            /** Ship Scheduler */
-            ship_scheduler?: {
-                [key: string]: unknown;
-            } | null;
-            /** Update */
-            update?: {
-                [key: string]: unknown;
-            } | null;
-            history_import?: components["schemas"]["HistoryImportSnapshot-Input"] | null;
-            /**
-             * Parse Error Count 1H
-             * @default 0
-             */
-            parse_error_count_1h: number;
-            /**
-             * Ship Attempts 1H
-             * @default 0
-             */
-            ship_attempts_1h: number;
-            /**
-             * Ship Successes 1H
-             * @default 0
-             */
-            ship_successes_1h: number;
-            /**
-             * Ship Rate Limited 1H
-             * @default 0
-             */
-            ship_rate_limited_1h: number;
-            /**
-             * Ship Server Errors 1H
-             * @default 0
-             */
-            ship_server_errors_1h: number;
-            /**
-             * Ship Payload Rejections 1H
-             * @default 0
-             */
-            ship_payload_rejections_1h: number;
-            /**
-             * Ship Payload Too Large 1H
-             * @default 0
-             */
-            ship_payload_too_large_1h: number;
-            /**
-             * Ship Retryable Client Errors 1H
-             * @default 0
-             */
-            ship_retryable_client_errors_1h: number;
-            /**
-             * Ship Connect Errors 1H
-             * @default 0
-             */
-            ship_connect_errors_1h: number;
-            /** Ship Latency P50 Ms 1H */
-            ship_latency_p50_ms_1h?: number | null;
-            /** Ship Latency P95 Ms 1H */
-            ship_latency_p95_ms_1h?: number | null;
-            /**
-             * Ship Attempts 10M
-             * @default 0
-             */
-            ship_attempts_10m: number;
-            /**
-             * Ship Successes 10M
-             * @default 0
-             */
-            ship_successes_10m: number;
-            /**
-             * Ship Rate Limited 10M
-             * @default 0
-             */
-            ship_rate_limited_10m: number;
-            /**
-             * Ship Server Errors 10M
-             * @default 0
-             */
-            ship_server_errors_10m: number;
-            /**
-             * Ship Retryable Client Errors 10M
-             * @default 0
-             */
-            ship_retryable_client_errors_10m: number;
-            /**
-             * Ship Connect Errors 10M
-             * @default 0
-             */
-            ship_connect_errors_10m: number;
-            /** Ship Lanes */
-            ship_lanes?: {
-                [key: string]: unknown;
-            };
-            /** Events Per Sec Ewma 10S */
-            events_per_sec_ewma_10s?: number | null;
-            /** Bytes Per Sec Ewma 10S */
-            bytes_per_sec_ewma_10s?: number | null;
-            /**
-             * Disk Free Bytes
-             * @default 0
-             */
-            disk_free_bytes: number;
-            /**
-             * Is Offline
-             * @default false
-             */
-            is_offline: boolean;
-            /** Managed Sessions */
-            managed_sessions?: components["schemas"]["ManagedSessionLeaseIn"][];
-            /** Unmanaged Session Bindings */
-            unmanaged_session_bindings?: components["schemas"]["UnmanagedSessionBindingIn"][];
-            /** Machine Evidence */
-            machine_evidence?: unknown;
-            /** Sessions */
-            sessions?: components["schemas"]["ResolvedLocalSessionIn"][];
-            /** Sessions Digest */
-            sessions_digest?: string | null;
-            /** Sessions Sequence */
-            sessions_sequence?: number | null;
-        };
         /** HistoryImportProgress */
         HistoryImportProgress: {
             /** Acknowledged Source Bytes */
@@ -4924,17 +4751,7 @@ export interface components {
             providers?: components["schemas"]["ProviderHistoryProgress"][];
         };
         /** HistoryImportSnapshot */
-        "HistoryImportSnapshot-Input": {
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "discovering" | "inventory_ready" | "importing" | "paused" | "backpressured" | "blocked_source" | "offline" | "current" | "unavailable";
-            inventory?: components["schemas"]["SourceInventory"] | null;
-            progress?: components["schemas"]["HistoryImportProgress"] | null;
-        };
-        /** HistoryImportSnapshot */
-        "HistoryImportSnapshot-Output": {
+        HistoryImportSnapshot: {
             /**
              * State
              * @enum {string}
@@ -5306,7 +5123,7 @@ export interface components {
             runtime_event_outbox?: {
                 [key: string]: unknown;
             } | null;
-            history_import?: components["schemas"]["HistoryImportSnapshot-Output"];
+            history_import?: components["schemas"]["HistoryImportSnapshot"];
             /** Parse Errors 1H */
             parse_errors_1h: number;
             /** Disk Free Bytes */
@@ -5947,33 +5764,6 @@ export interface components {
              * @description Provider thread identity that the resumed run must retain
              */
             provider_thread_id?: string | null;
-        };
-        /** ManagedSessionLeaseIn */
-        ManagedSessionLeaseIn: {
-            /**
-             * Session Id
-             * Format: uuid
-             */
-            session_id: string;
-            /** Provider */
-            provider: string;
-            /** Machine Id */
-            machine_id?: string | null;
-            /** Sequence */
-            sequence: number;
-            /** State */
-            state: string;
-            /** Bridge Status */
-            bridge_status?: string | null;
-            /** Thread Subscription Status */
-            thread_subscription_status?: string | null;
-            /** Observed At */
-            observed_at?: string | null;
-            /**
-             * Lease Ttl Ms
-             * @default 900000
-             */
-            lease_ttl_ms: number;
         };
         /**
          * ManagedSessionTransport
@@ -6676,93 +6466,6 @@ export interface components {
              * @default bearer
              */
             token_type: string;
-        };
-        /** ResolvedBridgeIn */
-        ResolvedBridgeIn: {
-            /** Bridge Pid */
-            bridge_pid?: number | null;
-            /** App Server Pid */
-            app_server_pid?: number | null;
-            /** Ws Url */
-            ws_url?: string | null;
-            /** Heartbeat At */
-            heartbeat_at?: string | null;
-            /** Status */
-            status?: string | null;
-            /** Thread Subscription Status */
-            thread_subscription_status?: string | null;
-            /** Launch Mode */
-            launch_mode?: string | null;
-            /** Ui Attached */
-            ui_attached?: boolean | null;
-            /** Ui Presence */
-            ui_presence?: string | null;
-        };
-        /** ResolvedEvidenceIn */
-        ResolvedEvidenceIn: {
-            /**
-             * Process Observed
-             * @default false
-             */
-            process_observed: boolean;
-            /**
-             * Transcript Observed
-             * @default false
-             */
-            transcript_observed: boolean;
-            /** Bridge State */
-            bridge_state?: string | null;
-            /** Hook Seen At */
-            hook_seen_at?: string | null;
-            /** Join Keys */
-            join_keys?: string[];
-        };
-        /** ResolvedLocalSessionIn */
-        ResolvedLocalSessionIn: {
-            /** Session Id */
-            session_id?: string | null;
-            /** Provider */
-            provider: string;
-            /** Provider Session Id */
-            provider_session_id?: string | null;
-            /** Control Path */
-            control_path: string;
-            /** State */
-            state: string;
-            /** Phase */
-            phase?: string | null;
-            /** Tool Name */
-            tool_name?: string | null;
-            /** Phase Observed At */
-            phase_observed_at?: string | null;
-            /** Last Activity At */
-            last_activity_at?: string | null;
-            workspace?: components["schemas"]["ResolvedWorkspaceIn"];
-            process?: components["schemas"]["ResolvedProcessIn"];
-            bridge?: components["schemas"]["ResolvedBridgeIn"];
-            evidence?: components["schemas"]["ResolvedEvidenceIn"];
-            /** Reason Codes */
-            reason_codes?: string[];
-        };
-        /** ResolvedProcessIn */
-        ResolvedProcessIn: {
-            /** Pid */
-            pid?: number | null;
-            /** Process Start Time */
-            process_start_time?: string | null;
-            /** Boot Id */
-            boot_id?: string | null;
-            /** Started At */
-            started_at?: string | null;
-        };
-        /** ResolvedWorkspaceIn */
-        ResolvedWorkspaceIn: {
-            /** Cwd */
-            cwd?: string | null;
-            /** Label */
-            label?: string | null;
-            /** Branch */
-            branch?: string | null;
         };
         /**
          * RunnerDoctorCheck
@@ -9870,24 +9573,6 @@ export interface components {
             count: number;
         };
         /**
-         * ShippingProgressIn
-         * @description Engine's shipping-progress snapshot.
-         *
-         *     The daemon always sends this complete object; ``None`` keeps heartbeats
-         *     from older engines compatible while preserving absence as unknown health
-         *     evidence.
-         */
-        ShippingProgressIn: {
-            /** Pending Work */
-            pending_work: boolean;
-            /** Stalled */
-            stalled: boolean;
-            /** Seconds Without Progress */
-            seconds_without_progress: number;
-            /** Observed At */
-            observed_at: string;
-        };
-        /**
          * SignalTier
          * @enum {string}
          */
@@ -10034,7 +9719,7 @@ export interface components {
         TimelineHistoryImportResponse: {
             /** Device Id */
             device_id: string;
-            history_import: components["schemas"]["HistoryImportSnapshot-Output"];
+            history_import: components["schemas"]["HistoryImportSnapshot"];
         };
         /** TimelineSessionCardResponse */
         TimelineSessionCardResponse: {
@@ -10350,44 +10035,6 @@ export interface components {
              * @enum {string}
              */
             outcome: "completed" | "aborted";
-        };
-        /**
-         * UnmanagedSessionBindingIn
-         * @description One row of Rust engine's unmanaged-session pid/cwd scan.
-         *
-         *     All fields except
-         *     machine_id, provider, provider_session_id, and observed_at are
-         *     tolerant of absence so the engine can ship partial observations
-         *     (e.g. file-only, no process yet) without breaking heartbeat ingest.
-         */
-        UnmanagedSessionBindingIn: {
-            /** Machine Id */
-            machine_id: string;
-            /** Provider */
-            provider: string;
-            /** Provider Session Id */
-            provider_session_id: string;
-            /** Source Path */
-            source_path?: string | null;
-            /** Source Inode */
-            source_inode?: number | null;
-            /** Source Device */
-            source_device?: number | null;
-            /** Pid */
-            pid?: number | null;
-            /** Process Start Time */
-            process_start_time?: string | null;
-            /** Cwd */
-            cwd?: string | null;
-            /** Source Offset */
-            source_offset?: number | null;
-            /** Source Mtime */
-            source_mtime?: string | null;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
         };
         /**
          * UsageLatestResponse
@@ -16570,13 +16217,426 @@ export interface operations {
     ingest_heartbeat_agents_heartbeat_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Send gzip when compressing the heartbeat request body. */
+                "Content-Encoding"?: "identity" | "gzip";
+            };
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["HeartbeatIn"];
+                "application/json": {
+                    /** Version */
+                    version?: string | null;
+                    /** Daemon Pid */
+                    daemon_pid?: number | null;
+                    /** Last Ship At */
+                    last_ship_at?: string | null;
+                    /** Last Ship Attempt At */
+                    last_ship_attempt_at?: string | null;
+                    /** Last Ship Result */
+                    last_ship_result?: string | null;
+                    /** Last Ship Latency Ms */
+                    last_ship_latency_ms?: number | null;
+                    /** Last Ship Http Status */
+                    last_ship_http_status?: number | null;
+                    /** Last Ship Error Kind */
+                    last_ship_error_kind?: string | null;
+                    /** Last Ship Error Message */
+                    last_ship_error_message?: string | null;
+                    /**
+                     * Spool Pending Count
+                     * @default 0
+                     */
+                    spool_pending_count?: number;
+                    shipping_progress?: {
+                        /** Pending Work */
+                        pending_work: boolean;
+                        /** Stalled */
+                        stalled: boolean;
+                        /** Seconds Without Progress */
+                        seconds_without_progress: number;
+                        /** Observed At */
+                        observed_at: string;
+                    } | null;
+                    /**
+                     * Spool Dead Count
+                     * @default 0
+                     */
+                    spool_dead_count?: number;
+                    /** Archive Backlog */
+                    archive_backlog?: {
+                        [key: string]: unknown;
+                    };
+                    /** Storage V2 Outbox */
+                    storage_v2_outbox?: {
+                        [key: string]: unknown;
+                    };
+                    /** Runtime Event Outbox */
+                    runtime_event_outbox?: {
+                        [key: string]: unknown;
+                    };
+                    /** Managed Launch Recovery */
+                    managed_launch_recovery?: {
+                        [key: string]: unknown;
+                    };
+                    /** Adaptive Backlog Limiter */
+                    adaptive_backlog_limiter?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Ship Scheduler */
+                    ship_scheduler?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Update */
+                    update?: {
+                        [key: string]: unknown;
+                    } | null;
+                    history_import?: {
+                        /**
+                         * State
+                         * @enum {string}
+                         */
+                        state: "discovering" | "inventory_ready" | "importing" | "paused" | "backpressured" | "blocked_source" | "offline" | "current" | "unavailable";
+                        inventory?: {
+                            /**
+                             * Schema Version
+                             * @constant
+                             */
+                            schema_version: 1;
+                            /** Generation */
+                            generation: number;
+                            /** Content Sha256 */
+                            content_sha256: string;
+                            /**
+                             * Observed At
+                             * Format: date-time
+                             */
+                            observed_at: string;
+                            /** Scan Duration Ms */
+                            scan_duration_ms: number;
+                            /** Scan Error Count */
+                            scan_error_count: number;
+                            /** Source Count */
+                            source_count: number;
+                            /** Source Bytes */
+                            source_bytes: number;
+                            /** Wal Bytes */
+                            wal_bytes: number;
+                            /** Footprint Bytes */
+                            footprint_bytes: number;
+                            /** Providers */
+                            providers?: {
+                                /** Provider */
+                                provider: string;
+                                /** Source Count */
+                                source_count: number;
+                                /** Source Bytes */
+                                source_bytes: number;
+                                /** Wal Bytes */
+                                wal_bytes: number;
+                                /** Footprint Bytes */
+                                footprint_bytes: number;
+                                /** Oldest Modified At Ms */
+                                oldest_modified_at_ms?: number | null;
+                                /** Newest Modified At Ms */
+                                newest_modified_at_ms?: number | null;
+                            }[];
+                        } | null;
+                        progress?: {
+                            /** Acknowledged Source Bytes */
+                            acknowledged_source_bytes: number;
+                            /** Remaining Source Bytes */
+                            remaining_source_bytes: number;
+                            /** Acknowledged Records */
+                            acknowledged_records: number;
+                            /** Remaining Records */
+                            remaining_records: number;
+                            /** Pending Outbox Count */
+                            pending_outbox_count: number;
+                            /** Pending Outbox Bytes */
+                            pending_outbox_bytes: number;
+                            /** Blocked Source Count */
+                            blocked_source_count: number;
+                            /** Blocked Bytes */
+                            blocked_bytes: number;
+                            /** Latest Block Kind */
+                            latest_block_kind?: string | null;
+                            /** Providers */
+                            providers?: {
+                                /** Provider */
+                                provider: string;
+                                /**
+                                 * Unit
+                                 * @enum {string}
+                                 */
+                                unit: "bytes" | "records" | "unknown";
+                                /** Inventory Source Count */
+                                inventory_source_count: number;
+                                /** Inventory Source Bytes */
+                                inventory_source_bytes: number;
+                                /** Tracked Source Count */
+                                tracked_source_count: number;
+                                /** Complete Source Count */
+                                complete_source_count: number;
+                                /** Observed Units */
+                                observed_units: number;
+                                /** Acknowledged Units */
+                                acknowledged_units: number;
+                                /** Remaining Units */
+                                remaining_units: number;
+                                /** Exact Total */
+                                exact_total: boolean;
+                                /** Inventory Coverage Complete */
+                                inventory_coverage_complete: boolean;
+                            }[];
+                        } | null;
+                    } | null;
+                    /**
+                     * Parse Error Count 1H
+                     * @default 0
+                     */
+                    parse_error_count_1h?: number;
+                    /**
+                     * Ship Attempts 1H
+                     * @default 0
+                     */
+                    ship_attempts_1h?: number;
+                    /**
+                     * Ship Successes 1H
+                     * @default 0
+                     */
+                    ship_successes_1h?: number;
+                    /**
+                     * Ship Rate Limited 1H
+                     * @default 0
+                     */
+                    ship_rate_limited_1h?: number;
+                    /**
+                     * Ship Server Errors 1H
+                     * @default 0
+                     */
+                    ship_server_errors_1h?: number;
+                    /**
+                     * Ship Payload Rejections 1H
+                     * @default 0
+                     */
+                    ship_payload_rejections_1h?: number;
+                    /**
+                     * Ship Payload Too Large 1H
+                     * @default 0
+                     */
+                    ship_payload_too_large_1h?: number;
+                    /**
+                     * Ship Retryable Client Errors 1H
+                     * @default 0
+                     */
+                    ship_retryable_client_errors_1h?: number;
+                    /**
+                     * Ship Connect Errors 1H
+                     * @default 0
+                     */
+                    ship_connect_errors_1h?: number;
+                    /** Ship Latency P50 Ms 1H */
+                    ship_latency_p50_ms_1h?: number | null;
+                    /** Ship Latency P95 Ms 1H */
+                    ship_latency_p95_ms_1h?: number | null;
+                    /**
+                     * Ship Attempts 10M
+                     * @default 0
+                     */
+                    ship_attempts_10m?: number;
+                    /**
+                     * Ship Successes 10M
+                     * @default 0
+                     */
+                    ship_successes_10m?: number;
+                    /**
+                     * Ship Rate Limited 10M
+                     * @default 0
+                     */
+                    ship_rate_limited_10m?: number;
+                    /**
+                     * Ship Server Errors 10M
+                     * @default 0
+                     */
+                    ship_server_errors_10m?: number;
+                    /**
+                     * Ship Retryable Client Errors 10M
+                     * @default 0
+                     */
+                    ship_retryable_client_errors_10m?: number;
+                    /**
+                     * Ship Connect Errors 10M
+                     * @default 0
+                     */
+                    ship_connect_errors_10m?: number;
+                    /** Ship Lanes */
+                    ship_lanes?: {
+                        [key: string]: unknown;
+                    };
+                    /** Events Per Sec Ewma 10S */
+                    events_per_sec_ewma_10s?: number | null;
+                    /** Bytes Per Sec Ewma 10S */
+                    bytes_per_sec_ewma_10s?: number | null;
+                    /**
+                     * Disk Free Bytes
+                     * @default 0
+                     */
+                    disk_free_bytes?: number;
+                    /**
+                     * Is Offline
+                     * @default false
+                     */
+                    is_offline?: boolean;
+                    /** Managed Sessions */
+                    managed_sessions?: {
+                        /**
+                         * Session Id
+                         * Format: uuid
+                         */
+                        session_id: string;
+                        /** Provider */
+                        provider: string;
+                        /** Machine Id */
+                        machine_id?: string | null;
+                        /** Sequence */
+                        sequence: number;
+                        /** State */
+                        state: string;
+                        /** Bridge Status */
+                        bridge_status?: string | null;
+                        /** Thread Subscription Status */
+                        thread_subscription_status?: string | null;
+                        /** Observed At */
+                        observed_at?: string | null;
+                        /**
+                         * Lease Ttl Ms
+                         * @default 900000
+                         */
+                        lease_ttl_ms?: number;
+                    }[];
+                    /** Unmanaged Session Bindings */
+                    unmanaged_session_bindings?: {
+                        /** Machine Id */
+                        machine_id: string;
+                        /** Provider */
+                        provider: string;
+                        /** Provider Session Id */
+                        provider_session_id: string;
+                        /** Source Path */
+                        source_path?: string | null;
+                        /** Source Inode */
+                        source_inode?: number | null;
+                        /** Source Device */
+                        source_device?: number | null;
+                        /** Pid */
+                        pid?: number | null;
+                        /** Process Start Time */
+                        process_start_time?: string | null;
+                        /** Cwd */
+                        cwd?: string | null;
+                        /** Source Offset */
+                        source_offset?: number | null;
+                        /** Source Mtime */
+                        source_mtime?: string | null;
+                        /**
+                         * Observed At
+                         * Format: date-time
+                         */
+                        observed_at: string;
+                    }[];
+                    /** Machine Evidence */
+                    machine_evidence?: unknown;
+                    /** Sessions */
+                    sessions?: {
+                        /** Session Id */
+                        session_id?: string | null;
+                        /** Provider */
+                        provider: string;
+                        /** Provider Session Id */
+                        provider_session_id?: string | null;
+                        /** Control Path */
+                        control_path: string;
+                        /** State */
+                        state: string;
+                        /** Phase */
+                        phase?: string | null;
+                        /** Tool Name */
+                        tool_name?: string | null;
+                        /** Phase Observed At */
+                        phase_observed_at?: string | null;
+                        /** Last Activity At */
+                        last_activity_at?: string | null;
+                        /** ResolvedWorkspaceIn */
+                        workspace?: {
+                            /** Cwd */
+                            cwd?: string | null;
+                            /** Label */
+                            label?: string | null;
+                            /** Branch */
+                            branch?: string | null;
+                        };
+                        /** ResolvedProcessIn */
+                        process?: {
+                            /** Pid */
+                            pid?: number | null;
+                            /** Process Start Time */
+                            process_start_time?: string | null;
+                            /** Boot Id */
+                            boot_id?: string | null;
+                            /** Started At */
+                            started_at?: string | null;
+                        };
+                        /** ResolvedBridgeIn */
+                        bridge?: {
+                            /** Bridge Pid */
+                            bridge_pid?: number | null;
+                            /** App Server Pid */
+                            app_server_pid?: number | null;
+                            /** Ws Url */
+                            ws_url?: string | null;
+                            /** Heartbeat At */
+                            heartbeat_at?: string | null;
+                            /** Status */
+                            status?: string | null;
+                            /** Thread Subscription Status */
+                            thread_subscription_status?: string | null;
+                            /** Launch Mode */
+                            launch_mode?: string | null;
+                            /** Ui Attached */
+                            ui_attached?: boolean | null;
+                            /** Ui Presence */
+                            ui_presence?: string | null;
+                        };
+                        /** ResolvedEvidenceIn */
+                        evidence?: {
+                            /**
+                             * Process Observed
+                             * @default false
+                             */
+                            process_observed?: boolean;
+                            /**
+                             * Transcript Observed
+                             * @default false
+                             */
+                            transcript_observed?: boolean;
+                            /** Bridge State */
+                            bridge_state?: string | null;
+                            /** Hook Seen At */
+                            hook_seen_at?: string | null;
+                            /** Join Keys */
+                            join_keys?: string[];
+                        };
+                        /** Reason Codes */
+                        reason_codes?: string[];
+                    }[];
+                    /** Sessions Digest */
+                    sessions_digest?: string | null;
+                    /** Sessions Sequence */
+                    sessions_sequence?: number | null;
+                };
             };
         };
         responses: {
@@ -16586,15 +16646,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
             };
         };
     };
