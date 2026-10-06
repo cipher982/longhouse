@@ -161,7 +161,8 @@ export default function MachinesPage() {
 
   const waitingForDirectory = isError && !data && directory.isLoading;
   const pageReady = !isLoading && !waitingForDirectory;
-  useReadinessFlag({ ready: pageReady, screenshotReady: pageReady });
+  const directoryReady = directory.data?.machines !== undefined;
+  useReadinessFlag({ ready: pageReady || directoryReady, screenshotReady: pageReady });
 
   const summaries = data?.machines ?? [];
   const active = summaries.filter((summary) => !machineStatus(summary).quiet);
@@ -193,7 +194,7 @@ export default function MachinesPage() {
   );
 
   let body: ReactNode;
-  if (directoryIsEmpty) {
+  if (directoryIsEmpty && !isError) {
     body = firstMachineEmptyState;
   } else if (isLoading || waitingForDirectory) {
     body = machines?.length ? (

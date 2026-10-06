@@ -80,7 +80,7 @@ describe("MachinesPage", () => {
     renderPage();
 
     const row = await screen.findByTestId("machine-directory-row-cinder");
-    expect(document.body).not.toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-ready", "true");
     expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
     expect(row).toHaveTextContent("cinder");
     expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
@@ -104,7 +104,7 @@ describe("MachinesPage", () => {
     expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
     expect(screen.getByTestId("machines-connect-first-button")).toBeInTheDocument();
     expect(screen.queryByRole("status")).toBeNull();
-    expect(document.body).not.toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-ready", "true");
     expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
 
     await act(async () => resolveSummary(response([])));
@@ -115,6 +115,23 @@ describe("MachinesPage", () => {
     });
   });
 
+  it("shows summary failure when an empty directory is returned", async () => {
+    let rejectSummary!: (error: Error) => void;
+    api.listMachineSummaries
+      .mockImplementationOnce(
+        () => new Promise<MachinesSummaryResponse>((_resolve, reject) => { rejectSummary = reject; }),
+      )
+      .mockRejectedValueOnce(new Error("The session catalog is restarting."));
+    api.listMachines.mockResolvedValue({ machines: [] });
+    renderPage();
+
+    expect(await screen.findByTestId("machines-connect-first-button")).toBeInTheDocument();
+    await act(async () => rejectSummary(new Error("The session catalog is restarting.")));
+    expect(await screen.findByRole("button", { name: "Try again" }, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.queryByTestId("machines-connect-first-button")).toBeNull();
+  });
+
+
   it("shows directory-backed machine details while activity loads", async () => {
     let resolveSummary!: (value: MachinesSummaryResponse) => void;
     api.listMachineSummaries.mockImplementation(
@@ -124,7 +141,7 @@ describe("MachinesPage", () => {
     renderPage(true);
 
     expect(await screen.findByTestId("machine-name")).toHaveTextContent("cinder");
-    expect(document.body).not.toHaveAttribute("data-ready", "true");
+    expect(document.body).toHaveAttribute("data-ready", "true");
     expect(document.body).toHaveAttribute("data-screenshot-ready", "false");
     expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
     expect(screen.queryByText("Last 14 days")).toBeNull();

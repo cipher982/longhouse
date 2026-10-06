@@ -170,7 +170,7 @@ export default function MachineDetailPage() {
   const [launchOpen, setLaunchOpen] = useState(false);
 
   const pageReady = !isLoading && !waitingForDirectory;
-  useReadinessFlag({ ready: pageReady, screenshotReady: pageReady });
+  useReadinessFlag({ ready: pageReady || Boolean(directoryMachine), screenshotReady: pageReady });
 
   if ((isLoading || waitingForDirectory) && !directoryMachine) {
     return (
