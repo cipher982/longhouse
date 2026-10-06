@@ -55,6 +55,11 @@ const RUNTIME_BATCH_ZSTD_LEVEL: i32 = 3;
 /// encoding (a poison event, isolated plain) costs plain-speed delivery for
 /// one window, not for the life of the process.
 const RUNTIME_BATCH_ZSTD_RETRY: Duration = Duration::from_secs(15 * 60);
+/// Longest pause one host-wide restart refusal may impose on every request.
+/// The runtime's K1 `Retry-After` is at most the claim's remaining
+/// `expected_back_by` window, capped at 5 s server-side; 10 s bounds a buggy or
+/// hostile header without starving liveness.
+const MAX_HOST_RETRY_AFTER: Duration = Duration::from_secs(10);
 
 /// Origin of a process-local monotonic clock, for refusal timestamps an
 /// atomic can hold.
@@ -413,7 +418,7 @@ impl ShipperClient {
             return;
         };
         let window = RetryAfterWindow {
-            until: Instant::now() + retry_after,
+            until: Instant::now() + retry_after.min(MAX_HOST_RETRY_AFTER),
             release_on_serving: self.host_link.has_valid_claim(),
             serving_generation: self.host_link.serving_generation(),
         };
@@ -421,6 +426,19 @@ impl ShipperClient {
         if current.is_none_or(|current| window.until > current.until) {
             *current = Some(window);
         }
+    }
+
+    /// Feed a non-2xx response to the host link and return its `Retry-After`.
+    /// Only a host-wide K1 restart refusal pauses every request to this host;
+    /// lane backpressure (429, storage 503s) stays with the caller that got it,
+    /// so it can never stall heartbeat liveness or unrelated writes.
+    fn note_rejection(&self, status: u16, headers: &HeaderMap, body: &str) -> Option<Duration> {
+        let host_wide = self.host_link.observe_http_rejection(status, body);
+        let retry_after = parse_retry_after_seconds(headers).map(Duration::from_secs_f64);
+        if host_wide {
+            self.record_retry_after(retry_after);
+        }
+        retry_after
     }
 
     /// POST a small JSON payload with an optional request-level timeout.
@@ -604,12 +622,7 @@ impl ShipperClient {
             });
         }
         let body = response.text().await.unwrap_or_default();
-        self.host_link
-            .observe_http_rejection(status.as_u16(), &body);
-        let retry_after = parse_retry_after_seconds(&headers).map(Duration::from_secs_f64);
-        if matches!(status.as_u16(), 429 | 503) {
-            self.record_retry_after(retry_after);
-        }
+        let retry_after = self.note_rejection(status.as_u16(), &headers, &body);
         Err(JsonPostError::Http {
             status: status.as_u16(),
             body,
@@ -738,12 +751,7 @@ impl ShipperClient {
         self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            self.host_link
-                .observe_http_rejection(status.as_u16(), &body);
-            let retry_after = parse_retry_after_seconds(&headers).map(Duration::from_secs_f64);
-            if matches!(status.as_u16(), 429 | 503) {
-                self.record_retry_after(retry_after);
-            }
+            self.note_rejection(status.as_u16(), &headers, &body);
             anyhow::bail!("POST returned {status}: {body}");
         }
         self.host_link.observe_serving_evidence(runtime_epoch);
@@ -785,13 +793,7 @@ impl ShipperClient {
         self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            self.host_link
-                .observe_http_rejection(status.as_u16(), &body);
-            let retry_after =
-                parse_retry_after_seconds(&response_headers).map(Duration::from_secs_f64);
-            if matches!(status.as_u16(), 429 | 503) {
-                self.record_retry_after(retry_after);
-            }
+            self.note_rejection(status.as_u16(), &response_headers, &body);
             anyhow::bail!("PUT returned {status}: {body}");
         }
         self.host_link.observe_serving_evidence(runtime_epoch);
@@ -952,12 +954,7 @@ impl ShipperClient {
         self.host_link.note_runtime_epoch(runtime_epoch);
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            self.host_link
-                .observe_http_rejection(status.as_u16(), &body);
-            let retry_after = parse_retry_after_seconds(&headers).map(Duration::from_secs_f64);
-            if matches!(status.as_u16(), 429 | 503) {
-                self.record_retry_after(retry_after);
-            }
+            self.note_rejection(status.as_u16(), &headers, &body);
             if let Some(backpressure) =
                 parse_storage_v2_backpressure(status.as_u16(), &headers, &body, lane)
             {

@@ -36,6 +36,10 @@ pub struct HostLinkStatus {
     pub claim_started_at: Option<String>,
     pub last_acknowledged_at: Option<String>,
     pub fresh_horizon_secs: Option<u64>,
+    /// Last time any serving evidence arrived: an accepted write, an open
+    /// admission, a serving lifecycle frame or a heartbeat acknowledgement.
+    #[serde(default)]
+    pub last_serving_at: Option<String>,
     pub runtime_epoch: Option<String>,
 }
 impl HostLinkStatus {
@@ -66,6 +70,7 @@ impl HostLink {
             claim_started_at: None,
             last_acknowledged_at: None,
             fresh_horizon_secs: None,
+            last_serving_at: None,
             runtime_epoch: None,
         };
         let (changed, _) = watch::channel(initial.clone());
@@ -191,6 +196,7 @@ impl HostLink {
         }
         status.claim = None;
         status.claim_started_at = None;
+        status.last_serving_at = Some(now.to_rfc3339());
         if status.state != "serving" {
             status.state = "serving".to_string();
             status.since = now.to_rfc3339();
@@ -234,16 +240,24 @@ impl HostLink {
         self.changed.send_replace(status.clone());
     }
 
-    pub fn observe_http_rejection(&self, status_code: u16, body: &str) {
+    /// Record a typed restart refusal. Returns true only for a host-wide K1
+    /// refusal (`runtime_restarting` / `runtime_unreachable`), the one case in
+    /// which every request to this host should wait out `Retry-After`. Lane
+    /// backpressure and other 503s/429s stay local to their caller.
+    pub fn observe_http_rejection(&self, status_code: u16, body: &str) -> bool {
         if status_code != 503 {
-            return;
+            return false;
         }
         let Ok(value) = serde_json::from_str::<Value>(body) else {
-            return;
+            return false;
         };
         if let Some(claim) = value.get("claim") {
             self.observe_lifecycle_value(claim);
         }
+        matches!(
+            value.get("code").and_then(Value::as_str),
+            Some("runtime_restarting" | "runtime_unreachable")
+        )
     }
 
     pub fn note_runtime_epoch(&self, runtime_epoch: Option<&str>) {
@@ -301,11 +315,18 @@ fn state_at(status: &HostLinkStatus, now: DateTime<Utc>) -> String {
         .fresh_horizon_secs
         .filter(|seconds| *seconds > 0)
         .unwrap_or(DEFAULT_FRESH_HORIZON_SECS);
-    let reference = status
-        .last_acknowledged_at
-        .as_deref()
-        .and_then(parse_timestamp)
-        .or_else(|| parse_timestamp(&status.since));
+    // The freshest serving evidence counts. An old heartbeat acknowledgement
+    // must never outvote a recovery (open admission, accepted write, serving
+    // frame) observed just now.
+    let reference = [
+        status.last_acknowledged_at.as_deref(),
+        status.last_serving_at.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(parse_timestamp)
+    .max()
+    .or_else(|| parse_timestamp(&status.since));
     if reference.is_some_and(|at| now.signed_duration_since(at).num_seconds() < horizon as i64) {
         if status.last_acknowledged_at.is_some() || status.state == "serving" {
             "serving".to_string()
@@ -488,5 +509,40 @@ mod tests {
         ack.record_heartbeat_ack(Some(240));
         assert_eq!(ack.snapshot().fresh_horizon_secs, Some(240));
         assert!(ack.snapshot().last_acknowledged_at.is_some());
+    }
+
+    #[test]
+    fn fresh_serving_evidence_outvotes_an_expired_heartbeat_ack() {
+        let link = HostLink::new();
+        link.record_heartbeat_ack(Some(120));
+        let mut status = link.snapshot();
+        let stale = (Utc::now() - Duration::seconds(600)).to_rfc3339();
+        status.last_acknowledged_at = Some(stale.clone());
+        status.last_serving_at = Some(stale);
+        assert_eq!(state_at(&status, Utc::now()), "unreachable");
+
+        // An open admission (or accepted write) right now means serving, even
+        // though the last heartbeat acknowledgement is far past the horizon.
+        status.last_serving_at = Some(Utc::now().to_rfc3339());
+        assert_eq!(state_at(&status, Utc::now()), "serving");
+    }
+
+    #[test]
+    fn only_typed_restart_refusals_are_host_wide() {
+        let link = HostLink::new();
+        assert!(
+            link.observe_http_rejection(503, &json!({"code": "runtime_restarting"}).to_string())
+        );
+        assert!(
+            link.observe_http_rejection(503, &json!({"code": "runtime_unreachable"}).to_string())
+        );
+        // Lane backpressure, untyped 503s and HTML pages never pause the host.
+        assert!(
+            !link.observe_http_rejection(429, &json!({"code": "runtime_restarting"}).to_string())
+        );
+        assert!(
+            !link.observe_http_rejection(503, &json!({"code": "write_backpressure"}).to_string())
+        );
+        assert!(!link.observe_http_rejection(503, "<!DOCTYPE html>"));
     }
 }
