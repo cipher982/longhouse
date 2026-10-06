@@ -61,6 +61,9 @@ import { useHeaderSlot } from "@/app/headerSlot";
 import { useStoredState } from "@/shared/hooks/useStoredState";
 import { GaugeIcon } from "@/shared/ui/icons";
 import { SessionRailFrame } from "./rail/SessionRail";
+import { DisplaySettingsPopover } from "./display/DisplaySettingsPopover";
+import { displaySettingsStyle } from "./display/displaySettings";
+import { useDisplaySettings } from "./display/useDisplaySettings";
 import { useReportActiveSession, useSessionRail } from "./rail/sessionRailContext";
 import { config } from "@/shared/lib/config";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
@@ -115,6 +118,8 @@ function SessionDetailWorkspaceRoute({
     false,
     (raw) => (typeof raw === "boolean" ? raw : null),
   );
+  const display = useDisplaySettings();
+  const displayStyle = useMemo(() => displaySettingsStyle(display.settings), [display.settings]);
   const workspace = useSessionWorkspace(sessionId, {
     highlightEventId,
     shared_by: sharedByUserId,
@@ -631,6 +636,11 @@ function SessionDetailWorkspaceRoute({
 
   const headerRight = (
     <div className="session-workspace-header__actions">
+      <DisplaySettingsPopover
+        settings={display.settings}
+        onChange={display.update}
+        onReplace={display.replace}
+      />
       <button
         type="button"
         className={`timeline-pane__filter-toggle${readoutsOpen ? " is-active" : ""}`}
@@ -722,6 +732,7 @@ function SessionDetailWorkspaceRoute({
   return (
     <div
       className={workspaceClassName}
+      style={displayStyle}
       data-session-id={displaySession.id}
       data-state-commit-seq={
         displaySession.session_state.commit_seq ?? undefined

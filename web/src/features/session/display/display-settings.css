@@ -1,0 +1,133 @@
+/* Display settings popover (session-view-terminal-parity C7). */
+.display-settings {
+  position: relative;
+  display: inline-flex;
+}
+
+.display-settings__toggle {
+  font-family: var(--font-family-serif);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.display-settings__popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: var(--z-popover, 60);
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 10px;
+  background: var(--color-surface-overlay);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  font-family: var(--font-family-base);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.display-settings__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.display-settings__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.display-settings__presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.display-settings__presets button,
+.display-settings__segmented button,
+.display-settings__stepper button {
+  min-width: 0;
+  padding: 6px 4px;
+  border: 1px solid var(--color-border-subtle);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.display-settings__presets button {
+  border-radius: 8px;
+  padding: 8px 4px;
+}
+
+.display-settings__presets button.is-selected {
+  border-color: var(--color-brand-primary);
+  color: var(--color-text-primary);
+}
+
+.display-settings__segmented {
+  display: flex;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.display-settings__segmented button {
+  flex: 1;
+  border: 0;
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.display-settings__segmented button:last-child {
+  border-right: 0;
+}
+
+.display-settings__segmented button.is-selected {
+  background: var(--color-surface-elevated);
+  color: var(--color-brand-primary);
+}
+
+.display-settings__stepper {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  align-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.display-settings__stepper button {
+  border: 0;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.display-settings__stepper button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.display-settings__stepper output {
+  text-align: center;
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.display-settings button:focus-visible {
+  outline: 1px solid var(--color-brand-primary-hover);
+  outline-offset: -1px;
+}
+
+.display-settings__hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}

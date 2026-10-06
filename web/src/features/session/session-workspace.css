@@ -1675,7 +1675,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: var(--space-3) 0;
+  padding: var(--tl-msg-pad, var(--space-3)) 0;
   max-width: var(--tl-prose-max);
   width: 100%;
 }
@@ -1752,7 +1752,7 @@
    at …" is the label. The serif stays a heading voice. */
 .tl-msg--user .tl-msg__body {
   font-family: var(--font-family-base);
-  font-size: 16px;
+  font-size: var(--tl-ask-size, 16px);
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
   color: var(--color-text-primary);
@@ -1910,26 +1910,29 @@
   min-width: 24px;
   background: linear-gradient(90deg, var(--color-border-primary), transparent);
 }
+/* Display settings (display/displaySettings.ts) set these on the session
+   route; the fallbacks are the Comfortable layout. */
 .tl-msg__body {
   color: rgba(250, 245, 236, 0.96);
-  line-height: 1.6;
-  font-size: 15.5px;
+  line-height: var(--tl-prose-leading, 1.6);
+  font-size: var(--tl-prose-size, 15.5px);
+  font-family: var(--tl-prose-font, inherit);
   text-wrap: pretty;
   word-break: break-word;
 }
 .tl-msg__body p {
-  margin: 0 0 0.6em;
+  margin: 0 0 var(--tl-para-gap, 0.6em);
 }
 .tl-msg__body p:last-child {
   margin-bottom: 0;
 }
 .tl-msg__body ul,
 .tl-msg__body ol {
-  margin: 0.4em 0;
+  margin: var(--tl-list-gap, 0.4em) 0;
   padding-left: 1.4em;
 }
 .tl-msg__body li {
-  margin: 0.15em 0;
+  margin: var(--tl-item-gap, 0.15em) 0;
 }
 .tl-msg__body code {
   font-family: var(--font-family-mono);
