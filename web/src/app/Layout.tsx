@@ -18,12 +18,9 @@ import "./styles/layout.css";
 import { XIcon } from "@/shared/ui/icons";
 import { getNavItems } from "./navigation/navItems";
 import { HeaderSlotContext, MobileNavSlotContext, isSessionRoute } from "./headerSlot";
+import { preloadMachinesPage } from "./routeChunks";
 
 const MACHINE_STATUS_INITIAL_DELAY_MS = 2_500;
-// Warm the lazy route code before selection; page queries still start on navigation.
-function preloadMachinesPage() {
-  void import("@/features/machines/MachinesPage").catch(() => undefined);
-}
 
 type AvatarUser = { avatar_url?: string | null } | null | undefined;
 

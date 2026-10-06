@@ -6,6 +6,7 @@ import { useEffect } from "react";
  * and React finds it already resolved.
  */
 export const loadSessionDetailPage = () => import("@/features/session/SessionDetailPage");
+export const loadMachinesPage = () => import("@/features/machines/MachinesPage");
 
 let sessionDetailRequested = false;
 
@@ -16,6 +17,18 @@ export function preloadSessionDetailPage(): void {
   void loadSessionDetailPage().catch(() => {
     // A failed preload is retried by the route itself.
     sessionDetailRequested = false;
+  });
+}
+
+let machinesPageRequested = false;
+
+/** Start downloading the Machines route code; safe to call repeatedly. */
+export function preloadMachinesPage(): void {
+  if (machinesPageRequested) return;
+  machinesPageRequested = true;
+  void loadMachinesPage().catch(() => {
+    // A failed preload is retried by the route itself.
+    machinesPageRequested = false;
   });
 }
 
