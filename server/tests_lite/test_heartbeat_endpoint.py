@@ -496,9 +496,7 @@ def test_heartbeat_gzip_round_trip_matches_identity(live_catalog, live_catalog_c
     assert identity_response.status_code == 204, identity_response.text
     assert gzip_response.status_code == 204, gzip_response.text
     assert gzip_response.headers["x-longhouse-request-encodings"] == "gzip"
-    assert gzip_response.headers["x-longhouse-machine-fresh-horizon"] == str(
-        DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
-    )
+    assert gzip_response.headers["x-longhouse-machine-fresh-horizon"] == str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS)
     stamps = _stamps(device_id)
     assert len(stamps) == 2
     assert stamps[0]["raw_json"] == stamps[1]["raw_json"]
@@ -517,8 +515,6 @@ def test_heartbeat_rejects_gzip_beyond_decoded_limit(live_catalog, live_catalog_
     assert response.headers["x-longhouse-request-encodings"] == "gzip"
     assert response.headers["x-longhouse-machine-fresh-horizon"] == str(DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS)
     assert _stamps("oversized-gzip-machine") == []
-
-
 
 
 def test_heartbeat_identity_body_keeps_legacy_size_behavior(live_catalog, live_catalog_client):
@@ -1222,24 +1218,24 @@ def test_heartbeat_drops_evidence_over_the_transport_budget_and_still_lands(live
     assert dropped == 1
 
 
+def test_heartbeat_budget_uses_normalized_size_not_raw_bytes(live_catalog, live_catalog_client, monkeypatch):
+    """Whitespace in the raw body never decides the evidence budget.
 
-
-def test_heartbeat_budget_near_boundary_matches_legacy_serialized_size(live_catalog, live_catalog_client, monkeypatch):
+    The raw evidence span is padded to twice the budget while its normalized
+    serialization fits, so the evidence must still be accepted.
+    """
     from zerg.machine_evidence import machine_evidence_bytes
     from zerg.routers.heartbeat import MachineEvidenceIn
-    from zerg.routers.heartbeat import _machine_evidence_decoded_bytes
 
     evidence = _machine_evidence_payload()
     normalized = MachineEvidenceIn.model_validate(evidence).model_dump(mode="json", exclude_none=True)
     legacy_size = machine_evidence_bytes(normalized)
+    budget = legacy_size + 10
     compact_evidence = json.dumps(evidence, separators=(",", ":")).encode("utf-8")
-    target_size = max(legacy_size, len(compact_evidence)) + 50
-    budget = target_size - 1
-    padded_evidence = b"{" + b" " * (target_size - len(compact_evidence)) + compact_evidence[1:]
+    padded_evidence = b"{" + b" " * (2 * budget) + compact_evidence[1:]
     body = b'{"version":"budget-boundary","machine_evidence":' + padded_evidence + b"}"
 
-    assert legacy_size <= budget < target_size
-    assert _machine_evidence_decoded_bytes(body) == target_size
+    assert len(padded_evidence) > 2 * budget
     monkeypatch.setattr("zerg.routers.heartbeat.MAX_MACHINE_EVIDENCE_BYTES", budget)
     device_id = "boundary-evidence-machine"
     response = live_catalog_client.post(

@@ -694,225 +694,6 @@ def _decode_heartbeat_body(raw_body: bytes, content_encoding: str) -> bytes:
     return decoded
 
 
-def _json_text_encoding(raw_body: bytes) -> str:
-    if raw_body.startswith(b"\x00\x00\xfe\xff") or raw_body.startswith(b"\x00\x00\x00{"):
-        return "utf-32-be"
-    if raw_body.startswith(b"\xff\xfe\x00\x00") or raw_body.startswith(b"{\x00\x00\x00"):
-        return "utf-32-le"
-    if raw_body.startswith(b"\xfe\xff") or raw_body.startswith(b"\x00{"):
-        return "utf-16-be"
-    if raw_body.startswith(b"\xff\xfe") or raw_body.startswith(b"{\x00"):
-        return "utf-16-le"
-    return "utf-8"
-
-
-def _json_string_end(text: str, start: int) -> int | None:
-    if start >= len(text) or text[start] != '"':
-        return None
-    index = start + 1
-    while index < len(text):
-        char = text[index]
-        if char == '"':
-            return index + 1
-        if char == "\\":
-            index += 2
-        else:
-            index += 1
-    return None
-
-
-def _json_value_end(text: str, start: int) -> int | None:
-    if start >= len(text):
-        return None
-    if text[start] == '"':
-        return _json_string_end(text, start)
-    if text[start] in "[{":
-        stack = ["]" if text[start] == "[" else "}"]
-        index = start + 1
-        while index < len(text):
-            char = text[index]
-            if char == '"':
-                string_end = _json_string_end(text, index)
-                if string_end is None:
-                    return None
-                index = string_end
-                continue
-            if char in "[{":
-                stack.append("]" if char == "[" else "}")
-            elif char in "]}":
-                if not stack or char != stack[-1]:
-                    return None
-                stack.pop()
-                if not stack:
-                    return index + 1
-            index += 1
-        return None
-    index = start
-    while index < len(text) and text[index] not in " \t\r\n,}]":
-        index += 1
-    return index if index > start else None
-
-
-def _json_string_end_bytes(raw_body: bytes, start: int) -> int | None:
-    if start >= len(raw_body) or raw_body[start] != 34:
-        return None
-    index = raw_body.find(b'"', start + 1)
-    while index >= 0:
-        slash_index = index - 1
-        while slash_index > start and raw_body[slash_index] == 92:
-            slash_index -= 1
-        if (index - slash_index - 1) % 2 == 0:
-            return index + 1
-        index = raw_body.find(b'"', index + 1)
-    return None
-
-
-_JSON_STRUCTURE_RE = re.compile(rb'[\[\]{}"]')
-
-
-def _json_value_end_bytes(raw_body: bytes, start: int) -> int | None:
-    if start >= len(raw_body):
-        return None
-    if raw_body[start] == 34:
-        return _json_string_end_bytes(raw_body, start)
-    if raw_body[start] in (91, 123):
-        stack = [93 if raw_body[start] == 91 else 125]
-        index = start + 1
-        while index < len(raw_body):
-            match = _JSON_STRUCTURE_RE.search(raw_body, index)
-            if match is None:
-                return None
-            index = match.start()
-            byte = raw_body[index]
-            if byte == 34:
-                string_end = _json_string_end_bytes(raw_body, index)
-                if string_end is None:
-                    return None
-                index = string_end
-                continue
-            if byte in (91, 123):
-                stack.append(93 if byte == 91 else 125)
-            elif byte in (93, 125):
-                if not stack or byte != stack[-1]:
-                    return None
-                stack.pop()
-                if not stack:
-                    return index + 1
-            index += 1
-        return None
-    index = start
-    while index < len(raw_body) and raw_body[index] not in b" \t\r\n,}]":
-        index += 1
-    return index if index > start else None
-
-
-def _machine_evidence_decoded_bytes_utf8(raw_body: bytes) -> int | None:
-    index = 3 if raw_body.startswith(b"\xef\xbb\xbf") else 0
-
-    def skip_whitespace(position: int) -> int:
-        while position < len(raw_body) and raw_body[position] in b" \t\r\n":
-            position += 1
-        return position
-
-    index = skip_whitespace(index)
-    if index >= len(raw_body) or raw_body[index] != 123:
-        return None
-    index += 1
-    evidence_bytes: int | None = None
-    while True:
-        index = skip_whitespace(index)
-        if index >= len(raw_body) or raw_body[index] == 125:
-            return evidence_bytes
-        key_start = index
-        key_end = _json_string_end_bytes(raw_body, key_start)
-        if key_end is None:
-            return None
-        key_token = raw_body[key_start:key_end]
-        is_machine_evidence = key_token == b'"machine_evidence"'
-        if not is_machine_evidence and b"\\" in key_token:
-            try:
-                is_machine_evidence = json.loads(key_token) == "machine_evidence"
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                return None
-        index = skip_whitespace(key_end)
-        if index >= len(raw_body) or raw_body[index] != 58:
-            return None
-        value_start = skip_whitespace(index + 1)
-        value_end = _json_value_end_bytes(raw_body, value_start)
-        if value_end is None:
-            return None
-        if is_machine_evidence:
-            evidence_bytes = value_end - value_start
-        index = skip_whitespace(value_end)
-        if index >= len(raw_body):
-            return None
-        if raw_body[index] == 44:
-            index += 1
-            continue
-        if raw_body[index] == 125:
-            return evidence_bytes
-        return None
-
-
-def _machine_evidence_decoded_bytes(decoded_body: bytes) -> int | None:
-    """Measure the raw decoded JSON value for machine_evidence without re-encoding it."""
-
-    encoding = _json_text_encoding(decoded_body)
-    if encoding == "utf-8":
-        return _machine_evidence_decoded_bytes_utf8(decoded_body)
-
-    try:
-        text = decoded_body.decode(encoding)
-    except UnicodeDecodeError:
-        return None
-    if text.startswith("\ufeff"):
-        text = text[1:]
-
-    def skip_whitespace(index: int) -> int:
-        while index < len(text) and text[index] in " \t\r\n":
-            index += 1
-        return index
-
-    index = skip_whitespace(0)
-    if index >= len(text) or text[index] != "{":
-        return None
-    index += 1
-    evidence_bytes: int | None = None
-    while True:
-        index = skip_whitespace(index)
-        if index >= len(text) or text[index] == "}":
-            return evidence_bytes
-        key_start = index
-        key_end = _json_string_end(text, key_start)
-        if key_end is None:
-            return None
-        try:
-            key = json.loads(text[key_start:key_end])
-        except json.JSONDecodeError:
-            return None
-        index = skip_whitespace(key_end)
-        if index >= len(text) or text[index] != ":":
-            return None
-        value_start = skip_whitespace(index + 1)
-        value_end = _json_value_end(text, value_start)
-        if value_end is None:
-            return None
-        if key == "machine_evidence":
-            try:
-                evidence_bytes = len(text[value_start:value_end].encode(encoding))
-            except UnicodeEncodeError:
-                return None
-        index = skip_whitespace(value_end)
-        if index >= len(text):
-            return None
-        if text[index] == ",":
-            index += 1
-            continue
-        if text[index] == "}":
-            return evidence_bytes
-        return None
-
-
 def _machine_evidence_row_count(evidence: object) -> int:
     if not isinstance(evidence, dict):
         return 0
@@ -938,7 +719,6 @@ def _accepted_machine_evidence(
     evidence: object,
     *,
     device_id: str,
-    decoded_evidence_bytes: int | None,
 ) -> tuple[str | None, dict | None]:
     """Return the pre-catalog disposition and evidence that may be shipped.
 
@@ -965,16 +745,13 @@ def _accepted_machine_evidence(
             _validation_reason(exc),
         )
         return "rejected", None
-    lower_fallback_bound = MAX_MACHINE_EVIDENCE_BYTES * 9 // 10
-    upper_fallback_bound = MAX_MACHINE_EVIDENCE_BYTES * 11 // 10
-    if decoded_evidence_bytes is not None and decoded_evidence_bytes > upper_fallback_bound:
-        return _drop_oversized_machine_evidence(device_id=device_id, size=decoded_evidence_bytes)
-
+    # The budget is defined on the normalized serialization (what catalogd
+    # receives), so measure exactly that. One dump of an already-validated model
+    # is cheap; the whole-payload retention dump was the expensive part.
     serialized = parsed.model_dump(mode="json", exclude_none=True)
-    if decoded_evidence_bytes is not None and decoded_evidence_bytes >= lower_fallback_bound:
-        serialized_size = machine_evidence_bytes(serialized)
-        if serialized_size > MAX_MACHINE_EVIDENCE_BYTES:
-            return _drop_oversized_machine_evidence(device_id=device_id, size=serialized_size)
+    serialized_size = machine_evidence_bytes(serialized)
+    if serialized_size > MAX_MACHINE_EVIDENCE_BYTES:
+        return _drop_oversized_machine_evidence(device_id=device_id, size=serialized_size)
     return None, serialized
 
 
@@ -1462,18 +1239,10 @@ async def ingest_heartbeat(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
         evidence_started = time.monotonic()
-        # A document within the budget proves its evidence subtree also fits;
-        # scan an exact raw span only when the whole decoded body exceeds it.
-        decoded_evidence_bytes = (
-            _machine_evidence_decoded_bytes(decoded_body)
-            if len(decoded_body) > MAX_MACHINE_EVIDENCE_BYTES and isinstance(payload.machine_evidence, dict)
-            else None
-        )
         timing["evidence_rows"] = _machine_evidence_row_count(payload.machine_evidence)
         pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
             payload.machine_evidence,
             device_id=device_id,
-            decoded_evidence_bytes=decoded_evidence_bytes,
         )
         timing["evidence_validation_ms"] = (time.monotonic() - evidence_started) * 1000
 
