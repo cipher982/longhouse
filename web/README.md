@@ -22,7 +22,8 @@ The desktop Machines tab prefetches route code on pointer hover or keyboard focu
 The activity/sync summary still loads only after navigation, while the directory
 remains visible.
 
-Failed lazy-page imports are classified from Vite's `vite:preloadError` event; the route boundary offers a manual reload instead of silently discarding in-progress page state.
+If Vite emits `vite:preloadError` for a failed lazy-page import, the route boundary shows a reload action; ordinary render errors keep the in-place retry.
+
 Machine filters apply before lexical and semantic result limits, including retained
 history whose display metadata lacks a device ID. The disposable search index adds
 nullable machine identity and uses retained source identity for existing rows; source
