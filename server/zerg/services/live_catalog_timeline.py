@@ -820,8 +820,12 @@ def _project_live_catalog_session_snapshot(
             "invalid_catalog_snapshot",
             "Catalog session snapshot is missing reducer fact heads.",
         )
-    session_facts = facts.get("session")
-    if not include_hidden and isinstance(session_facts, dict) and bool(session_facts.get("hidden_from_default_timeline")):
+    card_facts = facts.get("card")
+    if (
+        not include_hidden
+        and isinstance(card_facts, dict)
+        and (bool(card_facts.get("hidden_from_default_timeline")) or bool(card_facts.get("user_hidden_from_timeline")))
+    ):
         return None, None, commit_seq
     try:
         projected = project_catalog_session_facts(

@@ -726,6 +726,29 @@ def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):
     assert captured["params"]["limit"] == 20
 
 
+@pytest.mark.parametrize("flag", ["hidden_from_default_timeline", "user_hidden_from_timeline"])
+def test_detail_read_without_hidden_suppresses_a_hidden_card(monkeypatch, flag):
+    session_id = str(uuid4())
+    snapshot = {
+        "found": True,
+        "commit_seq": "23",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "legacy_facts": {"catalog": {"session_id": session_id}, "card": {flag: 1}},
+        "heads": [],
+        "heads_truncated": False,
+    }
+    monkeypatch.setattr(live_catalog_timeline, "shadow_session_state_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "project_catalog_session_facts",
+        lambda *_args, **_kwargs: pytest.fail("a hidden card must not be projected for the timeline stream"),
+    )
+
+    result, alias, commit_seq = read_live_catalog_session(session_id, owner_id=3, include_hidden=False)
+
+    assert (result, alias, commit_seq) == (None, None, "23")
+
+
 def test_canonical_detail_projects_truncated_heads_as_no_state_evidence(monkeypatch):
     session_id = str(uuid4())
     snapshot = {
