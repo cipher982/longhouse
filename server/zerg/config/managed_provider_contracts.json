@@ -1880,7 +1880,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "0eacc278eec433c3bf2197f7ee5e8061a1480a3e7916e97d113e257f17599d6c"
+      "adapter_digest": "293bf242b2da17719a0b41846c0180b356bb954b22ae956a834325c15010f719"
     },
     {
       "provider": "opencode",
@@ -3050,7 +3050,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "51d4fe0632e98fdc062af488f7b7fd3f61bd2af8b31f36485761ec117dff68ff"
+      "adapter_digest": "f63f7600aa85bd100809c3a4cbbfdc41264f7257aa57beb5eedc79cce4c7c604"
     },
     {
       "provider": "cursor",
@@ -5061,7 +5061,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "e20c61b4286fbc1a6c7cdb69c653ef5a89a48fbe44789660ff488160af1d01ba"
+      "adapter_digest": "2433edb0cb6bcbaf4dee584c8ae060289f9d2dd7248cf88bc50b2babb2172f91"
     }
   ]
 }
