@@ -138,9 +138,9 @@ function MachineRow({ summary }: { summary: MachineSummary }) {
   );
 }
 
-function DirectoryRow({ machine }: { machine: MachineDirectoryEntry }) {
+function DirectoryRow({ machine, provisional = false }: { machine: MachineDirectoryEntry; provisional?: boolean }) {
   return (
-    <li className="machine-row" data-testid={`machine-row-${machine.device_id}`}>
+    <li className="machine-row" data-testid={`${provisional ? "machine-directory-row" : "machine-row"}-${machine.device_id}`}>
       <Link to={`/machines/${encodeURIComponent(machine.device_id)}`} className="machine-directory-row">
         <span className="machine-name">
           <span className={`machine-dot machine-dot--${machine.online ? "idle" : "off"}`} aria-hidden="true" />
@@ -183,8 +183,8 @@ export default function MachinesPage() {
     body = machines?.length ? (
       <>
         <p className="machine-meta" role="status">Loading activity and sync…</p>
-        <ul className="machine-list" data-testid="machine-list">
-          {machines.map((machine) => <DirectoryRow key={machine.device_id} machine={machine} />)}
+        <ul className="machine-list" data-testid="machine-directory-list">
+          {machines.map((machine) => <DirectoryRow key={machine.device_id} machine={machine} provisional />)}
         </ul>
       </>
     ) : (

@@ -163,13 +163,15 @@ export default function MachineDetailPage() {
   const { deviceId = "" } = useParams();
   const navigate = useNavigate();
   const { data, isLoading, isError, error, refetch } = useMachineSummaries();
-  const directory = useMachineDirectory({ enabled: isError && !data });
+  const directory = useMachineDirectory({ enabled: !data, refetchInterval: isError && !data ? 30_000 : false });
   const { data: runners } = useRunners({ refetchInterval: 30_000 });
+  const directoryMachine = directory.data?.machines?.find((machine) => machine.device_id === deviceId);
+  const waitingForDirectory = isError && !data && directory.isLoading;
   const [launchOpen, setLaunchOpen] = useState(false);
 
-  useReadinessFlag({ ready: !isLoading });
+  useReadinessFlag({ ready: (!isLoading && !waitingForDirectory) || Boolean(directoryMachine) });
 
-  if (isLoading || (isError && !data && directory.isLoading)) {
+  if ((isLoading || waitingForDirectory) && !directoryMachine) {
     return (
       <PageShell size="wide" className="machine-page">
         <div className="machines-loading">
@@ -178,7 +180,7 @@ export default function MachineDetailPage() {
       </PageShell>
     );
   }
-  if (isError && !data && !directory.data?.machines?.some((machine) => machine.device_id === deviceId)) {
+  if (isError && !data && !directoryMachine) {
     return (
       <PageShell size="wide" className="machine-page">
         <EmptyState
@@ -195,7 +197,7 @@ export default function MachineDetailPage() {
     );
   }
   const summary = data?.machines.find((item) => item.machine.device_id === deviceId);
-  const machine = summary?.machine ?? (!data ? directory.data?.machines?.find((entry) => entry.device_id === deviceId) : undefined);
+  const machine = summary?.machine ?? (!data ? directoryMachine : undefined);
   if (!machine) {
     return (
       <PageShell size="wide" className="machine-page">
@@ -248,6 +250,9 @@ export default function MachineDetailPage() {
           )}
         </div>
       </header>
+      {isLoading && !summary && (
+        <p className="machine-meta" role="status">Loading activity and sync…</p>
+      )}
 
       {isError && (
         <p className="machines-stale" role="status">
@@ -340,7 +345,13 @@ export default function MachineDetailPage() {
         </section>
         <section>
           <h2 className="machine-section-title">Sync</h2>
-          {summary ? <Sync summary={summary} /> : <p className="machine-empty-line">Sync information is unavailable.</p>}
+          {summary ? (
+            <Sync summary={summary} />
+          ) : isLoading ? (
+            <p className="machine-empty-line">Loading sync…</p>
+          ) : (
+            <p className="machine-empty-line">Sync information is unavailable.</p>
+          )}
         </section>
       </div>
 

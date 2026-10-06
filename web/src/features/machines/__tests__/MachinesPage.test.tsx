@@ -79,13 +79,29 @@ describe("MachinesPage", () => {
     api.listMachines.mockResolvedValue({ machines: [summary("cinder").machine] });
     renderPage();
 
-    const row = await screen.findByTestId("machine-row-cinder");
+    const row = await screen.findByTestId("machine-directory-row-cinder");
     expect(row).toHaveTextContent("cinder");
     expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
     expect(within(row).queryByText("No recent sessions")).toBeNull();
 
     await act(async () => resolveSummary(response([summary("cinder")])));
-    expect(await screen.findByText("No recent sessions")).toBeInTheDocument();
+    expect(await screen.findByTestId("machine-row-cinder")).toHaveTextContent("No recent sessions");
+  });
+
+  it("shows directory-backed machine details while activity loads", async () => {
+    let resolveSummary!: (value: MachinesSummaryResponse) => void;
+    api.listMachineSummaries.mockImplementation(
+      () => new Promise<MachinesSummaryResponse>((resolve) => { resolveSummary = resolve; }),
+    );
+    api.listMachines.mockResolvedValue({ machines: [summary("cinder").machine] });
+    renderPage(true);
+
+    expect(await screen.findByTestId("machine-name")).toHaveTextContent("cinder");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading activity and sync");
+    expect(screen.queryByText("Last 14 days")).toBeNull();
+
+    await act(async () => resolveSummary(response([summary("cinder")])));
+    expect(await screen.findByText("Last 14 days")).toBeInTheDocument();
   });
 
   it("lists active machines with their live work and folds quiet ones into one line", async () => {
@@ -192,6 +208,7 @@ describe("MachinesPage", () => {
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.queryByText("No upload reports from this machine in the last 30 days.")).toBeNull();
     expect(screen.queryByText("Last 14 days")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Retry" }, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("unavailable");
   });
 
