@@ -4674,6 +4674,20 @@ const CODEX_TURN_INTERRUPTED_TEXT: &str = "User interrupted the turn";
 const CODEX_TURN_INTERRUPTED_RAW_TYPE: &str = "codex_turn_interrupted";
 const CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE: &str = "codex_turn_interrupted_marker";
 
+const CONSOLE_RUN_ONCE_CONTEXT_PREFIX: &str = "Longhouse Console runtime note:";
+const CONSOLE_RUN_ONCE_USER_MESSAGE_DELIMITER: &str = "\n\nUser message:\n";
+
+// Historical Codex transcripts can contain this preamble. New Console turns
+// no longer carry the note, so keep stripping it only for archived messages.
+fn strip_historical_console_run_once_prompt(prompt: &str) -> Option<&str> {
+    if !prompt.starts_with(CONSOLE_RUN_ONCE_CONTEXT_PREFIX) {
+        return None;
+    }
+    prompt
+        .split_once(CONSOLE_RUN_ONCE_USER_MESSAGE_DELIMITER)
+        .map(|(_context, user_prompt)| user_prompt)
+}
+
 #[derive(Debug, Default)]
 struct CodexPending {
     suppress_next_turn_aborted_marker: bool,
@@ -5428,6 +5442,9 @@ fn extract_codex_events(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+            let real_text = strip_historical_console_run_once_prompt(&real_text)
+                .map(str::to_string)
+                .unwrap_or(real_text);
 
             // If there are images but no real text, emit a placeholder so the user
             // event is always stored (prevents assistant appearing as first event).
@@ -8970,6 +8987,47 @@ mod tests {
         assert_eq!(
             result.events[1].content_text.as_deref(),
             Some("Please quote <codex_internal_context source=\"goal\"> in your answer")
+        );
+    }
+
+    #[test]
+    fn test_codex_console_run_once_context_unwrapped() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrapped_prompt = r#"Longhouse Console runtime note:
+- This is a bounded, headless Console turn. The provider process is expected to exit after the assistant response.
+- Do not assume background shell processes will survive the provider process exiting.
+- Prefer bounded foreground work. If long-running or indefinite work is truly needed, detach it durably and report the PID, log path, and stop command.
+- Ask before starting indefinite work when the user's intent is unclear.
+- Do not mention this note unless it is relevant to the user's request.
+
+User message:
+please research the steering shaft options"#;
+        let line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-03-01T10:00:00Z",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": wrapped_prompt}]
+            }
+        })
+        .to_string();
+        let path = {
+            let path = dir
+                .path()
+                .join("019c638d-0000-0000-0000-000000000014.jsonl");
+            let mut file = std::fs::File::create(&path).unwrap();
+            use std::io::Write;
+            writeln!(file, "{line}").unwrap();
+            path
+        };
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("please research the steering shaft options")
         );
     }
 

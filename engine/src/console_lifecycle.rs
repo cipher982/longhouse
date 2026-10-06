@@ -104,8 +104,19 @@ pub struct IdleOutcome {
     pub signal: IdleSignal,
     pub invocation_state: InvocationState,
     pub pending_count: usize,
+    pub has_active_turn: bool,
 }
 
+#[derive(Debug)]
+pub struct WakeTargetGone;
+
+impl std::fmt::Display for WakeTargetGone {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("wake target is gone or wake_id is unknown")
+    }
+}
+
+impl std::error::Error for WakeTargetGone {}
 #[derive(Clone, Debug)]
 pub struct WakeBinding {
     pub buffered_events: Vec<BufferedEvent>,
@@ -122,6 +133,7 @@ struct State {
     pending_wake_id: Option<String>,
     buffered_events: Vec<BufferedEvent>,
     deferred_idle: Option<IdleSignal>,
+    input_pending: bool,
 }
 
 pub struct ConsoleInvocation {
@@ -161,6 +173,7 @@ impl ConsoleInvocation {
                 pending_wake_id: None,
                 buffered_events: Vec::new(),
                 deferred_idle: None,
+                input_pending: false,
             }),
             stopped: AtomicBool::new(false),
             stopped_notify: tokio::sync::Notify::new(),
@@ -222,6 +235,8 @@ impl ConsoleInvocation {
             state.latest_turn = binding;
             state.pending_wake_id = None;
             state.buffered_events.clear();
+            state.deferred_idle = None;
+            state.input_pending = false;
         }
         self.write_input(text, images).await
     }
@@ -236,6 +251,12 @@ impl ConsoleInvocation {
 
     pub fn replace_input(&self, input: Arc<dyn ConsoleInput>) {
         *self.input.lock().unwrap_or_else(|error| error.into_inner()) = input;
+    }
+    pub fn pending_wake_id(&self) -> Option<String> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        (state.phase == InvocationState::Responding && state.current_turn.is_none())
+            .then(|| state.pending_wake_id.clone())
+            .flatten()
     }
 
     pub fn response_started(&self, trigger: Value) -> Option<WakeRequest> {
@@ -257,32 +278,54 @@ impl ConsoleInvocation {
         })
     }
 
-    pub fn bind_wake(
+    pub fn bind_wake<F>(
         &self,
         invocation_id: &str,
         wake_id: &str,
         binding: TurnBinding,
-    ) -> Result<WakeBinding> {
+        persist: F,
+    ) -> Result<WakeBinding>
+    where
+        F: FnOnce() -> Result<()>,
+    {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if invocation_id != self.launch_id
             || state.phase != InvocationState::Responding
+            || state.current_turn.is_some()
             || state.pending_wake_id.as_deref() != Some(wake_id)
-            || binding.origin != TurnOrigin::Wake
         {
-            bail!("wake target is gone or wake_id is unknown");
+            return Err(WakeTargetGone.into());
         }
+        persist()?;
         state.current_turn = Some(binding.clone());
-        state.latest_turn = binding;
+        state.latest_turn = binding.clone();
         state.pending_wake_id = None;
+        state.input_pending = binding.origin == TurnOrigin::User;
         let buffered_events = std::mem::take(&mut state.buffered_events);
-        let deferred_idle = state
-            .deferred_idle
-            .take()
-            .map(|signal| complete_idle(&mut state, signal));
+        let deferred_idle = if state.input_pending {
+            None
+        } else {
+            state
+                .deferred_idle
+                .take()
+                .map(|signal| complete_idle(&mut state, signal))
+        };
         Ok(WakeBinding {
             buffered_events,
             deferred_idle,
         })
+    }
+
+    pub fn finish_pending_user_input(&self) -> Option<IdleOutcome> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.input_pending {
+            return None;
+        }
+        state.input_pending = false;
+        state
+            .deferred_idle
+            .take()
+            .map(|signal| complete_idle(&mut state, signal))
     }
 
     pub fn route_stream_event(&self, sequence: u64, value: Value) -> Option<(TurnBinding, Value)> {
@@ -381,9 +424,13 @@ impl ConsoleInvocation {
 
     pub fn idle(&self, signal: IdleSignal) -> Option<IdleOutcome> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.current_turn.is_none() && state.pending_wake_id.is_some() {
+        if state.input_pending {
             state.deferred_idle = Some(signal);
             return None;
+        }
+        if state.current_turn.is_none() && state.pending_wake_id.take().is_some() {
+            state.buffered_events.clear();
+            state.deferred_idle = None;
         }
         Some(complete_idle(&mut state, signal))
     }
@@ -404,6 +451,7 @@ impl ConsoleInvocation {
         state.pending_wake_id = None;
         state.buffered_events.clear();
         state.deferred_idle = None;
+        state.input_pending = false;
         active
     }
 
@@ -432,11 +480,13 @@ impl ConsoleInvocation {
 }
 
 fn complete_idle(state: &mut State, signal: IdleSignal) -> IdleOutcome {
-    let binding = state
-        .current_turn
-        .take()
-        .unwrap_or_else(|| state.latest_turn.clone());
+    let active_turn = state.current_turn.take();
+    let has_active_turn = active_turn.is_some();
+    let binding = active_turn.unwrap_or_else(|| state.latest_turn.clone());
     state.latest_turn = binding.clone();
+    state.pending_wake_id = None;
+    state.input_pending = false;
+    state.deferred_idle = None;
     let invocation_state = if state.pending.is_empty() {
         InvocationState::Closed
     } else {
@@ -448,9 +498,9 @@ fn complete_idle(state: &mut State, signal: IdleSignal) -> IdleOutcome {
         signal,
         invocation_state,
         pending_count: state.pending.len(),
+        has_active_turn,
     }
 }
-
 type InvocationKey = (String, String);
 static INVOCATIONS: LazyLock<Mutex<HashMap<InvocationKey, Arc<ConsoleInvocation>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -583,13 +633,6 @@ mod tests {
         assert!(invocation
             .route_stream_event(1, serde_json::json!({"type": "assistant"}))
             .is_none());
-        assert!(invocation
-            .idle(IdleSignal {
-                terminal_state: "run_completed".to_string(),
-                exit_code: Some(0),
-                stderr: None,
-            })
-            .is_none());
         let binding = invocation
             .bind_wake(
                 &wake.invocation_id,
@@ -600,10 +643,106 @@ mod tests {
                     client_request_id: None,
                     origin: TurnOrigin::Wake,
                 },
+                || Ok(()),
             )
             .unwrap();
         assert_eq!(binding.buffered_events.len(), 1);
-        assert_eq!(binding.deferred_idle.unwrap().binding.run_id, "wake-run");
+        assert!(binding.deferred_idle.is_none());
+        assert_eq!(invocation.latest_turn().run_id, "wake-run");
+    }
+
+    #[tokio::test]
+    async fn unbound_wake_idle_drops_events_and_makes_wake_target_gone() {
+        let invocation = invocation();
+        invocation.replace_pending(
+            vec![PendingItem {
+                id: "task-1".to_string(),
+                kind: "monitor".to_string(),
+                status: "running".to_string(),
+                description: None,
+            }],
+            vec![],
+        );
+        invocation.idle(IdleSignal {
+            terminal_state: "run_completed".to_string(),
+            exit_code: Some(0),
+            stderr: None,
+        });
+        let wake = invocation
+            .response_started(serde_json::json!({"kind": "task_completed"}))
+            .unwrap();
+        assert!(invocation
+            .route_stream_event(1, serde_json::json!({"type": "assistant"}))
+            .is_none());
+
+        let outcome = invocation
+            .idle(IdleSignal {
+                terminal_state: "run_completed".to_string(),
+                exit_code: Some(0),
+                stderr: None,
+            })
+            .unwrap();
+        assert!(!outcome.has_active_turn);
+        assert_eq!(invocation.state(), InvocationState::Parked);
+        assert_eq!(invocation.pending_wake_id(), None);
+        assert!(invocation.state.lock().unwrap().buffered_events.is_empty());
+        let error = invocation
+            .bind_wake(
+                &wake.invocation_id,
+                &wake.wake_id,
+                TurnBinding {
+                    run_id: "late-wake".to_string(),
+                    turn_id: None,
+                    client_request_id: None,
+                    origin: TurnOrigin::Wake,
+                },
+                || Ok(()),
+            )
+            .unwrap_err();
+        assert!(error.is::<WakeTargetGone>());
+    }
+
+    #[tokio::test]
+    async fn wake_persistence_failure_leaves_unbound_state_unchanged() {
+        let invocation = invocation();
+        invocation.replace_pending(
+            vec![PendingItem {
+                id: "task-1".to_string(),
+                kind: "monitor".to_string(),
+                status: "running".to_string(),
+                description: None,
+            }],
+            vec![],
+        );
+        invocation.idle(IdleSignal {
+            terminal_state: "run_completed".to_string(),
+            exit_code: Some(0),
+            stderr: None,
+        });
+        let wake = invocation
+            .response_started(serde_json::json!({"kind": "task_completed"}))
+            .unwrap();
+        assert!(invocation
+            .route_stream_event(1, serde_json::json!({"type": "assistant"}))
+            .is_none());
+
+        assert!(invocation
+            .bind_wake(
+                &wake.invocation_id,
+                &wake.wake_id,
+                TurnBinding {
+                    run_id: "failed-wake".to_string(),
+                    turn_id: None,
+                    client_request_id: None,
+                    origin: TurnOrigin::Wake,
+                },
+                || Err(anyhow::anyhow!("claim persistence failed")),
+            )
+            .is_err());
+        assert_eq!(invocation.latest_turn().run_id, "run-1");
+        assert_eq!(invocation.pending_wake_id(), Some(wake.wake_id));
+        assert_eq!(invocation.state(), InvocationState::Responding);
+        assert_eq!(invocation.state.lock().unwrap().buffered_events.len(), 1);
     }
 
     #[tokio::test]

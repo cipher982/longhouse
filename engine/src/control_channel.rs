@@ -2476,7 +2476,7 @@ async fn execute_turn_start(
         })
         .await
         .map(|summary| {
-            json!({
+            let mut result = json!({
                 "session_id": summary.session_id,
                 "thread_id": thread_id,
                 "run_id": summary.run_id,
@@ -2484,12 +2484,17 @@ async fn execute_turn_start(
                 "transport": CLAUDE_PRINT_ADAPTER,
                 "provider_thread_id": summary.provider_thread_id,
                 "launch_id": summary.launch_id,
-                "pid": summary.pid,
-                "process_group_id": summary.process_group_id,
                 "stdout_path": summary.stdout_path,
                 "stderr_path": summary.stderr_path,
                 "argv": summary.argv,
-            })
+            });
+            if let Some(pid) = summary.pid {
+                result["pid"] = json!(pid);
+            }
+            if let Some(process_group_id) = summary.process_group_id {
+                result["process_group_id"] = json!(process_group_id);
+            }
+            result
         })
     } else if provider == "cursor" {
         start_cursor_print_turn(CursorPrintRunConfig {
