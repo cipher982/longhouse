@@ -94,16 +94,28 @@ pub struct ServerBackpressureDetail {
 pub struct StorageV2Backpressure {
     pub lane: String,
     pub retry_after: Duration,
+    /// The refusal was a typed planned restart (`runtime_restarting` /
+    /// `runtime_unreachable`), not a busy lane. Retries are the same; the
+    /// error names the code so restart-shaped classification can see it.
+    pub restart_code: Option<String>,
 }
 
 impl std::fmt::Display for StorageV2Backpressure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "storage-v2 {} lane busy; retry after {}ms",
-            self.lane,
-            self.retry_after.as_millis()
-        )
+        match &self.restart_code {
+            Some(code) => write!(
+                formatter,
+                "storage-v2 {} lane paused: {code}; retry after {}ms",
+                self.lane,
+                self.retry_after.as_millis()
+            ),
+            None => write!(
+                formatter,
+                "storage-v2 {} lane busy; retry after {}ms",
+                self.lane,
+                self.retry_after.as_millis()
+            ),
+        }
     }
 }
 
@@ -1011,15 +1023,6 @@ impl ShipperClient {
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             self.note_rejection(&retry_lane, status.as_u16(), &headers, &body);
-            // A typed restart refusal is the host restarting, not storage
-            // backpressure or a rejected envelope: keep its code in the error
-            // so the caller can recognise it as restart-shaped.
-            if status.as_u16() == 503
-                && (body.contains("\"runtime_restarting\"")
-                    || body.contains("\"runtime_unreachable\""))
-            {
-                anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
-            }
             if let Some(backpressure) =
                 parse_storage_v2_backpressure(status.as_u16(), &headers, &body, lane)
             {
@@ -1138,7 +1141,7 @@ fn parse_storage_v2_backpressure(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
-        .is_some_and(|code| code == "runtime_restarting" || code == "runtime_unreachable");
+        .filter(|code| code == "runtime_restarting" || code == "runtime_unreachable");
     let typed_busy = parse_header_string(headers, STORAGE_BACKPRESSURE_HEADER)
         .is_some_and(|kind| kind == "storage_lane_busy");
     // A catalogd deadline expiry reaches the shipper as `catalog_unavailable`.
@@ -1158,13 +1161,14 @@ fn parse_storage_v2_backpressure(
             retry_after: parse_retry_after_seconds(headers)
                 .map(Duration::from_secs_f64)
                 .unwrap_or(Duration::from_secs(5)),
+            restart_code: None,
         });
     }
     if status_code != 503
         || (!typed_busy
             && !body.contains("storage_lane_busy")
             && !catalog_backpressure
-            && !typed_runtime_unavailable)
+            && typed_runtime_unavailable.is_none())
     {
         return None;
     }
@@ -1173,6 +1177,7 @@ fn parse_storage_v2_backpressure(
         retry_after: parse_retry_after_seconds(headers)
             .map(Duration::from_secs_f64)
             .unwrap_or(Duration::from_secs(5)),
+        restart_code: typed_runtime_unavailable,
     })
 }
 

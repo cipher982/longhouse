@@ -608,10 +608,11 @@ mod tests {
         // The generic wrapper alone is not network evidence.
         assert!(!link.explains_failure("POST failed: builder error: invalid header value"));
         assert!(!link.explains_failure("POST failed: relative URL without a base"));
-        // Storage-v2 keeps the typed restart code in its error.
+        // Storage-v2 keeps the typed restart code in its backpressure error.
         assert!(link.explains_failure(
-            r#"storage-v2 envelope POST returned 503 Service Unavailable: {"code":"runtime_restarting","retryable":true}"#
+            "storage-v2 live lane paused: runtime_restarting; retry after 2000ms"
         ));
+        assert!(!link.explains_failure("storage-v2 live lane busy; retry after 5000ms"));
         // Without a claim nothing is explained away.
         assert!(!HostLink::new().explains_failure("POST failed: error sending request for url"));
     }
