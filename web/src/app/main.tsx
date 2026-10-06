@@ -9,7 +9,7 @@ import { loadRouteChunks } from "./routeChunks";
 // Global stylesheet entrypoint
 import "./styles/app.css";
 import { AppContent, AppProviders } from "./AppRoot";
-import { installVitePreloadRecovery } from "./vitePreloadRecovery";
+import { installVitePreloadRecovery } from "@/shared/lib/vitePreloadRecovery";
 
 installVitePreloadRecovery();
 

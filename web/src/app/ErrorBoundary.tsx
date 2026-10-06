@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangleIcon } from '@/shared/ui/icons';
+import { isVitePreloadFailure } from "@/shared/lib/vitePreloadRecovery";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -10,7 +11,11 @@ interface ErrorBoundaryState {
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
-  fallback?: React.ComponentType<{ error?: Error; retry: () => void }>;
+  fallback?: React.ComponentType<{
+    error?: Error;
+    retry: () => void;
+    moduleLoadFailure?: boolean;
+  }>;
 }
 
 // Default error fallback component
@@ -117,9 +122,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    const moduleLoadFailure =
-      typeof window !== 'undefined' && window.__longhouseVitePreloadFailure === true;
-    if (moduleLoadFailure) window.__longhouseVitePreloadFailure = false;
+    const moduleLoadFailure = isVitePreloadFailure(error);
     return {
       hasError: true,
       error,
@@ -162,7 +165,13 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
     if (this.props.fallback) {
       const FallbackComponent = this.props.fallback;
-      return <FallbackComponent error={this.state.error} retry={this.handleRetry} />;
+      return (
+        <FallbackComponent
+          error={this.state.error}
+          retry={this.handleRetry}
+          moduleLoadFailure={this.state.moduleLoadFailure}
+        />
+      );
     }
     return (
       <DefaultErrorFallback
