@@ -247,8 +247,8 @@ export class HostLinkStore {
     const cancel = () => {
       if (!active) return;
       active = false;
-      this.servingWaiters.delete(ready);
-      this.refreshSnapshot();
+      const wasWaiting = this.servingWaiters.delete(ready);
+      if (wasWaiting) this.refreshSnapshot();
     };
     const ready = () => {
       if (!active) return;
@@ -269,16 +269,16 @@ export class HostLinkStore {
   /** Recompute time-derived state; used by the monitor and deterministic tests. */
   refreshSnapshot(): void {
     const next = this.deriveSnapshot();
-    if (!this.sameSnapshot(this.snapshot, next)) {
-      this.snapshot = next;
+    const waiters =
+      next.state === "serving" ? Array.from(this.servingWaiters) : [];
+    if (waiters.length > 0) this.servingWaiters.clear();
+    const snapshot = waiters.length > 0 ? this.deriveSnapshot() : next;
+    if (!this.sameSnapshot(this.snapshot, snapshot)) {
+      this.snapshot = snapshot;
       for (const listener of this.listeners) listener();
     }
     this.syncHealthPoll();
-
-    if (next.state === "serving" && this.servingWaiters.size > 0) {
-      const waiters = Array.from(this.servingWaiters);
-      for (const waiter of waiters) waiter();
-    }
+    for (const waiter of waiters) waiter();
   }
 
   private deriveSnapshot(): HostLinkSnapshot {
@@ -359,10 +359,7 @@ export class HostLinkStore {
 
   private syncHealthPoll(): void {
     if (this.monitorCount === 0 || !this.healthFetcher) return;
-    const shouldPoll =
-      this.snapshot.state === "updating" ||
-      this.snapshot.state === "slow_update" ||
-      this.servingWaiters.size > 0;
+    const shouldPoll = this.snapshot.state !== "serving" || this.servingWaiters.size > 0;
 
     if (!shouldPoll) {
       clearTimeout(this.healthTimer ?? undefined);

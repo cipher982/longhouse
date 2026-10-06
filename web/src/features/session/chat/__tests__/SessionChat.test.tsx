@@ -985,7 +985,7 @@ describe("SessionChat", () => {
       }
       return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
-    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+    const firstView = renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
 
     await user.type(screen.getByRole("textbox"), "restart raced the send");
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -997,15 +997,28 @@ describe("SessionChat", () => {
     expect(screen.queryByText("Not delivered")).not.toBeInTheDocument();
     const requestId = postedRequestIds[0];
 
+    const storedKey = Array.from({ length: window.localStorage.length }, (_, index) =>
+      window.localStorage.key(index),
+    ).find((key) => key?.startsWith("longhouse:session-input:sess-1:"));
+    const stored = JSON.parse(window.localStorage.getItem(storedKey!) ?? "null");
+    expect(stored).toMatchObject({
+      clientRequestId: requestId,
+      waitingForHostUpdate: true,
+    });
+    firstView.unmount();
     act(() =>
       hostLinkStore.observeLifecycle({
         state: "serving",
         runtime_epoch: "runtime-new",
       }),
     );
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
     await waitFor(() => expect(postedRequestIds).toHaveLength(2));
     expect(postedRequestIds[1]).toBe(requestId);
     expect(screen.queryByText("Not delivered")).not.toBeInTheDocument();
+    const delivered = JSON.parse(window.localStorage.getItem(storedKey!) ?? "null");
+    expect(delivered).toMatchObject({ deliveryConfirmed: true });
+    expect(delivered).not.toHaveProperty("waitingForHostUpdate");
   });
   it("retains provider-ambiguous intent after explicit same-ID replay", async () => {
     const user = userEvent.setup();

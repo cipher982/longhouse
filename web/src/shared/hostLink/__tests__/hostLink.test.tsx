@@ -71,6 +71,22 @@ describe("host-link store", () => {
     stop();
   });
 
+  it("resumes multiple queued sends in FIFO order", () => {
+    const store = new HostLinkStore({
+      pageCommit,
+      now: () => Date.parse("2026-10-06T12:00:00.000Z"),
+    });
+    store.observeLifecycle(claim());
+    const resumed: string[] = [];
+    store.waitForServing(() => resumed.push("first"));
+    store.waitForServing(() => resumed.push("second"));
+    store.waitForServing(() => resumed.push("third"));
+
+    store.observeLifecycle(claim({ state: "serving" }));
+
+    expect(resumed).toEqual(["first", "second", "third"]);
+  });
+
   it("moves to slow_update at expected_back_by and unreachable at the deadline", () => {
     let now = Date.parse("2026-10-06T12:00:00.000Z");
     const store = new HostLinkStore({ pageCommit, now: () => now });
@@ -90,6 +106,81 @@ describe("host-link store", () => {
     now = Date.parse("2026-10-06T12:00:30.000Z");
     store.refreshSnapshot();
     expect(store.getSnapshot().state).toBe("unreachable");
+  });
+
+  it("recovers from an initial health failure and offers the changed build", async () => {
+    vi.useFakeTimers();
+    const fetchHealth = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("host is offline"))
+      .mockResolvedValueOnce({
+        runtime: { epoch: "runtime-recovered", admission: "open" as const },
+        build: { commit: "new-commit" },
+      });
+    const store = new HostLinkStore({ pageCommit });
+    const stop = store.startMonitoring(fetchHealth);
+    try {
+      await act(async () => {
+        await store.refreshHealth();
+      });
+      expect(store.getSnapshot().state).toBe("unreachable");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(fetchHealth).toHaveBeenCalledTimes(2);
+      expect(store.getSnapshot()).toMatchObject({
+        state: "serving",
+        reloadAvailable: true,
+      });
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps polling after claim expiry until the host serves again", async () => {
+    vi.useFakeTimers();
+    let now = Date.parse("2026-10-06T12:00:00.000Z");
+    const fetchHealth = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runtime: { epoch: "runtime-1", admission: "open" as const },
+        build: { commit: pageCommit },
+      })
+      .mockResolvedValueOnce({
+        runtime: { epoch: "runtime-2", admission: "open" as const },
+        build: { commit: "new-commit" },
+      });
+    const store = new HostLinkStore({ pageCommit, now: () => now });
+    const stop = store.startMonitoring(fetchHealth);
+    try {
+      await act(async () => {
+        await store.refreshHealth();
+      });
+      store.observeLifecycle(
+        claim({
+          expected_back_by: new Date(now + 1_000).toISOString(),
+          deadline: new Date(now + 2_000).toISOString(),
+          cutoff: new Date(now + 3_000).toISOString(),
+        }),
+      );
+      now += 2_000;
+      act(() => store.refreshSnapshot());
+      expect(store.getSnapshot().state).toBe("unreachable");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(fetchHealth).toHaveBeenCalledTimes(2);
+      expect(store.getSnapshot()).toMatchObject({
+        state: "serving",
+        reloadAvailable: true,
+      });
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the health endpoint polling every two seconds while a claim is held", async () => {

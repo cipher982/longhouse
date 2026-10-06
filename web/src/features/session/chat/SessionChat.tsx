@@ -229,6 +229,7 @@ interface StoredInputOutbox {
   attachments: { filename: string; type: string; size: number }[];
   createdAt: number;
   deliveryConfirmed?: boolean;
+  waitingForHostUpdate?: boolean;
 }
 
 interface StoredInputOutboxPayload {
@@ -364,6 +365,30 @@ async function persistInputOutbox(
   }
 }
 
+function setInputWaitingForHostUpdate(
+  sessionId: string,
+  clientRequestId: string,
+  waiting: boolean,
+): void {
+  const key = inputOutboxKey(sessionId, clientRequestId);
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return;
+    const stored = JSON.parse(raw) as StoredInputOutbox;
+    if (
+      stored.sessionId !== sessionId ||
+      stored.clientRequestId !== clientRequestId
+    ) {
+      return;
+    }
+    if (waiting) stored.waitingForHostUpdate = true;
+    else delete stored.waitingForHostUpdate;
+    window.localStorage.setItem(key, JSON.stringify(stored));
+  } catch {
+    // The already-persisted send remains safe to retry in the mounted view.
+  }
+}
+
 function clearInputOutbox(sessionId: string, clientRequestId: string): void {
   try {
     window.localStorage.removeItem(inputOutboxKey(sessionId, clientRequestId));
@@ -388,10 +413,9 @@ function retainDeliveredInputOutbox(
     ) {
       return;
     }
-    window.localStorage.setItem(
-      key,
-      JSON.stringify({ ...stored, deliveryConfirmed: true }),
-    );
+    const delivered = { ...stored, deliveryConfirmed: true };
+    delete delivered.waitingForHostUpdate;
+    window.localStorage.setItem(key, JSON.stringify(delivered));
     deleteInputOutboxPayload(sessionId, clientRequestId);
   } catch {
     // Keep the original durable payload when the summary cannot be stored.
@@ -701,26 +725,41 @@ export function SessionChat({
     void loadInputOutboxes(session.id)
       .then((stored) => {
         if (!mounted || stored.length === 0) return;
-        setPendingManagedLocalInputs(
-          stored.map(({ metadata, attachments, attachmentsLost }) => ({
-            text: metadata.text,
-            clientRequestId: metadata.clientRequestId,
-            serverInputId: null,
-            serverLiveInputId: null,
-            intent: metadata.intent,
-            model: metadata.model,
-            legacyModelMissing: !Object.prototype.hasOwnProperty.call(metadata, "model"),
-            attachments,
-            attachmentSummaries: metadata.attachments.map((attachment) => ({
-              filename: attachment.filename,
-              mimeType: attachment.type || null,
-              byteSize: attachment.size,
-            })),
-            phase: metadata.deliveryConfirmed ? "delivered" : "unknown",
-            attachmentsLost,
-            detail: attachmentsLost ? ATTACHMENTS_LOST_ERROR : undefined,
-          })),
+        const recovered: PendingManagedLocalInput[] = stored.map(
+          ({ metadata, attachments, attachmentsLost }) => {
+            const waitingForHostUpdate =
+              !metadata.deliveryConfirmed &&
+              metadata.waitingForHostUpdate === true &&
+              !attachmentsLost;
+            return {
+              text: metadata.text,
+              clientRequestId: metadata.clientRequestId,
+              serverInputId: null,
+              serverLiveInputId: null,
+              intent: metadata.intent,
+              model: metadata.model,
+              legacyModelMissing: !Object.prototype.hasOwnProperty.call(metadata, "model"),
+              attachments,
+              attachmentSummaries: metadata.attachments.map((attachment) => ({
+                filename: attachment.filename,
+                mimeType: attachment.type || null,
+                byteSize: attachment.size,
+              })),
+              phase: metadata.deliveryConfirmed
+                ? "delivered"
+                : waitingForHostUpdate
+                  ? "submitting"
+                  : "unknown",
+              attachmentsLost,
+              detail: attachmentsLost
+                ? ATTACHMENTS_LOST_ERROR
+                : waitingForHostUpdate
+                  ? HOST_LINK_COPY.sendQueued
+                  : undefined,
+            };
+          },
         );
+        setPendingManagedLocalInputs(recovered);
       })
       .catch((storageError) => {
         if (mounted) {
@@ -1167,6 +1206,7 @@ export function SessionChat({
       clientRequestId: string,
       model: string | null | undefined,
     ): ManagedSendResult => {
+      setInputWaitingForHostUpdate(session.id, clientRequestId, true);
       setPendingManagedLocalInputs((current) =>
         current.map((pending) =>
           pending.clientRequestId === clientRequestId
@@ -1194,7 +1234,7 @@ export function SessionChat({
 
       return { kind: "accepted", clientRequestId };
     },
-    [],
+    [session.id],
   );
   const handleManagedLocalSend = useCallback(
     async (
@@ -2044,6 +2084,7 @@ export function SessionChat({
     (pending: PendingManagedLocalInput) => {
       hostResumeRetryWaitersRef.current.get(pending.clientRequestId)?.();
       hostResumeRetryWaitersRef.current.delete(pending.clientRequestId);
+      setInputWaitingForHostUpdate(session.id, pending.clientRequestId, false);
       setEditingPendingId(pending.clientRequestId);
       setDraft(pending.text);
       if (!pending.legacyModelMissing) {
@@ -2052,7 +2093,7 @@ export function SessionChat({
       composerAttachments.restore(pending.attachments);
       setError(null);
     },
-    [composerAttachments, handleSelectedModelChange],
+    [composerAttachments, handleSelectedModelChange, session.id],
   );
 
   // Actions go through a ref so the reported entries only change when what
@@ -2071,6 +2112,31 @@ export function SessionChat({
     edit: handleEditPending,
     discard: handleDiscardPending,
   };
+  useEffect(() => {
+    for (const pending of pendingManagedLocalInputs) {
+      if (
+        pending.phase !== "submitting" ||
+        pending.detail !== HOST_LINK_COPY.sendQueued ||
+        hostResumeRetryWaitersRef.current.has(pending.clientRequestId)
+      ) {
+        continue;
+      }
+      const cancel = hostLinkStore.waitForServing(() => {
+        hostResumeRetryWaitersRef.current.delete(pending.clientRequestId);
+        void outboxActionsRef.current.retry(
+          pending.text,
+          pending.intent,
+          pending.attachments,
+          {
+            existingClientRequestId: pending.clientRequestId,
+            model: pending.model,
+            legacyModelMissing: pending.legacyModelMissing,
+          },
+        );
+      });
+      hostResumeRetryWaitersRef.current.set(pending.clientRequestId, cancel);
+    }
+  }, [pendingManagedLocalInputs]);
   const outboxEntries = useMemo<OutboxEntry[]>(() => {
     if (!isManagedLocal) return [];
     const rows = queuedInputsQuery.data ?? [];
