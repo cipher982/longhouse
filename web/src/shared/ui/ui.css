@@ -420,6 +420,25 @@
     color: var(--color-intent-error);
   }
 
+  .ui-empty-state__details {
+    margin-top: var(--space-4);
+    max-width: 480px;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  .ui-empty-state__details summary {
+    cursor: pointer;
+  }
+
+  .ui-empty-state__details code {
+    display: block;
+    margin-top: var(--space-2);
+    font-family: var(--font-family-mono);
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+
   /* --- Action Error Banner --- */
   .ui-action-error-banner {
     display: flex;

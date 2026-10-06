@@ -7,6 +7,8 @@ interface EmptyStateProps {
   title: string;
   description?: string;
   action?: React.ReactNode;
+  /** Technical detail for a bug report, collapsed under "Details". Never the headline. */
+  details?: string;
   className?: string;
 }
 
@@ -16,6 +18,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   title,
   description,
   action,
+  details,
   className,
 }) => {
   return (
@@ -26,6 +29,12 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
         <p className="ui-empty-state__description">{description}</p>
       )}
       {action && <div className="ui-empty-state__action">{action}</div>}
+      {details && (
+        <details className="ui-empty-state__details">
+          <summary>Details</summary>
+          <code>{details}</code>
+        </details>
+      )}
     </div>
   );
 };

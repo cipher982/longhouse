@@ -79,6 +79,7 @@ import {
   type PauseRequestResponseRequest,
   type SessionResumeIntent,
 } from "@/shared/api/agents";
+import { errorDetails } from "@/shared/ui/errorDetails";
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "@/shared/api/base";
 import {
   countTimelineItems,
@@ -356,12 +357,9 @@ function SessionDetailWorkspaceRoute({
       <div className="session-workspace-route session-workspace-route--empty">
         <EmptyState
           variant="error"
-          title="Error loading session"
-          description={
-            sessionError instanceof Error
-              ? sessionError.message
-              : "Session not found or failed to load."
-          }
+          title="Couldn't open this session"
+          description="Longhouse couldn't load this session. It may have been removed, or the server may be restarting."
+          details={errorDetails(sessionError)}
           action={
             <Button variant="primary" onClick={handleBack}>
               Back to Timeline

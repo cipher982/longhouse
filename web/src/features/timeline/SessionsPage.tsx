@@ -53,6 +53,7 @@ import {
 } from "./sessionsUrlState";
 import "./sessions.css";
 import "./inbox.css";
+import { errorDetails } from "@/shared/ui/errorDetails";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -454,13 +455,14 @@ export default function SessionsPage() {
       <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
         <EmptyState
           variant="error"
-          title="Error loading timeline"
-          description={error instanceof Error ? error.message : "Unknown error"}
+          title="Couldn't load your sessions"
+          description="Longhouse couldn't read your session list. Try again. If it keeps happening, the details below help us find the cause."
           action={
             <Button variant="primary" onClick={() => refetch()}>
-              Try Again
+              Try again
             </Button>
           }
+          details={errorDetails(error)}
         />
       </PageShell>
     );

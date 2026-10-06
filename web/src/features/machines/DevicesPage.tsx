@@ -20,6 +20,7 @@ import { useConfirm } from "@/shared/ui/confirm";
 import { parseUTC } from "@/shared/lib/dateUtils";
 import { connectMachineCommand, connectServerCommand } from "./connectCommands";
 import "./DevicesPage.css";
+import { errorDetails } from "@/shared/ui/errorDetails";
 
 function formatDate(iso: string | null): string {
   if (!iso) return "Never";
@@ -164,7 +165,12 @@ export default function DevicesPage() {
   if (error) {
     return (
       <PageShell size="narrow" className="devices-page-container">
-        <EmptyState variant="error" title="Error loading device tokens" description={String(error)} />
+        <EmptyState
+          variant="error"
+          title="Couldn't load your devices"
+          description="Longhouse couldn't read your device list. Reload the page to try again."
+          details={errorDetails(error)}
+        />
       </PageShell>
     );
   }

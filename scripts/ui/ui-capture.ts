@@ -112,6 +112,7 @@ const SCENES = [
   "onboarding-modal",
   "missing-api-key",
   "timeline-card-stress",
+  "timeline-error",
   "timeline-hearth",
   "launch-unavailable",
   "launch-no-machines",
@@ -328,6 +329,7 @@ function parseViewport(value: string | undefined): ViewportConfig {
 function sceneUsesMockApi(scene: SceneName): boolean {
   return (
     scene === "timeline-card-stress" ||
+    scene === "timeline-error" ||
     scene === "timeline-hearth" ||
     scene === "launch-unavailable" ||
     scene === "launch-no-machines" ||
@@ -868,6 +870,21 @@ async function installSceneMocks(
       return;
     }
 
+    // The page a one-session catalog overflow used to produce (2026-10-06).
+    if (scene === "timeline-error" && pathname === "/api/timeline/sessions") {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail: {
+            code: "shadow_fact_head_limit_exceeded",
+            message: "Canonical session facts exceed the bounded timeline projection limit.",
+          },
+        }),
+      });
+      return;
+    }
+
     if (pathname === "/api/timeline/sessions") {
       const sessions = LANDING_TIMELINE_SCENES.includes(scene)
         ? buildLandingTimelineFixture(requestUrl.searchParams.get("query") ?? "").sessions
@@ -1186,6 +1203,7 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
 
   if (
     scene === "timeline-card-stress" ||
+    scene === "timeline-error" ||
     scene === "launch-unavailable" ||
     scene === "launch-no-machines" ||
     scene === FIRST_RUN_SCENE ||

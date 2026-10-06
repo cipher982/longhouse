@@ -19,6 +19,7 @@ import {
 } from "./machinePresentation";
 import { useMachineDirectoryForSummary, useMachineSummaries } from "./useMachines";
 import "./MachinesPage.css";
+import { errorDetails } from "@/shared/ui/errorDetails";
 
 const AGENTS_SHOWN = 5;
 const LIVE_SHOWN = 3;
@@ -198,7 +199,7 @@ export default function MachinesPage() {
     body = (
       <>
         <p className="machines-stale" role="status">
-          Activity and sync are unavailable. {error instanceof Error ? error.message : ""}{" "}
+          Activity and sync are unavailable.{" "}
           <button type="button" className="machines-link-button" onClick={() => { void refetch(); void directory.refetch(); }}>
             Try again
           </button>
@@ -229,7 +230,7 @@ export default function MachinesPage() {
       <>
         {machines && machines.length > 0 ? (
           <p className="machines-stale" role="status">
-            Activity and sync are unavailable. {error instanceof Error ? error.message : ""}{" "}
+            Activity and sync are unavailable.{" "}
             <button type="button" className="machines-link-button" onClick={() => { void refetch(); void directory.refetch(); }}>
               Try again
             </button>
@@ -238,7 +239,8 @@ export default function MachinesPage() {
           <EmptyState
             variant="error"
             title="Machine activity and sync are unavailable right now"
-            description={error instanceof Error ? error.message : "Longhouse could not read this host's machine summaries."}
+            description="Longhouse couldn't read your machines' activity."
+            details={errorDetails(error)}
             action={
               <Button variant="secondary" onClick={() => { void refetch(); void directory.refetch(); }}>
                 Try again

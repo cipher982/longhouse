@@ -19,6 +19,7 @@ import { makeSessionStateFacts } from "@/shared/test/sessionState";
 import type { Runner } from "@/shared/api/index";
 import { TestRouter } from "@/shared/test/test-utils";
 import SessionsPage from "../SessionsPage";
+import { ApiError } from "@/shared/api/base";
 
 const hookMocks = vi.hoisted(() => ({
   useAgentSessions: vi.fn(),
@@ -402,6 +403,30 @@ describe("SessionsPage", () => {
     expect(screen.getByText(/Importing history/)).toHaveTextContent(
       "Importing history · sessions appear as they arrive",
     );
+  });
+
+  it("explains a failed timeline in plain words and keeps the server's code under Details", async () => {
+    const refetch = vi.fn();
+    mockUseAgentSessions.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new ApiError({
+        url: "/api/timeline/sessions",
+        status: 503,
+        body: { detail: { code: "shadow_fact_head_limit_exceeded", message: "Canonical session facts exceed the bounded timeline projection limit." } },
+      }),
+      refetch,
+    });
+    renderSessionsPage();
+
+    expect(screen.getByRole("heading", { name: "Couldn't load your sessions" })).toBeInTheDocument();
+    const details = screen.getByText("Details").closest("details");
+    expect(details).not.toHaveAttribute("open");
+    expect(details).toHaveTextContent("HTTP 503 · shadow_fact_head_limit_exceeded");
+    expect(screen.getByText(/Longhouse couldn't read your session list/)).not.toHaveTextContent("Canonical");
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalled();
   });
 
   it("does not show import progress without an active import", () => {

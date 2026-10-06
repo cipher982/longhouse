@@ -57,6 +57,7 @@ import { SyntaxHighlighter, oneDark } from "./syntaxHighlighter";
 import { OutboxRow, type OutboxEntry } from "./OutboxRow";
 import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./liteBodies";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
+import { errorDetails } from "@/shared/ui/errorDetails";
 
 type EventFilter = "all" | "messages" | "tools";
 
@@ -1721,12 +1722,9 @@ export function TimelinePane({
         ) : showScopedError ? (
           <EmptyState
             variant="error"
-            title="Timeline unavailable"
-            description={
-              error instanceof Error
-                ? error.message
-                : "The stitched timeline failed to load for this session."
-            }
+            title="Couldn't load this conversation"
+            description="Longhouse couldn't read this session's messages. Reload the page to try again."
+            details={errorDetails(error)}
           />
         ) : filteredItems.length === 0 && visibleOutbox.length === 0 ? (
           <EmptyState

@@ -986,7 +986,7 @@ test.describe("Session Detail Page", () => {
 
     // Should show error state
     await expect(page.locator(".ui-empty-state")).toBeVisible();
-    await expect(page.locator("text=Error loading session")).toBeVisible();
+    await expect(page.locator("text=Couldn't open this session")).toBeVisible();
 
     // Back button should be visible
     const backButton = page.locator('button:has-text("Back")');

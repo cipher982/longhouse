@@ -390,7 +390,6 @@ def test_canonical_detail_projects_one_owner_scoped_snapshot(monkeypatch):
 @pytest.mark.parametrize(
     ("snapshot_update", "expected_code"),
     [
-        ({"heads_truncated": True}, "shadow_fact_head_limit_exceeded"),
         ({"heads": None}, "invalid_catalog_snapshot"),
         ({"legacy_facts": None}, "invalid_catalog_snapshot"),
     ],
@@ -727,19 +726,90 @@ def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):
     assert captured["params"]["limit"] == 20
 
 
-def test_canonical_timeline_fails_closed_on_truncated_heads():
+def test_canonical_detail_projects_truncated_heads_as_no_state_evidence(monkeypatch):
+    session_id = str(uuid4())
     snapshot = {
-        "commit_seq": "31",
+        "found": True,
+        "commit_seq": "23",
         "observed_at": datetime.now(timezone.utc).isoformat(),
-        "rows": [{"facts": {}, "heads": [], "heads_truncated": True}],
-        "total": 1,
-        "has_real_sessions": True,
+        "legacy_facts": {"session": {"session_id": session_id}},
+        "heads": [{"family": "activity"}] * 3,
+        "heads_truncated": True,
     }
+    seen = {}
 
-    with pytest.raises(CatalogReadError) as raised:
-        project_catalog_timeline_snapshot(snapshot)
+    def project(facts, *, observed_at, canonical_heads, commit_seq):
+        seen["heads"] = canonical_heads
+        return SimpleNamespace(model_copy=lambda update: SimpleNamespace(**update))
 
-    assert raised.value.code == "shadow_fact_head_limit_exceeded"
+    monkeypatch.setattr(live_catalog_timeline, "shadow_session_state_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(live_catalog_timeline, "project_catalog_session_facts", project)
+
+    read_live_catalog_session(session_id, owner_id=3)
+
+    assert seen["heads"] == [], "a truncated head set is no evidence, never a partial one"
+
+
+def test_one_over_limit_session_degrades_only_its_own_card(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    ids = [uuid4(), uuid4()]
+    with LiveSession() as db:
+        for index, session_id in enumerate(ids):
+            thread_id = uuid4()
+            db.add(
+                LiveSessionCatalog(
+                    session_id=str(session_id),
+                    provider="codex",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    started_at=now - timedelta(minutes=index),
+                    last_activity_at=now - timedelta(minutes=index),
+                    user_messages=1,
+                    summary_title=f"Session {index}",
+                    primary_thread_id=str(thread_id),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveTimelineCard(
+                    session_id=str(session_id),
+                    provider="codex",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    started_at=now - timedelta(minutes=index),
+                    last_activity_at=now - timedelta(minutes=index),
+                    summary_title=f"Session {index}",
+                    first_user_message_preview=f"Session {index}",
+                    user_messages=1,
+                    archive_state="legacy_hot",
+                    derived_state="current",
+                    parser_revision="test",
+                    updated_at=now,
+                )
+            )
+            _add_live_kernel(db, session_id=session_id, thread_id=thread_id, now=now)
+        db.commit()
+        snapshot = _snapshot(db, _params())
+
+    overflowing = next(row for row in snapshot["rows"] if row["facts"]["catalog"]["session_id"] == str(ids[1]))
+    overflowing["heads_truncated"] = True
+    overflowing["heads"] = [{"family": "activity", "bogus": True}] * 300
+
+    response = project_catalog_timeline_snapshot(snapshot)
+
+    by_id = {card.head.id: card for card in response.sessions}
+    assert set(by_id) == {str(ids[0]), str(ids[1])}, "the healthy session must still be served"
+    degraded = by_id[str(ids[1])].head
+    assert degraded.timeline_card.status.label == "Activity unknown"
+    assert degraded.session_state.control.actions.send_input.state == "unavailable"
 
 
 def _add_live_kernel(

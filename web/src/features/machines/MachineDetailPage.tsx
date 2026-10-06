@@ -21,6 +21,7 @@ import {
 } from "./machinePresentation";
 import { useMachineDirectoryForSummary, useMachineSummaries } from "./useMachines";
 import "./MachinesPage.css";
+import { errorDetails } from "@/shared/ui/errorDetails";
 
 function shortDate(isoDate: string): string {
   // A calendar day from the server, not an instant: render it without a timezone shift.
@@ -187,7 +188,8 @@ export default function MachineDetailPage() {
         <EmptyState
           variant="error"
           title="Machine information is unavailable right now"
-          description={error instanceof Error ? error.message : "Longhouse could not read this host's machines."}
+          description="Longhouse couldn't read this machine's information."
+          details={errorDetails(error)}
           action={
             <Button variant="secondary" onClick={() => { void refetch(); void directory.refetch(); }}>
               Try again

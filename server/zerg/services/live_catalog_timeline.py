@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
@@ -53,6 +54,8 @@ from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.utils.time import normalize_utc
+
+logger = logging.getLogger(__name__)
 
 
 def _primary_thread_facts(catalog_facts: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -650,6 +653,27 @@ def list_live_catalog_timeline(
     return project_catalog_timeline_snapshot(snapshot)
 
 
+def _bounded_heads(row: Mapping[str, Any], *, surface: str) -> Any:
+    """Return a row's state fact heads, or no evidence when they were truncated.
+
+    A session whose state facts overflow the bounded read projects as if no
+    state evidence exists: it reads as unknown and offers no control, instead
+    of failing the whole page it shares with every other session.
+    """
+
+    if row.get("heads_truncated") is not True:
+        return row.get("heads")
+    facts = row.get("facts") if isinstance(row.get("facts"), Mapping) else row.get("legacy_facts")
+    session_facts = facts.get("session") if isinstance(facts, Mapping) else None
+    session_id = session_facts.get("session_id") if isinstance(session_facts, Mapping) else None
+    logger.warning(
+        "shadow_fact_head_limit_exceeded: projecting %s session %s without state evidence",
+        surface,
+        session_id or "<unknown>",
+    )
+    return []
+
+
 def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessionsListResponse:
     """Project a raw catalogd timeline snapshot without any storage access."""
 
@@ -659,12 +683,7 @@ def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessi
     cards: list[TimelineSessionCardResponse] = []
     commit_seq = int(snapshot.get("commit_seq") or 0)
     for row in snapshot.get("rows") or []:
-        canonical_heads = row.get("heads")
-        if row.get("heads_truncated") is True:
-            raise CatalogReadError(
-                "shadow_fact_head_limit_exceeded",
-                "Canonical session facts exceed the bounded timeline projection limit.",
-            )
+        canonical_heads = _bounded_heads(row, surface="timeline")
         projected = project_catalog_session_facts(
             row["facts"],
             observed_at=observed_at,
@@ -785,18 +804,13 @@ def _project_live_catalog_session_snapshot(
     if snapshot.get("found") is not True:
         return None, None, commit_seq
     observed_at = decode_catalog_datetime(snapshot.get("observed_at"))
-    if snapshot.get("heads_truncated") is True:
-        raise CatalogReadError(
-            "shadow_fact_head_limit_exceeded",
-            "Canonical session facts exceed the bounded detail projection limit.",
-        )
     facts = snapshot.get("legacy_facts")
     if not isinstance(observed_at, datetime) or not isinstance(facts, dict):
         raise CatalogReadError(
             "invalid_catalog_snapshot",
             "Catalog session snapshot is incomplete.",
         )
-    heads = snapshot.get("heads")
+    heads = _bounded_heads(snapshot, surface="detail")
     if not isinstance(heads, list):
         raise CatalogReadError(
             "invalid_catalog_snapshot",
