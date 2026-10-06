@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, Command};
 
-use crate::console_adapter::{claim_process_liveness, read_growth, stderr_tail, ClaimLiveness};
+use crate::console_adapter::{read_growth, stderr_tail, ClaimLiveness};
 use crate::console_lifecycle::{
     ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationState, PendingItem,
     TurnBinding, TurnOrigin,
