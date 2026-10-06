@@ -2272,6 +2272,15 @@ export function SessionChat({
   );
   const composerIdleClock = formatClockTime(composerLastTurnMs);
   const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
+  // Dock: the status line shows only while something runs or needs a
+  // decision; at rest the placeholder carries it ("Idle since 2:21 AM —
+  // message to continue").
+  const composerHeadVisible =
+    showComposerUnavailableState || composerState.tone !== "cool";
+  const dockPlaceholder =
+    composerState.tone === "cool"
+      ? `${composerState.text} — message to continue`
+      : composerPlaceholder || "Message";
 
   // Dock layout: this renders inside the composer frame itself, between
   // the head row and the input (see below) — one framed object, not a
@@ -2529,75 +2538,48 @@ export function SessionChat({
             />
           </>
         ) : null}
-        {isDock ? (
+        {isDock && composerHeadVisible ? (
           <div
             className="session-chat-composer__head"
             data-testid="session-chat-composer-head"
           >
-            {/* The runtime-evidence strip rides in this row, so the row must
-                exist even while the composer is unavailable (a pending
-                question, a disconnected control path); only the state label
-                yields to the unavailable notice below. */}
-            {showComposerUnavailableState ? null : (
+            {/* A status line only while something is happening; idle lives in
+                the input's placeholder. While the composer is unavailable the
+                runtime-evidence strip still needs a home, so it rides here. */}
+            {showComposerUnavailableState ? null : composerState.tone === "live" ? (
               <>
-                {composerState.tone === "live" ? (
-                  <>
-                    <StatusBulb state="working" />
-                    <span className="session-chat-composer__head-label">
-                      {composerWorkingLabel}
-                    </span>
-                    {composerElapsedSeconds != null ? (
-                      <Nixie
-                        value={formatElapsedClock(composerElapsedSeconds)}
-                        flickerOnChange={false}
-                      />
-                    ) : null}
-                  </>
-                ) : composerState.tone === "attention" ? (
-                  <>
-                    <StatusBulb state="waiting" />
-                    <span className="session-chat-composer__head-label">
-                      {composerState.text}
-                    </span>
-                  </>
-                ) : composerState.tone === "unknown" ? (
-                  <>
-                    <StatusBulb state="unknown" />
-                    <span className="session-chat-composer__head-label">
-                      {composerState.text}
-                    </span>
-                    {composerObservedClock ? (
-                      <span className="session-chat-composer__head-detail">
-                        last observed at {composerObservedClock}
-                      </span>
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    <StatusBulb state="idle" />
-                    <span className="session-chat-composer__head-label session-chat-composer__head-label--idle">
-                      Idle
-                    </span>
-                    {composerIdleClock ? (
-                      <span className="session-chat-composer__head-detail">
-                        the last turn ended at {composerIdleClock}
-                      </span>
-                    ) : null}
-                  </>
-                )}
-                {session.session_state.mode === "console" ? (
-                  <ModelPicker
-                    deviceId={session.device_id}
-                    provider={session.provider}
-                    value={selectedModel}
-                    onChange={handleSelectedModelChange}
-                    compact
-                    testId="session-model-select"
+                <StatusBulb state="working" />
+                <span className="session-chat-composer__head-label">
+                  {composerWorkingLabel}
+                </span>
+                {composerElapsedSeconds != null ? (
+                  <Nixie
+                    value={formatElapsedClock(composerElapsedSeconds)}
+                    flickerOnChange={false}
                   />
                 ) : null}
               </>
-            )}
-            {composerHeaderAccessory ? (
+            ) : composerState.tone === "attention" ? (
+              <>
+                <StatusBulb state="waiting" />
+                <span className="session-chat-composer__head-label">
+                  {composerState.text}
+                </span>
+              </>
+            ) : composerState.tone === "unknown" ? (
+              <>
+                <StatusBulb state="unknown" />
+                <span className="session-chat-composer__head-label">
+                  {composerState.text}
+                </span>
+                {composerObservedClock ? (
+                  <span className="session-chat-composer__head-detail">
+                    last observed at {composerObservedClock}
+                  </span>
+                ) : null}
+              </>
+            ) : null}
+            {showComposerUnavailableState && composerHeaderAccessory ? (
               <span className="session-chat-composer__head-accessory">
                 {composerHeaderAccessory}
               </span>
@@ -2730,8 +2712,12 @@ export function SessionChat({
                     </div>
                   ))
               : null}
-            {attachImagesEnabled ? (
+            {attachImagesEnabled &&
+            (!isDock ||
+              composerAttachments.attachments.length > 0 ||
+              composerAttachments.error) ? (
               <AttachmentTray
+                showAdd={!isDock}
                 attachments={composerAttachments.attachments}
                 onAddFiles={composerAttachments.addFiles}
                 onRemove={composerAttachments.removeAttachment}
@@ -2744,19 +2730,54 @@ export function SessionChat({
             ) : null}
             {isDock ? (
               <div className="session-chat-composer-row">
-                <textarea
-                  ref={composerTextareaRef}
-                  value={draft}
-                  onChange={(e) => {
-                    handleDraftChange(e.target.value);
-                    autoResizeDockTextarea(e.target);
-                  }}
-                  onKeyDown={handleKeyDown}
-                  placeholder={composerPlaceholder || "Message"}
-                  aria-label="Next instruction"
-                  disabled={isSubmitting}
-                  rows={1}
-                />
+                {attachImagesEnabled ? (
+                  <AttachmentTray
+                    showThumbs={false}
+                    attachments={composerAttachments.attachments}
+                    onAddFiles={composerAttachments.addFiles}
+                    onRemove={composerAttachments.removeAttachment}
+                    isCompressing={composerAttachments.isCompressing}
+                    disabled={isSubmitting}
+                    addDisabled={!attachmentInputEnabled}
+                  />
+                ) : null}
+                <div className="session-chat-composer-input">
+                  <textarea
+                    ref={composerTextareaRef}
+                    value={draft}
+                    onChange={(e) => {
+                      handleDraftChange(e.target.value);
+                      autoResizeDockTextarea(e.target);
+                    }}
+                    onKeyDown={handleKeyDown}
+                    placeholder={dockPlaceholder}
+                    aria-label="Next instruction"
+                    disabled={isSubmitting}
+                    rows={1}
+                  />
+                  {session.session_state.mode === "console" || composerHeaderAccessory ? (
+                    <div
+                      className="session-chat-composer-chips"
+                      data-testid="session-chat-composer-chips"
+                    >
+                      {session.session_state.mode === "console" ? (
+                        <ModelPicker
+                          deviceId={session.device_id}
+                          provider={session.provider}
+                          value={selectedModel}
+                          onChange={handleSelectedModelChange}
+                          compact
+                          testId="session-model-select"
+                        />
+                      ) : null}
+                      {composerHeaderAccessory ? (
+                        <span className="session-chat-composer__head-accessory">
+                          {composerHeaderAccessory}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
                 {isManagedLocal && sentConfirmation && !outboxInTranscript ? (
                   <span className="session-chat-sent-notice">Sent</span>
                 ) : null}

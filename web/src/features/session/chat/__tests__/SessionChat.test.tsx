@@ -3643,6 +3643,29 @@ describe("SessionChat composer status", () => {
     expect(composerHead()).not.toHaveTextContent("Working");
   });
 
+  it("folds idle into the placeholder and keeps the composer to one row", () => {
+    const lastResultAt = "2026-10-06T02:21:00Z";
+    renderSessionChat({
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          activity: "quiescent",
+          lastResultAt,
+          observedAt: lastResultAt,
+        }),
+      }),
+      composerHeaderAccessory: <span data-testid="evidence-accessory" />,
+    });
+
+    expect(screen.queryByTestId("session-chat-composer-head")).not.toBeInTheDocument();
+    const input = screen.getByLabelText("Next instruction");
+    expect(input).toHaveAttribute("placeholder", expect.stringMatching(/^Idle since .+ — message to continue$/));
+    // The evidence chip rides in the input's bottom edge, beside the field.
+    expect(screen.getByTestId("session-chat-composer-chips")).toContainElement(
+      screen.getByTestId("evidence-accessory"),
+    );
+  });
+
   it("demotes an expired work claim instead of repeating the cached label", () => {
     const now = Date.now();
     renderSessionChat(

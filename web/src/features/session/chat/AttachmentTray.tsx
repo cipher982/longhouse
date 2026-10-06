@@ -13,6 +13,10 @@ interface Props {
   onClearError?: () => void;
   disabled?: boolean;
   addDisabled?: boolean;
+  /** The dock splits the tray: the add button sits at the start of the
+   * one-row composer, thumbnails and errors above it. */
+  showAdd?: boolean;
+  showThumbs?: boolean;
 }
 
 export function AttachmentTray({
@@ -24,14 +28,19 @@ export function AttachmentTray({
   onClearError,
   disabled,
   addDisabled,
+  showAdd = true,
+  showThumbs = true,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const slotsLeft = COMPOSER_ATTACHMENT_LIMITS.maxAttachments - attachments.length;
-  const canAdd = !disabled && !addDisabled && slotsLeft > 0;
+  const canAdd = showAdd && !disabled && !addDisabled && slotsLeft > 0;
 
   return (
-    <div className="session-chat-attachment-tray" data-testid="attachment-tray">
-      {attachments.map((a) => (
+    <div
+      className={`session-chat-attachment-tray${showThumbs ? "" : " session-chat-attachment-tray--add-only"}`}
+      data-testid={showThumbs ? "attachment-tray" : "attachment-add"}
+    >
+      {(showThumbs ? attachments : []).map((a) => (
         <div key={a.clientId} className="session-chat-attachment-tray__item">
           <img src={a.previewUrl} alt={a.filename} className="session-chat-attachment-tray__thumb" />
           <button
@@ -67,7 +76,7 @@ export function AttachmentTray({
           e.target.value = "";
         }}
       />
-      {error ? (
+      {showThumbs && error ? (
         <div
           className="session-chat-attachment-tray__error"
           role="alert"
