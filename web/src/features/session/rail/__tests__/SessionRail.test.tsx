@@ -422,6 +422,18 @@ describe("rail rows follow the Timeline's tiers", () => {
     expect(rows[0].lamp).toBe("working");
   });
 
+  it("lists automation runs only when asked, for the switcher", () => {
+    const cards = [
+      card("a", {}, { activity: "quiescent" }),
+      card("canary", { launch_actor: "automation" }, { activity: "quiescent" }),
+    ];
+    expect(buildRailRows(cards, Date.now(), null).map((row) => row.id)).toEqual(["a"]);
+    expect(buildRailRows(cards, Date.now(), null, { includeAutomation: true }).map((row) => row.id).sort()).toEqual([
+      "a",
+      "canary",
+    ]);
+  });
+
   it("keeps the open session listed with its own words even when the Timeline hides it", () => {
     const rows = buildRailRows(
       [card("a", {}, { activity: "quiescent" })],

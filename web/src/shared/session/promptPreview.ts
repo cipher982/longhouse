@@ -67,10 +67,14 @@ export function cleanPromptPreview(value: string | null | undefined): string {
   }
 
   // Nothing typed outside the wrappers: the wrapped text is the prompt.
-  const inner = tidy([...pasted, ...attached].join(" "));
-  if (inner) {
-    const marker = pasted.length > 0 ? "[pasted]" : "[attachment]";
-    return `${text.includes(IMAGE) ? "[image] " : ""}${marker} ${inner}`;
+  const parts = [
+    ...pasted.map((inner) => ["[pasted]", tidy(inner)]),
+    ...attached.map((inner) => ["[attachment]", tidy(inner)]),
+  ]
+    .filter(([, inner]) => inner)
+    .map(([marker, inner]) => `${marker} ${inner}`);
+  if (parts.length > 0) {
+    return `${text.includes(IMAGE) ? "[image] " : ""}${parts.join(" ")}`;
   }
   return text.includes(IMAGE) ? "[image]" : "";
 }

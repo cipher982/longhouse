@@ -124,8 +124,11 @@ export function buildRailRows(
   cards: readonly TimelineSessionCard[],
   nowMs: number,
   active: RailActiveSession | null,
+  { includeAutomation = false }: { includeAutomation?: boolean } = {},
 ): RailRow[] {
-  const people = cards.filter((card) => !isAutomationSession(card.head, getProjectLabel(card.head)));
+  const people = includeAutomation
+    ? [...cards]
+    : cards.filter((card) => !isAutomationSession(card.head, getProjectLabel(card.head)));
   const layout = buildInboxLayout(people, undefined, nowMs);
   const recent = layout.history
     .flatMap((group) => group.sessions)
@@ -200,6 +203,11 @@ function SessionRail({
 
   const rows = useMemo(
     () => buildRailRows(data?.sessions ?? [], nowMs, activeSession),
+    [data?.sessions, nowMs, activeSession],
+  );
+  // ⌘K is a search: it finds every listed session, automation runs included.
+  const switcherRows = useMemo(
+    () => buildRailRows(data?.sessions ?? [], nowMs, activeSession, { includeAutomation: true }),
     [data?.sessions, nowMs, activeSession],
   );
   // Most sessions run on one machine; name the machine only on the rows that
@@ -350,7 +358,7 @@ function SessionRail({
       {switcherOpen
         ? createPortal(
             <SessionSwitcher
-              rows={rows}
+              rows={switcherRows}
               activeSessionId={activeSessionId}
               shortcutLabel={switcherLabel}
               onClose={() => setSwitcherOpen(false)}

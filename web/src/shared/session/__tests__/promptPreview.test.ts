@@ -33,6 +33,12 @@ describe("cleanPromptPreview", () => {
     expect(cleanPromptPreview('""" ╭────────────╮ │ week one │')).toBe("week one");
   });
 
+  it("labels each wrapper's own text when a prompt is only wrappers", () => {
+    expect(cleanPromptPreview('<pasted_content id="a">notes</pasted_content id="a"><attachment>spec.md</attachment>')).toBe(
+      "[pasted] notes [attachment] spec.md",
+    );
+  });
+
   it("leaves an ordinary prompt alone apart from whitespace", () => {
     expect(cleanPromptPreview("  On my web app,\n when I click Machines  ")).toBe("On my web app, when I click Machines");
     expect(cleanPromptPreview(null)).toBe("");
