@@ -1316,7 +1316,9 @@ qa-ui-baseline-update: ## Rewrite visual baselines for app, public, and mobile p
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=visual-baseline --update-snapshots=all
-	@# Copied under artifacts/ so an isolated (crunch) run brings them back; commit them from there.
+	@# Copied under artifacts/ because an isolated run returns only artifacts. On crunch:
+	@#   scripts/ops/crunch.sh run 'make qa-ui-baseline-update && cp -r artifacts/test-isolation "$$CRUNCH_OUT"/'
+	@# then copy .../files/1/ui-baselines/* into e2e/tests/ and commit.
 	@mkdir -p artifacts/ui-baselines && cd e2e/tests && tar -cf - ui_baseline_app.spec.ts-snapshots ui_baseline_public.spec.ts-snapshots mobile/ui_baseline_mobile.spec.ts-snapshots | tar -xf - -C ../../artifacts/ui-baselines
 
 qa-ui-baseline-mobile: ## Visual baseline check for mobile app pages (Linux renders: run on crunch)

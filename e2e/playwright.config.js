@@ -9,6 +9,7 @@ import {
   safeChildEnvironment,
   stripAmbientSecrets,
 } from "./test-runtime.js";
+const VISUAL_BASELINE_PATH = "{testDir}/{testFilePath}-snapshots/{arg}-chromium-linux{ext}";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const suppliedIsolatedRuntime = process.env.LONGHOUSE_TEST_ISOLATED === "1";
@@ -104,11 +105,12 @@ const config = {
   },
 
   // Visual baselines are Linux renders made on the crunch VM (see the
-  // qa-ui-baseline targets). Both screenshot APIs share one honest name.
-  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-chromium-linux{ext}",
+  // qa-ui-baseline targets). Both screenshot APIs share one honest name; only
+  // the single-worker visual-baseline project writes them.
+  snapshotPathTemplate: VISUAL_BASELINE_PATH,
   expect: {
     toHaveScreenshot: {
-      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-chromium-linux{ext}",
+      pathTemplate: VISUAL_BASELINE_PATH,
     },
   },
 
