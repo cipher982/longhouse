@@ -1897,6 +1897,83 @@ def test_shadow_state_read_bounds_combined_rpc_payload(daemon_paths):
     assert len(frame) < HEADER_BYTES + MAX_PAYLOAD_BYTES
 
 
+def test_shadow_state_reads_only_registry_matched_lifecycle_heads(daemon_paths):
+    # A coordinating session leaves one delegation_lifecycle head per subagent it
+    # ever started. On david010 (2026-10-06) 318 of them made every timeline
+    # read fail with shadow_fact_head_limit_exceeded although the registry named
+    # no subagent at all. Only heads for subagents the registry names can
+    # refine it, so only those are read and none count against the state bound.
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = "77777777-7777-4777-8777-777777777777"
+    run_id = "run-lifecycle"
+
+    def head(family: str, subject_key: str, value: dict, seq: int) -> dict:
+        return {
+            "family": family,
+            "subject_key": subject_key,
+            "source": "claude_hook",
+            "source_epoch": run_id,
+            "session_id": session_id,
+            "ordering_mode": "sequenced",
+            "source_seq": seq,
+            "evidence_hash": f"{seq:064x}",
+            "observed_at": now,
+            "valid_until": now + timedelta(minutes=30),
+            "value_json": json.dumps(value),
+            "updated_commit_seq": seq,
+            "received_at": now,
+        }
+
+    registry = {
+        "run_id": run_id,
+        "items": [
+            {"id": "monitor-1", "kind": "monitor", "status": "running"},
+            {"id": "agent-kept", "kind": "subagent", "status": "running"},
+        ],
+    }
+    rows = [head("delegation", f"run:{run_id}", registry, 1)]
+    rows += [
+        head("delegation_lifecycle", f"run:{run_id}:agent:agent-{index}", {"item": {"id": f"agent-{index}"}}, 10 + index)
+        for index in range(300)
+    ]
+    rows.append(head("delegation_lifecycle", f"run:{run_id}:agent:agent-kept", {"item": {"id": "agent-kept"}}, 5))
+    with engine.begin() as connection:
+        connection.execute(LiveUser.__table__.insert().values(id=7, email="owner@example.com", role="ADMIN", is_active=True))
+        _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
+        connection.execute(FactHead.__table__.insert(), rows)
+
+    store = CatalogStore(engine)
+    single = store.read_shadow_session_state(session_id=session_id, owner_id=7)
+    many = store.read_shadow_sessions_state(session_ids=[session_id], owner_id=7)["sessions"][0]
+    listed = store.list_session_timeline(
+        project=None,
+        provider=None,
+        environment=None,
+        include_test=True,
+        hide_autonomous=False,
+        include_automation=True,
+        device_id=None,
+        days_back=7,
+        limit=20,
+        offset=0,
+        owner_id=7,
+        include_state_heads=True,
+    )
+    engine.dispose()
+
+    [row] = [row for row in listed["rows"] if row["facts"]["catalog"]["session_id"] == session_id]
+    assert row["heads_truncated"] is False
+    assert [h["subject_key"] for h in row["heads"] if h["family"] == "delegation_lifecycle"] == [f"run:{run_id}:agent:agent-kept"]
+    for result in (single, many):
+        assert result["heads_truncated"] is False
+        lifecycle = [h["subject_key"] for h in result["heads"] if h["family"] == "delegation_lifecycle"]
+        assert lifecycle == [f"run:{run_id}:agent:agent-kept"]
+        assert result["head_count"] == 2
+
+
 @pytest.mark.asyncio
 async def test_shadow_state_health_summarizes_bounded_recent_outcomes(daemon_paths, monkeypatch):
     database_path, socket_path = daemon_paths

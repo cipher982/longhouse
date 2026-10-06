@@ -440,6 +440,52 @@ def read_bounded_sessions_fact_heads(
     return commit_seq, grouped, truncated
 
 
+def read_registry_lifecycle_heads(
+    connection: Connection,
+    *,
+    heads_by_session: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Read the delegation_lifecycle heads that can refine a delegation registry.
+
+    A lifecycle edge only updates a subagent the registry already names
+    (``existing_exact_link_only``), keyed ``run:<run>:agent:<id>`` under the
+    registry's source and run. Every SubagentStart leaves one such head and
+    nothing retires it, so a long coordinating session accumulates hundreds
+    that can no longer match anything. Reading by the registry's own members
+    bounds this by the registry's item limit instead of by session age.
+    """
+
+    keys: set[tuple[str, str, str, str]] = set()
+    for session_id, heads in heads_by_session.items():
+        for head in heads:
+            if head.get("family") != "delegation":
+                continue
+            try:
+                value = json.loads(head["value_json"])
+            except (TypeError, ValueError):
+                continue
+            run_id = str(head.get("source_epoch") or "")
+            if not run_id:
+                continue
+            for item in [*(value.get("items") or []), *(value.get("recent_items") or [])]:
+                if isinstance(item, dict) and item.get("kind") == "subagent" and isinstance(item.get("id"), str) and item["id"]:
+                    keys.add((session_id, f"run:{run_id}:agent:{item['id']}", str(head["source"]), run_id))
+    grouped: dict[str, list[dict[str, Any]]] = {session_id: [] for session_id in heads_by_session}
+    if not keys:
+        return grouped
+    rows = connection.execute(
+        select(FactHead.__table__)
+        .where(
+            FactHead.family == "delegation_lifecycle",
+            tuple_(FactHead.session_id, FactHead.subject_key, FactHead.source, FactHead.source_epoch).in_(sorted(keys)),
+        )
+        .order_by(FactHead.session_id.asc(), FactHead.updated_commit_seq.desc(), FactHead.subject_key.asc())
+    ).mappings()
+    for row in rows:
+        grouped.setdefault(str(row["session_id"]), []).append(dict(row))
+    return grouped
+
+
 def _validate_fact(fact: ReducerFact) -> ReducerFact:
     if not fact.family or len(fact.family) > 32:
         raise ValueError("fact family is missing or too long")
