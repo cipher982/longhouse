@@ -1348,6 +1348,38 @@ describe("TimelinePane outbox", () => {
     expect(screen.queryByTestId("session-outbox-row")).not.toBeInTheDocument();
   });
 
+  it("renders Longhouse invocation-close receipts as background-work notices", () => {
+    render(
+      <TimelinePane
+        items={[]}
+        totalEntries={0}
+        loadedEntries={0}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+        outbox={[
+          {
+            key: "close:invocation-1",
+            text: "Stopped 2 background tasks: watch the branch; run the tests",
+            state: "sent",
+            origin: "longhouse",
+          },
+        ]}
+      />,
+    );
+
+    const row = screen.getByTestId("session-provider-notification");
+    expect(row).toHaveAttribute("data-origin", "longhouse");
+    expect(row).toHaveTextContent("Stopped 2 background tasks: watch the branch; run the tests");
+    expect(row).not.toHaveClass("tl-msg--user");
+    expect(screen.queryByTestId("session-outbox-row")).not.toBeInTheDocument();
+  });
+
   it("puts a delivered send above the live reply it is waiting on", () => {
     // F6: the provider's live preview streams before the send's durable echo
     // is ingested; the ask must not render under its own answer.

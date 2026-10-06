@@ -69,6 +69,7 @@ class LiveInputReceiptSnapshot:
     intent: str
     status: str
     client_request_id: str | None
+    origin: str = "user"
     payload_digest: str | None = None
     archive_session_input_id: int | None = None
     durable_event_id: str | None = None
@@ -105,7 +106,7 @@ def _snapshot(row: LiveSessionInputReceipt) -> LiveInputReceiptSnapshot:
         intent=str(row.intent or "auto"),
         status=str(row.status or "created"),
         client_request_id=row.client_request_id,
-        payload_digest=row.payload_digest,
+        origin=str(getattr(row, "origin", None) or "user"),
         archive_session_input_id=(int(row.archive_session_input_id) if row.archive_session_input_id is not None else None),
         durable_event_id=getattr(row, "durable_event_id", None),
         delivery_request_id=row.delivery_request_id,
@@ -128,6 +129,7 @@ def _snapshot_from_rpc(value: dict[str, Any]) -> LiveInputReceiptSnapshot:
         intent=str(value.get("intent") or "auto"),
         status=str(value.get("status") or "created"),
         client_request_id=value.get("client_request_id"),
+        origin=str(value.get("origin") or "user"),
         payload_digest=value.get("payload_digest"),
         archive_session_input_id=value.get("archive_session_input_id"),
         durable_event_id=str(value["durable_event_id"]) if value.get("durable_event_id") is not None else None,
@@ -210,6 +212,7 @@ def list_recent_live_input_receipts(db: Session, *, session_id: UUID | str) -> l
                 )
                 | ((LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERED) & (LiveSessionInputReceipt.updated_at >= delivered_cutoff))
                 | (LiveSessionInputReceipt.id.in_(nonterminal_console_receipt_ids))
+                | (LiveSessionInputReceipt.origin == "longhouse")
             ),
         )
         .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())

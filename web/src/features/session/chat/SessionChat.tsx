@@ -1922,12 +1922,17 @@ export function SessionChat({
   const canInterruptTurn =
     isManagedLocal &&
     session.session_state.control.actions.interrupt.state === "available";
+  const parkedBackgroundWork =
+    session.session_state.mode === "console" &&
+    session.session_state.run?.lifecycle === "ended" &&
+    session.session_state.delegation?.state === "pending" &&
+    (session.session_state.delegation.count ?? 0) > 0;
+  const interruptActionLabel = parkedBackgroundWork ? "Stop background work" : "Stop";
   const attachmentInputEnabled = attachImagesEnabled && !isSendLocked;
-  // Inline interrupt is only offered while a turn is actually running — an
-  // idle session has nothing to stop. When the stall-recovery card is showing
-  // it already exposes the same action, so we hide the composer copy to avoid
-  // two buttons doing the identical thing.
-  const showInlineInterrupt = canInterruptTurn && isSendLocked && !isStalled;
+  // A parked Console invocation has no active turn, but its provider-owned
+  // work is still live and the served interrupt action closes that invocation.
+  const showInlineInterrupt =
+    canInterruptTurn && !isStalled && (isSendLocked || parkedBackgroundWork);
   // When steer is available, the primary action is steer. Queue-next becomes
   // a secondary escape hatch. If only queue is available, primary = queue.
   const primaryIntent: "auto" | "queue" | "steer" = !isSendLocked
@@ -2198,8 +2203,13 @@ export function SessionChat({
         mimeType: attachment.mime_type,
         byteSize: attachment.byte_size,
       }));
-      const origin = row.turn?.origin === "wake" ? "wake" : "user";
-      if (origin === "wake") {
+      const origin =
+        row.origin === "wake" || row.origin === "longhouse"
+          ? row.origin
+          : row.turn?.origin === "wake"
+            ? "wake"
+            : "user";
+      if (origin !== "user") {
         inFlight.push({
           key,
           text: row.text,
@@ -2997,14 +3007,14 @@ export function SessionChat({
                     variant="danger"
                     size="sm"
                     className="session-chat-btn session-chat-btn--stop"
-                    aria-label={isInterrupting ? "Stopping" : "Stop"}
-                    title="Interrupt the active turn"
+                    aria-label={isInterrupting ? "Stopping" : interruptActionLabel}
+                    title={parkedBackgroundWork ? "Stop background work owned by this provider" : "Interrupt the active turn"}
                     onClick={() => void handleInterrupt()}
                     disabled={isInterrupting}
                     data-testid="session-chat-interrupt"
                   >
                     <span className="session-chat-action-label">
-                      {isInterrupting ? "Stopping" : "Stop"}
+                      {isInterrupting ? "Stopping" : interruptActionLabel}
                     </span>
                     <svg
                       className="session-chat-action-icon"
@@ -3113,7 +3123,7 @@ export function SessionChat({
                       disabled={isInterrupting}
                       data-testid="session-chat-interrupt"
                     >
-                      {isInterrupting ? "Stopping" : "Stop"}
+                      {isInterrupting ? "Stopping" : interruptActionLabel}
                     </Button>
                   ) : null}
                   {canSteerNow && canQueueNow ? (

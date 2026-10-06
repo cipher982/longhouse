@@ -1134,6 +1134,20 @@ struct LonghouseAPI: Sendable {
         }
     }
 
+    func interruptConsoleTurn(id: String) async throws {
+        var request = URLRequest(
+            url: baseURL.appendingPathComponent("/api/sessions/\(id)/turns/current/interrupt")
+        )
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: response.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: response.statusCode)
+        }
+    }
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent {
         var request = URLRequest(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/resume-intent")

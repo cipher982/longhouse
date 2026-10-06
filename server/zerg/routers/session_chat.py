@@ -402,7 +402,7 @@ class QueuedInputSummary(BaseModel):
     live_input_id: str | None = None
     client_request_id: str | None = None
     durable_event_id: str | None = None
-    text: str
+    origin: str = "user"
     intent: InputIntent
     status: InputStatus
     disposition: InputDisposition = Field(
@@ -1414,6 +1414,7 @@ def _live_queued_summary(receipt: LiveInputReceiptSnapshot) -> QueuedInputSummar
     return QueuedInputSummary(
         id=receipt.archive_session_input_id,
         live_input_id=receipt.id,
+        origin=receipt.origin,
         client_request_id=receipt.client_request_id,
         durable_event_id=receipt.durable_event_id,
         text=receipt.text,

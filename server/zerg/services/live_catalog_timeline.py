@@ -190,6 +190,14 @@ def _console_control_facts(
             capability=f"{session.provider}.turn_interrupt",
         )
     )
+    invocation_close_adapter_available = bool(
+        machine_online
+        and registry.supports(
+            owner_id=owner_id,
+            device_id=device_id,
+            capability=f"{session.provider}.invocation_close",
+        )
+    )
     return project_console_control(
         closed=session.closed_at is not None,
         execution_target_available=bool(device_id and cwd),
@@ -197,6 +205,7 @@ def _console_control_facts(
         machine_online=machine_online,
         adapter_available=adapter_available,
         interrupt_adapter_available=interrupt_adapter_available,
+        invocation_close_adapter_available=invocation_close_adapter_available,
     ).as_catalog_facts()
 
 

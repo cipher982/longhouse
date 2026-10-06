@@ -503,8 +503,9 @@ struct SessionView: View {
         } else {
             localInputs = hostUpdateInputs
         }
-        let wakeInputs = (viewModel.detail?.inputReceipts ?? []).compactMap { receipt -> SubmittedInput? in
-            guard receipt.origin == "wake",
+        let systemReceiptInputs = (viewModel.detail?.inputReceipts ?? []).compactMap { receipt -> SubmittedInput? in
+            guard let origin = receipt.origin,
+                  origin == "wake" || origin == "longhouse",
                   let clientRequestId = receipt.clientRequestId,
                   let text = receipt.text,
                   !text.isEmpty else { return nil }
@@ -512,7 +513,7 @@ struct SessionView: View {
                 id: clientRequestId,
                 clientRequestId: clientRequestId,
                 text: text,
-                origin: "wake",
+                origin: origin,
                 intent: receipt.intent,
                 phase: .sent,
                 serverInputId: nil,
@@ -521,7 +522,7 @@ struct SessionView: View {
                 createdAt: receipt.createdAt.flatMap(LonghouseDateParser.parse) ?? .distantPast
             )
         }
-        return localInputs + wakeInputs
+        return localInputs + systemReceiptInputs
     }
 
     private var transcript: some View {
@@ -660,6 +661,8 @@ struct SessionView: View {
             queuedElsewhereCount: viewModel.queuedElsewhereCount,
             lastSendOutcome: viewModel.lastSendOutcome,
             isSending: viewModel.isSending,
+            isStopping: viewModel.isStoppingConsoleWork,
+            stopErrorMessage: viewModel.stopErrorMessage,
             attachmentIsEmpty: attachmentStore.isEmpty,
             attachmentIsProcessing: attachmentStore.isProcessing,
             isLoadingPickerItems: isLoadingPickerItems,
@@ -691,6 +694,9 @@ struct SessionView: View {
                 )
             },
             onSend: { intent in await send(intent: intent) },
+            onStop: {
+                await viewModel.stopConsoleWork(sessionId: sessionId, appState: appState)
+            },
             actionMenu: { attachmentInputEnabled in
                 SessionComposerActionMenu(
                     detail: detail,

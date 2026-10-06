@@ -614,6 +614,67 @@ describe("SessionChat", () => {
     await waitFor(() => expect(consoleInterruptCalls).toBe(1));
   });
 
+  it("shows Stop background work for a parked Console invocation", async () => {
+    const user = userEvent.setup();
+    let closeCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (
+        String(path).endsWith("/turns/current/interrupt") &&
+        init?.method === "POST"
+      ) {
+        closeCalls += 1;
+        return Promise.resolve({
+          interrupt_dispatched: true,
+          session_id: "sess-1",
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+    const now = "2026-10-06T12:00:00Z";
+    renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        provider: "claude",
+        session_state: {
+          ...makeSessionStateFacts({
+            activity: "quiescent",
+            access: "live_control",
+            mode: "console",
+            startTurnAvailable: true,
+            sendAvailable: true,
+            interruptAvailable: true,
+          }),
+          run: {
+            id: "parked-run",
+            lifecycle: "ended",
+            started_at: now,
+            ended_at: now,
+          },
+          delegation: {
+            state: "pending",
+            count: 2,
+            kinds: { monitor: 2 },
+            items: [],
+            observed_at: now,
+            valid_until: "2026-10-06T12:30:00Z",
+          },
+        },
+        capabilities: {
+          control_label: "console",
+          can_interrupt_active_turn: false,
+        } as SessionChatTarget["capabilities"],
+      }),
+    });
+
+    const stop = await screen.findByRole("button", { name: "Stop background work" });
+    expect(stop).toBeEnabled();
+    await user.click(stop);
+    await waitFor(() => expect(closeCalls).toBe(1));
+  });
+
   it("does not mention Stop when a locked session is not interruptible", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

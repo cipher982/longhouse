@@ -38,6 +38,17 @@ enum SessionComposerControlState {
         }
     }
 
+    static func stopActionLabel(for detail: SessionDetail) -> String? {
+        guard detail.stateFacts.mode == "console",
+              detail.stateFacts.interrupt.isAvailable else { return nil }
+        if detail.stateFacts.runLifecycle == "ended",
+           detail.stateFacts.delegation?.state == "pending",
+           (detail.stateFacts.delegation?.count ?? 0) > 0 {
+            return "Stop background work"
+        }
+        return "Stop"
+    }
+
     /// The queue is shared by every sender into a session. The phone shows a
     /// bubble only for what it sent, so a message another sender parked is named
     /// rather than counted silently ("two queued" beside one bubble read as a bug).
@@ -155,6 +166,8 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     let queuedElsewhereCount: Int
     let lastSendOutcome: SessionInputOutcome?
     let isSending: Bool
+    let isStopping: Bool
+    let stopErrorMessage: String?
     let attachmentIsEmpty: Bool
     let attachmentIsProcessing: Bool
     let isLoadingPickerItems: Bool
@@ -170,6 +183,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         _ message: String?
     ) async -> Bool
     let onSend: (_ intent: String?) async -> Void
+    let onStop: () async -> Void
     let actionMenu: (_ attachmentInputEnabled: Bool) -> ActionMenu
     let attachmentTray: AttachmentTray
 
@@ -184,6 +198,8 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         queuedElsewhereCount: Int = 0,
         lastSendOutcome: SessionInputOutcome? = nil,
         isSending: Bool = false,
+        isStopping: Bool = false,
+        stopErrorMessage: String? = nil,
         attachmentIsEmpty: Bool = true,
         attachmentIsProcessing: Bool = false,
         isLoadingPickerItems: Bool = false,
@@ -199,6 +215,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
             _ message: String?
         ) async -> Bool,
         onSend: @escaping (_ intent: String?) async -> Void,
+        onStop: @escaping () async -> Void = {},
         @ViewBuilder actionMenu: @escaping (_ attachmentInputEnabled: Bool) -> ActionMenu,
         @ViewBuilder attachmentTray: () -> AttachmentTray
     ) {
@@ -211,6 +228,8 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         self.queuedInputCount = queuedInputCount
         self.queuedElsewhereCount = queuedElsewhereCount
         self.lastSendOutcome = lastSendOutcome
+        self.isStopping = isStopping
+        self.stopErrorMessage = stopErrorMessage
         self.isSending = isSending
         self.attachmentIsEmpty = attachmentIsEmpty
         self.attachmentIsProcessing = attachmentIsProcessing
@@ -222,6 +241,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         self.pauseErrorMessage = pauseErrorMessage
         self.onPauseRespond = onPauseRespond
         self.onSend = onSend
+        self.onStop = onStop
         self.actionMenu = actionMenu
         self.attachmentTray = attachmentTray()
     }
@@ -231,6 +251,26 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         VStack(alignment: .leading, spacing: 6) {
             if detail.stateFacts.mode == "console" {
                 SessionModelChip(model: model, onTap: onModelTap)
+            }
+            if let stopLabel = SessionComposerControlState.stopActionLabel(for: detail) {
+                HStack {
+                    Button {
+                        Task { await onStop() }
+                    } label: {
+                        Label(isStopping ? "Stopping" : stopLabel, systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isStopping)
+                    .accessibilityLabel(isStopping ? "Stopping" : stopLabel)
+                    .accessibilityIdentifier("session-chat-stop")
+                    Spacer(minLength: 0)
+                }
+            }
+            if let stopErrorMessage {
+                Text(stopErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(Ember.ember)
             }
 
             if failedInputCount > 0 {

@@ -1165,6 +1165,125 @@ def _enqueue_console_wake_turn(orm: Session, event: Any, *, observed_at: datetim
     )
 
 
+def _invocation_close_notice(reason: str, stopped: list[Mapping[str, Any]]) -> str:
+    descriptions = [
+        str(item.get("description") or item.get("kind") or item.get("id") or "background work").strip()[:512] for item in stopped
+    ]
+    count = len(stopped)
+    task_noun = "background task" if count == 1 else "background tasks"
+    summary = "; ".join(descriptions)
+    if reason == "machine_agent_restart":
+        return f"Longhouse restarted; {count} {task_noun} stopped: {summary}"
+    return f"Stopped {count} {task_noun}: {summary}"
+
+
+def _record_console_invocation_closed_notice(orm: Session, event: Any, *, observed_at: datetime) -> None:
+    payload = event.payload if isinstance(event.payload, Mapping) else {}
+    invocation_id = str(payload.get("invocation_id") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    raw_stopped = payload.get("stopped")
+    session_id = str(event.session_id or "")
+    if (
+        not invocation_id
+        or len(invocation_id) > 249
+        or reason not in {"user_stop", "machine_agent_restart"}
+        or not isinstance(raw_stopped, list)
+        or not raw_stopped
+        or len(raw_stopped) > 256
+        or any(not isinstance(item, Mapping) for item in raw_stopped)
+        or str(event.dedupe_key or "") != f"close:{invocation_id}"
+        or event.run_id is None
+        or event.thread_id is None
+        or event.device_id is None
+    ):
+        return
+    stopped = [item for item in raw_stopped if isinstance(item, Mapping)]
+    if len(stopped) != len(raw_stopped):
+        return
+    session = orm.get(LiveSessionCatalog, session_id) if session_id else None
+    if (
+        session is None
+        or str(session.origin_kind or "").strip().lower() != "console"
+        or session.closed_at is not None
+        or str(session.primary_thread_id or "") != str(event.thread_id)
+    ):
+        return
+    thread = orm.get(LiveSessionThread, str(event.thread_id))
+    provider = str(event.provider or "").strip().lower()
+    if (
+        thread is None
+        or str(thread.session_id) != session_id
+        or str(thread.device_id or "") != str(event.device_id)
+        or provider not in {"claude", "codex", "omp"}
+        or provider != str(session.provider or "").strip().lower()
+    ):
+        return
+    owner_key = CatalogStore._resolve_session_owner_id(orm.connection(), session_id=session_id)
+    try:
+        owner_id = int(owner_key) if owner_key is not None else None
+    except (TypeError, ValueError):
+        owner_id = None
+    if owner_id is None or not CatalogStore._session_explicitly_belongs_to_owner(
+        orm.connection(),
+        session_id=session_id,
+        owner_id=owner_id,
+    ):
+        return
+
+    client_request_id = f"close:{invocation_id}"
+    existing = (
+        orm.query(LiveSessionInputReceipt.id)
+        .filter(
+            LiveSessionInputReceipt.owner_id == owner_id,
+            LiveSessionInputReceipt.session_id == session_id,
+            LiveSessionInputReceipt.client_request_id == client_request_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        return
+
+    run_id = str(event.run_id)
+    latest_run = (
+        orm.query(LiveSessionRun)
+        .filter(LiveSessionRun.thread_id == str(event.thread_id))
+        .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
+        .first()
+    )
+    if latest_run is None or str(latest_run.id) != run_id or latest_run.ended_at is None:
+        return
+    turn = (
+        orm.query(LiveConsoleTurn)
+        .filter(
+            LiveConsoleTurn.session_id == session_id,
+            LiveConsoleTurn.thread_id == str(event.thread_id),
+            LiveConsoleTurn.run_id == run_id,
+        )
+        .one_or_none()
+    )
+    if turn is None or turn.state not in CONSOLE_TURN_TERMINAL_STATES:
+        return
+
+    occurred_at = _as_aware_utc(event.occurred_at) or observed_at
+    orm.add(
+        LiveSessionInputReceipt(
+            id=str(uuid4()),
+            owner_id=owner_id,
+            session_id=session_id,
+            thread_id=str(event.thread_id),
+            provider=provider,
+            device_id=str(event.device_id),
+            origin="longhouse",
+            client_request_id=client_request_id,
+            intent="auto",
+            status="delivered",
+            text=_invocation_close_notice(reason, stopped),
+            created_at=occurred_at,
+            updated_at=occurred_at,
+        )
+    )
+
+
 def _settle_console_turn(
     orm: Session,
     turn: LiveConsoleTurn,
@@ -1299,6 +1418,9 @@ def _settle_console_turns_from_runtime(orm: Session, events: list[Any], *, obser
             wake_turn = _enqueue_console_wake_turn(orm, event, observed_at=observed_at)
             if wake_turn is not None:
                 dispatch.append(wake_turn)
+            continue
+        if event.kind == "invocation_closed":
+            _record_console_invocation_closed_notice(orm, event, observed_at=observed_at)
             continue
         outcome = CONSOLE_TURN_OUTCOME_BY_RUN_TERMINAL.get(str((event.payload or {}).get("terminal_state") or ""))
         if (
@@ -1493,7 +1615,7 @@ def _input_receipt_dto(
     origin: str | None = None,
 ) -> dict[str, Any]:
     turn_identity = None
-    origin = str(origin or getattr(turn, "origin", None) or "user")
+    origin = str(origin or getattr(turn, "origin", None) or getattr(receipt, "origin", None) or "user")
     if turn is not None:
         turn_identity = {
             "turn_id": str(turn.id),
@@ -5838,6 +5960,60 @@ class CatalogStore:
                     .first()
                 )
                 if turn is None:
+                    observed_at = datetime.now(UTC)
+                    snapshots = _assemble_session_facts(
+                        connection,
+                        session_ids=[session_id],
+                        observed_at=observed_at,
+                        compact=True,
+                    )
+                    if snapshots:
+                        snapshot = snapshots[0]
+                        commit_seq, heads = read_session_fact_heads(connection, session_id=session_id)
+                        from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
+
+                        projected = project_shadow_session_state_facts(
+                            session_id=session_id,
+                            commit_seq=commit_seq,
+                            catalog_facts=snapshot,
+                            heads=heads,
+                            now=observed_at,
+                        )
+                        primary_thread = snapshot.get("primary_thread") or {}
+                        latest_run = snapshot.get("latest_run") or {}
+                        run_id = str(latest_run.get("id") or "")
+                        latest_turn = (
+                            orm.query(LiveConsoleTurn)
+                            .filter(
+                                LiveConsoleTurn.session_id == session_id,
+                                LiveConsoleTurn.thread_id == str(primary_thread.get("id") or ""),
+                                LiveConsoleTurn.run_id == run_id,
+                            )
+                            .order_by(LiveConsoleTurn.created_at.desc(), LiveConsoleTurn.id.desc())
+                            .first()
+                        )
+                        if (
+                            projected.mode == "console"
+                            and projected.disposition.state == "open"
+                            and projected.run is not None
+                            and projected.run.lifecycle == "ended"
+                            and projected.delegation.state == "pending"
+                            and projected.delegation.count > 0
+                            and latest_run.get("ended_at") is not None
+                            and latest_turn is not None
+                            and latest_turn.state in CONSOLE_TURN_TERMINAL_STATES
+                        ):
+                            return {
+                                "found": True,
+                                "turn": None,
+                                "parked_invocation": {
+                                    "turn_id": str(latest_turn.id),
+                                    "run_id": run_id,
+                                    "thread_id": str(primary_thread["id"]),
+                                    "provider": str((snapshot.get("catalog") or {}).get("provider") or ""),
+                                    "device_id": str(primary_thread.get("device_id") or ""),
+                                },
+                            }
                     return {"found": True, "turn": None}
                 receipt = orm.get(LiveSessionInputReceipt, turn.receipt_id)
                 thread = orm.get(LiveSessionThread, turn.thread_id)

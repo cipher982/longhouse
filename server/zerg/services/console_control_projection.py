@@ -43,6 +43,7 @@ class ConsoleControlProjection:
     can_start_turn: bool
     start_turn_blocked_by: ConsoleStartBlocker | None
     can_interrupt_active_turn: bool
+    invocation_close_adapter_available: bool = False
 
     @property
     def connection(self) -> ConsoleConnection:
@@ -72,6 +73,7 @@ class ConsoleControlProjection:
             "machine_online": self.machine_online,
             "adapter_available": self.adapter_available,
             "interrupt_adapter_available": self.interrupt_adapter_available,
+            "invocation_close_adapter_available": self.invocation_close_adapter_available,
             "can_start_turn": self.can_start_turn,
             "start_turn_blocked_by": self.start_turn_blocked_by,
             "can_interrupt_active_turn": self.can_interrupt_active_turn,
@@ -96,6 +98,7 @@ class ConsoleControlProjection:
             can_start_turn=bool(value.get("can_start_turn")),
             start_turn_blocked_by=blocked,  # type: ignore[arg-type]
             can_interrupt_active_turn=bool(value.get("can_interrupt_active_turn")),
+            invocation_close_adapter_available=bool(value.get("invocation_close_adapter_available")),
         )
 
 
@@ -107,6 +110,7 @@ def project_console_control(
     machine_online: bool,
     adapter_available: bool,
     interrupt_adapter_available: bool,
+    invocation_close_adapter_available: bool = False,
 ) -> ConsoleControlProjection:
     """Project Console reachability and independent actions without I/O."""
 
@@ -126,6 +130,7 @@ def project_console_control(
         can_start_turn=blocked_by is None,
         start_turn_blocked_by=blocked_by,
         can_interrupt_active_turn=(normalized_state in _EXECUTION_STATES and machine_online and interrupt_adapter_available),
+        invocation_close_adapter_available=invocation_close_adapter_available,
     )
 
 

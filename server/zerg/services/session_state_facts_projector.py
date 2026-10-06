@@ -252,6 +252,8 @@ def project_served_session_state_facts(
     control = _served_control(
         shadow.control,
         mode=served_mode,
+        run=shadow.run,
+        delegation=shadow.delegation,
         catalog_facts=catalog_facts,
         supported_operations=set(supported_operations),
         resume=_resume_action_availability(
@@ -350,6 +352,8 @@ def _served_control(
     catalog_facts: Mapping[str, Any],
     supported_operations: set[str],
     resume: SessionActionAvailability,
+    run: SessionRunFacts | None,
+    delegation: SessionDelegationFacts,
 ) -> SessionControlFacts:
     def availability(available: bool, reason: str) -> SessionActionAvailability:
         if available:
@@ -363,6 +367,21 @@ def _served_control(
     )
     console_control = _mapping(catalog_facts.get("console_control"))
     console_projection = ConsoleControlProjection.from_catalog_facts(console_control)
+    parked_invocation_pending = (
+        mode == "console"
+        and console_projection.turn_state == "idle"
+        and run is not None
+        and run.id is not None
+        and run.lifecycle == "ended"
+        and delegation.state == "pending"
+        and delegation.count > 0
+    )
+    interrupt_available = console_projection.can_interrupt_active_turn or (
+        parked_invocation_pending and console_projection.machine_online and console_projection.invocation_close_adapter_available
+    )
+    interrupt_unavailable_reason = console_projection.interrupt_unavailable_reason
+    if parked_invocation_pending and console_projection.machine_online and not console_projection.invocation_close_adapter_available:
+        interrupt_unavailable_reason = "unsupported"
     start_turn = availability(
         mode == "console" and console_projection.can_start_turn,
         console_projection.start_turn_blocked_by or ("not_console" if mode != "console" else "start_turn_unavailable"),
@@ -381,10 +400,7 @@ def _served_control(
             actions=SessionControlActions(
                 start_turn=start_turn,
                 send_input=availability(False, "use_start_turn"),
-                interrupt=availability(
-                    console_projection.can_interrupt_active_turn,
-                    console_projection.interrupt_unavailable_reason,
-                ),
+                interrupt=availability(interrupt_available, interrupt_unavailable_reason),
                 terminate=availability(False, "unsupported"),
                 reattach=availability(False, "not_helm"),
                 resume=resume,

@@ -49,6 +49,7 @@ RuntimeEventKind = Literal[
     "phase_signal",
     "delegation_signal",
     "wake_signal",
+    "invocation_closed",
     "progress_signal",
     "terminal_signal",
     "binding_signal",
@@ -64,6 +65,7 @@ RuntimeEventApplyOutcome = Literal[
     "protected_terminal",
     "stored_live_overlay",
 ]
+_STATELESS_RUNTIME_EVENT_KINDS = frozenset({"delegation_signal", "wake_signal", "invocation_closed"})
 
 # Derived from the managed phase contract, which is also what generates the
 # engine's copy. These windows previously lived here, in the engine, and in local
@@ -790,7 +792,7 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
     # lease vanish from the active list when the Live Store is configured.
     touch_live_sessions_from_runtime_events(
         db,
-        [e for e in events if e.kind in KNOWN_RUNTIME_EVENT_KINDS and e.kind not in {"delegation_signal", "wake_signal"}],
+        [e for e in events if e.kind in KNOWN_RUNTIME_EVENT_KINDS and e.kind not in _STATELESS_RUNTIME_EVENT_KINDS],
     )
     return RuntimeEventBatchResult(
         accepted=len(events),
@@ -1146,8 +1148,8 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
             event.session_id,
         )
         return "ignored"
-    if event.kind in {"delegation_signal", "wake_signal"}:
-        # Registry and wake evidence are reduced independently of parent
+    if event.kind in _STATELESS_RUNTIME_EVENT_KINDS:
+        # Registry, wake, and close evidence are reduced independently of parent
         # activity. They must not reopen or refresh a completed run.
         return "stored_live_overlay"
 

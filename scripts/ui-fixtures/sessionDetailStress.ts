@@ -1550,6 +1550,91 @@ export function buildSessionBackgroundNoticesFixture(): SessionDetailFixture {
   return fixture;
 }
 
+
+/** Parked Console state with the persistent Longhouse close receipt at tail. */
+export function buildSessionParkedCloseFixture(): SessionDetailFixture {
+  const fixture = buildSessionDetailStressFixture();
+  const now = SESSION_DETAIL_STRESS_NOW;
+  fixture.session.provider = "claude";
+  fixture.session.status = "idle";
+  fixture.session.presence_state = "idle";
+  fixture.session.active_tool = null;
+  fixture.session.display_phase = "Idle";
+  fixture.session.runtime_display = {
+    ...(fixture.session.runtime_display as JsonObject),
+    state: "idle",
+    tone: "idle",
+    headline: "Waiting on 2 background tasks",
+    detail: "Waiting on 2 background tasks",
+    phase_label: "Idle",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    is_idle: true,
+    is_managed_local_truth: true,
+    has_signal: true,
+    activity_recency: "fresh",
+    lifecycle: "open",
+  };
+  fixture.session.session_state = makeSessionState({
+    mode: "console",
+    run: {
+      id: "parked-run-close-fixture",
+      lifecycle: "ended",
+      started_at: "2026-04-15T15:15:00Z",
+      ended_at: now,
+    },
+    working_set: "open",
+    activity: {
+      state: "quiescent",
+      raw_kind: "idle",
+      tool: null,
+      source: "claude_console",
+      observed_at: now,
+      valid_until: null,
+    },
+    delegation: {
+      state: "pending",
+      count: 2,
+      kinds: { monitor: 1, shell: 1 },
+      items: [
+        { id: "watch-branch", kind: "monitor", status: "running", description: "watch the branch" },
+        { id: "integration-tests", kind: "shell", status: "running", description: "run the integration tests" },
+      ],
+      recent_items: [],
+      source: "claude_console",
+      observed_at: now,
+      valid_until: "2026-04-15T16:42:00Z",
+    },
+    control: {
+      ownership: "owned",
+      connection: "connected",
+      actions: {
+        start_turn: { state: "available" },
+        send_input: { state: "unavailable", reason: "use_start_turn" },
+        interrupt: { state: "available" },
+        terminate: { state: "unavailable", reason: "unsupported" },
+        reattach: { state: "unavailable", reason: "not_helm" },
+        resume: { state: "unavailable", reason: "not_helm" },
+        branch: { state: "unavailable", reason: "not_supported" },
+      },
+    },
+    presentation: {
+      primary: { key: "delegated_work", label: "Background · 2 tasks", tone: "idle", observed_at: now },
+      access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
+      transcript: null,
+    },
+  });
+  fixture.session.capabilities = {
+    ...(fixture.session.capabilities as JsonObject),
+    control_label: "console",
+    can_start_turn: true,
+    can_interrupt_active_turn: false,
+  };
+  fixture.turns = { turns: [], total: 0 };
+  return fixture;
+}
+
 /**
  * The shape most sessions actually have when someone opens them: a Claude
  * Helm session, idle, about thirty messages over five asks, whose newest

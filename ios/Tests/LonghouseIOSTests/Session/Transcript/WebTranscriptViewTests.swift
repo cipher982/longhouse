@@ -143,7 +143,7 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertNil(rows.first?.role)
     }
 
-    func testWakeReceiptAndDurableEchoRenderAsProviderNotifications() {
+    func testWakeAndLonghouseCloseReceiptsRenderAsProviderNotifications() {
         let wakeText = "Background task finished: the branch is ready"
         let receiptRows = WebTranscriptView.payloadItems(
             timelineItems: [],
@@ -160,6 +160,21 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertNil(receiptRows.first?.role)
         XCTAssertEqual(receiptRows.first?.body, wakeText)
 
+        let closeText = "Stopped 2 background tasks: watch the branch; run the tests"
+        let closeRows = WebTranscriptView.payloadItems(
+            timelineItems: [],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: closeText,
+                    clientRequestId: "close:invocation-1",
+                    serverInputId: nil,
+                    origin: "longhouse"
+                ),
+            ]
+        )
+        XCTAssertEqual(closeRows.map(\.kind), ["providerNotification"])
+        XCTAssertNil(closeRows.first?.role)
+        XCTAssertEqual(closeRows.first?.body, closeText)
         let wakeEvent = makeUserEvent(
             id: 44,
             content: "provider's wake input",

@@ -24,6 +24,7 @@ from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 
 CONSOLE_TURN_START_COMMAND = "session.turn.start"
 CONSOLE_TURN_INTERRUPT_COMMAND = "session.turn.interrupt"
+CONSOLE_INVOCATION_CLOSE_COMMAND = "session.invocation.close"
 CONSOLE_TURN_STEER_COMMAND = "session.turn.steer"
 CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS = 10
 # A starting turn is durable across a lost control reply, but it cannot remain
@@ -158,7 +159,45 @@ async def interrupt_console_turn(
     if result.get("found") is not True:
         raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
     turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
-    if turn is None or not turn.get("run_id"):
+    if turn is None:
+        parked = result.get("parked_invocation") if isinstance(result.get("parked_invocation"), dict) else None
+        if parked is None or not parked.get("run_id") or not parked.get("thread_id") or not parked.get("turn_id"):
+            raise ConsoleTurnUnavailable("no_active_turn", "Session has no active Console turn")
+        provider = str(parked.get("provider") or "").strip()
+        device_id = str(parked.get("device_id") or "").strip()
+        run_id = UUID(str(parked["run_id"]))
+        capability = f"{provider}.invocation_close"
+        control = registry or get_machine_control_channel_registry()
+        if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+            raise ConsoleTurnUnavailable("no_active_turn", "Session has no active Console turn")
+        response = await control.send_command(
+            owner_id=owner_id,
+            device_id=device_id,
+            session_id=str(session_id),
+            command_type=CONSOLE_INVOCATION_CLOSE_COMMAND,
+            payload={
+                "provider": provider,
+                "run_id": str(run_id),
+                "thread_id": str(parked["thread_id"]),
+                "reason": "user_stop",
+            },
+            command_id=f"{run_id}:close",
+            timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS,
+        )
+        message = dict(response.message or {})
+        error = None
+        if not response.transport_ok:
+            error = str(response.error or "Console invocation close outcome is unknown")
+        elif message.get("ok") is not True:
+            detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+            error = str(detail.get("message") or response.error or "Console invocation close failed")
+        return ConsoleTurnInterrupt(
+            turn_id=UUID(str(parked["turn_id"])),
+            run_id=run_id,
+            dispatched=error is None,
+            error=error,
+        )
+    if not turn.get("run_id"):
         raise ConsoleTurnUnavailable("no_active_turn", "Session has no active Console turn")
 
     provider = str(turn.get("provider") or "").strip()

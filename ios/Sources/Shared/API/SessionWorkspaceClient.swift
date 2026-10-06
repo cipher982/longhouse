@@ -56,6 +56,7 @@ protocol SessionWorkspaceClient: Sendable {
         message: String?
     ) async throws -> PauseRequestResponse
     func markSessionRead(id: String, readThrough: String) async throws
+    func interruptConsoleTurn(id: String) async throws
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent
     func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
@@ -134,6 +135,10 @@ extension SessionWorkspaceClient {
     func postClientDiagnostics(_ payload: ClientDiagnosticsPayload) async {}
 
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent {
+        throw LonghouseAPIError.requestFailed
+    }
+
+    func interruptConsoleTurn(id: String) async throws {
         throw LonghouseAPIError.requestFailed
     }
 

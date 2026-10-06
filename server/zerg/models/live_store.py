@@ -784,7 +784,7 @@ class LiveMachineControlOperation(LiveBase):
 
 
 class LiveSessionInputReceipt(LiveBase):
-    """Hot-lane user text input receipt before archive projection is required."""
+    """Hot-lane receipt for user input and Longhouse-authored session notices."""
 
     __tablename__ = "live_session_input_receipts"
 
@@ -794,6 +794,7 @@ class LiveSessionInputReceipt(LiveBase):
     thread_id = Column(String(36), nullable=True, index=True)
     provider = Column(String(64), nullable=False, index=True)
     device_id = Column(String(255), nullable=True, index=True)
+    origin = Column(String(16), nullable=True)
     client_request_id = Column(String(255), nullable=True)
     intent = Column(String(32), nullable=False)
     status = Column(String(32), nullable=False, index=True)

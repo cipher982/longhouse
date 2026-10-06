@@ -44,6 +44,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-ended   # the ended-run notice, resume and branch, no modal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-background-notices   # collapsed and expanded PNGs
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-parked-close
  *   bunx tsx scripts/ui/ui-capture.ts devices --scene=devices-revoke
  *   bunx tsx scripts/ui/ui-capture.ts landing --scene=provider-certification --viewport=desktop-tall
  *   bunx tsx scripts/ui/ui-capture.ts machines
@@ -59,6 +60,7 @@ import { ensureFrontend, REPO_ROOT } from "./frontend";
 import {
   buildSessionBackgroundNoticesFixture,
   buildSessionDetailStressFixture,
+  buildSessionParkedCloseFixture,
   buildSessionProseIdleFixture,
   buildRailSessionsFixture,
   buildSessionQuestionFixture,
@@ -138,8 +140,8 @@ const SCENES = [
   "session-resume",
   "session-ended",
   "session-stale-observation",
-  "session-tones",
   "session-background-notices",
+  "session-parked-close",
   "landing",
   "landing-search",
   "landing-session",
@@ -194,6 +196,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-ended",
   "session-stale-observation",
   "session-tones",
+  "session-parked-close",
   "session-background-notices",
 ];
 
@@ -367,6 +370,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-ended" ||
     scene === "session-stale-observation" ||
     scene === "session-tones" ||
+    scene === "session-parked-close" ||
     scene === "session-background-notices" ||
     scene === FIRST_RUN_SCENE ||
     scene === FIRST_RUN_MACHINE_SCENE ||
@@ -533,6 +537,8 @@ export async function installSceneMocks(
             ? buildSessionToneFixture(tone)
             : scene === "session-background-notices"
               ? buildSessionBackgroundNoticesFixture()
+              : scene === "session-parked-close"
+                ? buildSessionParkedCloseFixture()
               : buildSessionDetailStressFixture();
     const sessionBasePath = `/api/timeline/sessions/${fixture.session.id}`;
 
@@ -704,6 +710,30 @@ export async function installSceneMocks(
       }
       if (
         pathname === `/api/sessions/${fixture.session.id}/inputs` &&
+        scene === "session-parked-close"
+      ) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 9002,
+              live_input_id: "close-invocation-fixture",
+              client_request_id: "close:invocation-fixture",
+              origin: "longhouse",
+              text: "Stopped 2 background tasks: watch the branch; run the integration tests",
+              intent: "auto",
+              status: "delivered",
+              delivery_status: "delivered",
+              turn: null,
+              created_at: "2026-04-15T16:10:50Z",
+            },
+          ]),
+        });
+        return;
+      }
+      if (
+        pathname === `/api/sessions/${fixture.session.id}/inputs` &&
         scene === "session-wake-origin"
       ) {
         await route.fulfill({
@@ -788,6 +818,22 @@ export async function installSceneMocks(
         return;
       }
 
+      if (
+        scene === "session-parked-close" &&
+        pathname === "/api/timeline/machines/device-cinder/providers/claude/models"
+      ) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            device_id: "cinder",
+            provider: "claude",
+            days_back: 90,
+            models: [{ model: "claude-sonnet-4-5", last_used_at: "2026-04-15T14:12:00Z" }],
+          }),
+        });
+        return;
+      }
       await sealOrFallback(route, scene, pathname);
     });
     return;
@@ -1357,6 +1403,14 @@ async function captureBundle(
     );
     await wakeRow.waitFor({ state: "visible", timeout: 10_000 });
     await wakeRow.scrollIntoViewIfNeeded();
+  }
+  if (scene === "session-parked-close") {
+    const closeRow = page.locator(
+      '[data-testid="session-provider-notification"][data-origin="longhouse"]',
+    );
+    await closeRow.waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop background work" }).waitFor({ state: "visible", timeout: 10_000 });
+    await closeRow.scrollIntoViewIfNeeded();
   }
 
   if (scene === DEVICES_REVOKE_SCENE) {

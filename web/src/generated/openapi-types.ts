@@ -6266,8 +6266,11 @@ export interface components {
             client_request_id?: string | null;
             /** Durable Event Id */
             durable_event_id?: string | null;
-            /** Text */
-            text: string;
+            /**
+             * Origin
+             * @default user
+             */
+            origin: string;
             /**
              * Intent
              * @enum {string}

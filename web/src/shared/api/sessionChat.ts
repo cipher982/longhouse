@@ -35,6 +35,7 @@ export interface QueuedInputSummary {
   live_input_id?: string | null;
   client_request_id?: string | null;
   durable_event_id?: string | null;
+  origin?: "user" | "wake" | "longhouse" | null;
   text: string;
   intent: SessionInputIntent;
   status: SessionInputStatus;

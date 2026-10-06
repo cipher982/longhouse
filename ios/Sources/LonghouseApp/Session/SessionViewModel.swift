@@ -84,6 +84,8 @@ final class SessionViewModel: ObservableObject {
     /// payload again after a frame acknowledgement failure.
     @Published private(set) var transcriptRenderRetryRevision: UInt64 = 0
     @Published var isSending = false
+    @Published private(set) var isStoppingConsoleWork = false
+    @Published var stopErrorMessage: String?
     @Published var isRespondingToPauseRequest = false
     /// Frames received on the workspace stream, for the dock's activity strip.
     let activity = ActivityPulseStore()
@@ -311,6 +313,8 @@ final class SessionViewModel: ObservableObject {
             isTranscriptFrameReady = false
             transcriptRendererErrorMessage = nil
             transcriptRenderRetryRevision = 0
+            isStoppingConsoleWork = false
+            stopErrorMessage = nil
             detail = nil
             detailWasLoadedFromTail = false
             detailWasLoadedFromPrimary = false
@@ -853,6 +857,25 @@ final class SessionViewModel: ObservableObject {
                     self.loadSubagents(api: api, sessionId: sessionId)
                 }
             }
+        }
+    }
+
+    func stopConsoleWork(sessionId: String, appState: AppState) async {
+        guard !isStoppingConsoleWork else { return }
+        guard let api = apiFactory(appState.serverURL) else {
+            stopErrorMessage = "The Longhouse server URL is invalid."
+            return
+        }
+        isStoppingConsoleWork = true
+        stopErrorMessage = nil
+        defer { isStoppingConsoleWork = false }
+        do {
+            try await api.interruptConsoleTurn(id: sessionId)
+            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+        } catch let LonghouseAPIError.structured(_, _, message) {
+            stopErrorMessage = message.isEmpty ? "Could not stop background work." : message
+        } catch {
+            stopErrorMessage = "Could not stop background work. Refresh and try again."
         }
     }
 
