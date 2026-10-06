@@ -37,6 +37,8 @@ trap cleanup EXIT
 
 [[ -f "$STATE" ]] || die "no simlab run; start one with simlab.py up --seed-corpus <dir>"
 read -r url token < <(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s.get("client_url") or s["base_url"], s["token"])' "$STATE")
+# The project is generated, not checked in; a fresh bench mirror has none yet.
+(cd "$ROOT_DIR" && make ios-project >/dev/null)
 DEVICE="${SIM_UDID:-$(python3 "$ROOT_DIR/scripts/ci/select_ios_simulator.py" "$PROJECT" LonghouseChatStress | sed -n 's/.*id=//p')}"
 [[ -n "$DEVICE" ]] || die "no simulator"
 if ! xcrun simctl list devices booted | grep -q "$DEVICE"; then
@@ -53,7 +55,6 @@ xcrun simctl spawn "$DEVICE" log config --subsystem ai.longhouse.ios --mode leve
 mkdir -p "$OUT_DIR"
 BASE="$OUT_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
 started=$SECONDS
-(cd "$ROOT_DIR" && make ios-project >/dev/null)
 # Optimized like the tour: unoptimized Swift on a simulator spends seconds in
 # runtime metadata lookups the shipping app never pays.
 if ! xcodebuild -project "$PROJECT" -scheme LonghouseChatStress -configuration Debug \
