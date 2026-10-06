@@ -57,7 +57,22 @@ impl ConsoleInput for ConsoleRpcInput {
 /// Abort the provider's active response. Closing the FIFO is deliberately
 /// separate: it prevents future prompts but must not cancel a running turn.
 pub async fn abort(fifo: &Path) -> Result<()> {
-    write_command(fifo, &json!({"type": "abort"})).await
+    match write_command(fifo, &json!({"type": "abort"})).await {
+        Ok(()) => Ok(()),
+        Err(error) if fifo_provider_is_gone(&error) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn fifo_provider_is_gone(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.raw_os_error(),
+                Some(libc::ENOENT) | Some(libc::ENXIO) | Some(libc::EPIPE)
+            )
+        })
+    })
 }
 
 pub fn create_fifo(path: &Path) -> Result<()> {
@@ -469,6 +484,16 @@ mod tests {
         let count = reader.read(&mut bytes).unwrap();
         let command: Value = serde_json::from_slice(&bytes[..count - 1]).unwrap();
         assert_eq!(command, json!({"type": "abort"}));
+    }
+    #[tokio::test]
+    async fn abort_tolerates_missing_or_readerless_fifo() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing.fifo");
+        abort(&missing).await.unwrap();
+
+        let readerless = temp.path().join("readerless.fifo");
+        create_fifo(&readerless).unwrap();
+        abort(&readerless).await.unwrap();
     }
 
     #[test]

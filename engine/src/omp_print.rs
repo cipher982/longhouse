@@ -412,6 +412,16 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .write_input(&config.prompt, &config.image_paths)
         .await
     {
+        if let Some(queued) = invocation.take_queued_turn() {
+            settle_queued_omp_user_turn(
+                queued,
+                &sink,
+                format!("queued OMP user turn was not started: {error}"),
+                None,
+                0,
+            )
+            .await;
+        }
         invocation.take_active_turn();
         let _ = registry.record_invocation_state(&config.run_id, "closed", 0);
         invocation.close_input().await.ok();
@@ -802,6 +812,16 @@ async fn adopt_parked_turn(
         .await
     {
         let pending_count = invocation.pending_count();
+        if let Some(queued) = invocation.take_queued_turn() {
+            settle_queued_omp_user_turn(
+                queued,
+                &sink,
+                format!("queued OMP user turn was not started: {error}"),
+                None,
+                pending_count,
+            )
+            .await;
+        }
         invocation.take_active_turn();
         sink.post_terminal_with_lifecycle(
             "run_failed",
@@ -853,6 +873,16 @@ async fn bind_wake_turn(
             .await
         {
             let pending_count = invocation.pending_count();
+            if let Some(queued) = invocation.take_queued_turn() {
+                settle_queued_omp_user_turn(
+                    queued,
+                    &sink,
+                    format!("queued OMP user turn was not started: {error}"),
+                    None,
+                    pending_count,
+                )
+                .await;
+            }
             invocation.take_active_turn();
             sink.post_terminal_with_lifecycle(
                 "run_failed",
@@ -1184,17 +1214,23 @@ pub async fn interrupt_omp_print_turn(
         .as_deref()
         .context("OMP Console turn has no stdout path")?;
     let fifo = Path::new(stdout_path).with_file_name(crate::console_rpc::RPC_STDIN);
-    crate::console_rpc::abort(&fifo).await?;
+    let abort_result = crate::console_rpc::abort(&fifo).await;
     let result = unsafe { libc::killpg(pgid, libc::SIGINT) };
-    if result != 0 {
+    let signal_error = if result != 0 {
         let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(error).context("interrupting OMP Console process group");
-        }
-    }
+        (error.raw_os_error() != Some(libc::ESRCH)).then_some(error)
+    } else {
+        None
+    };
     tokio::time::sleep(Duration::from_millis(750)).await;
     if !cleanup_live_claim(run_id).await {
         anyhow::bail!("OMP Console process-group cleanup was not verified");
+    }
+    if let Err(error) = abort_result {
+        return Err(error).context("aborting the OMP Console response");
+    }
+    if let Some(error) = signal_error {
+        return Err(error).context("interrupting OMP Console process group");
     }
     Ok(())
 }
@@ -1522,6 +1558,23 @@ fn record_invocation_claim_state(invocation: &ConsoleInvocation) {
         );
     }
 }
+async fn settle_queued_omp_user_turn(
+    binding: TurnBinding,
+    sink: &OmpPrintSink,
+    reason: String,
+    exit_code: Option<i32>,
+    pending_count: usize,
+) {
+    sink.for_binding(&binding)
+        .post_terminal_with_lifecycle(
+            "run_failed",
+            exit_code,
+            Some(reason),
+            Some("closed"),
+            Some(pending_count),
+        )
+        .await;
+}
 
 async fn remove_async_work_placeholder(
     invocation: &ConsoleInvocation,
@@ -1668,6 +1721,7 @@ async fn fail_omp_invocation(
     exit_code: Option<i32>,
 ) {
     let pending_count = invocation.pending_count();
+    let queued = invocation.take_queued_turn();
     let binding = invocation.take_active_turn();
     let latest_binding = invocation.latest_turn();
     let run_id = binding
@@ -1680,22 +1734,32 @@ async fn fail_omp_invocation(
         .unwrap_or_else(|| sink.clone());
     let _ = invocation.close_input().await;
     let cleanup_verified = cleanup_owned_child(child, &run_id).await;
-    if let Some(binding) = binding {
-        let mut reason = error;
-        if !cleanup_verified {
-            reason.push_str("; owned process-group cleanup was not verified");
-        }
+    let mut reason = error;
+    if !cleanup_verified {
+        reason.push_str("; owned process-group cleanup was not verified");
+    }
+    if binding.is_some() {
         terminal_sink
             .post_terminal_with_lifecycle(
                 "run_failed",
                 exit_code,
-                Some(reason),
+                Some(reason.clone()),
                 Some("closed"),
                 Some(pending_count),
             )
             .await;
     } else if let Ok(claims) = crate::turn_claims::default_registry() {
         let _ = claims.record_invocation_state(&run_id, "closed", pending_count);
+    }
+    if let Some(queued) = queued {
+        settle_queued_omp_user_turn(
+            queued,
+            sink,
+            format!("queued OMP user turn was not started because the invocation failed: {reason}"),
+            exit_code,
+            pending_count,
+        )
+        .await;
     }
     invocation.process_exited();
     crate::console_lifecycle::unregister(&invocation.launch_id);
@@ -3533,6 +3597,8 @@ for line in sys.stdin:
             append_native(first_message)
             out({"type":"message_end","message":first_message})
             out({"type":"agent_end","isTerminal":True,"willContinue":False})
+            if prompt == "scenario=queued-failure":
+                sys.exit(7)
             user_message(prompt)
             assistant_message(prompt)
             out({"type":"session_settled"})
@@ -4258,6 +4324,83 @@ for line in sys.stdin:
         let transcript = std::fs::read_to_string(&first.session_file).unwrap();
         assert!(transcript.contains("scenario=responding"));
         assert!(transcript.contains("second queued prompt"));
+        wait_for_process_group_exit(first.process_group_id.unwrap()).await;
+        restore_test_longhouse_home(previous_home);
+    }
+    #[tokio::test]
+    async fn queued_user_turn_fails_if_invocation_exits_before_its_response() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = set_test_longhouse_home(temp.path().join("longhouse"));
+        let fake_omp = temp.path().join("omp");
+        write_fake_omp(&fake_omp);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let first_run_id = Uuid::new_v4().to_string();
+        let queued_run_id = Uuid::new_v4().to_string();
+        let claims = crate::turn_claims::default_registry().unwrap();
+        claims
+            .claim(&first_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let first = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &first_run_id,
+            "scenario=responding",
+            None,
+            None,
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        let active_marker = PathBuf::from(format!("{}.active", first.session_file));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !active_marker.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fake OMP did not start its in-flight response"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        claims
+            .claim(&queued_run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let queued = start_omp_print_turn(lifecycle_config(
+            temp.path(),
+            &fake_omp,
+            &session_id,
+            &thread_id,
+            &queued_run_id,
+            "scenario=queued-failure",
+            first.provider_thread_id.clone(),
+            Some(PathBuf::from(&first.session_file)),
+            "user",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(queued.pid, first.pid);
+
+        let queued_claim = wait_for_terminal(&queued_run_id).await;
+        assert_eq!(
+            queued_claim.result.as_ref().unwrap()["terminal_state"],
+            "run_failed"
+        );
+        assert!(
+            queued_claim
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("queued OMP user turn was not started"),
+            "{queued_claim:?}"
+        );
+        assert_eq!(queued_claim.invocation_state.as_deref(), Some("closed"));
         wait_for_process_group_exit(first.process_group_id.unwrap()).await;
         restore_test_longhouse_home(previous_home);
     }

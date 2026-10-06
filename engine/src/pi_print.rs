@@ -451,13 +451,20 @@ pub async fn interrupt_pi_print_turn(
         .as_deref()
         .context("Pi Console turn has no stdout path")?;
     let fifo = Path::new(stdout_path).with_file_name(crate::console_rpc::RPC_STDIN);
-    crate::console_rpc::abort(&fifo).await?;
+    let abort_result = crate::console_rpc::abort(&fifo).await;
     let result = unsafe { libc::killpg(pgid, libc::SIGINT) };
-    if result != 0 {
+    let signal_error = if result != 0 {
         let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(error).context("interrupting Pi Console process group");
-        }
+        (error.raw_os_error() != Some(libc::ESRCH)).then_some(error)
+    } else {
+        None
+    };
+    cleanup_process_group(Some(pgid)).await;
+    if let Err(error) = abort_result {
+        return Err(error).context("aborting the Pi Console response");
+    }
+    if let Some(error) = signal_error {
+        return Err(error).context("interrupting Pi Console process group");
     }
     Ok(())
 }

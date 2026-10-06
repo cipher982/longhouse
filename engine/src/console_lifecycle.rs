@@ -631,12 +631,18 @@ impl ConsoleInvocation {
     pub fn take_active_turn(&self) -> Option<TurnBinding> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.phase = InvocationState::Closed;
-        state.queued_turn = None;
         state.pending_wake_id = None;
         state.buffered_events.clear();
         state.deferred_idle = None;
         state.input_pending = false;
         state.current_turn.take()
+    }
+    pub fn take_queued_turn(&self) -> Option<TurnBinding> {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .queued_turn
+            .take()
     }
 
     pub fn process_exited(&self) {
