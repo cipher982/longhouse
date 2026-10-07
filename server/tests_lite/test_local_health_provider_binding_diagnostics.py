@@ -72,8 +72,9 @@ def test_local_health_reader_cutoff_matches_sqlalchemy_storage(tmp_path):
         # Inside the 7-day window (2 days old) -> must be counted.
         _seed_missing(db, provider_session_id="ses_recent", session_id=uuid4(), observed_at=NOW - timedelta(days=2))
         # On the cutoff date, one hour inside the window. Stored as
-        # 'YYYY-MM-DD HH:MM:SS'; a lexical compare against the ISO cutoff
-        # ('YYYY-MM-DDTHH:MM:SS+00:00') sorts ' ' before 'T' and drops it.
+        # 'YYYY-MM-DD HH:MM:SS.ffffff'; a lexical compare against the ISO
+        # cutoff ('YYYY-MM-DDTHH:MM:SS+00:00') sorts ' ' before 'T' and would
+        # drop it.
         _seed_missing(
             db,
             provider_session_id="ses_boundary",
