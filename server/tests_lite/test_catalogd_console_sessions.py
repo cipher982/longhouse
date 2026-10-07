@@ -1394,7 +1394,7 @@ async def test_console_wake_signal_is_idempotent_fifo_and_dispatches_wake_payloa
     assert control.command["payload"]["origin"] == "wake"
     assert control.command["payload"]["wake_id"] == wake_id
     assert control.command["payload"]["invocation_id"] == invocation_id
-    assert control.command["payload"]["message"] == ""
+    assert control.command["payload"]["message"] == "Monitor event: the branch is ready"
     assert control.command["payload"]["resume_provider_thread_id"] == provider_thread_id
 
 

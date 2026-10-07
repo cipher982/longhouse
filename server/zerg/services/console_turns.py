@@ -27,6 +27,9 @@ CONSOLE_TURN_INTERRUPT_COMMAND = "session.turn.interrupt"
 CONSOLE_INVOCATION_CLOSE_COMMAND = "session.invocation.close"
 CONSOLE_TURN_STEER_COMMAND = "session.turn.steer"
 CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS = 10
+# A wake turn's receipt text always names its trigger; this only covers a row
+# written without one.
+WAKE_FALLBACK_MESSAGE = "Background work update"
 # A starting turn is durable across a lost control reply, but it cannot remain
 # in FIFO limbo forever when the provider never reaches a settled launch state.
 CONSOLE_STARTING_TTL_SECONDS = 5 * 60
@@ -590,7 +593,11 @@ async def enqueue_catalog_console_turn(
         if origin == "wake":
             payload["wake_id"] = str(turn.get("wake_id") or "")
             payload["invocation_id"] = str(turn.get("invocation_id") or "")
-            payload["message"] = ""
+            # The wake's own description ("Monitor event: ..."). No adapter
+            # writes it as input -- a wake binds a run to a response the
+            # provider already started -- but released Machine Agents reject a
+            # turn start without a message.
+            payload["message"] = str(turn.get("message") or "") or WAKE_FALLBACK_MESSAGE
         if turn.get("report_id"):
             payload["report_id"] = str(turn["report_id"])
         if turn.get("attachments"):
@@ -898,7 +905,7 @@ async def dispatch_catalog_claimed_turn(
             payload.pop("launch_actor")
             payload["wake_id"] = str(turn.get("wake_id") or "")
             payload["invocation_id"] = str(turn.get("invocation_id") or "")
-            payload["message"] = ""
+            payload["message"] = str(turn.get("message") or "") or WAKE_FALLBACK_MESSAGE
         if turn.get("report_id"):
             payload["report_id"] = str(turn["report_id"])
         if turn.get("attachments"):

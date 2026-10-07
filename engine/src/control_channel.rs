@@ -2407,11 +2407,18 @@ async fn execute_turn_start(
             message: format!("provider={provider} does not accept Console image attachments"),
         });
     }
-    let message = crate::input_attachments::text_or_attachments(payload, "message", &attachments)
-        .map_err(|error| CommandError {
-        code: "invalid_command".to_string(),
-        message: error.to_string(),
-    })?;
+    // A wake binds a run to a response the provider already started on its
+    // own; no adapter writes its text as input, so it needs none.
+    let message = if payload_optional_string(payload, "origin").as_deref() == Some("wake") {
+        payload_optional_string(payload, "message").unwrap_or_default()
+    } else {
+        crate::input_attachments::text_or_attachments(payload, "message", &attachments).map_err(
+            |error| CommandError {
+                code: "invalid_command".to_string(),
+                message: error.to_string(),
+            },
+        )?
+    };
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
     // A branch's first turn carries the parent thread to fork from. Only the
     // first: once the child owns a thread of its own, later turns resume it
@@ -7127,6 +7134,7 @@ for value in "$@"; do
   previous="$value"
 done
 printf '{{"type":"system","subtype":"init","session_id":"%s"}}\n' "$provider_id"
+printf '%s\n' "$input" | sed 's/^{{/{{"isReplay":true,/'
 case "$input" in *'sleep prompt'*) sleep 30;; esac
 printf '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"done"}}]}}}}\n'
 printf '{{"type":"result","subtype":"success","is_error":false}}\n'
@@ -7316,6 +7324,37 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
                 assert!(std::time::Instant::now() < cancel_deadline);
                 runtime.block_on(async { tokio::time::sleep(Duration::from_millis(20)).await });
             }
+
+            // A wake binds a run to a response Claude already started; it
+            // carries no input, so an empty message must not be rejected
+            // (2026-10-07: every wake failed "payload.message is required").
+            let wake_run_id = Uuid::new_v4().to_string();
+            let mut cache = command_cache();
+            let wake = runtime.block_on(handle_command_frame(
+                json!({
+                    "type": "command",
+                    "command_id": wake_run_id,
+                    "session_id": session_id,
+                    "command_type": COMMAND_TURN_START,
+                    "payload": {
+                        "provider": "claude",
+                        "thread_id": thread_id,
+                        "turn_id": Uuid::new_v4().to_string(),
+                        "run_id": wake_run_id,
+                        "client_request_id": "wake:gone:1",
+                        "cwd": workspace,
+                        "message": "",
+                        "permission_mode": "bypass",
+                        "origin": "wake",
+                        "wake_id": "gone:1",
+                        "invocation_id": "gone",
+                        "resume_provider_thread_id": provider_thread_id,
+                    },
+                }),
+                &mut cache,
+                &test_config(),
+            ));
+            assert_eq!(wake["ok"], true, "{wake}");
         });
     }
 

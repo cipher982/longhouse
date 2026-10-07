@@ -412,7 +412,8 @@ def test_catalog_mode_http_wake_signal_dispatches_once_after_completed_turn(tmp_
             assert "launch_actor" not in wake_command["payload"]
             assert wake_command["payload"]["wake_id"] == wake_id
             assert wake_command["payload"]["invocation_id"] == invocation_id
-            assert wake_command["payload"]["message"] == ""
+            # Released Machine Agents reject a turn start without a message.
+            assert wake_command["payload"]["message"] == "Monitor event: the branch is ready"
             assert wake_command["payload"]["resume_provider_thread_id"] == user_resume_identity
 
             wake_request_id = f"wake:{wake_id}"
