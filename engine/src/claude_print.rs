@@ -1867,6 +1867,12 @@ impl ClaudePrintSink {
                 let _ = registry.record_invocation_state(&self.run_id, state, count);
             }
         }
+        crate::status_slot::retire_console_run(
+            "claude",
+            CLAUDE_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+        );
     }
 
     fn persist_local_phase(

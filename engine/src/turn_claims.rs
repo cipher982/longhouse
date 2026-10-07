@@ -3,7 +3,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -251,6 +251,33 @@ impl TurnClaimRegistry {
             Err(err) => Err(err).with_context(|| format!("creating turn claim {}", path.display())),
         }
     }
+    /// Publish OMP's launch-scoped directory hold before the provider can
+    /// create its first native file. Exact identity binding replaces this
+    /// directory hint with the transcript path.
+    pub fn set_pending_omp_session_dir(
+        &self,
+        run_id: &str,
+        session_dir: &Path,
+    ) -> Result<TurnClaim> {
+        anyhow::ensure!(
+            session_dir.is_absolute(),
+            "OMP pending session directory must be absolute"
+        );
+        let mut claim = self.read(run_id)?;
+        anyhow::ensure!(
+            claim.provider.eq_ignore_ascii_case("omp") && claim.state == "claimed",
+            "OMP session directory can only be reserved on a claimed OMP turn"
+        );
+        let mut result = claim.result.take().unwrap_or_else(|| serde_json::json!({}));
+        result
+            .as_object_mut()
+            .context("OMP pending turn claim result is not an object")?
+            .insert("session_dir".into(), serde_json::json!(session_dir));
+        claim.result = Some(result);
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
 
     pub fn mark_spawned(
         &self,
@@ -426,6 +453,44 @@ impl TurnClaimRegistry {
             left.claimed_at.cmp(&right.claimed_at)
         })
         .context("reading turn claim registry")
+    }
+
+    /// Preserve an OMP-reported path while its lazy native source is pending.
+    /// Only the later provider-authored header can confirm archive identity.
+    pub fn set_pending_omp_source(
+        &self,
+        run_id: &str,
+        provider_thread_id: &str,
+        source_path: &Path,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        anyhow::ensure!(
+            claim.provider == "omp" && claim.state == "spawned",
+            "only a spawned OMP invocation can reserve its reported source"
+        );
+        let session_dir = claim
+            .result
+            .as_ref()
+            .and_then(|result| result.get("session_dir"))
+            .and_then(Value::as_str)
+            .context("OMP invocation has no pending session directory")?;
+        anyhow::ensure!(
+            !provider_thread_id.trim().is_empty()
+                && crate::omp_session::session_file_path_in_session_dir(
+                    Path::new(session_dir),
+                    source_path
+                ),
+            "OMP reported source is outside its exact invocation scope"
+        );
+        claim.provider_thread_id = Some(provider_thread_id.to_string());
+        claim.provider_identity_confirmed = false;
+        claim.source_path = Some(source_path.to_string_lossy().into_owned());
+        if let Some(result) = claim.result.as_mut().and_then(Value::as_object_mut) {
+            result.insert("session_file".into(), serde_json::json!(source_path));
+        }
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
     }
 
     pub fn mark_provider_binding(
@@ -804,6 +869,32 @@ mod tests {
         assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
     }
 
+    #[test]
+    fn omp_pending_directory_preserves_claim_scope_without_native_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(241);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&run_id, &id(242), &id(243), None, None, "omp")
+            .unwrap();
+        let mut initial = registry.read(&run_id).unwrap();
+        initial.result = Some(serde_json::json!({"launch_marker": "kept"}));
+        registry.write(&initial).unwrap();
+
+        let pending_dir = temp.path().join("omp-sessions/longhouse-scope");
+        let pending = registry
+            .set_pending_omp_session_dir(&run_id, &pending_dir)
+            .unwrap();
+        assert_eq!(pending.state, "claimed");
+        assert!(pending.provider_thread_id.is_none());
+        assert!(!pending.provider_identity_confirmed);
+        assert!(pending.source_path.is_none());
+        assert_eq!(pending.result.as_ref().unwrap()["launch_marker"], "kept");
+        assert_eq!(
+            pending.result.as_ref().unwrap()["session_dir"].as_str(),
+            Some(pending_dir.to_str().unwrap())
+        );
+    }
     #[test]
     fn terminal_claim_without_spawn_stores_terminal_result() {
         let temp = tempfile::tempdir().unwrap();

@@ -152,58 +152,68 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         }
     }
 
-    let session_dir = config
-        .session_dir
-        .clone()
-        .or_else(|| {
-            crate::omp_session::session_dir_for_launch(&config.cwd, config.profile.as_deref()).ok()
-        })
-        .context("OMP has no session directory")?;
-    crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, &session_dir)?;
-    std::fs::create_dir_all(&session_dir)?;
-    set_private_dir(&session_dir)?;
-
+    let session_root = match config.session_dir.clone() {
+        Some(path) => path,
+        None => crate::omp_session::session_dir_for_launch(&config.cwd, config.profile.as_deref())?,
+    };
     let expected_provider_thread_id = config
         .resume_provider_thread_id
         .clone()
         .filter(|value| !value.trim().is_empty());
-    let session_file = if let Some(path) = config.resume_session_file.clone() {
-        let expected = expected_provider_thread_id
-            .as_deref()
-            .context("OMP exact resume requires a native session id")?;
-        crate::omp_session::verify_exact_session_file(
-            &path,
-            expected,
-            Some(&config.cwd.display().to_string()),
-        )?;
-        path
-    } else {
-        anyhow::ensure!(
-            expected_provider_thread_id.is_none(),
-            "OMP native resume id has no exact session file"
-        );
-        crate::omp_session::reserve_session_path(&session_dir)?
-    };
-    let source_start_len = std::fs::metadata(&session_file)
+    let (session_dir, mut session_file, fresh_directory) =
+        if let Some(path) = config.resume_session_file.clone() {
+            let expected = expected_provider_thread_id
+                .as_deref()
+                .context("OMP exact resume requires a native session id")?;
+            crate::omp_session::verify_exact_session_file(
+                &path,
+                expected,
+                Some(&config.cwd.display().to_string()),
+            )?;
+            let retained_dir = path
+                .parent()
+                .context("OMP exact resume file has no session directory")?;
+            anyhow::ensure!(
+                retained_dir.is_absolute(),
+                "OMP exact resume requires an absolute session directory"
+            );
+            crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, retained_dir)?;
+            (retained_dir.to_path_buf(), Some(path), None)
+        } else {
+            anyhow::ensure!(
+                expected_provider_thread_id.is_none(),
+                "OMP native resume id has no exact session file"
+            );
+            crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, &session_root)?;
+            std::fs::create_dir_all(&session_root)?;
+            set_private_dir(&session_root)?;
+            let fresh = crate::omp_session::FreshSessionDirectory::create(&session_root)?;
+            (fresh.path().to_path_buf(), None, Some(fresh))
+        };
+    let mut source_start_len = session_file
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     let local_db_path = config
         .local_db_path
         .clone()
         .or_else(|| crate::config::get_agent_db_path().ok());
-    // The Console path claims its source locally, exactly as Helm does: the
-    // daemon projects the claim into the binding discovery reads, so a busy or
-    // unreadable archive cannot fail a launch here either. `local_db_path` stays
-    // for the phase outbox, which is not on the identity path.
-    crate::managed_source_claim::reserve(
-        &config.session_id,
-        "omp",
-        &session_file,
-        &config.cwd,
-        None,
-        None,
-    )
-    .with_context(|| format!("claiming the OMP console source {}", session_file.display()))?;
+    let registry = crate::turn_claims::default_registry()?;
+    // A cold resume already has an exact retained path to reserve. A fresh
+    // session has no path until OMP creates its native source, so its turn
+    // claim holds this private directory Pending before the child can start.
+    if let Some(session_file) = session_file.as_deref() {
+        crate::managed_source_claim::reserve(
+            &config.session_id,
+            "omp",
+            session_file,
+            &config.cwd,
+            None,
+            None,
+        )
+        .with_context(|| format!("claiming the OMP console source {}", session_file.display()))?;
+    }
 
     let launch_id = Uuid::new_v4().to_string();
     let run_dir = crate::config::get_agent_dir()?
@@ -221,7 +231,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         config.model.as_deref(),
         config.profile.as_deref(),
         &session_dir,
-        &session_file,
+        session_file.as_deref(),
         omp_supports_no_ui(&config.omp_bin),
     );
     // RPC stdin: see `console_rpc`. The prompt and a later steer are written
@@ -252,11 +262,38 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
             crate::console_rpc::adopt_fifo_as_stdin(&rpc_stdin_c)
         });
     }
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("spawning `{}` --mode rpc", config.omp_bin))?;
-    let pid = child.id().context("omp --mode rpc returned no pid")?;
-    let process_group_id = i32::try_from(pid).context("OMP pid exceeds process-group range")?;
+    if session_file.is_none() {
+        if let Err(error) = registry.set_pending_omp_session_dir(&config.run_id, &session_dir) {
+            let _ = registry.mark_failed(&config.run_id, &error.to_string());
+            return Err(error);
+        }
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = registry.mark_failed(&config.run_id, &error.to_string());
+            return Err(error).with_context(|| format!("spawning `{}` --mode rpc", config.omp_bin));
+        }
+    };
+    let pid = match child.id() {
+        Some(pid) => pid,
+        None => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let error = anyhow::anyhow!("omp --mode rpc returned no pid");
+            let _ = registry.mark_failed(&config.run_id, &error.to_string());
+            return Err(error);
+        }
+    };
+    let process_group_id = match i32::try_from(pid) {
+        Ok(process_group_id) => process_group_id,
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = registry.mark_failed(&config.run_id, &error.to_string());
+            return Err(error).context("OMP pid exceeds process-group range");
+        }
+    };
     let result = json!({
         "session_id": config.session_id,
         "thread_id": config.thread_id,
@@ -271,12 +308,12 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         "stdout_path": stdout_path,
         "stderr_path": stderr_path,
         "session_dir": session_dir,
-        "session_file": session_file,
+        "session_file": session_file.as_ref().map(|path| path.display().to_string()),
         "cwd": config.cwd,
         "machine_name": config.machine_name,
         "argv": argv,
     });
-    if let Err(error) = crate::turn_claims::default_registry()?.mark_spawned_invocation(
+    if let Err(error) = registry.mark_spawned_invocation(
         &config.run_id,
         pid,
         process_group_id,
@@ -290,6 +327,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     ) {
         cleanup_process_group(Some(process_group_id)).await;
         let _ = child.kill().await;
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
         return Err(error).context("persisting OMP Console spawn identity");
     }
     refresh_owned_processes(&config.run_id);
@@ -304,7 +342,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         process_group_id: Some(process_group_id),
         stdout_path: stdout_path.clone(),
         session_dir: session_dir.clone(),
-        session_file: session_file.clone(),
+        session_file: session_file.clone().unwrap_or_default(),
         provider_thread_id: expected_provider_thread_id.clone(),
         source_start_len,
         binding_emitted: false,
@@ -373,14 +411,76 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
             crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error.to_string());
         return Err(error);
     }
-    sink.provider_thread_id = Some(provider_thread_id.clone());
-    let registry = crate::turn_claims::default_registry()?;
-    if let Err(error) = registry.mark_provider_binding(&config.run_id, &provider_thread_id, None) {
-        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
-        return Err(error).context("recording OMP Console identity");
+    let exact_session_file = match (|| -> Result<PathBuf> {
+        let reported = state
+            .pointer("/data/sessionFile")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .context("OMP get_state reported no sessionFile")?;
+        let reported = PathBuf::from(reported);
+        if let Some(retained) = session_file.as_deref() {
+            anyhow::ensure!(
+                crate::storage_v2_shipper::stable_source_path(&reported)
+                    == crate::storage_v2_shipper::stable_source_path(retained),
+                "OMP RPC source does not match the exact resume source"
+            );
+        } else {
+            anyhow::ensure!(
+                crate::omp_session::session_file_path_in_session_dir(&session_dir, &reported),
+                "OMP RPC source is outside its launch-scoped session directory"
+            );
+        }
+        Ok(reported)
+    })() {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+            let _ = registry.mark_failed(&config.run_id, &error.to_string());
+            return Err(error).context("reserving the reported OMP native source");
+        }
+    };
+    if expected_provider_thread_id.is_none() {
+        if let Err(error) = crate::managed_source_claim::reserve(
+            &config.session_id,
+            "omp",
+            &exact_session_file,
+            &config.cwd,
+            Some(pid),
+            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        ) {
+            let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+            let _ = registry.mark_failed(&config.run_id, &error.to_string());
+            return Err(error).context("claiming the fresh OMP native source");
+        }
+        source_start_len = std::fs::metadata(&exact_session_file)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
     }
+    session_file = Some(exact_session_file.clone());
+    sink.session_file = exact_session_file.clone();
+    sink.source_start_len = source_start_len;
+    sink.provider_thread_id = Some(provider_thread_id.clone());
+    // `get_state` reports the exact native identity before a fresh session's
+    // JSONL is materialized. Reserve it now; the monitor verifies the provider
+    // header and emits the archive binding once the first prompt creates it.
+    if let Err(error) =
+        registry.set_pending_omp_source(&config.run_id, &provider_thread_id, &exact_session_file)
+    {
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ = crate::managed_source_claim::release(&config.session_id);
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
+        return Err(error).context("recording OMP Console pending source identity");
+    }
+    if let Err(error) = sink.ensure_transcript_binding().await {
+        let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ = crate::managed_source_claim::release(&config.session_id);
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
+        return Err(error).context("validating the OMP native source before prompt delivery");
+    }
+    let session_file = session_file.context("OMP Console has no bound native source")?;
     if let Err(error) = registry.record_invocation_turn(&config.run_id, "user", false) {
         let _ = cleanup_owned_child(&mut child, &config.run_id).await;
+        let _ = registry.mark_failed(&config.run_id, &error.to_string());
         return Err(error).context("recording OMP Console turn origin");
     }
     let input = Arc::new(crate::console_rpc::ConsoleRpcInput::new(rpc_stdin.clone()));
@@ -430,6 +530,9 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     let monitor_stderr_path = stderr_path.clone();
     let monitored_invocation = invocation.clone();
     tokio::spawn(async move {
+        // The source directory remains execution-owned while OMP's JSONL is
+        // still lazy; returning the launch summary must not remove it.
+        let _fresh_directory = fresh_directory;
         monitor_omp_print(
             &mut child,
             &monitor_stderr_path,
@@ -2293,12 +2396,9 @@ pub fn build_omp_args(
     model: Option<&str>,
     profile: Option<&str>,
     session_dir: &Path,
-    session_file: &Path,
+    session_file: Option<&Path>,
     headless_extensions: bool,
 ) -> Vec<String> {
-    let has_existing_session = std::fs::metadata(session_file)
-        .map(|metadata| metadata.len() > 0)
-        .unwrap_or(false);
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
     if headless_extensions {
         // Extensions run headless: no extension_ui_request dialogs for a host.
@@ -2307,11 +2407,18 @@ pub fn build_omp_args(
     args.extend([
         "--session-dir".into(),
         session_dir.to_string_lossy().into_owned(),
-        "--resume".into(),
-        session_file.to_string_lossy().into_owned(),
     ]);
-    if has_existing_session {
-        args.push("--continue".into());
+    if let Some(session_file) = session_file {
+        args.extend([
+            "--resume".into(),
+            session_file.to_string_lossy().into_owned(),
+        ]);
+        if std::fs::metadata(session_file)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false)
+        {
+            args.push("--continue".into());
+        }
     }
     if let Some(profile) = profile.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--profile".into(), profile.into()]);
@@ -2828,23 +2935,32 @@ impl OmpPrintSink {
         if self.binding_emitted {
             return Ok(self.provider_thread_id.is_some());
         }
-        let header = match crate::omp_session::read_session_header(&self.session_file) {
-            Ok(header) => header,
-            Err(_) => return Ok(false),
+        anyhow::ensure!(
+            crate::omp_session::session_file_path_in_session_dir(
+                &self.session_dir,
+                &self.session_file,
+            ),
+            "OMP Console source escaped its exact invocation scope"
+        );
+        let expected = self
+            .provider_thread_id
+            .as_deref()
+            .context("OMP Console has no reported native identity")?;
+        let metadata = match std::fs::symlink_metadata(&self.session_file) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error).context("reading OMP native source metadata"),
         };
-        if let Some(expected) = self.provider_thread_id.as_deref() {
-            anyhow::ensure!(
-                header.native_id == expected,
-                "OMP native session header changed identity after launch"
-            );
+        if metadata.len() == 0 {
+            return Ok(false);
         }
-        if let Some(stream_id) = self.provider_thread_id.as_deref() {
-            anyhow::ensure!(
-                stream_id == header.native_id,
-                "OMP stream and native source identities disagree"
-            );
-        }
-        self.provider_thread_id = Some(header.native_id.clone());
+        let claim = crate::managed_source_claim::read_claim(&self.session_id)?
+            .context("OMP Console has no exact source reservation")?;
+        let header = crate::omp_session::verify_session_header(
+            &self.session_file,
+            expected,
+            Some(&claim.cwd),
+        )?;
         crate::managed_source_claim::confirm_identity(
             &self.session_id,
             "omp",
@@ -3110,7 +3226,7 @@ impl OmpPrintSink {
                 "pending_count": count
             });
         }
-        self.post_events(vec![json!({
+        let terminal_event = json!({
             "runtime_key": format!("omp:{}", self.session_id),
             "session_id": self.session_id,
             "thread_id": self.thread_id,
@@ -3122,8 +3238,23 @@ impl OmpPrintSink {
             "occurred_at": Utc::now().to_rfc3339(),
             "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id),
             "payload": payload
-        })])
-        .await;
+        });
+        match crate::outbox::enqueue_runtime_event(
+            &self.runtime_events_outbox_dir,
+            &terminal_event,
+        ) {
+            Ok(()) => crate::status_slot::retire_console_run(
+                "omp",
+                OMP_PRINT_ADAPTER,
+                &self.session_id,
+                &self.run_id,
+            ),
+            Err(error) => eprintln!(
+                "[omp-print] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+                self.session_id,
+                self.run_id
+            ),
+        }
         crate::turn_claims::mark_terminal(
             &self.run_id,
             terminal_state,
@@ -3438,64 +3569,6 @@ mod tests {
     };
 
     #[test]
-    fn stock_omp_console_runs_in_rpc_mode_and_binds_exact_resume() {
-        let args = build_omp_args(
-            Some("gpt-5.2"),
-            Some("work"),
-            Path::new("/sessions"),
-            Path::new("/sessions/exact.jsonl"),
-            true,
-        );
-        assert_eq!(
-            args,
-            vec![
-                "--mode",
-                "rpc",
-                "--no-ui",
-                "--session-dir",
-                "/sessions",
-                "--resume",
-                "/sessions/exact.jsonl",
-                "--profile",
-                "work",
-                "--model",
-                "gpt-5.2",
-            ]
-        );
-        // The prompt (and any image) is a stdin command, never argv.
-        assert!(!args
-            .iter()
-            .any(|arg| arg == "-p" || arg == "--" || arg.starts_with('@')));
-        assert!(!args.iter().any(|arg| matches!(
-            arg.as_str(),
-            "--no-tools" | "--no-extensions" | "--no-skills"
-        )));
-    }
-
-    #[test]
-    fn existing_omp_session_args_request_native_continuation() {
-        let temp = tempfile::tempdir().unwrap();
-        let session_file = temp.path().join("session.jsonl");
-        std::fs::write(&session_file, b"{\"type\":\"session\"}\n").unwrap();
-        let args = build_omp_args(None, None, temp.path(), &session_file, true);
-        assert!(args.iter().any(|arg| arg == "--continue"));
-    }
-
-    #[test]
-    fn omp_without_no_ui_still_gets_rpc_mode_but_not_the_flag() {
-        let args = build_omp_args(
-            None,
-            None,
-            Path::new("/sessions"),
-            Path::new("/sessions/exact.jsonl"),
-            false,
-        );
-        assert_eq!(args[..2], ["--mode", "rpc"]);
-        assert!(!args.iter().any(|arg| arg == "--no-ui"));
-        assert!(args.iter().any(|arg| arg == "--resume"));
-    }
-
-    #[test]
     fn help_text_decides_whether_no_ui_is_advertised() {
         let current = "      --mode=<value>   Output mode: text, json, rpc, or rpc-ui\n      --no-ui          With --mode rpc: run extensions headless\n";
         let old = "      --mode=<value>   Output mode: text, json, rpc, or rpc-ui\n      --no-tools       Disable all built-in tools\n";
@@ -3755,16 +3828,34 @@ import sys
 import threading
 import time
 import uuid
-
 args = sys.argv[1:]
-source = args[args.index("--resume") + 1]
-if os.path.exists(source) and os.path.getsize(source) > 0:
+if "--help" in args:
+    print("--no-ui")
+    sys.exit(0)
+if "--version" in args:
+    print("18.7.0")
+    sys.exit(0)
+
+session_dir = args[args.index("--session-dir") + 1]
+if "--resume" in args:
+    source = args[args.index("--resume") + 1]
+    if not os.path.isfile(source) or os.path.getsize(source) == 0:
+        print("strict resume requires an existing native source", file=sys.stderr)
+        sys.exit(23)
     with open(source, "r", encoding="utf-8") as stream:
         session_header = json.loads(stream.readline())
+    if session_header.get("type") != "session" or not session_header.get("id"):
+        print("strict resume requires a valid native session header", file=sys.stderr)
+        sys.exit(24)
     native_id = session_header["id"]
 else:
     native_id = str(uuid.uuid4())
+    source = os.path.join(
+        session_dir,
+        "2026-10-06T10-00-00-000Z_" + native_id + ".jsonl",
+    )
     session_header = {}
+    # A fresh native source is lazy: get_state names it before first input.
 header = {
     "type": "session",
     "version": 3,
@@ -3781,8 +3872,8 @@ def out(event):
     with write_lock:
         print(json.dumps(event, separators=(",", ":")), flush=True)
 def append_native(message):
-    if os.path.getsize(source) == 0:
-        with open(source, "w", encoding="utf-8") as stream:
+    if not os.path.exists(source):
+        with open(source, "x", encoding="utf-8") as stream:
             stream.write(json.dumps(header, separators=(",", ":")) + "\n")
     with open(source, "a", encoding="utf-8") as stream:
         stream.write(json.dumps({
@@ -3839,7 +3930,7 @@ for line in sys.stdin:
             "type": "response",
             "command": "get_state",
             "success": True,
-            "data": {"sessionId": native_id, "hasPendingAsyncWork": bool(pending_jobs)},
+            "data": {"sessionId": native_id, "sessionFile": source, "hasPendingAsyncWork": bool(pending_jobs)},
         })
     elif kind == "steer":
         with open(source + ".steer.log", "a", encoding="utf-8") as stream:
@@ -3871,7 +3962,7 @@ for line in sys.stdin:
                 for waiting_line in sys.stdin:
                     waiting = json.loads(waiting_line)
                     if waiting["type"] == "get_state":
-                        out({"id": waiting.get("id"), "type": "response", "command": "get_state", "success": True, "data": {"sessionId": native_id, "hasPendingAsyncWork": False}})
+                        out({"id": waiting.get("id"), "type": "response", "command": "get_state", "success": True, "data": {"sessionId": native_id, "sessionFile": source, "hasPendingAsyncWork": False}})
                 continue
             elif prompt == "scenario=queued-failure":
                 sys.exit(7)
@@ -4959,6 +5050,29 @@ for line in sys.stdin:
             .expect("a console turn must claim its source");
         assert_eq!(claim.state, crate::managed_source_claim::ClaimState::Bound);
         assert_eq!(claim.native_session_id.as_deref(), Some(native_id.as_str()));
+        assert_eq!(
+            first_claim.result.as_ref().unwrap()["session_dir"].as_str(),
+            Some(first.session_dir.as_str())
+        );
+        assert_eq!(
+            first_claim.source_path.as_deref(),
+            Some(first.session_file.as_str())
+        );
+        assert_eq!(
+            Path::new(&first.session_file).parent().unwrap(),
+            Path::new(&first.session_dir)
+        );
+        assert_eq!(
+            std::fs::read_dir(&first.session_dir)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter(
+                    |entry| entry.path().extension().and_then(|value| value.to_str())
+                        == Some("jsonl")
+                )
+                .count(),
+            1
+        );
         // RPC mode: the prompt (even one that looks like a flag) is a stdin
         // command, never argv.
         assert!(first.argv.windows(2).any(|pair| pair == ["--mode", "rpc"]));
@@ -5041,26 +5155,39 @@ import select
 import sys
 import time
 import uuid
-
-MODE = "{mode}"
 args = sys.argv[1:]
-source = args[args.index("--resume") + 1]
-native_id = str(uuid.uuid4())
+if "--help" in args:
+    print("--no-ui")
+    sys.exit(0)
+if "--version" in args:
+    print("18.7.0")
+    sys.exit(0)
 def out(event):
     print(json.dumps(event, separators=(",", ":")), flush=True)
-time.sleep(1.0)
+time.sleep(0.05)
 early = bool(select.select([sys.stdin], [], [], 0)[0])
-# Stock OMP creates its native session file (header first) while starting.
-if not os.path.exists(source) or os.path.getsize(source) == 0:
-    os.makedirs(os.path.dirname(source), exist_ok=True)
-    with open(source, "w", encoding="utf-8") as stream:
-        stream.write(json.dumps({{"type":"session","version":3,"id":native_id,"timestamp":"2026-09-09T22:43:51.533Z","cwd":os.getcwd()}}) + "\n")
+
+MODE = "{mode}"
+session_dir = args[args.index("--session-dir") + 1]
+if "--resume" in args:
+    source = args[args.index("--resume") + 1]
+    if not os.path.isfile(source) or os.path.getsize(source) == 0:
+        print("strict resume requires an existing native source", file=sys.stderr)
+        sys.exit(23)
+    with open(source, "r", encoding="utf-8") as stream:
+        native_id = json.loads(stream.readline())["id"]
+else:
+    native_id = str(uuid.uuid4())
+    source = os.path.join(
+        session_dir,
+        "2026-10-06T10-00-00-000Z_" + native_id + ".jsonl",
+    )
 out({{"type":"ready"}})
 for line in sys.stdin:
     command = json.loads(line)
     kind = command["type"]
     if kind == "get_state":
-        out({{"id":command.get("id"),"type":"response","command":"get_state","success":True,"data":{{"sessionId":native_id}}}})
+        out({{"id":command.get("id"),"type":"response","command":"get_state","success":True,"data":{{"sessionId":native_id,"sessionFile":source}}}})
         if MODE == "wedge_if_early" and early:
             time.sleep(3600)
     elif kind == "prompt":
@@ -5068,6 +5195,9 @@ for line in sys.stdin:
             time.sleep(3600)
         prompt = command["message"]
         out({{"id":command.get("id"),"type":"response","command":"prompt","success":True}})
+        if not os.path.exists(source):
+            with open(source, "x", encoding="utf-8") as stream:
+                stream.write(json.dumps({{"type":"session","version":3,"id":native_id,"timestamp":"2026-10-06T22:43:51.533Z","cwd":os.getcwd()}}) + "\n")
         with open(source, "a", encoding="utf-8") as stream:
             stream.write(json.dumps({{"type":"message","id":"u1","message":{{"role":"user","content":[{{"type":"text","text":prompt}}]}}}}) + "\n")
             stream.write(json.dumps({{"type":"message","id":"a1","message":{{"role":"assistant","content":[{{"type":"text","text":"ok"}}],"stopReason":"stop"}}}}) + "\n")

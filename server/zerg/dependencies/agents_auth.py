@@ -31,13 +31,13 @@ logger = logging.getLogger(__name__)
 get_session_factory = get_catalog_session_factory
 
 # ---------------------------------------------------------------------------
-# Per-token sliding-window rate limit for agents write endpoints.
+# Per-token sliding-window rate limits, separated by the work they admit.
 #
-# The device/hook token authorizes a trusted machine, but a buggy or runaway
-# agent (or, if a token leaks, an attacker) can still flood the ingest/presence
-# write path. This is a cheap in-process backstop: a sliding window per
-# rate-key. Defaults are generous for healthy engines (which batch) and can be
-# tuned via env. Disabled when auth is disabled (local/dev) or under TESTING.
+# Observation traffic must never spend the admission needed to launch, steer,
+# settle a run, or renew machine liveness. Only the known observation routes
+# use the ingest bucket; other writes are control, so a new control route
+# cannot accidentally inherit telemetry's quota. Disabled when auth is
+# disabled (local/dev) or under TESTING.
 #
 # Storage-v2 writes (envelopes, media claims and uploads) are not counted. A
 # first history import is ~18k small writes, so 600/min paced a 2 GB import
@@ -134,46 +134,45 @@ def _managed_session_token_allowed(request: Request, token: ManagedSessionToken)
     return False
 
 
-_CONTROL_PATH_SUBSTRINGS = (
-    "/send-live",
-    "/interrupt-live",
-    "/terminate-live",
-    "/directed-inputs",
-    "/pause-responses",
-    "/pause-requests",
-)
-
-_CONTROL_PATH_SUFFIXES = (
-    "/interrupt",
-    "/inputs",
-)
+_LIVENESS_PATHS = frozenset({"/agents/heartbeat", "/agents/machine-presence"})
+_INGEST_PATHS = frozenset({"/agents/presence"})
 
 
 _STORAGE_V2_PREFIX = "/agents/storage/v2/"
-# Lanes admitted by resource-aware backpressure downstream, not by counting.
-_UNCOUNTED_LANES = frozenset({"storage"})
+# Storage uses resource admission; runtime batches are counted after their
+# validated event kinds distinguish durable lifecycle from observations.
+_UNCOUNTED_LANES = frozenset({"storage", "runtime"})
 
 
 def _rate_limit_lane(request: Request) -> str:
-    """Classify requests into distinct rate-limit buckets.
-
-    Bulk data ingest (events, envelopes, presence) must never exhaust the rate
-    bucket for interactive control (send-live, interrupts, directed inputs) or
-    reads.
-    """
+    """Keep observations, machine liveness, interactive writes, and reads independent."""
     method = request.method.upper()
     if method in ("GET", "HEAD", "OPTIONS"):
         return "read"
     path = _normalized_agents_path(request)
     if path.startswith(_STORAGE_V2_PREFIX):
         return "storage"
-    for sub in _CONTROL_PATH_SUBSTRINGS:
-        if sub in path:
-            return "control"
-    for suffix in _CONTROL_PATH_SUFFIXES:
-        if path.endswith(suffix):
-            return "control"
-    return "ingest"
+    if path == "/agents/runtime/events/batch":
+        return "runtime"
+    if path in _LIVENESS_PATHS:
+        return "liveness"
+    if path in _INGEST_PATHS:
+        return "ingest"
+    return "control"
+
+
+def enforce_runtime_request_lane(request: Request, *, lifecycle: bool) -> None:
+    """Admit a validated runtime batch without telemetry spending lifecycle quota."""
+    settings = get_settings()
+    if settings.auth_disabled or settings.testing:
+        return
+    rate_key = request.state.agents_rate_key
+    if not rate_key.endswith(":runtime"):
+        raise RuntimeError("Runtime admission requires a verified agents principal")
+    lane = "lifecycle" if lifecycle else "ingest"
+    rate_key = f"{rate_key.removesuffix(':runtime')}:{lane}"
+    request.state.agents_rate_key = rate_key
+    _enforce_rate_limit(rate_key)
 
 
 def _validate_device_token_for_request(token: str) -> DeviceToken | None:

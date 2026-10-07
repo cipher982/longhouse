@@ -3254,6 +3254,12 @@ impl CodexExecRuntimeSink {
             }
         })])
         .await;
+        crate::status_slot::retire_console_run(
+            "codex",
+            CODEX_EXEC_RUNTIME_SOURCE,
+            &self.session_id,
+            &self.run_id,
+        );
     }
 
     fn persist_local_provider_binding(
@@ -3754,6 +3760,31 @@ mod tests {
     use tokio::net::{TcpListener, UnixListener};
     use tokio::sync::mpsc;
 
+    struct IsolatedLonghouseHome {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl IsolatedLonghouseHome {
+        fn set(path: &Path) -> Self {
+            let previous = std::env::var_os("LONGHOUSE_HOME");
+            unsafe {
+                std::env::set_var("LONGHOUSE_HOME", path.as_os_str());
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for IsolatedLonghouseHome {
+        fn drop(&mut self) {
+            unsafe {
+                match self.previous.take() {
+                    Some(value) => std::env::set_var("LONGHOUSE_HOME", value),
+                    None => std::env::remove_var("LONGHOUSE_HOME"),
+                }
+            }
+        }
+    }
+
     fn config() -> CodexExecRunConfig {
         CodexExecRunConfig {
             session_id: "11111111-1111-4111-8111-111111111111".to_string(),
@@ -3779,24 +3810,9 @@ mod tests {
             fork_thread_id: None,
             machine_name: "cinder".to_string(),
             local_db_path: None,
-            // Point the wake at a private (nonexistent) socket rather than
-            // leaving it to the process-global
-            // `$LONGHOUSE_HOME/agent/transcript-wake.sock`. That fallback made
-            // a full-turn test here deliver its completion wake into whatever
-            // listener another module's test had bound there.
-            transcript_wake_socket: Some(
-                std::env::temp_dir()
-                    .join(format!(
-                        "longhouse-codex-exec-test-{}",
-                        uuid::Uuid::new_v4()
-                    ))
-                    .join("transcript-wake.sock"),
-            ),
+            transcript_wake_socket: None,
         }
     }
-
-    /// Serializes the tests that seed the process-global warm pool.
-    static WARM_POOL_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// The daemon awaits this on its SIGTERM path, so it must return even when
     /// the pool never reports the outstanding work settled. Before the budget,
@@ -3810,7 +3826,7 @@ mod tests {
     /// signal that group for real, and this pool is a process-wide global.
     #[tokio::test]
     async fn console_shutdown_returns_when_outstanding_work_never_reports() {
-        let _serial = WARM_POOL_TEST_LOCK.lock().await;
+        let _agent_state = crate::console_adapter::agent_state_guard();
         {
             let mut pool = console_worker_pool().lock().await;
             pool.spawning = 1;
@@ -3897,7 +3913,7 @@ for line in sys.stdin:
     async fn a_turn_takes_the_worker_a_slow_prewarm_is_still_starting() {
         // Stranger run 10041621cd97: the first turn missed a prewarm that was
         // still starting and cold-started a second `codex` beside it.
-        let _serial = WARM_POOL_TEST_LOCK.lock().await;
+        let _agent_state = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let fake_codex = temp.path().join("codex");
         fs::write(
@@ -3990,7 +4006,7 @@ for line in sys.stdin:
         // Review rv-20261004T213524Z-7c287cb-e292 F1: a prewarm failing just
         // before the turn's deadline handed the cold start a fresh full budget,
         // so the start could outlast the Runtime Host's 10 s turn-start wait.
-        let _serial = WARM_POOL_TEST_LOCK.lock().await;
+        let _agent_state = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let fake_codex = temp.path().join("codex");
         fs::write(
@@ -4545,6 +4561,8 @@ for line in sys.stdin:
         // global tree under it.
         let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let _home = IsolatedLonghouseHome::set(&longhouse_home);
         let fake_codex = temp.path().join("codex");
         fs::write(
             &fake_codex,
@@ -4594,6 +4612,7 @@ for line in sys.stdin:
         run_config.codex_bin = fake_codex.display().to_string();
         run_config.api_url = api_url;
         run_config.resume_thread_id = Some("provider-thread".to_string());
+        run_config.transcript_wake_socket = Some(longhouse_home.join("agent/transcript-wake.sock"));
         run_config.model = Some("gpt-5.3-codex-low".to_string());
         crate::turn_claims::default_registry()
             .unwrap()
@@ -4656,6 +4675,42 @@ for line in sys.stdin:
                 && json_string(event, &["payload", "terminal_state"]).as_deref()
                     == Some("run_completed")
         }));
+        assert_eq!(
+            crate::config::get_longhouse_home().unwrap(),
+            longhouse_home,
+            "default state roots resolve into this test's private Longhouse home"
+        );
+        let claim = crate::turn_claims::default_registry()
+            .unwrap()
+            .read(&summary.run_id)
+            .unwrap();
+        let launch_id = claim.launch_id.clone().expect("invocation launch id");
+        wait_for_codex_invocation_closed(&launch_id).await;
+        assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(claim.state, "terminal");
+        assert_eq!(
+            crate::config::get_agent_runtime_events_outbox_dir().unwrap(),
+            longhouse_home.join("agent/runtime-events-outbox")
+        );
+        assert!(
+            longhouse_home
+                .join("managed-local/claims")
+                .join(format!("{}.json", summary.session_id))
+                .exists(),
+            "source bindings are private to this run"
+        );
+        assert!(
+            !crate::status_slot::slot_path(
+                &crate::status_slot::status_slot_dir(&longhouse_home.join("agent"),),
+                &summary.session_id,
+            )
+            .exists(),
+            "the closed fake run leaves no current status"
+        );
+        assert!(
+            !longhouse_home.join("agent/transcript-wake.sock").exists(),
+            "the completion wake socket is private and not left behind"
+        );
     }
 
     fn fake_app_server_for_scenario(temp: &Path, scenario: &str) -> (PathBuf, PathBuf) {
@@ -4790,6 +4845,7 @@ for line in sys.stdin:
         run_config.prompt = prompt.to_string();
         run_config.resume_thread_id = None;
         run_config.fork_thread_id = None;
+        run_config.transcript_wake_socket = Some(root.join("longhouse/agent/transcript-wake.sock"));
         run_config
     }
 
@@ -4838,6 +4894,8 @@ for line in sys.stdin:
         }
         let _agent_state = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let _home = IsolatedLonghouseHome::set(&longhouse_home);
         let scenario_name = format!("{scenario:?}");
         let (fake_codex, input_log) = fake_app_server_for_scenario(temp.path(), &scenario_name);
         let (api_url, mut received) = spawn_runtime_capture_server().await;
@@ -4893,6 +4951,14 @@ for line in sys.stdin:
                 assert!(crate::process_group::group_is_alive(
                     first.process_group_id.unwrap()
                 ));
+                assert!(
+                    !crate::status_slot::slot_path(
+                        &crate::status_slot::status_slot_dir(&longhouse_home.join("agent")),
+                        &first.session_id,
+                    )
+                    .exists(),
+                    "parked background work retains its claim but not foreground thinking"
+                );
             }
             LifecycleScenario::Restart => unreachable!(),
             _ => return ScenarioOutcome::Unsupported("not_implemented:scenario_not_in_phase_one"),
@@ -5203,12 +5269,19 @@ for line in sys.stdin:
     #[tokio::test]
     #[ignore = "calls the installed Codex provider; run explicitly as an external contract canary"]
     async fn installed_codex_forks_into_a_new_thread_that_remembers_the_parent() {
+        let _agent_state = crate::console_adapter::agent_state_guard();
         let state_dir = tempfile::tempdir().unwrap();
+        let longhouse_home = state_dir.path().join("longhouse");
+        let _home = IsolatedLonghouseHome::set(&longhouse_home);
         let db_path = state_dir.path().join("state.db");
         let cwd = std::env::current_dir().unwrap();
 
         // Parent: plant a fact only this thread knows.
         let mut parent = config();
+        parent.session_id = uuid::Uuid::new_v4().to_string();
+        parent.run_id = uuid::Uuid::new_v4().to_string();
+        parent.thread_id = Some(uuid::Uuid::new_v4().to_string());
+        parent.turn_id = Some(uuid::Uuid::new_v4().to_string());
         parent.cwd = cwd.clone();
         parent.local_db_path = Some(db_path.clone());
         parent.prompt =
@@ -5216,12 +5289,14 @@ for line in sys.stdin:
         let (parent_thread_id, _) = run_installed_codex_turn(parent, "PARENT_READY").await;
 
         // Branch: fork the parent and ask for the planted fact back.
-        let child_session_id = "33333333-3333-4333-8333-333333333333";
+        let child_session_id = uuid::Uuid::new_v4().to_string();
+        let longhouse_thread_id = uuid::Uuid::new_v4().to_string();
         let mut child = config();
         child.cwd = cwd.clone();
         child.local_db_path = Some(db_path.clone());
         child.session_id = child_session_id.to_string();
-        child.run_id = "44444444-4444-4444-8444-999999999999".to_string();
+        child.run_id = uuid::Uuid::new_v4().to_string();
+        child.thread_id = Some(longhouse_thread_id.clone());
         child.fork_thread_id = Some(parent_thread_id.clone());
         child.prompt = "Reply with exactly the token you were asked to remember.".to_string();
         let (child_thread_id, recalled) =
@@ -5255,7 +5330,8 @@ for line in sys.stdin:
         second.cwd = cwd;
         second.local_db_path = Some(db_path.clone());
         second.session_id = child_session_id.to_string();
-        second.run_id = "44444444-4444-4444-8444-888888888888".to_string();
+        second.run_id = uuid::Uuid::new_v4().to_string();
+        second.thread_id = Some(longhouse_thread_id);
         second.resume_thread_id = Some(child_thread_id.clone());
         second.prompt = "Reply with exactly SECOND_TURN_OK.".to_string();
         let (second_thread_id, _) = run_installed_codex_turn(second, "SECOND_TURN_OK").await;
@@ -5268,13 +5344,20 @@ for line in sys.stdin:
     #[tokio::test]
     #[ignore = "calls the installed Codex provider; run explicitly as an external contract canary"]
     async fn installed_codex_completes_through_production_console_adapter() {
-        let _serial = WARM_POOL_TEST_LOCK.lock().await;
+        let _agent_state = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let _home = IsolatedLonghouseHome::set(&longhouse_home);
         let (api_url, mut received) = spawn_runtime_capture_server().await;
         let mut run_config = config();
+        run_config.session_id = uuid::Uuid::new_v4().to_string();
+        run_config.run_id = uuid::Uuid::new_v4().to_string();
+        run_config.thread_id = Some(uuid::Uuid::new_v4().to_string());
         run_config.cwd = std::env::current_dir().unwrap();
         run_config.api_url = api_url;
         run_config.codex_bin =
             std::env::var("LONGHOUSE_TEST_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+        run_config.transcript_wake_socket = Some(longhouse_home.join("agent/transcript-wake.sock"));
         run_config.prompt = "Reply with exactly PRODUCTION_ADAPTER_CANARY_OK.".to_string();
         prewarm_codex_console_workers().await;
         let summary = start_codex_exec_once(run_config).await.unwrap();

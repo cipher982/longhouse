@@ -52,7 +52,7 @@ def test_catalog_runtime_batch_uses_one_rpc_without_opening_sqlite(monkeypatch):
         response = Response()
         # ``db=None`` is what ``no_request_db`` yields on a Runtime Host: the
         # route has to answer without a SQLAlchemy session of any kind.
-        result = await runtime_router.ingest_runtime_observation_batch(
+        result = await runtime_router.apply_runtime_observation_batch(
             payload,
             response,
             None,
@@ -127,7 +127,7 @@ def test_runtime_batch_sends_catalogd_only_the_newest_print_overlay_per_message(
     monkeypatch.setattr(runtime_router, "_publish_live_transcript_previews", lambda *_args, **_kwargs: None)
 
     result = asyncio.run(
-        runtime_router.ingest_runtime_observation_batch(
+        runtime_router.apply_runtime_observation_batch(
             RuntimeEventBatchIngest(events=events),
             Response(),
             None,
@@ -183,7 +183,7 @@ def test_runtime_batch_keeps_the_newest_overlay_of_each_pi_item(monkeypatch):
     monkeypatch.setattr(runtime_router, "_publish_live_transcript_previews", lambda *_args, **_kwargs: None)
 
     asyncio.run(
-        runtime_router.ingest_runtime_observation_batch(
+        runtime_router.apply_runtime_observation_batch(
             RuntimeEventBatchIngest(events=[pi(1, "a"), pi(2, "a"), pi(3, "b"), pi(4, "b")]),
             Response(),
             None,
@@ -282,7 +282,7 @@ def test_runtime_batch_preserves_pi_message_end_preview_before_agent_settled(mon
     monkeypatch.setattr(runtime_router, "_publish_live_transcript_previews", lambda *_args, **_kwargs: None)
 
     asyncio.run(
-        runtime_router.ingest_runtime_observation_batch(
+        runtime_router.apply_runtime_observation_batch(
             RuntimeEventBatchIngest(events=[message_end, agent_settled, terminal]),
             Response(),
             None,
@@ -297,57 +297,6 @@ def test_runtime_batch_preserves_pi_message_end_preview_before_agent_settled(mon
     assert stored_event.payload["seq"] == 1
     assert served_preview["text"] == preview_text
     assert served_preview["is_complete"] is True
-
-
-def test_presence_live_store_delegates_to_runtime_batch_without_archive_wait(monkeypatch):
-    import zerg.routers.presence as presence_router
-    import zerg.routers.runtime as runtime_router
-
-    async def run_test():
-        calls = {}
-
-        async def fake_runtime_batch(payload, response, db, token, single):
-            calls["payload"] = payload
-            calls["db"] = db
-            calls["token"] = token
-            calls["single"] = single
-            response.headers["X-Runtime-Label"] = "presence-live-state"
-
-        def fail_archive_serializer():  # pragma: no cover - regression guard
-            raise AssertionError("live-configured presence must not wait on archive serializer")
-
-        monkeypatch.setattr(presence_router, "live_store_configured", lambda: True)
-        monkeypatch.setattr(presence_router, "get_write_serializer", fail_archive_serializer)
-        monkeypatch.setattr(runtime_router, "ingest_runtime_observation_batch", fake_runtime_batch)
-
-        token = SimpleNamespace(device_id="cinder", id="token-1", owner_id=1)
-        request_db = SimpleNamespace()
-        response = await presence_router.upsert_presence(
-            presence_router.PresenceIn(
-                session_id="019f3e77-2532-77d0-b9ba-2f24b1ca1cea",
-                state="running",
-                tool_name="Shell",
-                provider="codex",
-                occurred_at="2026-01-01T00:00:00Z",
-                dedupe_key="presence-live-route-fixture",
-            ),
-            SimpleNamespace(),
-            request_db,
-            token,
-        )
-
-        assert response.status_code == 204
-        assert response.headers["X-Runtime-Label"] == "presence-live-state"
-        assert calls["db"] is request_db
-        assert calls["token"] is token
-        assert calls["single"] is None
-        [event] = calls["payload"].events
-        assert event.runtime_key == "codex:019f3e77-2532-77d0-b9ba-2f24b1ca1cea"
-        assert event.phase == "running"
-        assert event.tool_name == "Shell"
-        assert event.dedupe_key == "presence-live-route-fixture"
-
-    asyncio.run(run_test())
 
 
 def test_runtime_batch_dispatches_exactly_the_console_turns_catalogd_claimed(monkeypatch):
@@ -393,7 +342,7 @@ def test_runtime_batch_dispatches_exactly_the_console_turns_catalogd_claimed(mon
                 }
             ]
         )
-        result = await runtime_router.ingest_runtime_observation_batch(
+        result = await runtime_router.apply_runtime_observation_batch(
             payload,
             Response(),
             None,

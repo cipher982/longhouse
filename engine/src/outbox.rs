@@ -1500,6 +1500,26 @@ fn runtime_event_batch_body(encoded: &[Vec<u8>]) -> Vec<u8> {
     body
 }
 
+fn runtime_event_retry_lane(events: &[PendingRuntimeEventPost]) -> &'static str {
+    if events.iter().any(|post| {
+        matches!(
+            post.event.get("kind").and_then(Value::as_str),
+            Some(
+                "binding_signal"
+                    | "terminal_signal"
+                    | "pause_request"
+                    | "pause_resolution"
+                    | "wake_signal"
+                    | "invocation_closed"
+            )
+        )
+    }) {
+        "runtime-lifecycle"
+    } else {
+        "runtime-observation"
+    }
+}
+
 async fn post_runtime_event_batch(
     client: &ShipperClient,
     batch: &[PendingRuntimeEventPost],
@@ -1509,6 +1529,7 @@ async fn post_runtime_event_batch(
     match client
         .post_runtime_event_batch(
             "/api/agents/runtime/events/batch",
+            runtime_event_retry_lane(batch),
             body,
             // One event goes however large it is: no smaller request exists.
             if batch.len() == 1 {
@@ -1571,6 +1592,7 @@ async fn isolate_permanent_runtime_event_rejection(
         match client
             .post_json_with_timeout_classified(
                 "/api/agents/runtime/events/batch",
+                runtime_event_retry_lane(std::slice::from_ref(post)),
                 body,
                 Some(RUNTIME_EVENT_POST_TIMEOUT),
             )
@@ -3253,6 +3275,67 @@ mod tests {
         assert!(!safe.contains('\n'));
         assert!(safe.ends_with('…'));
         assert!(safe.chars().count() <= RUNTIME_EVENT_RESPONSE_LOG_CHARS + 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn observation_cooldown_does_not_delay_a_durable_terminal() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for response in [
+                "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let header_end = loop {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    request.extend_from_slice(&buffer[..read]);
+                    if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let length = String::from_utf8_lossy(&request[..header_end])
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    }).unwrap();
+                while request.len() < header_end + length {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = runtime_test_client(address);
+        let observed = PendingRuntimeEventPost::from_event(json!({
+            "session_id": "session", "kind": "phase_signal", "dedupe_key": "observed",
+        }));
+        assert_eq!(
+            post_pending_runtime_event_files(&client, vec![observed]).await,
+            (0, 1)
+        );
+        let terminal = PendingRuntimeEventPost::from_event(json!({
+            "session_id": "session", "kind": "terminal_signal", "dedupe_key": "terminal",
+        }));
+        let delivered = tokio::time::timeout(
+            Duration::from_secs(5),
+            post_pending_runtime_event_files(&client, vec![terminal]),
+        )
+        .await;
+        server.abort();
+        let _ = server.await;
+        assert_eq!(
+            delivered.expect("terminal must not wait on the 30s observation cooldown"),
+            (1, 0)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

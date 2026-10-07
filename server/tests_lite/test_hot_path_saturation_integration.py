@@ -338,3 +338,113 @@ def test_hot_writes_reach_the_catalog_without_opening_the_archive_database(
         assert relaunch.json()["run_id"] == launched["run_id"]
 
     assert archive_use == [], "a hot route reached the archive database"
+
+
+def test_observation_flood_keeps_launch_outcome_input_and_heartbeat_admission(live: LiveCatalog, client, monkeypatch):
+    from zerg.dependencies import agents_auth
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    monkeypatch.setattr(agents_auth, "_RATE_LIMIT_MAX_REQUESTS", 4)
+    monkeypatch.setattr(agents_auth, "_rate_buckets", {})
+    owner = live.create_user(OWNER_EMAIL)
+    headers = {"X-Agents-Token": live.create_device_token(owner_id=owner, device_id=DEVICE_ID)}
+    seeded = live.commit_session(owner_id=owner, project=PROJECT)
+    runtime_key = f"codex:{seeded.session_id}"
+
+    for index in range(4):
+        observation = {
+            "runtime_key": runtime_key,
+            "session_id": str(seeded.session_id),
+            "provider": "codex",
+            "device_id": DEVICE_ID,
+            "source": "codex_bridge",
+            "kind": "phase_signal",
+            "phase": "thinking",
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "dedupe_key": f"admission-observation-{index}",
+            "payload": {},
+        }
+        response = client.post("/agents/runtime/events/batch", json={"events": [observation]}, headers=headers)
+        assert response.status_code == 200, response.text
+    refused = client.post("/agents/runtime/events/batch", json={"events": [observation]}, headers=headers)
+    assert refused.status_code == 429, refused.text
+    assert int(refused.headers["Retry-After"]) > 0
+
+    session_id = str(uuid4())
+    launch = client.post(
+        "/sessions/managed-local/this-device",
+        json={"session_id": session_id, "cwd": "/tmp/admission-proof", "provider": "codex"},
+        headers=headers,
+    )
+    assert launch.status_code == 200, launch.text
+    run_id = launch.json()["run_id"]
+    outcome = client.post(
+        f"/agents/sessions/{session_id}/launch-outcome",
+        json={"run_id": run_id, "outcome": "confirmed"},
+        headers=headers,
+    )
+    assert outcome.status_code == 200, outcome.text
+    facts = load_live_control_session_snapshot(session_id, owner_id=owner).catalog_facts
+    assert facts["readiness"]["state"] == "adopted"
+    assert facts["latest_run"]["id"] == run_id
+
+    # The canonical input route is singular. It must reach its own not-found
+    # decision, not inherit the full observation bucket.
+    missing_input = client.post(
+        f"/agents/sessions/{uuid4()}/input",
+        json={"text": "hello", "client_request_id": str(uuid4())},
+        headers=headers,
+    )
+    assert missing_input.status_code == 404, missing_input.text
+    heartbeat = client.post("/agents/heartbeat", json=HEARTBEAT_BODY, headers=headers)
+    assert heartbeat.status_code == 204, heartbeat.text
+    machines = client.get("/agents/machines/health", headers=headers)
+    assert machines.status_code == 200, machines.text
+    assert machines.json()["machines"][0]["version"] == HEARTBEAT_BODY["version"]
+    still_refused = client.post("/agents/runtime/events/batch", json={"events": [observation]}, headers=headers)
+    assert still_refused.status_code == 429, still_refused.text
+
+    # A mixed durable batch must preserve ordering and close the run even
+    # while replaceable observations are denied.
+    phase = {
+        **observation,
+        "runtime_key": f"codex:{session_id}",
+        "session_id": session_id,
+        "run_id": run_id,
+        "dedupe_key": "admission-owned-phase",
+        "occurred_at": datetime.now(UTC).isoformat(),
+    }
+    terminal = {
+        **phase,
+        "kind": "terminal_signal",
+        "phase": None,
+        "dedupe_key": "admission-owned-terminal",
+        "occurred_at": datetime.now(UTC).isoformat(),
+        "payload": {"terminal_state": "session_ended", "terminal_source": "codex_app_server"},
+    }
+    ended = client.post("/agents/runtime/events/batch", json={"events": [phase, terminal]}, headers=headers)
+    assert ended.status_code == 200, ended.text
+    closed = load_live_control_session_snapshot(session_id, owner_id=owner).catalog_facts
+    assert closed["latest_run"]["id"] == run_id
+    assert closed["latest_run"]["ended_at"] is not None
+    assert client.post("/agents/runtime/events/batch", json={"events": [observation]}, headers=headers).status_code == 429
+
+
+def test_control_flood_cannot_spend_machine_liveness_admission(live: LiveCatalog, client, monkeypatch):
+    from zerg.dependencies import agents_auth
+
+    monkeypatch.setattr(agents_auth, "_RATE_LIMIT_MAX_REQUESTS", 2)
+    monkeypatch.setattr(agents_auth, "_rate_buckets", {})
+    owner = live.create_user(OWNER_EMAIL)
+    headers = {"X-Agents-Token": live.create_device_token(owner_id=owner, device_id=DEVICE_ID)}
+    body = {"session_id": str(uuid4()), "cwd": "/tmp/admission-proof", "provider": "codex"}
+    for _ in range(2):
+        launched = client.post("/sessions/managed-local/this-device", json=body, headers=headers)
+        assert launched.status_code == 200, launched.text
+    refused = client.post("/sessions/managed-local/this-device", json=body, headers=headers)
+    assert refused.status_code == 429, refused.text
+    heartbeat = client.post("/agents/heartbeat", json=HEARTBEAT_BODY, headers=headers)
+    assert heartbeat.status_code == 204, heartbeat.text
+    machines = client.get("/agents/machines/health", headers=headers)
+    assert machines.status_code == 200, machines.text
+    assert machines.json()["machines"][0]["version"] == HEARTBEAT_BODY["version"]

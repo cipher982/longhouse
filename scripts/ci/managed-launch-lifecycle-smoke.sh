@@ -227,7 +227,9 @@ start_runtime_host() {
       # before the provider check and leaves the live store unused. A
       # counterpart that refuses for the wrong reason is only marginally better
       # than one that never refuses.
-      AUTH_DISABLED=1 \
+      AUTH_DISABLED=0 \
+      SINGLE_TENANT=1 \
+      LONGHOUSE_PASSWORD="$LIFECYCLE_PASSWORD" \
       LLM_DISABLED=1 \
       LOG_LEVEL=WARNING \
       DATABASE_URL="sqlite:///$TEST_ROOT/longhouse.db" \
@@ -261,13 +263,19 @@ start_runtime_host() {
 }
 
 FERNET="$(cd "$ROOT_DIR/server" && uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+LIFECYCLE_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 
 start_runtime_host || fail "Runtime Host never became healthy"
 echo "runtime host up on $BASE_URL"
 
 DEVICE_ID="11111111-1111-4111-8111-111111111111"
+BROWSER_TOKEN="$(curl -fsS -X POST "$BASE_URL/api/auth/password" \
+  -H 'content-type: application/json' \
+  -d "$(LIFECYCLE_PASSWORD="$LIFECYCLE_PASSWORD" python3 -c 'import json, os; print(json.dumps({"password": os.environ["LIFECYCLE_PASSWORD"]}))')" \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')"
 DEVICE_TOKEN="$(curl -fsS -X POST "$BASE_URL/api/devices/tokens" \
   -H 'content-type: application/json' \
+  -H "Authorization: Bearer $BROWSER_TOKEN" \
   -d '{"name":"lifecycle-smoke","device_id":"11111111-1111-4111-8111-111111111111"}' \
   | python3 -c 'import sys, json; print(json.load(sys.stdin)["token"])')"
 [[ "$DEVICE_TOKEN" == zdt_* ]] || fail "expected a real device token, got ${DEVICE_TOKEN:0:8}"
@@ -698,6 +706,55 @@ bridge.wait(timeout=5)
 PY
 chmod 755 "$BIN_DIR/claude"
 
+
+# Fill the actual authenticated observation bucket. A real launcher and machine
+# heartbeat must retain admission while these background posts are refused.
+SMOKE_API_URL="$BASE_URL" SMOKE_DEVICE_TOKEN="$DEVICE_TOKEN" SMOKE_SESSION_ID="$cursor_session_id" \
+  "$ROOT_DIR/server/.venv/bin/python" - <<'PY'
+import datetime
+import json
+import os
+import time
+
+import httpx
+
+started = time.monotonic()
+session_id = os.environ["SMOKE_SESSION_ID"]
+observation = {
+    "runtime_key": f"cursor:{session_id}",
+    "session_id": session_id,
+    "provider": "cursor",
+    "source": "cursor_helm",
+    "kind": "phase_signal",
+    "phase": "thinking",
+    "payload": {},
+}
+limit = int(os.environ.get("AGENTS_RATE_LIMIT_MAX_REQUESTS", "600"))
+if limit <= 0:
+    raise SystemExit("lifecycle smoke requires observation rate limiting")
+with httpx.Client(
+    base_url=os.environ["SMOKE_API_URL"],
+    headers={"X-Agents-Token": os.environ["SMOKE_DEVICE_TOKEN"]},
+    timeout=10,
+) as client:
+    for index in range(limit + 1):
+        observation["occurred_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        observation["dedupe_key"] = f"lifecycle-admission-{index}"
+        response = client.post("/api/agents/runtime/events/batch", json={"events": [observation]})
+        if response.status_code == 429:
+            break
+        if response.status_code != 200:
+            raise SystemExit(f"observation flood returned HTTP {response.status_code}: {response.text}")
+    else:
+        raise SystemExit("authenticated observation flood was not limited")
+    heartbeat = client.post(
+        "/api/agents/heartbeat",
+        json={"version": "lifecycle-admission", "daemon_pid": os.getpid(), "disk_free_bytes": 50_000_000_000},
+    )
+    if heartbeat.status_code != 204:
+        raise SystemExit(f"heartbeat starved by observations: HTTP {heartbeat.status_code}: {heartbeat.text}")
+print(json.dumps({"observation_status": 429, "heartbeat_status": 204, "elapsed_s": round(time.monotonic() - started, 3)}))
+PY
 claude_out="$TEST_ROOT/claude-launch.out"
 set +e
 run_launch_bounded "$claude_out" 90 \
@@ -711,6 +768,11 @@ if [[ "$claude_status" != "0" ]]; then
 fi
 grep -q 'CLAUDE_LIFECYCLE_PTY_OK' "$claude_out" || fail "the scripted claude never ran under the PTY"
 echo "ok: longhouse claude launched against a real Runtime Host"
+claude_session_id="$(sed -n 's/^LONGHOUSE_FAKE_SESSION_ID=\([0-9a-f-]*\).*/\1/p' "$claude_out" | tail -1 | tr -d '\r')"
+[[ -n "$claude_session_id" ]] || fail "Claude launch did not expose its owned session identity"
+[[ "$(launch_attempt_state "$claude_session_id")" == "adopted" ]] \
+  || fail "observation saturation prevented the native Claude launch from confirming registration"
+echo "ok: authenticated observation saturation preserves native launch registration and heartbeat"
 
 # ---------------------------------------------------------------------------
 # 3c. Codex launches through the actual native app-server bridge. This fake

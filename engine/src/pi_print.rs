@@ -1330,6 +1330,12 @@ impl PiPrintSink {
                 let _ = registry.record_invocation_state(&self.run_id, state, count);
             }
         }
+        crate::status_slot::retire_console_run(
+            "pi",
+            PI_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+        );
     }
 
     fn persist_local_phase(

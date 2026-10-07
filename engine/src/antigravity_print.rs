@@ -1113,6 +1113,12 @@ impl AntigravityPrintSink {
                 .then(|| stderr.clone())
                 .flatten(),
         );
+        crate::status_slot::retire_console_run(
+            "antigravity",
+            ANTIGRAVITY_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+        );
     }
 
     fn persist_local_phase(

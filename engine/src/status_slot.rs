@@ -18,11 +18,12 @@
 //! sends the newer value next tick. A daemon restart re-reads the slots and is
 //! immediately current.
 
-use std::collections::HashMap;
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -247,10 +248,19 @@ pub fn slot_path(dir: &Path, session_id: &str) -> PathBuf {
 
 /// Overwrite this session's slot. Atomic for readers, not fsynced.
 pub fn publish(dir: &Path, slot: &StatusSlot) -> std::io::Result<()> {
+    prepare_status_dir(dir)?;
+    let _guard = lock_session(dir, &slot.session_id)?;
+    publish_locked(dir, slot)
+}
+
+fn prepare_status_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
 
+fn publish_locked(dir: &Path, slot: &StatusSlot) -> std::io::Result<()> {
     let ready = slot_path(dir, &slot.session_id);
     // A unique temp name per write, created exclusively: two writers sharing
     // one temp path can interleave their bytes and publish the mixture.
@@ -288,7 +298,7 @@ pub fn publish(dir: &Path, slot: &StatusSlot) -> std::io::Result<()> {
 ///
 /// Returns whether the slot was written.
 pub fn publish_if_newer(dir: &Path, slot: &StatusSlot) -> std::io::Result<bool> {
-    std::fs::create_dir_all(dir)?;
+    prepare_status_dir(dir)?;
     let _guard = lock_session(dir, &slot.session_id)?;
     if let Some(current) = read_slot(&slot_path(dir, &slot.session_id)) {
         let (Some(existing), Some(incoming)) = (
@@ -297,14 +307,14 @@ pub fn publish_if_newer(dir: &Path, slot: &StatusSlot) -> std::io::Result<bool> 
         ) else {
             // An unreadable timestamp on either side is not evidence that this
             // observation is older, so publishing is the safe direction.
-            publish(dir, slot)?;
+            publish_locked(dir, slot)?;
             return Ok(true);
         };
         if existing > incoming {
             return Ok(false);
         }
     }
-    publish(dir, slot)?;
+    publish_locked(dir, slot)?;
     Ok(true)
 }
 
@@ -371,44 +381,22 @@ pub fn read_all(dir: &Path) -> Vec<StatusSlot> {
     slots
 }
 
-/// Drop a session's slot. The producer does this when the session ends.
-pub fn retire(dir: &Path, session_id: &str) {
-    let _ = std::fs::remove_file(slot_path(dir, session_id));
-}
-
-/// Age after which a slot no producer is maintaining is removed. A crashed
-/// launcher cannot retire its own slot, and nothing else knows it is gone.
-pub const STATUS_SLOT_ABANDONED_AFTER: std::time::Duration =
-    std::time::Duration::from_secs(24 * 60 * 60);
-
-/// Remove slots nothing has touched for a day. Bounded work: the directory
-/// holds one file per session.
-pub fn sweep_abandoned(dir: &Path, older_than: std::time::Duration) -> usize {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let now = std::time::SystemTime::now();
-    let mut removed = 0usize;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_slot = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".json") && !name.starts_with('.'));
-        if !is_slot {
-            continue;
-        }
-        let abandoned = entry
-            .metadata()
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age > older_than);
-        if abandoned && std::fs::remove_file(&path).is_ok() {
-            removed += 1;
-        }
+/// Drop a slot only when it still belongs to the run that ended.
+///
+/// The per-session lock orders this with slot writers, so a delayed terminal
+/// callback cannot remove a successor's status.
+pub fn retire_if_run(dir: &Path, session_id: &str, run_id: &str) -> std::io::Result<bool> {
+    prepare_status_dir(dir)?;
+    let _guard = lock_session(dir, session_id)?;
+    let path = slot_path(dir, session_id);
+    if !read_slot(&path).is_some_and(|slot| slot.run_id == run_id) {
+        return Ok(false);
     }
-    removed
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// Writes one session's status slot.
@@ -489,6 +477,15 @@ pub fn publish_console_phase(
     );
 }
 
+/// Retire the current status for one Console turn.
+///
+/// Unlike a Helm session, a Console session can run another turn after its
+/// invocation closes. Retirement is therefore scoped to the run, not latched
+/// for the lifetime of the cached per-session publisher.
+pub fn retire_console_run(provider: &str, transport: &str, session_id: &str, run_id: &str) {
+    publisher_for(provider, transport, session_id).retire_run(session_id, run_id);
+}
+
 /// Publishers are per session and per process: the epoch and sequence they
 /// carry are how the daemon tells a fresh statement from one it already sent,
 /// so a provider that publishes from free functions shares one here rather
@@ -498,7 +495,7 @@ static PUBLISHERS: std::sync::OnceLock<Mutex<HashMap<(String, String), Arc<Statu
 
 pub fn publisher_for(provider: &str, transport: &str, session_id: &str) -> Arc<StatusPublisher> {
     let registry = PUBLISHERS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = registry.lock().expect("status publisher registry poisoned");
+    let mut guard = registry.lock();
     guard
         .entry((provider.to_string(), session_id.to_string()))
         .or_insert_with(|| Arc::new(StatusPublisher::for_provider(provider, transport)))
@@ -516,12 +513,14 @@ pub struct StatusPublisher {
 
 #[derive(Default)]
 struct StatusPublisherState {
+    run_id: Option<String>,
+    /// A delayed callback cannot reclaim a run superseded in this process.
+    superseded_runs: HashSet<String>,
     preview: Option<StatusPreview>,
     last_written: Option<Instant>,
     last_phase: Option<(String, Option<String>, Option<String>)>,
     seq: u64,
-    /// A retired session has no current status. Nothing may recreate its slot,
-    /// including a frame that was already in flight when the run ended.
+    /// The current run is retired, including frames already in flight.
     retired: bool,
 }
 
@@ -566,10 +565,20 @@ impl StatusPublisher {
             preview,
             extra_payload,
         } = update;
-        // The lock is held across the write. Dropping it first let two frames
-        // race and land out of order, so the slot could end up holding the
-        // older of two states under the newer sequence.
-        let mut guard = self.state.lock().expect("status publisher mutex poisoned");
+        let mut guard = self.state.lock();
+        if guard.superseded_runs.contains(run_id) {
+            return;
+        }
+        if guard.run_id.as_deref() != Some(run_id) {
+            if let Some(previous) = guard.run_id.take() {
+                guard.superseded_runs.insert(previous);
+            }
+            guard.run_id = Some(run_id.to_string());
+            guard.preview = None;
+            guard.last_written = None;
+            guard.last_phase = None;
+            guard.retired = false;
+        }
         if guard.retired {
             return;
         }
@@ -642,26 +651,43 @@ impl StatusPublisher {
     /// A new turn starts with no preview. Without this the next phase snapshot
     /// carries the previous turn's text.
     pub fn clear_preview(&self) {
-        let mut guard = self.state.lock().expect("status publisher mutex poisoned");
+        let mut guard = self.state.lock();
         guard.preview = None;
     }
 
-    /// The run is over: there is no current status to state. Callers retire
-    /// only once the terminal record is durable, so a failure in between
-    /// cannot lose both the status and the evidence that the run ended.
-    pub fn retire(&self, session_id: &str) {
-        let mut guard = self.state.lock().expect("status publisher mutex poisoned");
+    /// Retire the current status only if it still belongs to `run_id`.
+    ///
+    /// A newer turn may already have replaced the slot while an older terminal
+    /// callback is winding down. The publisher state and the locked file check
+    /// both guard that transition.
+    pub fn retire_run(&self, session_id: &str, run_id: &str) {
+        let mut guard = self.state.lock();
+        if guard
+            .run_id
+            .as_deref()
+            .is_some_and(|current_run_id| current_run_id != run_id)
+        {
+            return;
+        }
+        guard.run_id = Some(run_id.to_string());
         guard.retired = true;
         guard.preview = None;
-        retire(&self.dir, session_id);
+        if let Err(error) = retire_if_run(&self.dir, session_id, run_id) {
+            eprintln!(
+                "[{}] status slot retirement failed for {} run {}: {error}",
+                self.provider, session_id, run_id
+            );
+        }
     }
-
-    /// Remove one session's slot while this publisher keeps running. A launch
-    /// that adopts another session goes on publishing under the adopted id, so
-    /// the slot it leaves behind must go without retiring the publisher.
-    pub fn remove_slot(&self, session_id: &str) {
-        let _guard = self.state.lock().expect("status publisher mutex poisoned");
-        retire(&self.dir, session_id);
+    /// Remove a slot left behind by an adopted session only if it still
+    /// belongs to the run whose terminal record was enqueued.
+    pub fn remove_slot_if_run(&self, session_id: &str, run_id: &str) -> std::io::Result<bool> {
+        let mut guard = self.state.lock();
+        if guard.run_id.as_deref() == Some(run_id) {
+            guard.retired = true;
+            guard.preview = None;
+        }
+        retire_if_run(&self.dir, session_id, run_id)
     }
 }
 
@@ -932,11 +958,11 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_session_leaves_nothing_behind() {
+    fn a_run_scoped_retirement_leaves_nothing_behind() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = status_slot_dir(tmp.path());
         publish(&dir, &slot("s1", "idle", 1)).expect("publish");
-        retire(&dir, "s1");
+        assert!(retire_if_run(&dir, "s1", "run-1").expect("retire matching run"));
         assert!(read_all(&dir).is_empty());
     }
 
@@ -1004,7 +1030,7 @@ mod tests {
             "each provider's events carry its own identity"
         );
 
-        publisher.retire("s1");
+        publisher.retire_run("s1", "run-1");
         assert!(read_all(&dir).is_empty());
         publisher.publish(StatusUpdate::phase(
             "s1",
@@ -1014,7 +1040,79 @@ mod tests {
         ));
         assert!(
             read_all(&dir).is_empty(),
-            "a retired session states nothing further"
+            "a retired run states nothing further"
+        );
+    }
+
+    #[test]
+    fn a_new_console_turn_republishes_and_an_old_run_cannot_retire_it() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = status_slot_dir(tmp.path());
+        let publisher = StatusPublisher::new(dir.clone(), "codex", "codex_app_server");
+
+        publisher.publish(StatusUpdate::phase(
+            "session-1",
+            "run-1",
+            "2026-09-17T15:00:01Z",
+            "thinking",
+        ));
+        publisher.retire_run("session-1", "run-1");
+        assert!(
+            read_all(&dir).is_empty(),
+            "a settled Console turn has no current status"
+        );
+
+        publisher.publish(StatusUpdate::phase(
+            "session-1",
+            "run-2",
+            "2026-09-17T15:00:02Z",
+            "thinking",
+        ));
+        let successor = read_all(&dir).pop().expect("new turn status");
+        assert_eq!(successor.run_id, "run-2");
+        assert_eq!(successor.phase, "thinking");
+
+        publisher.retire_run("session-1", "run-1");
+        assert_eq!(
+            read_all(&dir)
+                .pop()
+                .expect("successor remains current")
+                .run_id,
+            "run-2",
+            "a late terminal for the earlier run must not remove the successor"
+        );
+        publisher.publish(StatusUpdate::phase(
+            "session-1",
+            "run-1",
+            "2026-09-17T15:00:05Z",
+            "running",
+        ));
+        let current = read_all(&dir).pop().expect("successor status");
+        assert_eq!(current.run_id, "run-2");
+        assert_eq!(current.phase, "thinking");
+
+        let stale_owner = StatusPublisher::new(dir.clone(), "codex", "codex_app_server");
+        stale_owner.publish(StatusUpdate::phase(
+            "session-2",
+            "run-old",
+            "2026-09-17T15:00:03Z",
+            "thinking",
+        ));
+        let successor_owner = StatusPublisher::new(dir.clone(), "codex", "codex_app_server");
+        successor_owner.publish(StatusUpdate::phase(
+            "session-2",
+            "run-new",
+            "2026-09-17T15:00:04Z",
+            "running",
+        ));
+        stale_owner.retire_run("session-2", "run-old");
+        let successor = read_all(&dir)
+            .into_iter()
+            .find(|slot| slot.session_id == "session-2")
+            .expect("successor slot");
+        assert_eq!(
+            successor.run_id, "run-new",
+            "an independent old publisher cannot remove a successor slot"
         );
     }
 
@@ -1048,24 +1146,6 @@ mod tests {
             resolved.seq > pending.seq,
             "the change was published, not coalesced"
         );
-    }
-
-    #[test]
-    fn abandoned_slots_are_swept_and_live_ones_are_not() {
-        let tmp = TempDir::new().expect("tempdir");
-        let dir = status_slot_dir(tmp.path());
-        publish(&dir, &slot("s1", "thinking", 1)).expect("publish");
-
-        assert_eq!(
-            sweep_abandoned(&dir, std::time::Duration::from_secs(3600)),
-            0
-        );
-        assert_eq!(read_all(&dir).len(), 1, "a fresh slot is current truth");
-
-        // A launcher that crashed cannot retire its own slot, and nothing else
-        // knows it is gone.
-        assert_eq!(sweep_abandoned(&dir, std::time::Duration::ZERO), 1);
-        assert!(read_all(&dir).is_empty());
     }
 
     /// Two threads publishing the same session raced through one shared temp

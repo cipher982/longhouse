@@ -252,10 +252,10 @@ async def upsert_presence(
         session_uuid = None
 
     if live_store_configured():
-        from zerg.routers.runtime import ingest_runtime_observation_batch
+        from zerg.routers.runtime import apply_runtime_observation_batch
 
         runtime_response = Response()
-        await ingest_runtime_observation_batch(
+        await apply_runtime_observation_batch(
             RuntimeEventBatchIngest(events=runtime_events),
             runtime_response,
             db,

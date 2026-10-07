@@ -19,7 +19,6 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.cli.sessions import _parse_retry_after
 from zerg.cli.sessions import continue_session
 from zerg.dependencies.agents_auth import _rate_buckets
-from zerg.dependencies.agents_auth import _rate_limit_lane
 from zerg.dependencies.agents_auth import _rate_lock
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
@@ -35,33 +34,6 @@ def _req(method: str, path: str, token: str = "zdt_test_token") -> Request:
             "query_string": b"",
         }
     )
-
-
-def test_rate_limit_lane_classification():
-    # Read lane
-    assert _rate_limit_lane(_req("GET", "/api/agents/sessions/stream")) == "read"
-    assert _rate_limit_lane(_req("GET", "/api/agents/sessions/123/tail")) == "read"
-    assert _rate_limit_lane(_req("HEAD", "/api/agents/storage/v2/media/abc")) == "read"
-
-    # Control lane (session steering and direct interaction)
-    assert _rate_limit_lane(_req("POST", "/api/agents/sessions/123/send-live")) == "control"
-    assert _rate_limit_lane(_req("POST", "/api/agents/sessions/123/interrupt-live")) == "control"
-    assert _rate_limit_lane(_req("POST", "/api/agents/sessions/123/turns/current/interrupt")) == "control"
-    assert _rate_limit_lane(_req("POST", "/api/agents/sessions/123/terminate-live")) == "control"
-    assert _rate_limit_lane(_req("POST", "/api/agents/sessions/123/inputs")) == "control"
-    assert _rate_limit_lane(_req("POST", "/api/agents/directed-inputs")) == "control"
-    assert _rate_limit_lane(_req("POST", "/api/agents/directed-inputs/123/reply")) == "control"
-    assert _rate_limit_lane(_req("POST", "/api/agents/sessions/123/pause-responses")) == "control"
-
-    # Ingest lane (high-frequency background agent traffic)
-    assert _rate_limit_lane(_req("POST", "/api/agents/runtime/events/batch")) == "ingest"
-    assert _rate_limit_lane(_req("POST", "/api/agents/presence")) == "ingest"
-    assert _rate_limit_lane(_req("POST", "/api/agents/heartbeat")) == "ingest"
-
-    # Storage lane (storage-v2 writes admitted by resource-aware backpressure)
-    assert _rate_limit_lane(_req("POST", "/api/agents/storage/v2/envelopes")) == "storage"
-    assert _rate_limit_lane(_req("POST", "/api/agents/storage/v2/media/claims")) == "storage"
-    assert _rate_limit_lane(_req("PUT", "/api/agents/storage/v2/media/" + "a" * 64)) == "storage"
 
 
 def test_control_lane_isolated_from_ingest_floods(monkeypatch):
@@ -83,15 +55,15 @@ def test_control_lane_isolated_from_ingest_floods(monkeypatch):
         _rate_buckets.clear()
 
     # Saturate the ingest bucket (limit = 2)
-    req_ingest1 = _req("POST", "/api/agents/runtime/events/batch")
+    req_ingest1 = _req("POST", "/api/agents/presence")
     verify_agents_token(req_ingest1)
     assert req_ingest1.state.agents_rate_key == f"device:{device_id}:ingest"
 
-    req_ingest2 = _req("POST", "/api/agents/runtime/events/batch")
+    req_ingest2 = _req("POST", "/api/agents/presence")
     verify_agents_token(req_ingest2)
 
     # 3rd ingest request is 429 rate-limited
-    req_ingest3 = _req("POST", "/api/agents/runtime/events/batch")
+    req_ingest3 = _req("POST", "/api/agents/presence")
     with pytest.raises(HTTPException) as exc_info:
         verify_agents_token(req_ingest3)
     assert exc_info.value.status_code == 429
@@ -139,9 +111,9 @@ def test_history_import_writes_do_not_consume_the_ingest_bucket(monkeypatch):
     with _rate_lock:
         assert f"device:{device_id}:storage" not in _rate_buckets
     for _ in range(2):
-        verify_agents_token(_req("POST", "/api/agents/runtime/events/batch"))
+        verify_agents_token(_req("POST", "/api/agents/presence"))
     with pytest.raises(HTTPException) as exc_info:
-        verify_agents_token(_req("POST", "/api/agents/runtime/events/batch"))
+        verify_agents_token(_req("POST", "/api/agents/presence"))
     assert exc_info.value.status_code == 429
 
 

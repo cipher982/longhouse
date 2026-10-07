@@ -4,8 +4,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
 use crate::process_identity::{lstart_matches_recorded, ProcessFact};
 
 pub use crate::omp_helm_control::default_omp_helm_state_dir;
@@ -36,7 +34,7 @@ pub struct OmpHelmObservation {
     pub control_ready: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 struct OmpHelmStateFile {
     session_id: Option<String>,
     native_session_id: Option<String>,
@@ -57,7 +55,87 @@ struct OmpHelmStateFile {
     status: Option<String>,
     terminal_state: Option<String>,
     #[serde(default)]
+    session_dir: Option<String>,
+    #[serde(default)]
     ready: bool,
+}
+
+/// Resolve a launch-scoped source before the claim projector reaches the DB.
+/// A reported native identity is control evidence; archive admission requires
+/// its exact bound claim and provider-authored header.
+pub(crate) fn source_ownership(path: &Path) -> anyhow::Result<crate::omp_session::SourceOwnership> {
+    let Some(state_dir) = default_omp_helm_state_dir() else {
+        return Ok(crate::omp_session::SourceOwnership::Unclaimed);
+    };
+    source_ownership_in(&state_dir, path)
+}
+
+fn source_ownership_in(
+    state_dir: &Path,
+    path: &Path,
+) -> anyhow::Result<crate::omp_session::SourceOwnership> {
+    let stable = crate::storage_v2_shipper::stable_source_path;
+    let mut owner = None;
+    let mut pending = false;
+    for state_path in crate::managed_scan::state_file_paths(state_dir) {
+        let Ok(bytes) = fs::read(&state_path) else {
+            continue;
+        };
+        let Ok(state) = serde_json::from_slice::<OmpHelmStateFile>(&bytes) else {
+            continue;
+        };
+        let (Some(session_id), Some(run_id), Some(session_dir)) = (
+            state.session_id.as_deref(),
+            state.run_id.as_deref(),
+            state.session_dir.as_deref(),
+        ) else {
+            continue;
+        };
+        if uuid::Uuid::parse_str(session_id).is_err()
+            || uuid::Uuid::parse_str(run_id).is_err()
+            || state_path.file_stem().and_then(|name| name.to_str()) != Some(session_id)
+            || !crate::omp_session::session_file_path_in_session_dir(Path::new(session_dir), path)
+        {
+            continue;
+        }
+        let claim = crate::managed_source_claim::read_claim(session_id)?;
+        if let Some(claim) = claim.filter(|claim| {
+            claim.provider == "omp"
+                && claim.state == crate::managed_source_claim::ClaimState::Bound
+                && stable(Path::new(&claim.source_path)) == stable(path)
+        }) {
+            let native_id = claim
+                .native_session_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("bound OMP source has no native identity"))?;
+            anyhow::ensure!(
+                state.native_session_id.as_deref() == Some(native_id),
+                "OMP Helm source claim disagrees with the reported native identity"
+            );
+            crate::omp_session::verify_session_header(path, native_id, Some(&claim.cwd))?;
+            anyhow::ensure!(
+                owner
+                    .as_deref()
+                    .is_none_or(|existing| existing == session_id),
+                "OMP source has conflicting managed Helm owners"
+            );
+            owner = Some(session_id.to_string());
+        } else if state.terminal_state.as_deref().is_none_or(str::is_empty)
+            && matches!(
+                state.status.as_deref(),
+                Some("starting" | "running" | "ready" | "degraded" | "switching")
+            )
+        {
+            pending = true;
+        }
+    }
+    Ok(if pending {
+        crate::omp_session::SourceOwnership::Pending
+    } else if let Some(owner) = owner {
+        crate::omp_session::SourceOwnership::Managed(owner)
+    } else {
+        crate::omp_session::SourceOwnership::Unclaimed
+    })
 }
 
 pub(crate) fn collect_observations_from_processes(
@@ -372,5 +450,73 @@ mod tests {
             !observations[0].control_ready,
             "a missing control socket cannot advertise ready control"
         );
+    }
+    #[test]
+    fn fresh_helm_source_stays_pending_until_its_exact_native_bind() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let state_dir = temp.path().join("omp-helm");
+            let session_dir = temp.path().join("omp-sessions/longhouse-scope");
+            fs::create_dir_all(&state_dir).unwrap();
+            fs::create_dir_all(&session_dir).unwrap();
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let state_path = state_dir.join(format!("{session_id}.json"));
+            let mut state = serde_json::json!({
+                "session_id": session_id,
+                "run_id": run_id,
+                "session_dir": session_dir,
+                "native_session_id": "",
+                "status": "starting",
+                "ready": false,
+            });
+            fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+            let source = session_dir.join("2026-10-06T10-00-00-000Z_native-id.jsonl");
+            fs::write(
+                &source,
+                "{\"type\":\"session\",\"version\":3,\"id\":\"native-id\",\"cwd\":\"/workspace\"}\n",
+            ).unwrap();
+            assert!(matches!(
+                source_ownership_in(&state_dir, &source).unwrap(),
+                crate::omp_session::SourceOwnership::Pending
+            ));
+            assert!(matches!(
+                source_ownership_in(&state_dir, &temp.path().join("unclaimed.jsonl")).unwrap(),
+                crate::omp_session::SourceOwnership::Unclaimed
+            ));
+
+            state["native_session_id"] = serde_json::json!("native-id");
+            state["status"] = serde_json::json!("ready");
+            state["ready"] = serde_json::json!(true);
+            fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+            crate::managed_source_claim::reserve(
+                &session_id,
+                "omp",
+                &source,
+                Path::new("/workspace"),
+                None,
+                None,
+            )
+            .unwrap();
+            assert!(matches!(
+                source_ownership_in(&state_dir, &source).unwrap(),
+                crate::omp_session::SourceOwnership::Pending
+            ));
+            crate::managed_source_claim::confirm_identity(
+                &session_id,
+                "omp",
+                &source,
+                "native-id",
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                source_ownership_in(&state_dir, &source).unwrap(),
+                crate::omp_session::SourceOwnership::Managed(session_id)
+            );
+        });
     }
 }

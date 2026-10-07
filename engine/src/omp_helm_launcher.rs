@@ -10,12 +10,13 @@ use std::net::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -396,6 +397,8 @@ struct OmpHelmStateFile {
     tool_name: Option<String>,
     title: Option<String>,
     ready: bool,
+    #[serde(default)]
+    provider_session_started: bool,
     pending_transition: bool,
     #[serde(default)]
     initial_prompt_delivered: bool,
@@ -454,6 +457,8 @@ struct SharedState {
     /// Earliest time a later activity frame may retry a native-identity binding
     /// that never succeeded. See `IDENTITY_RECONCILE_INTERVAL`.
     identity_retry_after: Option<Instant>,
+    /// Native controls can be ready before OMP flushes its first history file.
+    native_source_bound: bool,
 }
 
 /// What a running launch needs to become another session's run: the machine
@@ -520,6 +525,7 @@ impl OmpHelmServer {
                 live_turn_seq: 0,
                 live_message_seq: 0,
                 identity_retry_after: None,
+                native_source_bound: false,
             })),
             socket_path,
             state_path: Arc::new(Mutex::new(state_path)),
@@ -555,37 +561,23 @@ impl OmpHelmServer {
     }
 
     fn persist_state(&self) -> Result<()> {
-        let _lock = self
-            .persist_lock
-            .lock()
-            .expect("OMP state persist mutex poisoned");
-        let state = self
-            .shared
-            .lock()
-            .expect("OMP state mutex poisoned")
-            .state
-            .clone();
+        let _lock = self.persist_lock.lock();
+        let state = self.shared.lock().state.clone();
         write_json_private(&self.state_path(), &state)
     }
 
     fn state_path(&self) -> PathBuf {
-        self.state_path
-            .lock()
-            .expect("OMP state path mutex poisoned")
-            .clone()
+        self.state_path.lock().clone()
     }
 
     fn take_launch_registration_retry(
         &self,
     ) -> Option<crate::managed_launch_lifecycle::ManagedRegistrationRetry> {
-        self.launch_registration_retry
-            .lock()
-            .expect("OMP registration retry mutex poisoned")
-            .take()
+        self.launch_registration_retry.lock().take()
     }
 
     fn enable_adoption(&self, context: AdoptionContext) {
-        *self.adoption.lock().expect("OMP adoption mutex poisoned") = Some(context);
+        *self.adoption.lock() = Some(context);
     }
 
     fn handle_connection(&self, stream: std::os::unix::net::UnixStream) {
@@ -638,7 +630,7 @@ impl OmpHelmServer {
         };
         let (sender, receiver) = mpsc::channel::<Value>();
         let previous_socket = {
-            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            let mut state = self.shared.lock();
             fail_pending_locked(&mut state, "OMP extension connection replaced");
             let previous_socket = state.extension_socket.take();
             state.extension_socket = Some(socket);
@@ -683,22 +675,22 @@ impl OmpHelmServer {
     }
 
     fn base_authority_matches(&self, frame: &Value) -> bool {
-        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let state = self.shared.lock();
         frame.get("auth_token").and_then(Value::as_str) == Some(state.state.channel_token.as_str())
             && frame_names_this_launch_locked(&state, frame)
     }
     fn extension_base_authority_matches(&self, connection_id: &str, frame: &Value) -> bool {
-        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let state = self.shared.lock();
         extension_base_authority_matches_locked(&state, connection_id, frame)
     }
 
     fn extension_identity_matches(&self, frame: &Value) -> bool {
-        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let state = self.shared.lock();
         extension_identity_matches_locked(&state, frame)
     }
 
     fn activity_identity_reconciliation_allowed(&self) -> bool {
-        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let state = self.shared.lock();
         !state.state.pending_transition
             && state.state.status != "stopped"
             && state.state.terminal_state.is_none()
@@ -708,13 +700,7 @@ impl OmpHelmServer {
     /// Whether this session's native identity has been committed to the source
     /// of truth. False means the launcher has nothing to attribute activity to.
     fn has_committed_identity(&self) -> bool {
-        !self
-            .shared
-            .lock()
-            .expect("OMP state mutex poisoned")
-            .state
-            .native_session_id
-            .is_empty()
+        !self.shared.lock().state.native_session_id.is_empty()
     }
     /// Guards shared by both identity-reconcile paths: a frame may only bind the
     /// session's source when it carries the base authority, the session can
@@ -728,26 +714,28 @@ impl OmpHelmServer {
     /// arms the spacing window. Callers must establish that the frame is
     /// eligible to bind first, so an ineligible frame cannot postpone a retry.
     fn uncommitted_identity_needs_reconcile(&self, frame: &Value) -> bool {
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        let mut state = self.shared.lock();
         let now = Instant::now();
-        let due = should_reconcile_uncommitted_identity(
-            &state.state.native_session_id,
-            frame,
-            state.identity_retry_after,
-            now,
-        );
+        let pending_source_materialized = !state.native_source_bound
+            && has_native_session_identity(frame)
+            && frame
+                .get("session_file")
+                .and_then(Value::as_str)
+                .is_some_and(|source| Path::new(source).is_file());
+        let due = pending_source_materialized
+            || should_reconcile_uncommitted_identity(
+                &state.state.native_session_id,
+                frame,
+                state.identity_retry_after,
+                now,
+            );
         if due {
             state.identity_retry_after = Some(now + IDENTITY_RECONCILE_INTERVAL);
         }
         due
     }
     fn terminal_turn_is_latched(&self) -> bool {
-        self.shared
-            .lock()
-            .expect("OMP state mutex poisoned")
-            .state
-            .agent_end_is_terminal
-            == Some(true)
+        self.shared.lock().state.agent_end_is_terminal == Some(true)
     }
     fn start_new_turn_locked(shared: &mut SharedState) {
         shared.live_turn_seq = shared.live_turn_seq.saturating_add(1);
@@ -769,7 +757,7 @@ impl OmpHelmServer {
         let Some(generation) = frame.get("turn_generation").and_then(Value::as_u64) else {
             return;
         };
-        let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
+        let mut shared = self.shared.lock();
         if shared.state.status == "stopped"
             || shared.state.terminal_state.is_some()
             || generation <= shared.observed_turn_generation
@@ -789,7 +777,7 @@ impl OmpHelmServer {
             return;
         };
         let generation = frame.get("turn_generation").and_then(Value::as_u64);
-        let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
+        let mut shared = self.shared.lock();
         if shared.state.status == "stopped"
             || shared.state.terminal_state.is_some()
             || generation.is_some_and(|value| value < shared.observed_turn_generation)
@@ -805,7 +793,7 @@ impl OmpHelmServer {
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let state = self.shared.lock();
         if !extension_base_authority_matches_locked(&state, connection_id, frame) {
             return false;
         }
@@ -835,7 +823,7 @@ impl OmpHelmServer {
 
     fn disconnect_extension(&self, connection_id: &str) {
         let socket = {
-            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            let mut state = self.shared.lock();
             if state.extension_connection_id.as_deref() != Some(connection_id) {
                 return;
             }
@@ -858,7 +846,7 @@ impl OmpHelmServer {
     }
 
     fn send_extension_frame(&self, connection_id: &str, frame: Value) {
-        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let state = self.shared.lock();
         if state.extension_connection_id.as_deref() == Some(connection_id) {
             if let Some(channel) = &state.extension_sender {
                 let _ = channel.send(frame);
@@ -868,16 +856,9 @@ impl OmpHelmServer {
 
     fn set_coordination_token(&self, token: &str) {
         let connection_id = {
-            let mut authority = self
-                .coordination_token
-                .lock()
-                .expect("OMP coordination token mutex poisoned");
+            let mut authority = self.coordination_token.lock();
             *authority = Some(token.to_owned());
-            self.shared
-                .lock()
-                .expect("OMP state mutex poisoned")
-                .extension_connection_id
-                .clone()
+            self.shared.lock().extension_connection_id.clone()
         };
         if let Some(connection_id) = connection_id {
             self.publish_coordination_token(&connection_id);
@@ -885,11 +866,7 @@ impl OmpHelmServer {
     }
 
     fn publish_coordination_token(&self, connection_id: &str) {
-        let token = self
-            .coordination_token
-            .lock()
-            .expect("OMP coordination token mutex poisoned")
-            .clone();
+        let token = self.coordination_token.lock().clone();
         if let Some(token) = token {
             self.send_extension_frame(
                 connection_id,
@@ -917,8 +894,15 @@ impl OmpHelmServer {
             .get("lease_generation")
             .and_then(Value::as_str)
             .context("OMP extension frame has no lease generation")?;
-        let (session_id, previous, previous_source, expected_generation, expected_pending) = {
-            let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let (
+            session_id,
+            previous,
+            previous_source,
+            expected_generation,
+            expected_pending,
+            launch_session_dir,
+        ) = {
+            let state = self.shared.lock();
             anyhow::ensure!(
                 state.extension_connection_id.as_deref() == Some(connection_id),
                 "OMP extension connection was replaced"
@@ -937,6 +921,7 @@ impl OmpHelmServer {
                 state.state.session_file.clone(),
                 state.state.lease_generation.clone(),
                 state.state.pending_transition,
+                state.state.session_dir.clone(),
             )
         };
         if !replacement {
@@ -960,6 +945,15 @@ impl OmpHelmServer {
             }
         }
         let adoption = self.adoption_target(&session_id, Path::new(source), native_id)?;
+        if previous.is_empty() && !replacement && adoption.is_none() {
+            anyhow::ensure!(
+                crate::omp_session::session_file_path_in_session_dir(
+                    Path::new(&launch_session_dir),
+                    Path::new(source)
+                ),
+                "OMP fresh native source is outside its launch-scoped session directory"
+            );
+        }
         let bind_session = adoption
             .as_ref()
             .map(|adoption| adoption.target.session_id.clone())
@@ -969,7 +963,7 @@ impl OmpHelmServer {
         // minting a Shadow session in this transition window. This is a local
         // file, so the archive database is not on the path to `ready` at all.
         {
-            let state = self.shared.lock().expect("OMP state mutex poisoned");
+            let state = self.shared.lock();
             identity_commit_authority_matches_locked(
                 &state,
                 connection_id,
@@ -986,6 +980,25 @@ impl OmpHelmServer {
             snapshot.provider_pid,
             snapshot.provider_process_start_time.clone(),
         )?;
+        let provider_started = {
+            let mut state = self.shared.lock();
+            identity_commit_authority_matches_locked(
+                &state,
+                connection_id,
+                &expected_generation,
+                expected_pending,
+            )?;
+            if state.state.provider_session_started {
+                false
+            } else {
+                state.state.provider_session_started = true;
+                state.state.updated_at = Utc::now().to_rfc3339();
+                true
+            }
+        };
+        if provider_started {
+            self.persist_state()?;
+        }
         // A repair may not inherit the launch header budget: it runs on the
         // session's activity reader thread, so its whole operation is bounded.
         let header_budget = match attempt {
@@ -993,9 +1006,35 @@ impl OmpHelmServer {
             BindingAttempt::Reconcile => RECONCILE_HEADER_TIMEOUT,
         };
         let deadline = Instant::now() + header_budget;
-        let header = loop {
-            match crate::omp_session::read_session_header(Path::new(source)) {
-                Ok(header) => break header,
+        let may_be_lazy = adoption.is_none()
+            && crate::omp_session::session_file_path_in_session_dir(
+                Path::new(&launch_session_dir),
+                Path::new(source),
+            )
+            && {
+                let state = self.shared.lock();
+                previous.is_empty()
+                    || !state.native_source_bound
+                    || previous != native_id
+                    || previous_source != source
+            };
+        let source_materialized = loop {
+            match crate::omp_session::verify_session_header(
+                Path::new(source),
+                native_id,
+                Some(&snapshot.cwd),
+            ) {
+                Ok(_) => break true,
+                Err(error)
+                    if may_be_lazy
+                        && error.chain().any(|cause| {
+                            cause
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                        }) =>
+                {
+                    break false;
+                }
                 Err(error) if Instant::now() < deadline => {
                     thread::sleep(Duration::from_millis(25));
                     drop(error);
@@ -1003,11 +1042,7 @@ impl OmpHelmServer {
                 Err(error) => return Err(error).context("waiting for OMP native session header"),
             }
         };
-        anyhow::ensure!(
-            header.native_id == native_id,
-            "OMP extension native identity does not match its source header"
-        );
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        let mut state = self.shared.lock();
         identity_commit_authority_matches_locked(
             &state,
             connection_id,
@@ -1019,22 +1054,21 @@ impl OmpHelmServer {
         // after this commit, but it cannot turn a late replacement ready.
         // `state` is held here, so read the fields directly rather than taking
         // the lock again (a std mutex is not reentrant).
-        crate::managed_source_claim::confirm_identity(
-            &bind_session,
-            "omp",
-            Path::new(source),
-            native_id,
-            state.state.provider_pid,
-            state.state.provider_process_start_time.clone(),
-        )?;
+        if source_materialized {
+            crate::managed_source_claim::confirm_identity(
+                &bind_session,
+                "omp",
+                Path::new(source),
+                native_id,
+                state.state.provider_pid,
+                state.state.provider_process_start_time.clone(),
+            )?;
+        }
         let adopted_from = adoption.as_ref().map(|adoption| {
             let launch = Self::adopt_locked(&mut state, adoption);
             // Move the state file with the identity, under the same lock, so no
             // concurrent persist writes the adopted session under the old name.
-            let mut path = self
-                .state_path
-                .lock()
-                .expect("OMP state path mutex poisoned");
+            let mut path = self.state_path.lock();
             *path = path.with_file_name(format!("{}.json", adoption.target.session_id));
             launch
         });
@@ -1048,6 +1082,7 @@ impl OmpHelmServer {
         state.state.ready = true;
         state.state.status = "ready".into();
         state.identity_retry_after = None;
+        state.native_source_bound = source_materialized;
         if recovered_from_degraded {
             state.state.terminal_reason = None;
         }
@@ -1072,7 +1107,9 @@ impl OmpHelmServer {
             self.finish_adoption(connection_id, launch, adoption)?;
         }
         self.persist_state()?;
-        self.publish_binding(Path::new(source), native_id, previous != native_id)?;
+        if source_materialized {
+            self.publish_binding(Path::new(source), native_id, previous != native_id)?;
+        }
         Ok(())
     }
 
@@ -1086,7 +1123,7 @@ impl OmpHelmServer {
         else {
             return false;
         };
-        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        let state = self.shared.lock();
         state.extension_connection_id.as_deref() == Some(connection_id)
             && state.state.lease_generation == expected_generation
             && state.state.pending_transition == replacement
@@ -1112,12 +1149,7 @@ impl OmpHelmServer {
         source: &Path,
         native_id: &str,
     ) -> Result<Option<Adoption>> {
-        if self
-            .adoption
-            .lock()
-            .expect("OMP adoption mutex poisoned")
-            .is_none()
-        {
+        if self.adoption.lock().is_none() {
             return Ok(None);
         }
         let state_path = self.state_path();
@@ -1202,10 +1234,7 @@ impl OmpHelmServer {
             .parent()
             .context("OMP state has no parent")?
             .to_path_buf();
-        *self
-            .adopted_lock
-            .lock()
-            .expect("OMP adoption mutex poisoned") = Some(adoption.lock);
+        *self.adopted_lock.lock() = Some(adoption.lock);
         drop(self.take_launch_registration_retry());
 
         let mut ended = launch;
@@ -1226,12 +1255,7 @@ impl OmpHelmServer {
             );
         }
 
-        let Some(context) = self
-            .adoption
-            .lock()
-            .expect("OMP adoption mutex poisoned")
-            .clone()
-        else {
+        let Some(context) = self.adoption.lock().clone() else {
             return Ok(());
         };
         let runtime_key = format!("omp:{}", ended.session_id);
@@ -1255,7 +1279,21 @@ impl OmpHelmServer {
             &home_state()?.join("agent/runtime-events-outbox"),
             &event,
         ) {
-            Ok(()) => self.status.remove_slot(&ended.session_id),
+            Ok(()) => match self
+                .status
+                .remove_slot_if_run(&ended.session_id, &ended.run_id)
+            {
+                Ok(true) => {}
+                Ok(false) => tracing::debug!(
+                    session_id = %ended.session_id,
+                    run_id = %ended.run_id,
+                    "adopted OMP run no longer owns the status slot"
+                ),
+                Err(error) => eprintln!(
+                    "[omp-helm] status slot retirement failed for adopted-from {} run {}: {error}",
+                    ended.session_id, ended.run_id
+                ),
+            },
             Err(error) => eprintln!(
                 "[omp-helm] terminal record enqueue failed for adopted-from {}: {error}",
                 ended.session_id
@@ -1280,7 +1318,7 @@ impl OmpHelmServer {
     }
 
     fn mark_degraded(&self, error: &anyhow::Error) {
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        let mut state = self.shared.lock();
         if state.state.status == "stopped" || state.state.terminal_state.is_some() {
             return;
         }
@@ -1375,7 +1413,7 @@ impl OmpHelmServer {
             return;
         }
         if matches!(kind, "session_before_switch" | "session_before_branch") {
-            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            let mut state = self.shared.lock();
             fail_pending_locked(&mut state, "OMP native session replacement started");
             state.state.ready = false;
             state.state.pending_transition = true;
@@ -1416,8 +1454,12 @@ impl OmpHelmServer {
             }
             "initial_prompt_request" => {
                 let granted = {
-                    let mut state = self.shared.lock().expect("OMP state mutex poisoned");
-                    if !state.state.ready || state.state.initial_prompt_delivered {
+                    let mut state = self.shared.lock();
+                    if !state.state.ready
+                        || state.state.native_session_id.is_empty()
+                        || state.state.session_file.is_empty()
+                        || state.state.initial_prompt_delivered
+                    {
                         false
                     } else {
                         state.state.initial_prompt_delivered = true;
@@ -1443,7 +1485,7 @@ impl OmpHelmServer {
                 }
             }
             "session_transition_cancelled" => {
-                let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+                let mut state = self.shared.lock();
                 if state.extension_connection_id.as_deref() != Some(connection_id)
                     || frame.get("lease_generation").and_then(Value::as_str)
                         != Some(state.state.lease_generation.as_str())
@@ -1480,13 +1522,7 @@ impl OmpHelmServer {
             }
             "command_result" => {
                 if let Some(request_id) = frame.get("request_id").and_then(Value::as_str) {
-                    if let Some(sender) = self
-                        .shared
-                        .lock()
-                        .expect("OMP state mutex poisoned")
-                        .pending
-                        .remove(request_id)
-                    {
+                    if let Some(sender) = self.shared.lock().pending.remove(request_id) {
                         let _ = sender.send(frame);
                     }
                 }
@@ -1537,7 +1573,7 @@ impl OmpHelmServer {
 
     fn reconcile_transition_timeout(&self, connection_id: &str, lease_generation: &str) {
         let (connection, generation) = {
-            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            let mut state = self.shared.lock();
             if state.extension_connection_id.as_deref() != Some(connection_id)
                 || !state.state.pending_transition
                 || state.state.lease_generation != lease_generation
@@ -1601,11 +1637,8 @@ impl OmpHelmServer {
         let live_delta = (kind == "message_update")
             .then(|| omp_live_text_delta(event).map(str::to_string))
             .flatten();
-        let _persist_lock = self
-            .persist_lock
-            .lock()
-            .expect("OMP state persist mutex poisoned");
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        let _persist_lock = self.persist_lock.lock();
+        let mut state = self.shared.lock();
         if state.state.status == "stopped" || state.state.terminal_state.is_some() {
             return;
         }
@@ -1719,11 +1752,8 @@ impl OmpHelmServer {
 
     fn record_keepalive_with_policy(&self, provider_idle: bool) {
         let (state, phase, tool) = {
-            let _persist_lock = self
-                .persist_lock
-                .lock()
-                .expect("OMP state persist mutex poisoned");
-            let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
+            let _persist_lock = self.persist_lock.lock();
+            let mut shared = self.shared.lock();
             if shared.state.status == "stopped" || shared.state.terminal_state.is_some() {
                 return;
             }
@@ -1795,7 +1825,7 @@ impl OmpHelmServer {
                 }),
             );
         }
-        let mut guard = self.shared.lock().expect("OMP state mutex poisoned");
+        let mut guard = self.shared.lock();
         guard.state.title = Some(title.to_string());
         guard.state.updated_at = Utc::now().to_rfc3339();
         drop(guard);
@@ -1907,10 +1937,7 @@ impl OmpHelmServer {
         sort_background_snapshot_items(&mut items);
         sort_background_snapshot_items(&mut recent_items);
 
-        let mut coalescer = self
-            .background_snapshot_coalescer
-            .lock()
-            .expect("OMP background snapshot mutex poisoned");
+        let mut coalescer = self.background_snapshot_coalescer.lock();
         if !coalescer.should_publish(&state, &items, &recent_items, Instant::now()) {
             return;
         }
@@ -2047,7 +2074,7 @@ impl OmpHelmServer {
                 .then(|| state.native_session_id.clone()),
         };
         let (phase, tool) = {
-            let shared = self.shared.lock().expect("OMP state mutex poisoned");
+            let shared = self.shared.lock();
             (shared.state.phase.clone(), shared.state.tool_name.clone())
         };
         self.status.publish(
@@ -2089,7 +2116,7 @@ impl OmpHelmServer {
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let (sender, receiver) = mpsc::channel();
         {
-            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            let mut state = self.shared.lock();
             if !remote_authority_matches_locked(&state, &frame) {
                 return channel_error("stale_channel", "OMP Helm channel identity rejected");
             }
@@ -2163,11 +2190,7 @@ impl OmpHelmServer {
         match receiver.recv_timeout(COMMAND_TIMEOUT) {
             Ok(response) => response,
             Err(_) => {
-                self.shared
-                    .lock()
-                    .expect("OMP state mutex poisoned")
-                    .pending
-                    .remove(&request_id);
+                self.shared.lock().pending.remove(&request_id);
                 channel_error(
                     "command_indeterminate",
                     "OMP extension did not acknowledge the command; delivery outcome is unknown",
@@ -2177,11 +2200,8 @@ impl OmpHelmServer {
     }
 
     fn mark_stopped(&self, exit_code: Option<i32>, reason: &str) -> Result<()> {
-        let _persist_lock = self
-            .persist_lock
-            .lock()
-            .expect("OMP state persist mutex poisoned");
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        let _persist_lock = self.persist_lock.lock();
+        let mut state = self.shared.lock();
         state.state.status = "stopped".into();
         state.state.ready = false;
         state.state.phase = "idle".into();
@@ -2209,19 +2229,19 @@ impl OmpHelmServer {
         }
         write_json_private(&self.state_path(), &snapshot)
     }
-    fn wait_until_ready(&self) -> Result<()> {
+    fn wait_until_provider_session_started(&self) -> Result<()> {
         let deadline = Instant::now() + OMP_READY_TIMEOUT;
         loop {
             let state = self.current_state();
-            if state.ready && state.status == "ready" {
+            if state.provider_session_started {
                 return Ok(());
             }
             if state.status == "stopped" || state.terminal_state.is_some() {
-                anyhow::bail!("OMP exited before native session readiness");
+                anyhow::bail!("OMP exited before reporting its native session identity and path");
             }
             if Instant::now() >= deadline {
                 anyhow::bail!(
-                    "OMP native session did not become ready within {} seconds",
+                    "OMP did not report its native session identity and path within {} seconds",
                     OMP_READY_TIMEOUT.as_secs()
                 );
             }
@@ -2232,7 +2252,7 @@ impl OmpHelmServer {
     fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
         let socket = {
-            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            let mut state = self.shared.lock();
             settle_pending_terminate_locked(&mut state);
             fail_pending_locked(&mut state, "OMP Helm server is shutting down");
             state.extension_sender = None;
@@ -2248,11 +2268,7 @@ impl OmpHelmServer {
     }
 
     fn current_state(&self) -> OmpHelmStateFile {
-        self.shared
-            .lock()
-            .expect("OMP state mutex poisoned")
-            .state
-            .clone()
+        self.shared.lock().state.clone()
     }
 }
 
@@ -2766,23 +2782,64 @@ fn initial_prompt_delivered(prompt: Option<&str>) -> bool {
     prompt.map(str::trim).is_none_or(str::is_empty)
 }
 
+struct SelectedSessionStorage {
+    session_dir: PathBuf,
+    session_file: Option<PathBuf>,
+    fresh_directory: Option<crate::omp_session::FreshSessionDirectory>,
+}
+
 fn select_session_storage(
     resume_state: Option<&OmpHelmStateFile>,
     configured_session_dir: Option<&Path>,
     profile: Option<&str>,
     cwd: &Path,
-) -> Result<(PathBuf, PathBuf)> {
-    let session_dir = resume_state
-        .map(|state| PathBuf::from(&state.session_dir))
-        .or_else(|| configured_session_dir.map(Path::to_path_buf))
-        .or_else(|| crate::omp_session::session_dir_for_launch(cwd, profile).ok())
-        .context("OMP has no session directory")?;
-    crate::omp_session::ensure_session_dir_is_disjoint_from_pi(cwd, &session_dir)?;
-    let session_file = match resume_state {
-        Some(state) => PathBuf::from(&state.session_file),
-        None => crate::omp_session::reserve_session_path(&session_dir)?,
+) -> Result<SelectedSessionStorage> {
+    let session_root = match resume_state {
+        Some(state) => PathBuf::from(&state.session_dir),
+        None => match configured_session_dir {
+            Some(path) => path.to_path_buf(),
+            None => crate::omp_session::session_dir_for_launch(cwd, profile)?,
+        },
     };
-    Ok((session_dir, session_file))
+    crate::omp_session::ensure_session_dir_is_disjoint_from_pi(cwd, &session_root)?;
+    if let Some(state) = resume_state {
+        return Ok(SelectedSessionStorage {
+            session_dir: session_root,
+            session_file: Some(PathBuf::from(&state.session_file)),
+            fresh_directory: None,
+        });
+    }
+    let fresh_directory = crate::omp_session::FreshSessionDirectory::create(&session_root)?;
+    Ok(SelectedSessionStorage {
+        session_dir: fresh_directory.path().to_path_buf(),
+        session_file: None,
+        fresh_directory: Some(fresh_directory),
+    })
+}
+
+fn build_omp_helm_args(
+    session_dir: &Path,
+    resume_file: Option<&Path>,
+    extension: &Path,
+    profile: Option<&str>,
+    model: Option<&str>,
+) -> Vec<std::ffi::OsString> {
+    let mut args = vec!["--session-dir".into(), session_dir.as_os_str().to_owned()];
+    if let Some(resume_file) = resume_file {
+        args.push("--resume".into());
+        args.push(resume_file.as_os_str().to_owned());
+    }
+    args.push("-e".into());
+    args.push(extension.as_os_str().to_owned());
+    if let Some(profile) = profile {
+        args.push("--profile".into());
+        args.push(profile.into());
+    }
+    if let Some(model) = model {
+        args.push("--model".into());
+        args.push(model.into());
+    }
+    args
 }
 
 fn provisional_run_id(session_id: &str) -> String {
@@ -2942,7 +2999,11 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     };
     let _owner_lock = launch_lock(&session_id)?;
     let (model, profile) = effective_resume_settings(&config, resume_state.as_ref());
-    let (session_dir, session_file) = select_session_storage(
+    let SelectedSessionStorage {
+        session_dir,
+        session_file,
+        fresh_directory: _fresh_session_directory,
+    } = select_session_storage(
         resume_state.as_ref(),
         config.session_dir.as_deref(),
         profile.as_deref(),
@@ -2952,18 +3013,6 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .as_ref()
         .map(|state| state.native_session_id.clone())
         .unwrap_or_default();
-    // Claim the exact path before stock OMP can materialize its header. The
-    // daemon projects the claim into the binding discovery reads, before it
-    // enumerates sources, so the path cannot be minted as a Shadow session in
-    // the launch gap — and, unlike the hidden database write this replaced, a
-    // busy archive cannot fail the claim.
-    if let Err(error) =
-        crate::managed_source_claim::reserve(&session_id, "omp", &session_file, &cwd, None, None)
-    {
-        eprintln!(
-            "Longhouse: OMP source claim could not be written; continuing unclaimed: {error:#}"
-        );
-    }
     let (url, token, machine_name) = registration_credentials(&config)?;
     let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
     let run_id = resume_attempt_id
@@ -2973,7 +3022,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     let connection_id = Uuid::new_v4().to_string();
     let lease_generation = Uuid::new_v4().to_string();
     let channel_token = Uuid::new_v4().to_string();
-    let provider_config = json!({"session_dir": session_dir, "session_file": session_file, "profile": profile, "model": model, "native_session_id": native_id});
+    let provider_config = json!({"session_dir": session_dir, "session_file": session_file.as_ref().map(|path| path.display().to_string()), "profile": profile, "model": model, "native_session_id": native_id});
     let registration = launch_registration(
         &cwd,
         &machine_name,
@@ -3032,7 +3081,10 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         model: model.clone(),
         profile: profile.clone(),
         native_session_id: native_id,
-        session_file: session_file.display().to_string(),
+        session_file: session_file
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         cwd: cwd.display().to_string(),
         provider_binary: fs::canonicalize(&binary)
             .unwrap_or_else(|_| PathBuf::from(&binary))
@@ -3053,6 +3105,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         tool_name: None,
         title: None,
         ready: false,
+        provider_session_started: false,
         pending_transition: false,
         // A resume prompt is delivered by the extension through Pi's native
         // sendUserMessage path after the resumed session is bound.
@@ -3095,10 +3148,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             })),
         )
     });
-    *server
-        .launch_registration_retry
-        .lock()
-        .expect("OMP registration retry mutex poisoned") = degraded;
+    *server.launch_registration_retry.lock() = degraded;
     // Adopting a session happens on the extension's reader thread, inside a
     // five-second transition window, so its registration runs on the same
     // background retry a degraded launch uses rather than blocking the bind.
@@ -3128,10 +3178,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
                 })),
             );
             retry.provider_alive.store(true, Ordering::Release);
-            retries
-                .lock()
-                .expect("OMP adoption retry mutex poisoned")
-                .push(retry);
+            retries.lock().push(retry);
         }
     };
     server.enable_adoption(AdoptionContext {
@@ -3140,27 +3187,21 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     });
     let extension = write_extension_file(&state_root.join("extensions").join(&session_id))?;
     let mut command = Command::new(&binary);
-    // `--session-dir`/`--resume` bind OMP to the session file this launch
-    // reserved, and `current_dir` puts it in the caller's workspace. Dropping
-    // them (d35d0995f, while rewriting this spawn for coordination tokens)
-    // made OMP open its OWN workspace-scoped session instead: it then reported
-    // a source the launcher had never reserved, identity binding waited for a
-    // header at a path OMP had not materialized, and every OMP Helm session
-    // stayed `degraded` with `waiting for OMP native session header`.
+    // Fresh launches let OMP create its native session in the scoped directory.
+    // Cold resumes pass only the validated retained exact file. In both cases,
+    // the extension's session_start binds the provider-authored identity before
+    // the launch becomes ready.
     command
-        .arg("--session-dir")
-        .arg(&session_dir)
-        .arg("--resume")
-        .arg(&session_file)
-        .arg("-e")
-        .arg(&extension)
+        .args(build_omp_helm_args(
+            &session_dir,
+            session_file.as_deref(),
+            &extension,
+            profile.as_deref(),
+            model.as_deref(),
+        ))
         .current_dir(&cwd);
     if let Some(profile) = profile.as_deref() {
         command.env("OMP_PROFILE", profile);
-        command.arg("--profile").arg(profile);
-    }
-    if let Some(model) = model.as_deref() {
-        command.arg("--model").arg(model);
     }
     let current_state = server.current_state();
     let channel_path = server.socket_path.to_string_lossy().into_owned();
@@ -3191,26 +3232,18 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .apply(&mut command, &owned_env);
     let server_for_spawn = server.clone();
     let exit = match run_provider(&mut command, &server, &runtime, |pid| {
-        let mut state = server_for_spawn
-            .shared
-            .lock()
-            .expect("OMP state mutex poisoned");
+        let mut state = server_for_spawn.shared.lock();
         state.state.provider_pid = Some(pid);
         state.state.provider_process_start_time = process_start_time(Some(pid));
         state.state.status = "running".into();
         state.state.updated_at = Utc::now().to_rfc3339();
         drop(state);
         server_for_spawn.persist_state()?;
-        server_for_spawn.wait_until_ready()?;
+        server_for_spawn.wait_until_provider_session_started()?;
         if let Some(transaction) = transaction.as_mut() {
             transaction.confirm_or_degrade("OMP", &crate::config::get_agent_dir()?, &deferred);
         }
-        if let Some(registration) = server_for_spawn
-            .launch_registration_retry
-            .lock()
-            .expect("OMP registration retry mutex poisoned")
-            .as_ref()
-        {
+        if let Some(registration) = server_for_spawn.launch_registration_retry.lock().as_ref() {
             registration.provider_alive.store(true, Ordering::Release);
         }
         let current = server_for_spawn.current_state();
@@ -3266,7 +3299,9 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     // and failing here would leave neither a current status nor the evidence
     // that the run ended.
     match crate::managed_terminal::enqueue(&root.join("agent/runtime-events-outbox"), &event) {
-        Ok(()) => server.status.retire(&current.session_id),
+        Ok(()) => server
+            .status
+            .retire_run(&current.session_id, &current.run_id),
         Err(error) => eprintln!(
             "[omp-helm] terminal record enqueue failed for {}: {error}; keeping the status slot",
             current.session_id
@@ -3394,6 +3429,7 @@ mod tests {
             live_turn_seq: 0,
             live_message_seq: 0,
             ready: true,
+            provider_session_started: true,
             pending_transition: false,
             terminal_state: None,
             terminal_reason: None,
@@ -3748,6 +3784,7 @@ mod tests {
             live_turn_seq: 0,
             live_message_seq: 0,
             identity_retry_after: None,
+            native_source_bound: false,
         };
 
         settle_pending_terminate_locked(&mut shared);
@@ -3778,6 +3815,7 @@ mod tests {
             live_turn_seq: 0,
             live_message_seq: 0,
             identity_retry_after: None,
+            native_source_bound: false,
         };
         let frame = json!({
             "auth_token": "token",
@@ -3815,7 +3853,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -3838,6 +3876,99 @@ mod tests {
             assert_eq!(current.phase, "running");
             assert!(current.ready);
             assert_eq!(current.status, "ready");
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn fresh_controls_are_ready_before_lazy_history_and_bind_when_it_appears() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let storage =
+            crate::omp_session::FreshSessionDirectory::create(&temp.path().join("sessions"))
+                .unwrap();
+        let source = storage
+            .path()
+            .join("2026-10-07T00-00-00-000Z_lazy-native.jsonl");
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let mut initial = state();
+            initial.session_id = Uuid::new_v4().to_string();
+            initial.run_id = Uuid::new_v4().to_string();
+            initial.native_session_id.clear();
+            initial.session_file.clear();
+            initial.session_dir = storage.path().display().to_string();
+            initial.cwd = temp.path().display().to_string();
+            initial.ready = false;
+            initial.status = "starting".into();
+            let session_id = initial.session_id.clone();
+            let state_path = longhouse_home
+                .join("managed-local/omp-helm")
+                .join(format!("{session_id}.json"));
+            let socket_dir = temp.path().join("socket");
+            let server = OmpHelmServer::start(
+                initial,
+                socket_dir.join("channel.sock"),
+                socket_dir,
+                state_path,
+            )
+            .unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let mut frame = json!({
+                "kind": "session_start",
+                "auth_token": "token",
+                "session_id": session_id,
+                "native_session_id": "lazy-native",
+                "session_file": source,
+                "connection_id": "connection",
+                "lease_generation": "generation",
+            });
+            server.handle_extension_frame("connection", frame.clone());
+            assert!(server.current_state().ready);
+            assert!(
+                !source.exists(),
+                "a fresh TUI must not need a first prompt to become ready"
+            );
+            let claim = crate::managed_source_claim::read_claim(&session_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                claim.state,
+                crate::managed_source_claim::ClaimState::Reserved
+            );
+            assert_eq!(
+                crate::managed_omp_helm_scan::source_ownership(&source).unwrap(),
+                crate::omp_session::SourceOwnership::Pending
+            );
+            fs::write(
+                &source,
+                format!(
+                    "{}\n",
+                    json!({
+                        "type": "session", "id": "lazy-native", "cwd": temp.path(),
+                    })
+                ),
+            )
+            .unwrap();
+            frame["kind"] = json!("agent_start");
+            frame["event"] = json!({"type": "agent_start"});
+            server.handle_extension_frame("connection", frame);
+            assert_eq!(
+                crate::managed_source_claim::read_claim(&session_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                crate::managed_source_claim::ClaimState::Bound
+            );
+            assert_eq!(
+                crate::managed_omp_helm_scan::source_ownership(&source).unwrap(),
+                crate::omp_session::SourceOwnership::Managed(session_id)
+            );
             server.shutdown();
         });
     }
@@ -3899,6 +4030,7 @@ mod tests {
         initial.native_session_id = String::new();
         initial.session_file = String::new();
         initial.ready = false;
+        initial.session_dir = temp.path().display().to_string();
         initial.status = "degraded".into();
         initial.terminal_reason = Some("database is locked".into());
 
@@ -3907,7 +4039,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -3965,6 +4097,7 @@ mod tests {
         initial.native_session_id = String::new();
         initial.session_file = String::new();
         initial.ready = false;
+        initial.session_dir = temp.path().display().to_string();
         initial.status = "degraded".into();
         initial.terminal_reason = Some("database is locked".into());
 
@@ -3976,7 +4109,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4045,7 +4178,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4098,7 +4231,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
                 shared.identity_retry_after = Some(Instant::now() + Duration::from_secs(60));
@@ -4122,7 +4255,7 @@ mod tests {
             );
             assert!(current.ready);
             assert!(
-                server.shared.lock().unwrap().identity_retry_after.is_none(),
+                server.shared.lock().identity_retry_after.is_none(),
                 "a cancelled transition must not leave a window arming a later frame"
             );
             server.shutdown();
@@ -4156,7 +4289,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4206,6 +4339,7 @@ mod tests {
         initial.native_session_id = String::new();
         initial.session_file = String::new();
         initial.ready = false;
+        initial.session_dir = temp.path().display().to_string();
         initial.status = "degraded".into();
         initial.terminal_reason = Some("database is locked".into());
 
@@ -4214,7 +4348,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4279,6 +4413,7 @@ mod tests {
         initial.native_session_id = String::new();
         initial.session_file = String::new();
         initial.ready = false;
+        initial.session_dir = temp.path().display().to_string();
         initial.status = "degraded".into();
 
         temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
@@ -4286,7 +4421,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4305,7 +4440,7 @@ mod tests {
                 }),
             );
             assert!(
-                server.shared.lock().unwrap().identity_retry_after.is_none(),
+                server.shared.lock().identity_retry_after.is_none(),
                 "a frame that fails the base authority must not arm the retry window"
             );
 
@@ -4351,7 +4486,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4367,35 +4502,6 @@ mod tests {
                     "lease_generation": "generation"
                 })
             };
-            let read_json_files =
-                |directory: &std::path::Path| -> Vec<(std::path::PathBuf, serde_json::Value)> {
-                    let Ok(entries) = fs::read_dir(directory) else {
-                        return Vec::new();
-                    };
-                    entries
-                        .flatten()
-                        .filter(|entry| {
-                            entry.path().extension().and_then(|value| value.to_str())
-                                == Some("json")
-                        })
-                        .filter_map(|entry| {
-                            let path = entry.path();
-                            let value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
-                            Some((path, value))
-                        })
-                        .collect()
-                };
-            let new_json_file =
-                |before: &[(std::path::PathBuf, serde_json::Value)],
-                 after: &[(std::path::PathBuf, serde_json::Value)]| {
-                    after
-                        .iter()
-                        .find(|(path, _)| {
-                            !before.iter().any(|(before_path, _)| before_path == path)
-                        })
-                        .map(|(_, value)| value.clone())
-                        .unwrap()
-                };
             let persisted = || {
                 serde_json::from_slice::<serde_json::Value>(
                     &fs::read(&persisted_state_path).unwrap(),
@@ -4460,7 +4566,7 @@ mod tests {
             assert_eq!(slot_files(), 1);
 
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.state.updated_at = "2000-01-01T00:00:00+00:00".into();
             }
             server.handle_extension_frame("connection", keepalive(true));
@@ -4470,7 +4576,7 @@ mod tests {
             assert_eq!(persisted()["updated_at"], refreshed.updated_at);
 
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.state.phase = "unknown".into();
                 shared.state.tool_name = Some("stale".into());
             }
@@ -4533,7 +4639,7 @@ mod tests {
             };
             let before_delayed = server.current_state();
             let before_delayed_live = {
-                let shared = server.shared.lock().unwrap();
+                let shared = server.shared.lock();
                 (
                     shared.live_message_seq,
                     shared.live_text_seq,
@@ -4586,7 +4692,7 @@ mod tests {
                 before_delayed.agent_end_is_terminal
             );
             let delayed_live = {
-                let shared = server.shared.lock().unwrap();
+                let shared = server.shared.lock();
                 (
                     shared.live_message_seq,
                     shared.live_text_seq,
@@ -4667,7 +4773,7 @@ mod tests {
 
             // Once the terminal record is durable the slot goes, and nothing
             // that arrives afterwards recreates it.
-            server.status.retire("session");
+            server.status.retire_run("session", "run");
             assert!(slot().is_none(), "a retired run has no current status");
             server.handle_extension_frame("connection", keepalive(false));
             assert_eq!(slot_files(), 0, "a retired slot is never recreated");
@@ -4776,7 +4882,7 @@ mod tests {
                 OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4809,7 +4915,7 @@ mod tests {
             ] {
                 server.handle_extension_frame("connection", frame(kind, event));
             }
-            let partial_seq = server.shared.lock().unwrap().live_text_seq;
+            let partial_seq = server.shared.lock().live_text_seq;
             assert!(partial_seq > 0, "the deltas were not taken as live text");
 
             server.handle_extension_frame(
@@ -4860,7 +4966,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -4974,7 +5080,7 @@ mod tests {
             assert_eq!(delayed_during_provisional.agent_end_is_terminal, Some(true));
 
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.state.updated_at = "2000-01-01T00:00:00+00:00".into();
             }
             let before_keepalive = server.current_state();
@@ -5123,7 +5229,7 @@ mod tests {
         let server = OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
         let (sender, _receiver) = mpsc::channel();
         {
-            let mut shared = server.shared.lock().unwrap();
+            let mut shared = server.shared.lock();
             shared.extension_sender = Some(sender);
             shared.extension_connection_id = Some("connection".into());
         }
@@ -5177,7 +5283,7 @@ mod tests {
         temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
             let server =
                 OmpHelmServer::start(state(), socket_path, socket_dir, state_path.clone()).unwrap();
-            let persist_guard = server.persist_lock.lock().unwrap();
+            let persist_guard = server.persist_lock.lock();
             let worker = {
                 let server = server.clone();
                 thread::spawn(move || {
@@ -5226,7 +5332,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -5279,7 +5385,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -5335,6 +5441,7 @@ mod tests {
             live_turn_seq: 0,
             live_message_seq: 0,
             identity_retry_after: None,
+            native_source_bound: false,
         };
         fail_pending_locked(&mut shared, "replacement");
         let response = receiver.recv().unwrap();
@@ -5351,7 +5458,7 @@ mod tests {
         let server = OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
         let (sender, _receiver) = mpsc::channel();
         {
-            let mut shared = server.shared.lock().unwrap();
+            let mut shared = server.shared.lock();
             shared.extension_sender = Some(sender);
             shared.extension_connection_id = Some("connection".into());
         }
@@ -5394,7 +5501,7 @@ mod tests {
         let server = OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
         let (sender, _receiver) = mpsc::channel();
         {
-            let mut shared = server.shared.lock().unwrap();
+            let mut shared = server.shared.lock();
             shared.extension_sender = Some(sender);
             shared.extension_connection_id = Some("connection".into());
         }
@@ -5494,7 +5601,7 @@ mod tests {
                 OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
-                let mut shared = server.shared.lock().unwrap();
+                let mut shared = server.shared.lock();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
@@ -5606,9 +5713,9 @@ mod tests {
             url: None,
             token: None,
         };
-
         let (model, profile) = effective_resume_settings(&config, Some(&retained));
-        let (session_dir, session_file) = select_session_storage(
+
+        let storage = select_session_storage(
             Some(&retained),
             config.session_dir.as_deref(),
             profile.as_deref(),
@@ -5618,12 +5725,236 @@ mod tests {
 
         assert_eq!(model.as_deref(), Some("original-model"));
         assert_eq!(profile.as_deref(), Some("original-profile"));
-        assert_eq!(session_dir, PathBuf::from(&retained.session_dir));
-        assert_eq!(session_file, PathBuf::from(&retained.session_file));
+        assert_eq!(storage.session_dir, PathBuf::from(&retained.session_dir));
+        assert_eq!(
+            storage.session_file.as_deref(),
+            Some(Path::new(&retained.session_file))
+        );
+        assert!(storage.fresh_directory.is_none());
         assert!(!temp.path().join("original-sessions").exists());
         assert!(!temp.path().join("new-sessions").exists());
     }
 
+    #[test]
+    fn fresh_launch_reserves_only_a_scoped_directory_not_a_transcript() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("sessions");
+        let storage = select_session_storage(None, Some(&root), None, temp.path()).unwrap();
+        assert!(storage.session_dir.starts_with(&root));
+        assert!(storage.session_file.is_none());
+        assert_eq!(fs::read_dir(&storage.session_dir).unwrap().count(), 0);
+        assert!(storage.fresh_directory.is_some());
+        let path = storage.session_dir.clone();
+        drop(storage);
+        assert!(!path.exists(), "unused fresh directory is removed");
+    }
+
+    #[test]
+    fn fresh_native_creation_binds_once_and_exact_cold_resume_keeps_history() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("workspace");
+        let archive_root = temp.path().join("omp-sessions");
+        fs::create_dir_all(&cwd).unwrap();
+        let fake_omp = temp.path().join("omp");
+        fs::write(
+            &fake_omp,
+            r##"#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+args = sys.argv[1:]
+session_dir = pathlib.Path(args[args.index("--session-dir") + 1])
+resume = args.index("--resume") + 1 if "--resume" in args else None
+if resume is not None:
+    source = pathlib.Path(args[resume])
+    if not source.is_file() or source.stat().st_size == 0:
+        print("strict resume requires an existing native source", file=sys.stderr)
+        sys.exit(23)
+    with source.open("r", encoding="utf-8") as stream:
+        native_id = json.loads(stream.readline())["id"]
+    with source.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"type":"message","marker":"resume-history"}) + "\n")
+else:
+    native_id = os.environ["LONGHOUSE_TEST_NATIVE_ID"]
+    source = session_dir / ("2026-10-06T10-00-00-000Z_" + native_id + ".jsonl")
+    header = {
+        "type": "session",
+        "version": 3,
+        "id": native_id,
+        "timestamp": "2026-10-06T10:00:00.000Z",
+        "cwd": os.getcwd(),
+    }
+    with source.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(header) + "\n")
+        stream.write(json.dumps({"type":"message","marker":"fresh-history"}) + "\n")
+
+print(json.dumps({
+    "kind": "session_start",
+    "event": {"type": "session_start"},
+    "auth_token": os.environ["LONGHOUSE_TEST_TOKEN"],
+    "session_id": os.environ["LONGHOUSE_TEST_SESSION_ID"],
+    "native_session_id": native_id,
+    "session_file": str(source),
+    "connection_id": os.environ["LONGHOUSE_TEST_CONNECTION_ID"],
+    "lease_generation": os.environ["LONGHOUSE_TEST_LEASE_GENERATION"],
+}))
+"##,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_omp).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_omp, permissions).unwrap();
+
+        let storage = select_session_storage(None, Some(&archive_root), None, &cwd).unwrap();
+        assert!(storage.session_file.is_none());
+        assert_eq!(fs::read_dir(&storage.session_dir).unwrap().count(), 0);
+
+        let session_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let connection_id = "fresh-connection";
+        let lease_generation = "fresh-generation";
+        let native_id = "native-fresh";
+        let extension = temp.path().join("extension.ts");
+        let args = build_omp_helm_args(&storage.session_dir, None, &extension, None, None);
+        let fresh = Command::new(&fake_omp)
+            .args(args)
+            .current_dir(&cwd)
+            .env("LONGHOUSE_TEST_NATIVE_ID", native_id)
+            .env("LONGHOUSE_TEST_SESSION_ID", &session_id)
+            .env("LONGHOUSE_TEST_TOKEN", "token")
+            .env("LONGHOUSE_TEST_CONNECTION_ID", connection_id)
+            .env("LONGHOUSE_TEST_LEASE_GENERATION", lease_generation)
+            .output()
+            .unwrap();
+        assert!(
+            fresh.status.success(),
+            "{}",
+            String::from_utf8_lossy(&fresh.stderr)
+        );
+        let provider_frame: Value = serde_json::from_slice(&fresh.stdout).unwrap();
+        assert_eq!(provider_frame["native_session_id"], native_id);
+        let source = PathBuf::from(provider_frame["session_file"].as_str().unwrap());
+        assert!(source.starts_with(&storage.session_dir));
+        assert_eq!(
+            crate::omp_session::read_session_header(&source)
+                .unwrap()
+                .native_id,
+            native_id
+        );
+
+        let longhouse_home = temp.path().join("longhouse");
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let mut initial = state();
+            initial.session_id = session_id.clone();
+            initial.run_id = run_id;
+            initial.native_session_id.clear();
+            initial.session_file.clear();
+            initial.session_dir = storage.session_dir.display().to_string();
+            initial.cwd = cwd.display().to_string();
+            initial.connection_id = connection_id.into();
+            initial.lease_generation = lease_generation.into();
+            initial.status = "starting".into();
+            initial.ready = false;
+            let socket_dir = temp.path().join("socket");
+            let state_path = longhouse_home
+                .join("managed-local/omp-helm")
+                .join(format!("{session_id}.json"));
+            let server = OmpHelmServer::start(
+                initial,
+                socket_dir.join("channel.sock"),
+                socket_dir,
+                state_path,
+            )
+            .unwrap();
+            assert_eq!(
+                crate::managed_omp_helm_scan::source_ownership(&source).unwrap(),
+                crate::omp_session::SourceOwnership::Pending
+            );
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some(connection_id.into());
+            }
+            server.handle_extension_frame(
+                connection_id,
+                json!({
+                    "kind": "session_start",
+                    "event": {"type": "session_start"},
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": native_id,
+                    "session_file": source,
+                    "connection_id": connection_id,
+                    "lease_generation": lease_generation
+                }),
+            );
+            let bound = server.current_state();
+            assert!(bound.ready);
+            assert_eq!(bound.status, "ready");
+            assert_eq!(bound.native_session_id, native_id);
+            assert_eq!(bound.session_file, source.display().to_string());
+            assert_eq!(
+                crate::managed_omp_helm_scan::source_ownership(&source).unwrap(),
+                crate::omp_session::SourceOwnership::Managed(session_id.clone())
+            );
+            let claim = crate::managed_source_claim::read_claim(&bound.session_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(claim.native_session_id.as_deref(), Some(native_id));
+            assert_eq!(claim.state, crate::managed_source_claim::ClaimState::Bound);
+            server.shutdown();
+        });
+
+        crate::omp_session::verify_exact_session_file(
+            &source,
+            native_id,
+            Some(cwd.to_str().unwrap()),
+        )
+        .unwrap();
+        let resumed = Command::new(&fake_omp)
+            .args(build_omp_helm_args(
+                &storage.session_dir,
+                Some(&source),
+                &extension,
+                None,
+                None,
+            ))
+            .current_dir(&cwd)
+            .env("LONGHOUSE_TEST_SESSION_ID", &session_id)
+            .env("LONGHOUSE_TEST_TOKEN", "token")
+            .env("LONGHOUSE_TEST_CONNECTION_ID", connection_id)
+            .env("LONGHOUSE_TEST_LEASE_GENERATION", lease_generation)
+            .output()
+            .unwrap();
+        assert!(
+            resumed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&resumed.stderr)
+        );
+        let resumed_frame: Value = serde_json::from_slice(&resumed.stdout).unwrap();
+        assert_eq!(resumed_frame["native_session_id"], native_id);
+        assert_eq!(resumed_frame["session_file"], source.display().to_string());
+        assert_eq!(
+            fs::read_dir(&storage.session_dir)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter(
+                    |entry| entry.path().extension().and_then(|value| value.to_str())
+                        == Some("jsonl")
+                )
+                .count(),
+            1
+        );
+        let history = fs::read_to_string(&source).unwrap();
+        assert!(history.contains("fresh-history"));
+        assert!(history.contains("resume-history"));
+    }
     #[test]
     fn fresh_launch_captures_ambient_omp_profile_for_resume() {
         // Mutates process-global environment: hold the shared agent-state
@@ -5739,10 +6070,10 @@ mod tests {
         let registered = Arc::clone(&fixture.registered);
         server.enable_adoption(AdoptionContext {
             machine_name: "machine".into(),
-            register: Arc::new(move |payload| registered.lock().unwrap().push(payload)),
+            register: Arc::new(move |payload| registered.lock().push(payload)),
         });
         let (sender, receiver) = mpsc::channel();
-        let mut shared = server.shared.lock().unwrap();
+        let mut shared = server.shared.lock();
         shared.extension_sender = Some(sender);
         shared.extension_connection_id = Some("connection".into());
         drop(shared);
@@ -5843,7 +6174,7 @@ mod tests {
                 .unwrap();
             assert_eq!(claim.native_session_id.as_deref(), Some("old-native"));
 
-            let registered = fixture.registered.lock().unwrap();
+            let registered = fixture.registered.lock();
             assert_eq!(registered.len(), 1);
             assert_eq!(registered[0]["session_id"], "old-session");
             assert_eq!(registered[0]["run_id"], adopted.run_id.as_str());
@@ -5855,7 +6186,7 @@ mod tests {
             assert!(registered[0]["resume_attempt_id"].is_string());
 
             // The extension keeps sending the launch's id from its environment.
-            let shared = server.shared.lock().unwrap();
+            let shared = server.shared.lock();
             assert!(frame_names_this_launch_locked(
                 &shared,
                 &json!({"session_id": "launch-session"})
@@ -5886,7 +6217,7 @@ mod tests {
             let current = server.current_state();
             assert_eq!(current.session_id, "launch-session");
             assert_eq!(current.status, "degraded");
-            assert!(fixture.registered.lock().unwrap().is_empty());
+            assert!(fixture.registered.lock().is_empty());
             let owner: OmpHelmStateFile = serde_json::from_slice(
                 &fs::read(fixture.state_root.join("old-session.json")).unwrap(),
             )

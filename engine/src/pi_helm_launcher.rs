@@ -1491,7 +1491,9 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     // and failing here would leave neither a current status nor the evidence
     // that the run ended.
     match enqueue_terminal_event(&final_state, &machine_name, exit_code, reason) {
-        Ok(()) => server.status.retire(&final_state.session_id),
+        Ok(()) => server
+            .status
+            .retire_run(&final_state.session_id, &final_state.run_id),
         Err(error) => eprintln!(
             "[pi-helm] terminal record enqueue failed for {}: {error}; keeping the status slot",
             final_state.session_id

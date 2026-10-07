@@ -4,13 +4,12 @@
 //! opaque native-id rules here so discovery and shipping cannot reuse Pi's
 //! provider semantics accidentally.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use sha2::Digest;
 use uuid::Uuid;
 
 /// Machine-Agent-only OMP discovery overrides. These are intentionally not
@@ -22,7 +21,6 @@ const OMP_DATA_DIR_NAME: &str = "omp";
 const OMP_CONFIG_DIR_ENV: &str = "LONGHOUSE_OMP_CONFIG_DIR";
 const OMP_PROFILE_ENV: &str = "OMP_PROFILE";
 const MAX_HEADER_SCAN_BYTES: u64 = 1024 * 1024;
-const OMP_TITLE_SLOT_BYTES: usize = 256;
 const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
 /// Nested task archives are accepted only through this bounded, header-linked
 /// artifact chain. It prevents a parked registry tree or an unrelated file
@@ -405,15 +403,9 @@ fn nested_session_has_authoritative_parent(
         if !parent_matches {
             return false;
         }
-        // A generated source is either directly under the session root or
-        // below one encoded-cwd bucket. Deeper paths are artifact children
-        // and must continue walking their own parentSession edge.
-        let relative_depth = parent_path
-            .strip_prefix(root)
-            .ok()
-            .map(|value| value.components().count())
-            .unwrap_or(usize::MAX);
-        if relative_depth <= 2 {
+        // Parent edges terminate only at a native source in the configured
+        // root, an encoded-cwd bucket, or a launch-scoped cwd bucket.
+        if is_archive_root_source(root, &parent_path) {
             return native_filename_id(&parent_path)
                 .is_none_or(|filename_id| filename_id == parent_header.native_id);
         }
@@ -436,21 +428,45 @@ fn native_filename_id(path: &Path) -> Option<&str> {
     date_shape.then_some(id).filter(|id| !id.is_empty())
 }
 
+fn is_cwd_bucket(dir: &Path) -> bool {
+    native_filename_id(dir).is_none() && !dir.with_extension("jsonl").is_file()
+}
+
+fn is_launch_scope_dir(root: &Path, dir: &Path) -> bool {
+    dir.parent() == Some(root)
+        && dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("longhouse-"))
+            .is_some_and(|id| Uuid::parse_str(id).is_ok())
+}
+
+fn is_archive_root_source(root: &Path, path: &Path) -> bool {
+    let parent = path.parent();
+    let direct = parent == Some(root);
+    let one_level_down = parent.and_then(Path::parent) == Some(root);
+    let cwd_bucket = one_level_down && parent.is_some_and(is_cwd_bucket);
+    let launch_cwd_bucket = parent
+        .and_then(Path::parent)
+        .is_some_and(|scope| is_launch_scope_dir(root, scope))
+        && parent.is_some_and(is_cwd_bucket);
+    direct || cwd_bucket || launch_cwd_bucket
+}
+
 /// Whether a file is in the version-bound OMP native session tree. The
 /// timestamp/id suffix is authoritative only for that tree; arbitrary exact
 /// resume paths are validated by `read_session_header` alone.
 pub fn is_session_path(root: &Path, path: &Path) -> bool {
     let parent = path.parent();
     let direct_source = parent == Some(root);
-    // One level down is either an encoded-cwd bucket, which holds sources
-    // whatever they are named, or an archive's artifact directory (`<stem>/`
-    // beside `<stem>.jsonl`, generated or explicitly named), whose files must
-    // prove their parent edge.
+    // One level down is either an encoded-cwd bucket, a launch scope, or an
+    // archive artifact directory whose files must prove their parent edge.
     let one_level_down = parent.and_then(Path::parent) == Some(root);
-    let bucket_source = one_level_down
-        && parent.is_some_and(|dir| {
-            native_filename_id(dir).is_none() && !dir.with_extension("jsonl").is_file()
-        });
+    let bucket_source = one_level_down && parent.is_some_and(is_cwd_bucket);
+    let launch_bucket_source = parent
+        .and_then(Path::parent)
+        .is_some_and(|scope| is_launch_scope_dir(root, scope))
+        && parent.is_some_and(is_cwd_bucket);
     if path.extension().and_then(|value| value.to_str()) != Some("jsonl") || !path.starts_with(root)
     {
         return false;
@@ -466,6 +482,7 @@ pub fn is_session_path(root: &Path, path: &Path) -> bool {
     };
     if !direct_source
         && !bucket_source
+        && !launch_bucket_source
         && !nested_session_has_authoritative_parent(root, path, &header)
     {
         return false;
@@ -473,9 +490,46 @@ pub fn is_session_path(root: &Path, path: &Path) -> bool {
     // OMP accepts arbitrary explicit resume filenames. The timestamp/id suffix
     // is only an additional check for generated direct-child archive names;
     // nested task artifacts are accepted only through their header edge.
-    let generated_name = direct_source || one_level_down;
+    let generated_name = direct_source || one_level_down || launch_bucket_source;
     !generated_name
         || native_filename_id(path).is_none_or(|filename_id| filename_id == header.native_id)
+}
+/// Whether a provider-reported JSONL path is scoped to this exact OMP
+/// directory. It also accepts OMP's single cwd-bucket layer before the file
+/// exists, so lazy session creation can be reserved without inventing a header.
+pub fn session_file_path_in_session_dir(session_dir: &Path, source: &Path) -> bool {
+    if !session_dir.is_absolute()
+        || !source.is_absolute()
+        || source.extension().and_then(|value| value.to_str()) != Some("jsonl")
+    {
+        return false;
+    }
+    let session_dir = crate::storage_v2_shipper::stable_source_path(session_dir);
+    let Some(parent) = source.parent() else {
+        return false;
+    };
+    if crate::storage_v2_shipper::stable_source_path(parent) == session_dir {
+        return true;
+    }
+    parent.parent().is_some_and(|bucket_root| {
+        crate::storage_v2_shipper::stable_source_path(bucket_root) == session_dir
+            && native_filename_id(parent).is_none()
+            && !parent.with_extension("jsonl").is_file()
+    })
+}
+
+/// Whether a materialized OMP source is directly in a configured session
+/// directory or in one native cwd-bucket beneath it.
+pub fn source_is_in_session_dir(session_dir: &Path, source: &Path) -> bool {
+    if !session_file_path_in_session_dir(session_dir, source) {
+        return false;
+    }
+    let session_dir = crate::storage_v2_shipper::stable_source_path(session_dir);
+    let Some(parent) = source.parent() else {
+        return false;
+    };
+    crate::storage_v2_shipper::stable_source_path(parent) == session_dir
+        || is_session_path(&session_dir, source)
 }
 
 /// Longhouse identity is derived from OMP's opaque native id only. A native
@@ -489,26 +543,50 @@ pub fn deterministic_session_id(native_id: &str) -> String {
     .to_string()
 }
 
-/// Reserve an exact native path before a managed OMP process is spawned. OMP
-/// owns creation of the header; the empty reservation is not a valid resume.
-pub fn reserve_session_path(session_dir: &Path) -> Result<PathBuf> {
-    if !session_dir.is_absolute() {
-        bail!("OMP session directory must be absolute");
-    }
-    fs::create_dir_all(session_dir)
-        .with_context(|| format!("creating OMP session directory: {}", session_dir.display()))?;
-    for _ in 0..8 {
-        let path = session_dir.join(format!("longhouse-{}.jsonl", Uuid::new_v4()));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => {
-                file.sync_all()?;
-                return Ok(path);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
+/// A unique, launch-scoped directory in OMP's selected archive root. OMP
+/// creates the native transcript itself; dropping this guard removes only an
+/// unused empty directory, never a provider-authored source.
+pub struct FreshSessionDirectory {
+    path: PathBuf,
+}
+
+impl FreshSessionDirectory {
+    pub fn create(session_root: &Path) -> Result<Self> {
+        if !session_root.is_absolute() {
+            bail!("OMP session directory must be absolute");
         }
+        fs::create_dir_all(session_root).with_context(|| {
+            format!("creating OMP session directory: {}", session_root.display())
+        })?;
+        for _ in 0..8 {
+            let path = session_root.join(format!("longhouse-{}", Uuid::new_v4()));
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+                    }
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        bail!("unable to create a unique OMP session directory")
     }
-    bail!("unable to reserve a unique OMP session path")
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for FreshSessionDirectory {
+    fn drop(&mut self) {
+        // The directory is intentionally retained once OMP has created its
+        // transcript. Only remove an unused staging directory.
+        let _ = fs::remove_dir(&self.path);
+    }
 }
 
 /// Compare workspace identities after resolving harmless symlink aliases.
@@ -524,29 +602,41 @@ fn workspace_binding_matches(actual: &str, expected: &str) -> bool {
         _ => false,
     }
 }
-/// Validate an exact continuation before OMP is allowed to apply its
-/// create-if-missing `--resume` behavior.
-pub fn verify_exact_session_file(
+/// Verify one materialized provider header without walking a live transcript.
+/// Fresh OMP sessions report their path before this header is written.
+pub fn verify_session_header(
     path: &Path,
     expected_native_id: &str,
     expected_cwd: Option<&str>,
 ) -> Result<OmpSessionHeader> {
     let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("reading OMP resume metadata: {}", path.display()))?;
-    if !metadata.file_type().is_file() || metadata.len() == 0 {
-        bail!("OMP resume source is missing or empty: {}", path.display());
-    }
+        .with_context(|| format!("reading OMP native source metadata: {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.file_type().is_file() && metadata.len() > 0,
+        "OMP native source is missing, empty, or not a regular file: {}",
+        path.display()
+    );
     let header = read_session_header(path)?;
     anyhow::ensure!(
         header.native_id == expected_native_id,
-        "OMP resume native id does not match the exact binding"
+        "OMP native id does not match the exact source binding"
     );
     if let Some(expected_cwd) = expected_cwd {
         anyhow::ensure!(
             workspace_binding_matches(&header.cwd, expected_cwd),
-            "OMP resume workspace does not match the exact binding"
+            "OMP native workspace does not match the exact source binding"
         );
     }
+    Ok(header)
+}
+
+/// Validate a retained exact continuation before OMP is allowed to resume it.
+pub fn verify_exact_session_file(
+    path: &Path,
+    expected_native_id: &str,
+    expected_cwd: Option<&str>,
+) -> Result<OmpSessionHeader> {
+    let header = verify_session_header(path, expected_native_id, expected_cwd)?;
     let file = File::open(path)
         .with_context(|| format!("opening OMP resume history: {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -762,6 +852,20 @@ pub fn bind_discovered_source(
             "OMP source binding native id changed"
         );
     }
+    match crate::managed_omp_helm_scan::source_ownership(&path)? {
+        SourceOwnership::Managed(session_id) => {
+            if let Some((existing_owner, _, _)) = existing.as_ref() {
+                anyhow::ensure!(
+                    existing_owner == &session_id,
+                    "OMP native source has conflicting managed owners"
+                );
+            }
+            bind_source_for_thread(conn, &path, &session_id, &header.native_id)?;
+            return Ok(SourceOwnership::Managed(session_id));
+        }
+        SourceOwnership::Pending if existing.is_none() => return Ok(SourceOwnership::Pending),
+        SourceOwnership::Pending | SourceOwnership::Unclaimed => {}
+    }
 
     let mut owner = existing
         .as_ref()
@@ -816,15 +920,12 @@ pub fn bind_discovered_source(
         }
     }
 
+    if pending || (provider_ids.len() > 1 && existing.is_none()) {
+        return Ok(SourceOwnership::Pending);
+    }
     if let Some(session_id) = owner {
-        if provider_ids.len() > 1 && existing.is_none() {
-            return Ok(SourceOwnership::Pending);
-        }
         bind_source_for_thread(conn, &path, &session_id, &header.native_id)?;
         return Ok(SourceOwnership::Managed(session_id));
-    }
-    if pending {
-        return Ok(SourceOwnership::Pending);
     }
     Ok(SourceOwnership::Unclaimed)
 }
@@ -979,26 +1080,35 @@ mod tests {
     }
 
     #[test]
-    fn reserved_path_is_not_a_valid_resume_until_omp_writes_a_header() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = reserve_session_path(dir.path()).unwrap();
-        assert!(verify_exact_session_file(&path, "native-id", None).is_err());
-        fs::write(&path, format!("{}\n", session_line("native-id"))).unwrap();
-        assert_eq!(
-            verify_exact_session_file(&path, "native-id", Some("/workspace"))
-                .unwrap()
-                .native_id,
-            "native-id"
-        );
-        assert!(
-            verify_exact_session_file(&dir.path().join("missing.jsonl"), "native-id", None)
-                .is_err()
-        );
-        fs::write(dir.path().join("corrupt.jsonl"), b"not-json\n").unwrap();
-        assert!(
-            verify_exact_session_file(&dir.path().join("corrupt.jsonl"), "native-id", None)
-                .is_err()
-        );
+    fn fresh_session_directory_contains_only_provider_created_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let empty_dir = {
+            let staging = FreshSessionDirectory::create(root.path()).unwrap();
+            assert!(staging.path().starts_with(root.path()));
+            assert_eq!(fs::read_dir(staging.path()).unwrap().count(), 0);
+            staging.path().to_path_buf()
+        };
+        assert!(!empty_dir.exists(), "unused staging directory is removed");
+
+        let staging = FreshSessionDirectory::create(root.path()).unwrap();
+        let source = staging
+            .path()
+            .join("2026-10-06T10-00-00-000Z_native-id.jsonl");
+        fs::write(&source, format!("{}\n", session_line("native-id"))).unwrap();
+        let header = verify_session_header(&source, "native-id", Some("/workspace")).unwrap();
+        assert_eq!(header.native_id, "native-id");
+        assert!(verify_session_header(&source, "other-id", Some("/workspace")).is_err());
+        assert!(verify_session_header(&source, "native-id", Some("/elsewhere")).is_err());
+        assert!(is_session_path(root.path(), &source));
+        let bucket = staging.path().join("cwd-bucket");
+        fs::create_dir(&bucket).unwrap();
+        let bucket_source = bucket.join("2026-10-06T10-00-00-000Z_bucket-native.jsonl");
+        fs::write(
+            &bucket_source,
+            format!("{}\n", session_line("bucket-native")),
+        )
+        .unwrap();
+        assert!(source_is_in_session_dir(staging.path(), &bucket_source));
     }
 
     #[test]

@@ -642,7 +642,25 @@ impl ShipperClient {
         content_encoding: &'static str,
         request_timeout: Option<Duration>,
     ) -> std::result::Result<JsonPostResponse, JsonPostError> {
-        self.wait_for_retry_after(path_suffix).await;
+        self.post_json_response_for_lane(
+            path_suffix,
+            path_suffix,
+            body,
+            content_encoding,
+            request_timeout,
+        )
+        .await
+    }
+
+    async fn post_json_response_for_lane(
+        &self,
+        path_suffix: &str,
+        retry_lane: &str,
+        body: Vec<u8>,
+        content_encoding: &'static str,
+        request_timeout: Option<Duration>,
+    ) -> std::result::Result<JsonPostResponse, JsonPostError> {
+        self.wait_for_retry_after(retry_lane).await;
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let wire_bytes = body.len();
         let mut request = self
@@ -681,7 +699,7 @@ impl ShipperClient {
             });
         }
         let body = response.text().await.unwrap_or_default();
-        let retry_after = self.note_rejection(path_suffix, status.as_u16(), &headers, &body);
+        let retry_after = self.note_rejection(retry_lane, status.as_u16(), &headers, &body);
         Err(JsonPostError::Http {
             status: status.as_u16(),
             body,
@@ -695,10 +713,11 @@ impl ShipperClient {
     pub async fn post_json_with_timeout_classified(
         &self,
         path_suffix: &str,
+        retry_lane: &str,
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> std::result::Result<(), JsonPostError> {
-        self.post_json_classified(path_suffix, body, "identity", request_timeout)
+        self.post_json_classified(path_suffix, retry_lane, body, "identity", request_timeout)
             .await
     }
 
@@ -729,6 +748,7 @@ impl ShipperClient {
     pub async fn post_runtime_event_batch(
         &self,
         path_suffix: &str,
+        retry_lane: &str,
         body: Vec<u8>,
         plain_limit: usize,
         request_timeout: Option<Duration>,
@@ -742,13 +762,13 @@ impl ShipperClient {
                 ));
             }
             return self
-                .post_json_classified(path_suffix, body, "identity", request_timeout)
+                .post_json_classified(path_suffix, retry_lane, body, "identity", request_timeout)
                 .await;
         }
         let encoded = zstd::stream::encode_all(body.as_slice(), RUNTIME_BATCH_ZSTD_LEVEL)
             .map_err(|error| JsonPostError::Transport(format!("zstd encoding failed: {error}")))?;
         match self
-            .post_json_classified(path_suffix, encoded, "zstd", request_timeout)
+            .post_json_classified(path_suffix, retry_lane, encoded, "zstd", request_timeout)
             .await
         {
             Err(refusal) if refusal.permanent_status_code().is_some() => {
@@ -764,8 +784,14 @@ impl ShipperClient {
                         "zstd batch refused; its events go again in plain requests".into(),
                     ));
                 }
-                self.post_json_classified(path_suffix, body, "identity", request_timeout)
-                    .await
+                self.post_json_classified(
+                    path_suffix,
+                    retry_lane,
+                    body,
+                    "identity",
+                    request_timeout,
+                )
+                .await
             }
             result => result,
         }
@@ -774,13 +800,20 @@ impl ShipperClient {
     async fn post_json_classified(
         &self,
         path_suffix: &str,
+        retry_lane: &str,
         body: Vec<u8>,
         content_encoding: &'static str,
         request_timeout: Option<Duration>,
     ) -> std::result::Result<(), JsonPostError> {
-        self.post_json_response(path_suffix, body, content_encoding, request_timeout)
-            .await
-            .map(|_| ())
+        self.post_json_response_for_lane(
+            path_suffix,
+            retry_lane,
+            body,
+            content_encoding,
+            request_timeout,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// POST JSON and decode a JSON response with an optional request timeout.

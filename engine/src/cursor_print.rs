@@ -791,6 +791,12 @@ impl CursorPrintSink {
             }
         })])
         .await;
+        crate::status_slot::retire_console_run(
+            "cursor",
+            CURSOR_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+        );
     }
 
     fn persist_local_phase(

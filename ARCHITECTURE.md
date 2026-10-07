@@ -45,6 +45,11 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
 - **Separate realtime truth from durable archive.** A live lane answers "what
   is happening right now" and must feel terminal-fast; a durable lane answers
   "what provably happened" and must be correct, ordered, and replayable.
+- **Keep observations out of control admission.** Replaceable runtime events
+  and presence have their own per-device quota. Launch and input use control
+  admission; heartbeat and machine presence use independent liveness admission.
+  Validated batches carrying bindings, interactions, wakes, or execution ends
+  use lifecycle admission and cooldowns, so telemetry cannot delay them.
 
 OMP's launch-scoped coordination authority belongs to the main managed session.
 Native subagents cannot use it to send as their parent; they report blockers and

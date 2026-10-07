@@ -262,7 +262,16 @@ pub async fn stop_server_bridge_at(
     let stopped = terminate_recorded_opencode_server(&state).await?;
     if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
         let outbox = crate::config::get_longhouse_home()?.join("agent/runtime-events-outbox");
-        enqueue_terminal_event(&state, &outbox)?;
+        if enqueue_terminal_event(&state, &outbox)? {
+            if let Some(run_id) = state.run_id.as_deref() {
+                crate::status_slot::publisher_for(
+                    "opencode",
+                    OPENCODE_SERVER_BRIDGE_TRANSPORT,
+                    &state.session_id,
+                )
+                .retire_run(&state.session_id, run_id);
+            }
+        }
         let directory = state_dir
             .map(Path::to_path_buf)
             .or_else(crate::managed_opencode_scan::default_opencode_server_state_dir)

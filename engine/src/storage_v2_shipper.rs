@@ -257,20 +257,10 @@ fn prepare_next_envelope_with_limit(
                 durable_session_id = Some(session_id);
             }
             crate::omp_session::SourceOwnership::Pending => {
-                if let Some(session_id) = durable_session_id.as_deref() {
-                    let Ok(native_id) = crate::omp_session::read_session_header(&canonical_path)
-                    else {
-                        return Ok(None);
-                    };
-                    crate::omp_session::bind_source_for_thread(
-                        conn,
-                        &canonical_path,
-                        session_id,
-                        &native_id.native_id,
-                    )?;
-                } else {
-                    return Ok(None);
-                }
+                // A managed wake's session override is not native identity
+                // confirmation. Keep the source held until its provider header
+                // has been verified against the exact reported binding.
+                return Ok(None);
             }
             crate::omp_session::SourceOwnership::Unclaimed => {
                 if let Some(session_id) = durable_session_id.as_deref() {

@@ -24,6 +24,7 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
+from zerg.dependencies.agents_auth import enforce_runtime_request_lane
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
@@ -36,6 +37,9 @@ from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import _is_bridge_transcript_event
 
+_LIFECYCLE_EVENT_KINDS = frozenset(
+    {"binding_signal", "terminal_signal", "pause_request", "pause_resolution", "wake_signal", "invocation_closed"}
+)
 # A batch is one catalogd apply, so it can never usefully exceed one catalogd
 # frame (8 MiB); twice that bounds both what a body may carry on the wire and
 # what a small zstd body may expand into.
@@ -141,11 +145,27 @@ def _canary_runtime_marker(event) -> tuple[int, int] | None:
 async def ingest_runtime_observation_batch(
     payload: RuntimeEventBatchIngest,
     response: Response,
+    request: Request,
     db: Session | None = Depends(_runtime_db_dependency),
     _token: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> RuntimeEventBatchResult:
     """Ingest normalized runtime observations and materialize runtime state."""
+    enforce_runtime_request_lane(
+        request,
+        lifecycle=any(event.kind in _LIFECYCLE_EVENT_KINDS for event in payload.events),
+    )
+    return await apply_runtime_observation_batch(payload, response, db, _token, _single)
+
+
+async def apply_runtime_observation_batch(
+    payload: RuntimeEventBatchIngest,
+    response: Response,
+    db: Session | None,
+    _token: object,
+    _single: object = None,
+) -> RuntimeEventBatchResult:
+    """Apply an already-authorized batch, including internal presence transitions."""
     try:
         events = payload.events
 
