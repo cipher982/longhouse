@@ -76,8 +76,8 @@ export function resolveTimelineSignal(
   const signal = servedSignal(session.session_state, options.nowMs ?? Date.now());
   if (signal === "closed") return "closed";
   if (options.connectivityHealthy === false) return "quiet";
-  // A parked or muted session does not shout; nor does it claim to be idle.
-  if (signal === "attention" && !isUserActive(session)) return "unknown";
+  // A parked or muted session's attention rests quiet.
+  if (signal === "attention" && !isUserActive(session)) return "quiet";
   return signal;
 }
 

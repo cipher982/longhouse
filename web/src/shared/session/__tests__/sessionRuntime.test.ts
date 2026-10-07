@@ -290,7 +290,7 @@ describe("resolveTimelineSignal", () => {
       session_state: makeSessionStateFacts({ pendingInteraction: true }),
       user_state: "parked",
     });
-    expect(parked).toBe("unknown");
+    expect(parked).toBe("quiet");
     const active = resolveTimelineSignal({
       session_state: makeSessionStateFacts({ pendingInteraction: true }),
       user_state: "active",
