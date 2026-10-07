@@ -15,13 +15,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
 use crate::console_lifecycle::{ConsoleInvocation, IdleSignal, TurnBinding, TurnOrigin};
+use crate::console_sink::{ConsoleProvider, ConsoleRun};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::pi_session::prepare_session;
@@ -77,21 +78,32 @@ pub struct PiPrintRunSummary {
 
 #[derive(Clone)]
 struct PiPrintSink {
-    session_id: String,
-    thread_id: String,
-    turn_id: Option<String>,
-    run_id: String,
-    client_request_id: Option<String>,
-    launch_id: String,
-    process_group_id: Option<i32>,
+    run: ConsoleRun,
     stdout_path: PathBuf,
     session_dir: PathBuf,
     provider_thread_id: String,
     session_file: Option<PathBuf>,
     binding_emitted: bool,
-    machine_name: String,
-    local_db_path: Option<PathBuf>,
-    runtime_events_outbox_dir: PathBuf,
+}
+
+static PI_CONSOLE: ConsoleProvider = ConsoleProvider {
+    provider: "pi",
+    adapter: PI_PRINT_ADAPTER,
+    tag: "pi-print",
+    lifetime: "one_shot",
+};
+
+impl std::ops::Deref for PiPrintSink {
+    type Target = ConsoleRun;
+    fn deref(&self) -> &ConsoleRun {
+        &self.run
+    }
+}
+
+impl std::ops::DerefMut for PiPrintSink {
+    fn deref_mut(&mut self) -> &mut ConsoleRun {
+        &mut self.run
+    }
 }
 
 pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunSummary> {
@@ -190,21 +202,24 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     };
     let process_group_id = i32::try_from(pid).context("Pi pid exceeds process-group range")?;
     let sink = PiPrintSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
-        launch_id: launch_id.clone(),
-        process_group_id: Some(process_group_id),
+        run: ConsoleRun {
+            provider: &PI_CONSOLE,
+            session_id: config.session_id.clone(),
+            thread_id: config.thread_id.clone(),
+            turn_id: config.turn_id.clone(),
+            run_id: config.run_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            launch_id: launch_id.clone(),
+            process_group_id: Some(process_group_id),
+            machine_name: config.machine_name.clone(),
+            local_db_path: config.local_db_path.clone(),
+            runtime_events_outbox_dir,
+        },
         stdout_path: stdout_path.clone(),
         session_dir: session_dir.clone(),
         provider_thread_id: provider_thread_id.clone(),
         session_file: exact_session_file.clone(),
         binding_emitted: false,
-        machine_name: config.machine_name.clone(),
-        local_db_path: config.local_db_path.clone(),
-        runtime_events_outbox_dir,
     };
     let result = json!({
         "session_id": config.session_id,
@@ -363,21 +378,24 @@ pub async fn recover_pi_print_turns(
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
         let sink = PiPrintSink {
-            session_id: claim.session_id.clone(),
-            thread_id: claim.thread_id.clone(),
-            turn_id: claim.turn_id.clone(),
-            run_id: claim.run_id.clone(),
-            client_request_id: claim.client_request_id.clone(),
-            launch_id: claim.launch_id.clone().unwrap_or_default(),
-            process_group_id: claim.process_group_id,
+            run: ConsoleRun {
+                provider: &PI_CONSOLE,
+                session_id: claim.session_id.clone(),
+                thread_id: claim.thread_id.clone(),
+                turn_id: claim.turn_id.clone(),
+                run_id: claim.run_id.clone(),
+                client_request_id: claim.client_request_id.clone(),
+                launch_id: claim.launch_id.clone().unwrap_or_default(),
+                process_group_id: claim.process_group_id,
+                machine_name: machine_name.to_string(),
+                local_db_path: local_db_path.clone(),
+                runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+            },
             stdout_path: stdout_path.clone(),
             session_dir,
             provider_thread_id: claim.provider_thread_id.clone().unwrap_or_default(),
             session_file: claim.source_path.as_deref().map(PathBuf::from),
             binding_emitted: false,
-            machine_name: machine_name.to_string(),
-            local_db_path: local_db_path.clone(),
-            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
         if sink.provider_thread_id.is_empty() {
             let _ = registry.mark_terminal(
@@ -1152,51 +1170,22 @@ impl PiPrintSink {
     }
 
     async fn post_binding(&self, provider_session_id: &str, transcript: &Path) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("pi:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "pi",
-            "device_id": self.machine_name,
-            "source": PI_PRINT_ADAPTER,
-            "kind": "binding_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("pi-print:{}:{}:binding", self.session_id, self.launch_id),
-            "payload": {
-                "provider_session_id": provider_session_id,
-                "source_path": transcript.to_string_lossy(),
-                "managed_transport": PI_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+        self.post_event(&self.binding_event(json!({
+            "provider_session_id": provider_session_id,
+            "source_path": transcript.to_string_lossy(),
+        })));
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>, activity_seq: u64) {
-        // One slot per session: the daemon records the local ledger from
-        // it and sends it. Only records no later event can restate —
-        // binding, terminal — stay on the durable queue.
-        let observed_at = Utc::now();
-        crate::status_slot::publish_console_phase(
-            "pi",
-            PI_PRINT_ADAPTER,
-            &self.session_id,
-            &self.run_id,
-            &observed_at.to_rfc3339(),
+        self.publish_phase(
             phase,
             tool_name.as_deref(),
-            json!({
-                "execution_lifetime": "one_shot",
-                "thread_id": self.thread_id,
-                "device_id": self.machine_name,
-                "activity_seq": activity_seq,
-            }),
+            Some(("activity_seq", json!(activity_seq))),
         );
     }
 
     async fn post_stream_event(&self, seq: u64, event: &Value, projection: &PiStreamProjection) {
-        let mut payload = json!({
+        let mut payload = self.with_transport(json!({
             "progress_kind": "pi_print_stream",
             "seq": seq,
             "thread_id": self.thread_id,
@@ -1204,9 +1193,7 @@ impl PiPrintSink {
             "client_request_id": self.client_request_id,
             "provider_thread_id": self.provider_thread_id,
             "event": crate::console_rpc::runtime_stream_event(event),
-            "managed_transport": PI_PRINT_ADAPTER,
-            "execution_lifetime": "one_shot"
-        });
+        }));
         if let Some(item_id) = projection.item_id(&self.run_id) {
             payload["item_id"] = json!(item_id);
         }
@@ -1226,43 +1213,19 @@ impl PiPrintSink {
                 }
             }
         }
-        self.post_events(vec![json!({
-            "runtime_key": format!("pi:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "pi",
-            "device_id": self.machine_name,
-            "source": PI_PRINT_ADAPTER,
-            "kind": "progress_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("pi-print:{}:{}:stdout:{seq}", self.session_id, self.run_id),
-            "payload": payload
-        })])
-        .await;
+        self.post_event(&self.run_event("progress_signal", &format!("stdout:{seq}"), payload));
     }
 
     async fn post_decode_gap(&self, seq: u64, error: &str) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("pi:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "pi",
-            "device_id": self.machine_name,
-            "source": PI_PRINT_ADAPTER,
-            "kind": "progress_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("pi-print:{}:{}:decode-gap:{seq}", self.session_id, self.run_id),
-            "payload": {
+        self.post_event(&self.run_event(
+            "progress_signal",
+            &format!("decode-gap:{seq}"),
+            self.with_transport(json!({
                 "progress_kind": "pi_print_decode_gap",
                 "seq": seq,
                 "error": error,
-                "managed_transport": PI_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+            })),
+        ));
     }
 
     async fn post_terminal(
@@ -1284,103 +1247,19 @@ impl PiPrintSink {
         pending_count: Option<usize>,
     ) {
         self.persist_local_phase("finished", None, Utc::now());
-        let mut payload = json!({
-            "managed_transport": PI_PRINT_ADAPTER,
-            "execution_lifetime": "one_shot",
-            "terminal_state": terminal_state,
-            "terminal_reason": terminal_state,
-            "terminal_source": PI_PRINT_ADAPTER,
-            "exit_code": exit_code,
-            "stderr_tail": stderr,
-            "provider_thread_id": self.provider_thread_id,
-            "source_path": self.session_file.as_ref().map(|path| path.to_string_lossy()),
-            "turn_id": self.turn_id,
-            "client_request_id": self.client_request_id
-        });
-        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
-            payload["invocation"] = json!({
-                "id": self.launch_id,
-                "state": state,
-                "pending_count": count
-            });
-        }
-        let terminal_event = json!({
-            "runtime_key": format!("pi:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "pi",
-            "device_id": self.machine_name,
-            "source": PI_PRINT_ADAPTER,
-            "kind": "terminal_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("pi-print:{}:{}:terminal", self.session_id, self.run_id),
-            "payload": payload
-        });
+        let mut payload =
+            self.terminal_payload(terminal_state, terminal_state, exit_code, stderr.as_deref());
+        payload["provider_thread_id"] = json!(self.provider_thread_id);
+        payload["source_path"] = json!(self
+            .session_file
+            .as_ref()
+            .map(|path| path.to_string_lossy()));
+        let payload = self.with_invocation(payload, invocation_state, pending_count);
+        let terminal_event = self.run_event("terminal_signal", "terminal", payload);
         let terminal_error = (terminal_state == "run_failed")
             .then(|| stderr.clone())
             .flatten();
-        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
-            crate::outbox::retain_and_enqueue_terminal_event(
-                &registry,
-                &self.runtime_events_outbox_dir,
-                &self.run_id,
-                terminal_state,
-                terminal_error,
-                terminal_event.clone(),
-            )
-        });
-        match handoff {
-            Ok((_, true)) => crate::status_slot::retire_console_run(
-                "pi",
-                PI_PRINT_ADAPTER,
-                &self.session_id,
-                &self.run_id,
-            ),
-            Ok((_, false)) => eprintln!(
-                "[pi-print] terminal record remains pending for {} run {}; keeping the status slot",
-                self.session_id, self.run_id
-            ),
-            Err(error) => {
-                eprintln!(
-                    "[pi-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
-                    self.session_id,
-                    self.run_id
-                );
-                if let Err(error) = crate::outbox::enqueue_runtime_event(
-                    &self.runtime_events_outbox_dir,
-                    &terminal_event,
-                ) {
-                    eprintln!("[pi-print] runtime outbox write failed: {error}");
-                }
-            }
-        }
-    }
-
-    fn persist_local_phase(
-        &self,
-        phase: &str,
-        tool_name: Option<String>,
-        observed_at: DateTime<Utc>,
-    ) {
-        let Some(db_path) = self.local_db_path.as_deref() else {
-            return;
-        };
-        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
-            db_path,
-            &self.session_id,
-            "pi",
-            phase,
-            tool_name.as_deref(),
-            PI_PRINT_ADAPTER,
-            &observed_at.to_rfc3339(),
-            Some(self.run_id.as_str()),
-        ) {
-            eprintln!(
-                "[pi-print] enqueue local phase failed for {}: {err}",
-                self.session_id
-            );
-        }
+        self.hand_off_terminal(terminal_state, terminal_error, terminal_event);
     }
 
     #[cfg(unix)]
@@ -1447,16 +1326,6 @@ impl PiPrintSink {
 
     #[cfg(not(unix))]
     async fn wake_transcript_shipper(&self, _source_path: &Path, _provider_session_id: &str) {}
-
-    async fn post_events(&self, events: Vec<Value>) {
-        for event in events {
-            if let Err(error) =
-                crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event)
-            {
-                eprintln!("[pi-print] runtime outbox write failed: {error}");
-            }
-        }
-    }
 }
 
 async fn cleanup_process_group(process_group_id: Option<i32>) {
@@ -1498,21 +1367,24 @@ mod tests {
     fn golden_pi_sink(home: &crate::console_sink::golden::GoldenHome) -> PiPrintSink {
         use crate::console_sink::golden::*;
         PiPrintSink {
-            session_id: SESSION.to_string(),
-            thread_id: THREAD.to_string(),
-            turn_id: Some(TURN.to_string()),
-            run_id: RUN.to_string(),
-            client_request_id: Some(CLIENT_REQUEST.to_string()),
-            launch_id: LAUNCH.to_string(),
-            process_group_id: None,
+            run: ConsoleRun {
+                provider: &PI_CONSOLE,
+                session_id: SESSION.to_string(),
+                thread_id: THREAD.to_string(),
+                turn_id: Some(TURN.to_string()),
+                run_id: RUN.to_string(),
+                client_request_id: Some(CLIENT_REQUEST.to_string()),
+                launch_id: LAUNCH.to_string(),
+                process_group_id: None,
+                machine_name: MACHINE.to_string(),
+                local_db_path: Some(home.local_db()),
+                runtime_events_outbox_dir: home.outbox(),
+            },
             stdout_path: home.temp.path().join("stdout.jsonl"),
             session_dir: home.temp.path().join("sessions"),
             provider_thread_id: PROVIDER_THREAD.to_string(),
             session_file: Some(home.temp.path().join("sessions/native.jsonl")),
             binding_emitted: false,
-            machine_name: MACHINE.to_string(),
-            local_db_path: Some(home.local_db()),
-            runtime_events_outbox_dir: home.outbox(),
         }
     }
 
@@ -2288,21 +2160,24 @@ if args[:2] == ["--mode", "rpc"]:
                     .claim(&run_id, &session_id, &thread_id, None, None, "pi")
                     .unwrap();
                 let sink = PiPrintSink {
-                    session_id: session_id.clone(),
-                    thread_id,
-                    turn_id: None,
-                    run_id: run_id.clone(),
-                    client_request_id: None,
-                    launch_id: Uuid::new_v4().to_string(),
-                    process_group_id: None,
+                    run: ConsoleRun {
+                        provider: &PI_CONSOLE,
+                        session_id: session_id.clone(),
+                        thread_id,
+                        turn_id: None,
+                        run_id: run_id.clone(),
+                        client_request_id: None,
+                        launch_id: Uuid::new_v4().to_string(),
+                        process_group_id: None,
+                        machine_name: "test".to_string(),
+                        local_db_path: None,
+                        runtime_events_outbox_dir: outbox.clone(),
+                    },
                     stdout_path: temp.path().join("stdout.jsonl"),
                     session_dir: temp.path().to_path_buf(),
                     provider_thread_id: Uuid::new_v4().to_string(),
                     session_file: None,
                     binding_emitted: false,
-                    machine_name: "test".to_string(),
-                    local_db_path: None,
-                    runtime_events_outbox_dir: outbox.clone(),
                 };
 
                 sink.post_phase("thinking", None, 0).await;
