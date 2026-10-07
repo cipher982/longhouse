@@ -605,12 +605,15 @@ def enqueue_reviews(repo: str | Path, policy: Policy, revs: list[str], *, sessio
                        created=_now(), updated=_now(), history=[])
         jobs += new
         _save_jobs(repo, jobs)
+        queued = sum(1 for j in jobs if j.get("state") == "queued")
     for job in new:
         span = f"--merge {job['head'][:12]}" if job["kind"] == "merge" else f"{job['base'][:12]}..{job['head'][:12]}"
         auto_log(repo, f"queued {job['id']} ({reason}): {span}, {len(job['commits'])} commit(s), "
                        f"intent={'longhouse:' + session if session else 'none'}")
-    if new:
-        start_workers(repo, min(AUTO_SLOTS, len(new)))
+    if queued:
+        # Also when nothing is new: a job requeued after its worker died needs a worker, and a spare one
+        # finds every slot taken and exits at once.
+        start_workers(repo, min(AUTO_SLOTS, queued))
     return new
 
 
@@ -777,6 +780,10 @@ def pushed_review_note(repo: str | Path, policy: Policy, updates: list[tuple[str
 
 def queue_mode(repo: str, wait: int | None) -> int:
     deadline = _now() + (wait or 0)
+    _, jobs = describe_queue(repo)
+    queued = sum(1 for j in jobs if j.get("state") == "queued")
+    if queued and hatch_binary():
+        start_workers(repo, min(AUTO_SLOTS, queued))  # a job whose worker died is never stranded
     while True:
         lines, jobs = describe_queue(repo)
         active = [j for j in jobs if j.get("state") in ("queued", "running")]
@@ -807,7 +814,8 @@ def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict], started: l
     if started is not None:
         queued = {sha for j in started for sha in j["commits"]}
         if started:
-            lines += [queued_note(repo, started).removeprefix("review-gate: ").capitalize() + ".",
+            note = queued_note(repo, started).removeprefix("review-gate: ")
+            lines += [note[:1].upper() + note[1:] + ".",
                       f"Wait for them, then retry: python3 {Path(__file__).resolve()} --repo {repo} queue --wait 1800",
                       "A commit refused for an open finding needs its disposition, not another review."]
         else:
@@ -874,7 +882,8 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("--range", dest="rng", default="origin/main..HEAD")
     backfill = sub.add_parser("backfill", help="queue background reviews of a range's commits that lack a receipt")
     backfill.add_argument("--range", dest="rng", required=True)
-    queue = sub.add_parser("queue", help="list the background reviews (non-zero only when --wait times out or one failed)")
+    queue = sub.add_parser("queue", help="list the background reviews (starting a worker for any queued one); with --wait, "
+                           "non-zero when it times out or a review failed")
     queue.add_argument("--wait", type=int, metavar="SECONDS", help="block until no review is queued or running")
     sub.add_parser("autoreview-worker", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)

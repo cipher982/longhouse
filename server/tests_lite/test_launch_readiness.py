@@ -642,6 +642,8 @@ def test_wait_mode_reruns_an_uncovered_superseded_run_a_bounded_number_of_times(
     assert reruns == ["37650853995", "37650853995"]
     assert "re-dispatched it for the exact SHA (2/2)" in err
     assert rc == 1 and "failed terminal checks" in err  # the third cancellation is terminal
+    # Each rerun had its grace to register before the next one: not both back to back.
+    assert clock.now >= 2 * mod.RERUN_REGISTER_GRACE_S
     assert clock.now < 7200
 
 

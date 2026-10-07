@@ -66,6 +66,14 @@ class AutofixTests(unittest.TestCase):
     def staged(self, name: str) -> str:
         return self.git("show", f":{name}")
 
+    def test_the_post_commit_record_carries_the_pre_fix_blob(self):
+        (self.dir / "a.txt").write_text("hello\n")
+        self.git("add", "a.txt")
+        self.snapshot()
+        self.assertEqual(self.fix("a.txt").returncode, 0)
+        state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
+        self.assertEqual((state / "staged").read_text(), f"a.txt\t{self.blob('hello')}\n")
+
     def test_a_fully_staged_file_is_fixed_and_restaged_so_the_commit_carries_the_fix(self):
         (self.dir / "a.txt").write_text("hello\n")
         self.git("add", "a.txt")
@@ -149,7 +157,7 @@ class AutofixTests(unittest.TestCase):
         self.assertEqual(self.git("status", "--short"), "MM a.txt\n")
         state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
         state.mkdir(exist_ok=True)
-        (state / "staged").write_text("a.txt\n")
+        (state / "staged").write_text(f"a.txt\t{self.blob('hello')}\n")
         (self.dir / "b.txt").write_text("someone's unrelated edit\n")
         self.git("add", "b.txt")
         self.assertEqual(self.autofix("post-commit").returncode, 0)
@@ -164,9 +172,19 @@ class AutofixTests(unittest.TestCase):
         (self.dir / "a.txt").write_text("edited after the commit\n")
         state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
         state.mkdir(exist_ok=True)
-        (state / "staged").write_text("a.txt\n")
+        (state / "staged").write_text(f"a.txt\t{self.blob('hello')}\n")
         self.assertEqual(self.autofix("post-commit").returncode, 0)
         self.assertEqual(self.git("status", "--short"), " M a.txt\n")
+
+    def test_post_commit_never_overwrites_a_different_edit_staged_to_the_fixed_path(self):
+        (self.dir / "a.txt").write_text("staged by someone, then the working tree reverted\n")
+        self.git("add", "a.txt")
+        (self.dir / "a.txt").write_text("x\n")  # the working tree equals HEAD again
+        state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
+        state.mkdir(exist_ok=True)
+        (state / "staged").write_text(f"a.txt\t{self.blob('hello')}\n")  # the fix's pre-fix copy was something else
+        self.assertEqual(self.autofix("post-commit").returncode, 0)
+        self.assertEqual(self.git("status", "--short"), "MM a.txt\n", "the other staged edit survives")
 
     def test_the_shims_are_installed_once_per_clone_and_pass_pre_commits_pid(self):
         installer = (ROOT / "scripts" / "ops" / "install-push-gate.sh").read_text()

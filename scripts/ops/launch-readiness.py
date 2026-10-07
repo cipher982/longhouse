@@ -196,7 +196,8 @@ def covering_run(repo: str, sha: str, workflow: str) -> Check | None:
     one still running may, and None when no descendant run exists or all of them failed."""
     proc = run(
         [
-            "gh", "run", "list", "-R", repo, "--workflow", workflow, "--branch", "main", "--event", "push",
+            # Any main run, push or workflow_dispatch: release.sh dispatches the path-filtered gates.
+            "gh", "run", "list", "-R", repo, "--workflow", workflow, "--branch", "main",
             "--limit", "30", "--json", "databaseId,headSha,status,conclusion,url",
         ],
         check=False,
@@ -526,19 +527,29 @@ def _expire_missing_workflows(checks: list[Check]) -> list[Check]:
     ]
 
 
-def _redispatch_superseded(args: argparse.Namespace, sha: str, checks: list[Check], redispatched: dict[str, int]) -> list[Check]:
-    """Rerun each cancelled, uncovered exact-SHA run (bounded per workflow) and wait on it instead of failing."""
+RERUN_REGISTER_GRACE_S = 300  # GitHub may still report the old attempt as cancelled for a while after a rerun
+
+
+def _redispatch_superseded(args: argparse.Namespace, sha: str, checks: list[Check], redispatched: dict[str, dict]) -> list[Check]:
+    """Rerun each cancelled, uncovered exact-SHA run (bounded per workflow) and wait on it instead of failing.
+    A rerun counts as in flight until the run is seen not cancelled, or RERUN_REGISTER_GRACE_S passes, so a
+    lagging status cannot spend the whole budget back to back."""
     out = []
     for check in checks:
+        state = redispatched.setdefault(check.name, {"count": 0, "at": None})
         if check.state != "failed" or not check.rerun_id:
+            state["at"] = None  # the rerun registered (or was never needed)
             out.append(check)
             continue
-        count = redispatched.get(check.name, 0)
+        if state["at"] is not None and time.monotonic() - state["at"] < RERUN_REGISTER_GRACE_S:
+            out.append(replace(check, state="pending", detail=f"{check.detail}; waiting for the rerun to register"))
+            continue
+        count = state["count"]
         if count >= args.redispatch_superseded:
             out.append(replace(check, detail=f"{check.detail}; re-dispatched {count} time(s) already"))
             continue
         proc = run(["gh", "run", "rerun", check.rerun_id, "-R", args.repo], check=False)
-        redispatched[check.name] = count + 1
+        state.update(count=count + 1, at=time.monotonic())
         if proc.returncode != 0:
             print(f"Re-dispatch of {check.name} run {check.rerun_id} for {sha[:12]} failed: {(proc.stderr or proc.stdout).strip()}",
                   file=sys.stderr)
@@ -565,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
     attempt = 0
     last_pending_signature: tuple[tuple[str, str, str], ...] | None = None
     immutable_success_cache: dict[tuple[str, ...], Check] = {}
-    redispatched: dict[str, int] = {}
+    redispatched: dict[str, dict] = {}
     while True:
         attempt += 1
         checks = run_checks(

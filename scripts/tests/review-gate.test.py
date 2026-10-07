@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import http.server
+import io
 import importlib.util
 import json
 import os
@@ -1026,6 +1028,22 @@ class AutoReviewTests(unittest.TestCase):
             gate._save_jobs(self.repo.dir, jobs)
         gate.autoreview_worker(self.repo.dir)
         self.assertEqual(self.jobs()[0]["state"], "done")
+
+    def test_a_job_stranded_by_a_dead_worker_gets_a_worker_from_the_next_trigger_or_queue(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        policy = self.repo.policy()
+        gate.enqueue_reviews(self.repo.dir, policy, [f"{self.base}..HEAD"], session=None, reason="push")
+        with gate._QueueLock(self.repo.dir):
+            jobs = self.jobs()
+            jobs[0].update(state="running", pid=2 ** 22 + 12345, attempts=1)  # its worker died (reboot, OOM)
+            gate._save_jobs(self.repo.dir, jobs)
+        self.started.clear()
+        self.assertEqual(gate.enqueue_reviews(self.repo.dir, policy, [f"{self.base}..HEAD"], session=None, reason="promotion"), [])
+        self.assertEqual(self.started, [1], "nothing new, but the requeued job needs a worker")
+        self.started.clear()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(gate.queue_mode(str(self.repo.dir), None), 0)
+        self.assertEqual(self.started, [1], "the documented wait command starts one too")
 
     def test_a_refused_promotion_starts_the_missing_reviews_and_says_so(self):
         self.repo.commit("a", {"server/a.py": "1"})

@@ -82,6 +82,17 @@ def _read(path: str) -> bytes | None:
         return None
 
 
+def _blob(content: bytes | None) -> str:
+    if content is None:
+        return ""
+    return subprocess.run(["git", "hash-object", "--stdin"], input=content, capture_output=True, check=True).stdout.decode().strip()
+
+
+def _index_blob(path: str) -> str:
+    out = git("ls-files", "-s", "--", path, check=False).stdout.split()
+    return out[1] if len(out) >= 2 else ""
+
+
 def _restore(path: str, content: bytes | None) -> None:
     if content is None:
         Path(path).unlink(missing_ok=True)
@@ -116,7 +127,9 @@ def fix(name: str, cmd: str, ok_exit: set[int], watch: list[str], how: str, file
         directory = state_dir()
         directory.mkdir(exist_ok=True)
         with open(directory / "staged", "a") as fh:
-            fh.write("".join(f"{p}\n" for p in safe))
+            # path and the blob it held before the fix: post-commit touches the real index only where it
+            # still holds exactly that (the stale copy `commit -o` leaves), never another staged edit.
+            fh.write("".join(f"{p}\t{_blob(before[p])}\n" for p in safe))
         print(f"autofix: {name}: fixed and re-staged {', '.join(safe)}")
     if unsafe:
         print(f"autofix: {name} would change {', '.join(unsafe)}, which also has unstaged changes, so it was not fixed "
@@ -131,13 +144,15 @@ def post_commit() -> int:
     os.environ.pop("GIT_INDEX_FILE", None)
     record = state_dir() / "staged"
     try:
-        paths = list(dict.fromkeys(p for p in record.read_text().splitlines() if p))
+        entries = [line.split("\t") for line in record.read_text().splitlines() if line]
     except OSError:
         return 0
     record.unlink(missing_ok=True)
-    # Only where the working tree is exactly what was committed: then the index becomes HEAD for that path,
-    # and nothing anyone staged or changed since is touched.
-    settled = [p for p in paths if Path(p).exists() and git("diff", "--quiet", "HEAD", "--", p, check=False).returncode == 0]
+    # Only where the working tree is exactly what was committed and the index still holds the pre-fix copy:
+    # then the index becomes HEAD for that path, and nothing anyone staged or changed since is touched.
+    settled = [e[0] for e in entries if len(e) == 2 and Path(e[0]).exists()
+               and git("diff", "--quiet", "HEAD", "--", e[0], check=False).returncode == 0
+               and _index_blob(e[0]) == e[1]]
     if settled:
         git("add", "--", *settled, check=False)
     return 0
