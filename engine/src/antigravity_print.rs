@@ -1162,9 +1162,9 @@ mod tests {
     use super::*;
 
     fn golden_antigravity_sink(
-        home: &crate::console_sink::golden::GoldenHome,
+        home: &crate::console_sink_golden::GoldenHome,
     ) -> AntigravityPrintSink {
-        use crate::console_sink::golden::*;
+        use crate::console_sink_golden::*;
         AntigravityPrintSink {
             run: ConsoleRun {
                 provider: &ANTIGRAVITY_CONSOLE,
@@ -1185,7 +1185,7 @@ mod tests {
 
     #[test]
     fn console_sink_golden_antigravity() {
-        use crate::console_sink::golden::*;
+        use crate::console_sink_golden::*;
         let home = GoldenHome::new("antigravity");
         let sink = golden_antigravity_sink(&home);
         let transcript = home.temp.path().join("brain/conversation.pb");

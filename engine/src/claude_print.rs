@@ -2144,8 +2144,8 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn golden_claude_sink(home: &crate::console_sink::golden::GoldenHome) -> ClaudePrintSink {
-        use crate::console_sink::golden::*;
+    fn golden_claude_sink(home: &crate::console_sink_golden::GoldenHome) -> ClaudePrintSink {
+        use crate::console_sink_golden::*;
         ClaudePrintSink {
             run: ConsoleRun {
                 provider: &CLAUDE_CONSOLE,
@@ -2166,7 +2166,7 @@ mod tests {
 
     #[test]
     fn console_sink_golden_claude() {
-        use crate::console_sink::golden::*;
+        use crate::console_sink_golden::*;
         let home = GoldenHome::new("claude");
         let sink = golden_claude_sink(&home);
         let phases = std::cell::RefCell::new(Vec::new());

@@ -1053,8 +1053,8 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn golden_cursor_sink(home: &crate::console_sink::golden::GoldenHome) -> CursorPrintSink {
-        use crate::console_sink::golden::*;
+    fn golden_cursor_sink(home: &crate::console_sink_golden::GoldenHome) -> CursorPrintSink {
+        use crate::console_sink_golden::*;
         CursorPrintSink {
             run: ConsoleRun {
                 provider: &CURSOR_CONSOLE,
@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn console_sink_golden_cursor() {
-        use crate::console_sink::golden::*;
+        use crate::console_sink_golden::*;
         let home = GoldenHome::new("cursor");
         let sink = golden_cursor_sink(&home);
         let phases = std::cell::RefCell::new(Vec::new());

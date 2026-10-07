@@ -2434,8 +2434,8 @@ impl OpenCodeRunSink {
 mod tests {
     use super::*;
 
-    fn golden_opencode_sink(home: &crate::console_sink::golden::GoldenHome) -> OpenCodeRunSink {
-        use crate::console_sink::golden::*;
+    fn golden_opencode_sink(home: &crate::console_sink_golden::GoldenHome) -> OpenCodeRunSink {
+        use crate::console_sink_golden::*;
         OpenCodeRunSink {
             run: ConsoleRun {
                 provider: &OPENCODE_CONSOLE,
@@ -2456,7 +2456,7 @@ mod tests {
 
     #[test]
     fn console_sink_golden_opencode() {
-        use crate::console_sink::golden::*;
+        use crate::console_sink_golden::*;
         let home = GoldenHome::new("opencode");
         let sink = golden_opencode_sink(&home);
         let phases = std::cell::RefCell::new(Vec::new());

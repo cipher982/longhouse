@@ -1360,8 +1360,8 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn golden_pi_sink(home: &crate::console_sink::golden::GoldenHome) -> PiPrintSink {
-        use crate::console_sink::golden::*;
+    fn golden_pi_sink(home: &crate::console_sink_golden::GoldenHome) -> PiPrintSink {
+        use crate::console_sink_golden::*;
         PiPrintSink {
             run: ConsoleRun {
                 provider: &PI_CONSOLE,
@@ -1386,7 +1386,7 @@ mod tests {
 
     #[test]
     fn console_sink_golden_pi() {
-        use crate::console_sink::golden::*;
+        use crate::console_sink_golden::*;
         let home = GoldenHome::new("pi");
         let sink = golden_pi_sink(&home);
         let projection = PiStreamProjection {

@@ -21,6 +21,8 @@ mod commands;
 mod config;
 mod console_adapter;
 mod console_sink;
+#[cfg(test)]
+mod console_sink_golden;
 mod console_lifecycle;
 mod console_rpc;
 mod control_channel;

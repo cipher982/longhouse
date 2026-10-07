@@ -3560,8 +3560,8 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn golden_omp_sink(home: &crate::console_sink::golden::GoldenHome) -> OmpPrintSink {
-        use crate::console_sink::golden::*;
+    fn golden_omp_sink(home: &crate::console_sink_golden::GoldenHome) -> OmpPrintSink {
+        use crate::console_sink_golden::*;
         OmpPrintSink {
             run: ConsoleRun {
                 provider: &OMP_CONSOLE,
@@ -3587,7 +3587,7 @@ mod tests {
 
     #[test]
     fn console_sink_golden_omp() {
-        use crate::console_sink::golden::*;
+        use crate::console_sink_golden::*;
         let home = GoldenHome::new("omp");
         let sink = golden_omp_sink(&home);
         let projection = OmpStreamProjection {
