@@ -10,14 +10,27 @@ export const loadMachinesPage = () => import("@/features/machines/MachinesPage")
 export const loadDocsRoutes = () => import("@/features/marketing/docs/DocsRoutes");
 
 /**
- * The source module behind loadDocsRoutes, as Vite's build manifest names it:
- * web/scripts/prerender.mjs links that chunk into every prerendered docs page,
- * and fails the build if the manifest has no such entry.
+ * Public routes that render from a lazy chunk. A prerendered page of such a
+ * route links the chunk's files in its <head> (web/scripts/prerender.mjs,
+ * which fails the build if Vite's manifest has no entry for `module`), and
+ * main.tsx loads the chunk before hydrating that page.
  */
-export const DOCS_ROUTES_MODULE = "src/features/marketing/docs/DocsRoutes.tsx";
+const LAZY_PUBLIC_ROUTES = [
+  {
+    matches: (pathname: string) => pathname === "/docs" || pathname.startsWith("/docs/"),
+    module: "src/features/marketing/docs/DocsRoutes.tsx",
+    load: loadDocsRoutes,
+  },
+];
 
-export function isDocsPath(pathname: string): boolean {
-  return pathname === "/docs" || pathname.startsWith("/docs/");
+/** Source modules (as Vite's build manifest names them) a route renders lazily. */
+export function routeChunkModules(pathname: string): string[] {
+  return LAZY_PUBLIC_ROUTES.filter((route) => route.matches(pathname)).map((route) => route.module);
+}
+
+/** Load the lazy chunks a route renders; resolves once all are in hand. */
+export function loadRouteChunks(pathname: string): Promise<unknown> {
+  return Promise.all(LAZY_PUBLIC_ROUTES.filter((route) => route.matches(pathname)).map((route) => route.load()));
 }
 
 let sessionDetailRequested = false;

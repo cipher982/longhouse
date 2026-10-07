@@ -4,7 +4,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router";
 import config from "@/shared/lib/config";
 import { shouldRetryQuery } from "./queryRetry";
-import { isDocsPath, loadDocsRoutes } from "./routeChunks";
+import { loadRouteChunks } from "./routeChunks";
 
 // Global stylesheet entrypoint
 import "./styles/app.css";
@@ -172,14 +172,10 @@ if (container.hasChildNodes()) {
       // uncaught error to /api/ops/beacon.
       onRecoverableError: (error) => console.warn("[hydrate]", error),
     });
-  // The docs are a lazy chunk the page's <head> already modulepreloads: have
-  // it in hand before hydrating so React adopts the static page in one pass.
-  // A failed load hydrates anyway, and the lazy route handles the failure.
-  if (isDocsPath(window.location.pathname)) {
-    void loadDocsRoutes().then(hydrate, hydrate);
-  } else {
-    hydrate();
-  }
+  // A lazy public route (the docs) has its chunk modulepreloaded by the page's
+  // <head>: have it in hand before hydrating so React adopts the static page
+  // without waiting. A failed load hydrates anyway; the lazy route handles it.
+  void loadRouteChunks(window.location.pathname).then(hydrate, hydrate);
 } else {
   ReactDOM.createRoot(container).render(app);
 }

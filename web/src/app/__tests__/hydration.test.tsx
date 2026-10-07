@@ -1,16 +1,19 @@
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { hydrateRoot } from "react-dom/client";
 import { prerender } from "react-dom/static";
 import { MemoryRouter } from "react-router";
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
-import { AppContent, AppProviders } from "../AppRoot";
-// Importing the prerender entry puts config in demo mode, as on the public site.
-import { renderRoute, routeChunkModules } from "../prerender";
-import { DOCS_ROUTES_MODULE, isDocsPath, loadDocsRoutes } from "../routeChunks";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderRoute } from "../prerender";
+import { routeChunkModules } from "../routeChunks";
 
-// What main.tsx does on a prerendered page: the same tree, hydrated onto the
-// static HTML, after loading the lazy docs chunk on a docs route.
+afterEach(() => {
+  delete window.__APP_MODE__;
+});
+
+// What main.tsx does on a prerendered page, as a browser runs it: a fresh copy
+// of the app (no lazy route resolved yet, the public site's demo config) loads
+// the route's lazy chunks, then hydrates the static HTML under StrictMode.
 async function hydrate(pathname: string) {
   const { html } = await renderRoute(pathname);
   // React's static renderer leaves its last context values set until its next
@@ -21,7 +24,14 @@ async function hydrate(pathname: string) {
   container.innerHTML = html;
   document.body.appendChild(container);
   const heading = container.querySelector("h1");
-  if (isDocsPath(pathname)) await loadDocsRoutes();
+
+  // renderRoute resolved App's lazy routes in this module graph; the browser
+  // starts with none resolved, so hydrate from a fresh one.
+  vi.resetModules();
+  window.__APP_MODE__ = "demo";
+  const { AppContent, AppProviders } = await import("../AppRoot");
+  const { loadRouteChunks } = await import("../routeChunks");
+  await loadRouteChunks(pathname);
 
   const recoverable: unknown[] = [];
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -29,11 +39,13 @@ async function hydrate(pathname: string) {
   await act(async () => {
     root = hydrateRoot(
       container,
-      <AppProviders queryClient={new QueryClient()}>
-        <MemoryRouter initialEntries={[pathname]}>
-          <AppContent />
-        </MemoryRouter>
-      </AppProviders>,
+      <StrictMode>
+        <AppProviders queryClient={new QueryClient()}>
+          <MemoryRouter initialEntries={[pathname]}>
+            <AppContent />
+          </MemoryRouter>
+        </AppProviders>
+      </StrictMode>,
       { onRecoverableError: (error) => recoverable.push(error) },
     );
   });
@@ -59,8 +71,9 @@ describe("hydrating prerendered pages", () => {
   );
 
   it("links the docs chunk into docs pages only", () => {
-    expect(routeChunkModules("/docs")).toEqual([DOCS_ROUTES_MODULE]);
-    expect(routeChunkModules("/docs/cli")).toEqual([DOCS_ROUTES_MODULE]);
+    const docs = ["src/features/marketing/docs/DocsRoutes.tsx"];
+    expect(routeChunkModules("/docs")).toEqual(docs);
+    expect(routeChunkModules("/docs/cli")).toEqual(docs);
     expect(routeChunkModules("/")).toEqual([]);
     expect(routeChunkModules("/blog")).toEqual([]);
     expect(routeChunkModules("/docsearch")).toEqual([]);
