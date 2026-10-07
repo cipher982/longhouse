@@ -59,7 +59,9 @@ impl InvocationCleanup {
 /// still alive, nothing proves the processes are gone.
 pub fn recovered_invocation_cleanup(claim: &crate::turn_claims::TurnClaim) -> InvocationCleanup {
     match claim.process_group_id {
-        Some(pgid) if !crate::process_group::group_is_alive(pgid) => InvocationCleanup::Complete,
+        Some(pgid) if pgid > 0 && !crate::process_group::group_is_alive(pgid) => {
+            InvocationCleanup::Complete
+        }
         _ => InvocationCleanup::Unverified,
     }
 }
@@ -1839,6 +1841,12 @@ mod tests {
         assert_eq!(
             recovered_invocation_cleanup(&claim),
             InvocationCleanup::Complete
+        );
+        claim.process_group_id = Some(0);
+        assert_eq!(
+            recovered_invocation_cleanup(&claim),
+            InvocationCleanup::Unverified,
+            "a pgid that was never probed proves nothing"
         );
         claim.process_group_id = None;
         assert_eq!(
