@@ -74,13 +74,6 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         async def start(self):
             calls.append(f"{self.label}_workers_start")
 
-    class Runner:
-        def start(self):
-            calls.append("runner_start")
-
-        def stop(self):
-            calls.append("runner_stop")
-
     async def completed_loop():
         return None
 
@@ -139,7 +132,6 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     )
     monkeypatch.setattr("zerg.services.maintenance.start_maintenance_loop", lambda: None)
     monkeypatch.setattr("zerg.services.maintenance.stop_maintenance_loop", noop_async)
-    monkeypatch.setattr("zerg.utils.async_runner.get_shared_runner", lambda: Runner())
     monkeypatch.setattr("zerg.websocket.manager.topic_manager.shutdown", noop_async)
 
     app = FastAPI()
@@ -148,13 +140,11 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         assert "search_projector_start" in calls
         assert "embedding_projector_start" in calls
         assert model_load_attempts == []
-        assert "runner_start" in calls
         assert app.state.catalogd_ping["ready"] is True
         assert app.state.searchd_ping is None
         assert app.state.storage_telemetry_task.done() is False
 
-    assert calls[-7:] == [
-        "runner_stop",
+    assert calls[-6:] == [
         "telemetry_stop",
         "search_projector_stop",
         "raw_workers_stop",

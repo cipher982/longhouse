@@ -329,11 +329,6 @@ async def lifespan(app: FastAPI):
         with _timed_startup_step("models_config_validation"):
             _validate_models_config_startup()
 
-        # Shared async runner
-        from zerg.utils.async_runner import get_shared_runner
-
-        get_shared_runner().start()
-
         if not _settings.testing:
             try:
                 from zerg.services.live_control_catalog import run_live_catalog_input_recovery_loop
@@ -461,11 +456,6 @@ async def lifespan(app: FastAPI):
 
             await stop_maintenance_loop()
 
-        async def stop_shared_runner() -> None:
-            from zerg.utils.async_runner import get_shared_runner
-
-            get_shared_runner().stop()
-
         async def stop_websocket_topic_manager() -> None:
             from zerg.websocket.manager import topic_manager
 
@@ -527,7 +517,6 @@ async def lifespan(app: FastAPI):
         if not _settings.testing:
             await _timed_shutdown_step("wal_checkpoint_loop", stop_wal_checkpoints)
             await _timed_shutdown_step("maintenance_loop", stop_maintenance)
-        await _timed_shutdown_step("shared_async_runner", stop_shared_runner)
         await _timed_shutdown_step("websocket_topic_manager", stop_websocket_topic_manager)
         if not _settings.testing or owns_test_catalog:
             await _timed_shutdown_step("storage_title_services", stop_storage_title)
