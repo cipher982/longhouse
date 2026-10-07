@@ -1370,6 +1370,31 @@ class AttestationTests(unittest.TestCase):
         self.assertIn("does not contain", why)
         self.assertIn("is failure", self.read_back([self.status("failure", self.prod)], self.prod))
         self.assertIn("no review attestation", self.read_back([], self.prod))
+        stray = self.repo.git("commit-tree", "-m", "off main", f"{self.prod}^{{tree}}")  # not contained by target
+        self.assertIn("does not contain the served", self.read_back([self.status("success", self.prod)], stray))
+
+    def test_one_failed_post_or_an_unreadable_production_does_not_stop_the_rest(self):
+        self.repo.receipt(self.prod)
+        calls = []
+
+        def flaky(slug, sha, state, description):
+            calls.append(sha)
+            if len(calls) == 1:
+                raise gate.GateError("gh: network down")
+            self.posted.append((sha, state, description))
+        gate.post_attestation = flaky
+        self.attest(self.dogfood, self.target)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([sha for sha, _, _ in self.posted], [self.target])
+        self.assertEqual(self.attest(self.dogfood, self.target).keys(), {self.dogfood})  # the failed one is retried
+        del self.served[gate.PRODUCTION_HEALTH_URL]
+        def unreadable(url):
+            if url not in self.served:
+                raise gate.GateError("down")
+            return self.served[url]
+        gate.served_commit = unreadable
+        posted = self.attest(self.target)
+        self.assertEqual(posted[self.target], ("success", f"from {self.dogfood}: clean"))
 
     def test_the_newest_attestation_by_an_allowed_account_wins(self):
         statuses = [self.status("success", self.prod, at="2026-10-07T00:00:00Z"),

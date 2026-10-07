@@ -1259,8 +1259,8 @@ reprovision: ## Reprovision an explicit immutable image (SUBDOMAIN=..., IMAGE=..
 
 # Promote Rings (.github/workflows/promote-rings.yml) moves dogfood and production on its own; the
 # targets below are for a specific SHA by hand (a rollback, a stuck ring). They refuse while a Promote
-# Rings job is running, so the two writers do not interleave; the control plane fences the rest.
-PROMOTER_IDLE = busy="$$(gh run list -R cipher982/longhouse --workflow promote-rings.yml --status in_progress --json url -q '.[0].url' 2>/dev/null)"; \
+# Rings run is queued or running, so the two writers do not interleave; the control plane fences the rest.
+PROMOTER_IDLE = busy="$$(gh run list -R cipher982/longhouse --workflow promote-rings.yml --limit 10 --json status,url -q '[.[] | select(.status != "completed")][0].url // empty' 2>/dev/null)"; \
 	[ -z "$$busy" ] || { echo "Promote Rings is running ($$busy); wait for it to finish (it may be doing this already)." >&2; exit 1; }
 
 .PHONY: promote-rings

@@ -1114,6 +1114,9 @@ def read_attestation(slug: str, sha: str) -> dict | None:
 
 def attested_refusal(repo: str | Path, slug: str, served: str, target: str) -> str | None:
     """None when an attestation allows served..target; otherwise why not."""
+    if served != target and not is_ancestor(repo, served, target):
+        return (f"{target[:12]} does not contain the served {served[:12]}, so no attestation of a range ending at "
+                f"{target[:12]} speaks for it")
     status = read_attestation(slug, target)
     if status is None:
         return (f"no review attestation on {target[:12]} yet (the review attester posts `{ATTEST_CONTEXT}` "
@@ -1154,12 +1157,17 @@ def attest_mode(repo: str, policy: Policy, targets: list[str], served_url: str, 
     try:
         git(repo, "fetch", "--quiet", os.environ.get("PUSH_READINESS_REMOTE", "").strip() or "origin", check=False)
         slug = github_slug(repo)
-        served = served_commit(served_url)
-        try:
-            dogfood = served_commit(dogfood_url)
-        except GateError as exc:
-            dogfood = None
-            print(f"review-gate: attest: dogfood unreadable: {exc}", file=sys.stderr)
+        rings = {}
+        for name, url in (("production", served_url), ("dogfood", dogfood_url)):
+            try:
+                rings[name] = served_commit(url)
+            except GateError as exc:
+                print(f"review-gate: attest: {name} unreadable: {exc}", file=sys.stderr)
+        if not rings:
+            raise GateError("neither ring's served commit is readable; nothing to compute a verdict from")
+        # An unreadable production still lets dogfood's verdict out (dogfood is its own base then).
+        served = rings.get("production") or rings["dogfood"]
+        dogfood = rings.get("dogfood")
         # The verdict is computed from the oldest ring that gives a clean one: production first (what a
         # production promotion asks), then dogfood (enough for a dogfood promotion, which asks from what
         # dogfood serves). A reader only trusts it for a ring whose served SHA contains that base.
@@ -1207,7 +1215,11 @@ def attest_mode(repo: str, policy: Policy, targets: list[str], served_url: str, 
             print(f"review-gate: attest {target[:12]} {state}: {description}")
             if dry_run:
                 continue
-            post_attestation(slug, target, state, description)
+            try:
+                post_attestation(slug, target, state, description)
+            except GateError as exc:  # one failed post must not stop the others; the next run retries it
+                print(f"review-gate: attest: {exc}", file=sys.stderr)
+                continue
             posted[target] = {"state": state, "description": description, "at": _now()}
         if not dry_run:
             cutoff = _now() - 14 * 86400
