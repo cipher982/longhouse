@@ -1937,8 +1937,8 @@ export function buildSessionConsoleFixture(): SessionDetailFixture {
 
 /**
  * The session rail's list: the timeline's first page, with the open session
- * plus neighbours in every state a rail row shows (running, needs you,
- * idle, ended, uncertain), across providers and machines.
+ * plus neighbours spanning live work, an active question, an unread Console
+ * result, failure, idle, ended and uncertain states across providers.
  */
 export function buildRailSessionsFixture(active: AgentSession): JsonObject {
   const now = SESSION_DETAIL_STRESS_NOW;
@@ -1969,6 +1969,14 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
       session_state: makeSessionState({
         activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: now, valid_until: null },
         delegation: { state: "none", count: 0, kinds: {}, source: "codex", observed_at: now, valid_until: null, items: [], recent_items: [] },
+        pending_interaction: {
+          id: "rail-question",
+          kind: "question",
+          opened_at: now,
+          resolved_at: null,
+          provider_request_id: "rail-question",
+          can_respond: true,
+        },
         presentation: {
           primary: { key: "needs_answer", label: "Needs your answer", tone: "blocked", observed_at: now },
           access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
@@ -2025,6 +2033,55 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
         delegation: { state: "none", count: 0, kinds: {}, source: "codex", observed_at: now, valid_until: null, items: [], recent_items: [] },
         presentation: {
           primary: { key: "activity_unknown", label: "Activity unknown", tone: "quiet", observed_at: now },
+          access: null,
+          transcript: null,
+        },
+      }),
+    },
+    {
+      id: "rail-failed",
+      provider: "codex",
+      summary_title: "Earlier run failed",
+      device_id: "cinder",
+      session_state: makeSessionState({
+        working_set: "history",
+        run: {
+          lifecycle: "ended",
+          started_at: "2026-04-15T15:30:00Z",
+          ended_at: now,
+          end_reason: "run_failed",
+        },
+        activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: now, valid_until: null },
+        delegation: { state: "none", count: 0, kinds: {}, source: "codex", observed_at: now, valid_until: null, items: [], recent_items: [] },
+        last_result_at: now,
+        presentation: {
+          primary: { key: "ended", label: "Run failed", tone: "blocked", observed_at: now },
+          access: null,
+          transcript: null,
+        },
+      }),
+    },
+    {
+      id: "rail-unread-result",
+      provider: "omp",
+      summary_title: "Console result awaiting review",
+      device_id: "cinder",
+      session_state: makeSessionState({
+        mode: "console",
+        working_set: "history",
+        run: {
+          lifecycle: "ended",
+          started_at: "2026-04-15T15:30:00Z",
+          ended_at: "2026-04-15T15:40:00Z",
+          end_reason: "run_completed",
+        },
+        activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: "2026-04-15T15:40:00Z", valid_until: null },
+        delegation: { state: "none", count: 0, kinds: {}, source: "console", observed_at: "2026-04-15T15:40:00Z", valid_until: null, items: [], recent_items: [] },
+        unread: true,
+        last_result_at: "2026-04-15T15:40:00Z",
+        last_result_outcome: "completed",
+        presentation: {
+          primary: { key: "idle", label: "Idle", tone: "idle", observed_at: "2026-04-15T15:40:00Z" },
           access: null,
           transcript: null,
         },

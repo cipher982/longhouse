@@ -184,6 +184,22 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.needsAttention).toBe(false);
   });
+  it("does not treat a pending interaction hidden by a terminal failure as actionable", () => {
+    const session_state = makeSessionStateFacts({
+      pendingInteraction: true,
+      activity: "quiescent",
+    });
+    session_state.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: null,
+    };
+    const session = makeSession({ session_state, user_state: "active" });
+
+    expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
+    expect(resolveTimelineSignal(session)).toBe("quiet");
+  });
 });
 
 describe("resolveTimelineSignal", () => {

@@ -52,6 +52,7 @@ import {
 } from "@/shared/instruments/toolActivity";
 import {
   isSessionClosed,
+  needsSessionAttention,
   resolveSessionRuntimeState,
 } from "@/shared/session/sessionRuntime";
 import { TimelinePane } from "./TimelinePane";
@@ -320,6 +321,7 @@ function SessionDetailWorkspaceRoute({
   const railReport = useMemo(() => {
     if (!session) return null;
     const state = getSessionHeaderState(session, nowMs, turnStartMs);
+    const primary = session.session_state.presentation.primary;
     return {
       id: session.id,
       title: getSessionCardText(session, { titleMaxChars: 80 }).title,
@@ -327,6 +329,9 @@ function SessionDetailWorkspaceRoute({
       host: session.control?.source_runner_name?.trim() || session.device_id || null,
       stateText: state.text,
       tone: state.tone,
+      statusKey: primary?.key ?? null,
+      statusTone: primary?.tone,
+      needsUser: needsSessionAttention(session),
     };
   }, [session, nowMs, turnStartMs]);
   useReportActiveSession(railReport);

@@ -20,6 +20,7 @@ import type { StatusLampState } from "@/shared/instruments/StatusLamp";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { SearchIcon, XIcon } from "@/shared/ui/icons";
 import { getRowStatus } from "@/features/timeline/SessionRow";
+import { needsSessionAttention } from "@/shared/session/sessionRuntime";
 import { buildInboxLayout, historySortKey, isAutomationSession } from "@/features/timeline/timelineInboxModel";
 import { getProjectLabel, getSessionCardText } from "@/shared/session/sessionLabels";
 import {
@@ -95,15 +96,28 @@ const TONE_FOR_LAMP: Record<StatusLampState, RailActiveSession["tone"]> = {
 };
 
 /**
- * The one word a row spends width on, and only when the session needs the
- * user. Every other state is the dot alone; the full status is in the row's
- * tooltip and accessible name.
+ * A blocked tone also covers terminal failures and non-interactive provider
+ * states. Only a pending question/approval says "Needs you".
  */
-export function railStatusFlag(lamp: StatusLampState, statusTone?: string): string | null {
-  if (lamp === "failed") return "Failed";
-  // "Needs your answer" arrives as a blocked tone while the live signal can
-  // still read idle; the Timeline shows that word, so the rail does too.
-  if (lamp === "waiting" || statusTone === "blocked") return "Needs you";
+export function railStatusFlag({
+  lamp,
+  statusTone,
+  statusKey,
+  needsUser,
+}: {
+  lamp: StatusLampState;
+  statusTone?: string;
+  statusKey?: string | null;
+  needsUser?: boolean;
+}): string | null {
+  if (
+    lamp === "failed" ||
+    statusKey === "launch_failed" ||
+    (statusKey === "ended" && statusTone === "blocked")
+  ) {
+    return "Failed";
+  }
+  if (needsUser) return "Needs you";
   return null;
 }
 
@@ -123,6 +137,8 @@ function rowFromCard(
     tone: TONE_FOR_LAMP[status.lampState],
     lamp: status.lampState,
     statusTone: status.statusTone,
+    statusKey: session.session_state.presentation.primary?.key ?? null,
+    needsUser: needsSessionAttention(session),
     group,
   };
 }
@@ -157,6 +173,8 @@ export function buildRailRows(
   const activeRow = (group: RailGroup): RailRow => ({
     ...active,
     lamp: LAMP_FOR_TONE[active.tone],
+    statusKey: active.statusKey ?? null,
+    needsUser: active.needsUser ?? false,
     group,
   });
   const index = rows.findIndex((row) => row.id === active.id);
@@ -274,8 +292,8 @@ function SessionRail({
     const active = row.id === activeSessionId;
     const hotkey = index < RAIL_HOTKEY_COUNT ? railHotkeyLabel(index, mac) : null;
     const host = row.host && sharedTitles.has(row.title) ? row.host : null;
-    const flag = railStatusFlag(row.lamp, row.statusTone);
-    const dotState = flag ? (row.lamp === "failed" ? "failed" : "waiting") : row.lamp;
+    const flag = railStatusFlag(row);
+    const dotState = flag === "Failed" ? "failed" : flag === "Needs you" ? "waiting" : row.lamp;
     const fullStatus = row.stateText || "status unknown";
     return (
       <li key={row.id}>

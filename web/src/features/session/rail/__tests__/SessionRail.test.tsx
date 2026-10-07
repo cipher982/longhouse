@@ -115,14 +115,15 @@ describe("rail hotkeys", () => {
 });
 
 describe("rail status word", () => {
-  it("names only the states that need the user; the rest are a dot", () => {
-    expect(railStatusFlag("waiting")).toBe("Needs you");
-    expect(railStatusFlag("failed")).toBe("Failed");
+  it("labels only active interactions as Needs you and keeps failures distinct", () => {
+    expect(railStatusFlag({ lamp: "waiting", needsUser: true })).toBe("Needs you");
+    expect(railStatusFlag({ lamp: "waiting", needsUser: false })).toBeNull();
+    expect(railStatusFlag({ lamp: "idle", statusKey: "ended", statusTone: "blocked" })).toBe("Failed");
+    expect(railStatusFlag({ lamp: "failed" })).toBe("Failed");
+    expect(railStatusFlag({ lamp: "idle", statusTone: "blocked" })).toBeNull();
     for (const lamp of ["working", "idle", "ended", "done", "unknown"] as const) {
-      expect(railStatusFlag(lamp)).toBeNull();
+      expect(railStatusFlag({ lamp })).toBeNull();
     }
-    // A question can arrive as a blocked tone while the live signal is idle.
-    expect(railStatusFlag("idle", "blocked")).toBe("Needs you");
   });
 });
 
@@ -479,5 +480,52 @@ describe("rail rows follow the Timeline's tiers", () => {
     );
     expect(rows.map((row) => row.id)).toEqual(["auto", "a"]);
     expect(rows[0]).toMatchObject({ stateText: "Idle", lamp: "idle", group: "recent" });
+  });
+
+  it("flags an explicit question, but not a failed run or a generic stall", () => {
+    const question = card("question", {}, { activity: "quiescent", pendingInteraction: true });
+    const failed = card("failed", {}, { activity: "quiescent" });
+    failed.head.session_state.run = { lifecycle: "ended", end_reason: "exit_nonzero" };
+    failed.head.session_state.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: "2026-10-06T11:00:00Z",
+    };
+    const stalled = card("stalled", {}, { activity: "stalled" });
+
+    const rows = buildRailRows([question, failed, stalled], Date.parse("2026-10-06T12:30:00Z"), null);
+    const byId = new Map(rows.map((row) => [row.id, row]));
+
+    expect(railStatusFlag(byId.get("question")!)).toBe("Needs you");
+    expect(railStatusFlag(byId.get("failed")!)).toBe("Failed");
+    expect(railStatusFlag(byId.get("stalled")!)).toBeNull();
+  });
+  it("preserves explicit status when the active page replaces its list row", () => {
+    const failed = buildRailRows([], Date.parse("2026-10-06T12:30:00Z"), {
+      id: "failed",
+      title: "Earlier run failed",
+      provider: "codex",
+      host: "cinder",
+      stateText: "Run failed",
+      tone: "attention",
+      statusKey: "ended",
+      statusTone: "blocked",
+      needsUser: false,
+    })[0];
+    const question = buildRailRows([], Date.parse("2026-10-06T12:30:00Z"), {
+      id: "question",
+      title: "Image model eval plan",
+      provider: "codex",
+      host: "cinder",
+      stateText: "Needs answer",
+      tone: "attention",
+      statusKey: "needs_answer",
+      statusTone: "blocked",
+      needsUser: true,
+    })[0];
+
+    expect(railStatusFlag(failed)).toBe("Failed");
+    expect(railStatusFlag(question)).toBe("Needs you");
   });
 });

@@ -10,14 +10,16 @@ export interface RailActiveSession {
   host: string | null;
   stateText: string;
   tone: "live" | "attention" | "unknown" | "cool";
+  statusKey?: string | null;
+  statusTone?: string;
+  /** True only for a current answer/approval interaction. */
+  needsUser?: boolean;
 }
 
 /** One rail row: the session, its Timeline tier, and the Timeline's lamp. */
 export type RailRow = RailActiveSession & {
   lamp: StatusLampState;
   group: "live" | "attention" | "recent";
-  /** The Timeline row's status tone ("blocked" when it asks the user). */
-  statusTone?: string;
 };
 
 export interface SessionRailContextValue {

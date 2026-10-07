@@ -41,12 +41,17 @@ export function isSessionClosed(
   return session?.session_state.disposition.state === "closed";
 }
 
+/** True only for an active session whose served headline is a pending interaction. */
 export function needsSessionAttention(
   session: Pick<AgentSession, "session_state" | "user_state">,
 ): boolean {
+  const primaryKey = session.session_state.presentation.primary?.key;
+  const hasCurrentInteraction =
+    session.session_state.pending_interaction != null &&
+    (primaryKey === "needs_answer" || primaryKey === "needs_approval");
   return !isSessionClosed(session)
     && (session.user_state == null || session.user_state === "active")
-    && session.session_state.pending_interaction != null;
+    && hasCurrentInteraction;
 }
 
 /**
