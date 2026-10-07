@@ -347,7 +347,7 @@ def _recall_excerpt(value: object, *, max_chars: int = 240) -> str:
 
 
 def recall_context(
-    ref: str = typer.Argument(..., help="Opaque ref returned by `longhouse recall`"),
+    ref: str = typer.Argument(..., help="Opaque ref returned by `longhouse-server recall`"),
     before: int = typer.Option(2, "--before", min=0, max=5, help="Turns before the matching turn (0-5)"),
     after: int = typer.Option(2, "--after", min=0, max=5, help="Turns after the matching turn (0-5)"),
     max_content_bytes: int = typer.Option(

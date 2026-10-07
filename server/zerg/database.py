@@ -1646,7 +1646,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
             else:
                 source_line_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(source_lines)"))}
                 if source_line_columns and "branch_id" not in source_line_columns:
-                    # Lightweight compatibility add. Full legacy rebuild is explicit via `longhouse migrate`.
+                    # Lightweight compatibility add. Full legacy rebuild is explicit via `longhouse-server migrate`.
                     conn.execute(text("ALTER TABLE source_lines ADD COLUMN branch_id INTEGER"))
                 if source_line_columns and "revision" not in source_line_columns:
                     conn.execute(text("ALTER TABLE source_lines ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"))

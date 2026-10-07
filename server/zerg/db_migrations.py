@@ -3,7 +3,7 @@
 Startup (`initialize_database`) must stay fast and only handle lightweight schema
 drift. Expensive data rewrites live here and run explicitly via:
 
-    longhouse migrate --apply
+    longhouse-server migrate --apply
 """
 
 from __future__ import annotations
