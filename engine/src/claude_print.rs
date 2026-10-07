@@ -982,8 +982,7 @@ pub async fn recover_claude_print_turns(
                 machine_name,
                 CLAUDE_RUNTIME_SOURCE,
                 InvocationCloseReason::MachineAgentRestart,
-                // Recovery publishes a close only once the group is gone.
-                crate::console_lifecycle::InvocationCleanup::Complete,
+                crate::console_lifecycle::recovered_invocation_cleanup(&claim),
                 &stopped,
             ) {
                 tracing::warn!(

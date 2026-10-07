@@ -39,7 +39,8 @@ pub enum InvocationCleanup {
     Complete,
     /// The group was proven ours and killed, but a process outlived SIGKILL.
     Survivors,
-    /// A live group could not be proven ours, so it was never signalled.
+    /// The group could not be proven ours or gone (a live group that is not
+    /// provably ours, or no recorded group); nothing was signalled.
     Unverified,
 }
 
@@ -50,6 +51,16 @@ impl InvocationCleanup {
             Self::Survivors => "survivors",
             Self::Unverified => "unverified",
         }
+    }
+}
+
+/// The cleanup a restart-recovery close can prove when it publishes: complete
+/// only when a recorded process group is gone. With no recorded group, or one
+/// still alive, nothing proves the processes are gone.
+pub fn recovered_invocation_cleanup(claim: &crate::turn_claims::TurnClaim) -> InvocationCleanup {
+    match claim.process_group_id {
+        Some(pgid) if !crate::process_group::group_is_alive(pgid) => InvocationCleanup::Complete,
+        _ => InvocationCleanup::Unverified,
     }
 }
 
@@ -1804,6 +1815,37 @@ mod tests {
             crate::process_group::DEFAULT_GRACE,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn recovery_cleanup_is_complete_only_for_a_recorded_group_that_is_gone() {
+        let mut child = spawn_owned_group();
+        let pid = child.id().unwrap();
+        let mut claim = spawned_claim(
+            pid,
+            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        );
+        assert_eq!(
+            recovered_invocation_cleanup(&claim),
+            InvocationCleanup::Unverified,
+            "a live group is not proof its processes are gone"
+        );
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(pid as i32),
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+        assert_eq!(
+            recovered_invocation_cleanup(&claim),
+            InvocationCleanup::Complete
+        );
+        claim.process_group_id = None;
+        assert_eq!(
+            recovered_invocation_cleanup(&claim),
+            InvocationCleanup::Unverified,
+            "no recorded group proves nothing"
+        );
     }
 
     #[tokio::test]

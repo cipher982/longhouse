@@ -78,7 +78,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertFalse(output.exists, "the job's output stays behind the row until it is tapped")
         let closeNotice = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "so it left them alone"))
+            .matching(NSPredicate(format: "label CONTAINS %@", "left any that remain alone"))
             .firstMatch
         XCTAssertTrue(
             closeNotice.waitForExistence(timeout: Self.webTranscriptTimeout),

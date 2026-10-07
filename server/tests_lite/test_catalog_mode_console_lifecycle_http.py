@@ -717,7 +717,7 @@ _CLOSE_NOTICE = "Stopped 2 background tasks: watch the branch; run the integrati
 _CLEANUP_LINES = {
     "complete": None,
     "survivors": "Some processes didn't exit and may still be running.",
-    "unverified": ("Some processes were still running, but Longhouse couldn't confirm they were this session's, so it left them alone."),
+    "unverified": "Longhouse couldn't confirm all its processes exited, and left any that remain alone.",
 }
 
 
@@ -765,7 +765,7 @@ def test_catalog_mode_http_parked_stop_reports_cleanup_on_response_and_notice(tm
             body = stopped.json()
             assert body["interrupt_dispatched"] is True
             assert body["cleanup"] == cleanup
-            assert body["cleanup_note"] == error_note
+            assert body["close_note"] == error_note
 
             # The reply alone records the notice: the engine's own event may be
             # only retained for replay.
@@ -821,7 +821,7 @@ def test_catalog_mode_http_parked_stop_from_an_engine_without_cleanup_reports_no
             stopped = client.post(f"/sessions/{session_id}/turns/current/interrupt")
             assert stopped.status_code == 200, stopped.text
             assert stopped.json()["cleanup"] is None
-            assert stopped.json()["cleanup_note"] == "Console process group 4242 survived close: still_alive"
+            assert stopped.json()["close_note"] == "Console process group 4242 survived close: still_alive"
             assert [row["text"] for row in _close_notices(store, session_id, "invocation-legacy")] == [_CLOSE_NOTICE]
     finally:
         api_app.dependency_overrides.clear()

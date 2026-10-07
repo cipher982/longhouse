@@ -7924,8 +7924,8 @@ export interface components {
             released_lock: boolean;
             /** Cleanup */
             cleanup?: ("complete" | "survivors" | "unverified") | null;
-            /** Cleanup Note */
-            cleanup_note?: string | null;
+            /** Close Note */
+            close_note?: string | null;
         };
         /** SessionLaunchFacts */
         SessionLaunchFacts: {

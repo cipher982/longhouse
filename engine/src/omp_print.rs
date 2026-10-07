@@ -1258,8 +1258,7 @@ fn publish_recovered_omp_close(
         machine_name,
         OMP_RUNTIME_SOURCE,
         InvocationCloseReason::MachineAgentRestart,
-        // Recovery publishes a close only once the group is gone.
-        crate::console_lifecycle::InvocationCleanup::Complete,
+        crate::console_lifecycle::recovered_invocation_cleanup(claim),
         &stopped,
     ) {
         Ok(_) => true,

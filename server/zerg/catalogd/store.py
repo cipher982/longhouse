@@ -1172,7 +1172,7 @@ def _enqueue_console_wake_turn(orm: Session, event: Any, *, observed_at: datetim
 INVOCATION_CLEANUP_NOTICES = {
     "complete": None,
     "survivors": "Some processes didn't exit and may still be running.",
-    "unverified": "Some processes were still running, but Longhouse couldn't confirm they were this session's, so it left them alone.",
+    "unverified": "Longhouse couldn't confirm all its processes exited, and left any that remain alone.",
 }
 
 
@@ -1189,7 +1189,7 @@ def _invocation_close_notice(reason: str, stopped: list[Mapping[str, Any]], clea
         notice = f"Stopped {count} {task_noun}: {summary}"
     cleanup_line = INVOCATION_CLEANUP_NOTICES.get(cleanup or "")
     if cleanup_line:
-        notice = f"{notice.rstrip('. ')}. {cleanup_line}"
+        notice = f"{notice if notice.endswith('.') else notice + '.'} {cleanup_line}"
     return notice
 
 

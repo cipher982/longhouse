@@ -937,8 +937,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events.append(makeEvent(
             id: next(),
             role: "user",
-            content: "Stopped 1 background task: tail the dev server log. Some processes were still running, "
-                + "but Longhouse couldn't confirm they were this session's, so it left them alone.",
+            content: "Stopped 1 background task: tail the dev server log. Longhouse couldn't confirm all its "
+                + "processes exited, and left any that remain alone.",
             timestamp: ts(),
             inputOrigin: SessionInputOrigin(
                 authoredVia: .longhouse,

@@ -477,8 +477,9 @@ class SessionInterruptResponse(BaseModel):
     # way; this says whether its processes are gone (`complete`), outlived the
     # kill (`survivors`), or were left alone because they could not be proven
     # this session's (`unverified`). The session's close notice says the same.
+    # close_note is the engine's diagnostic note on the close, if any.
     cleanup: Literal["complete", "survivors", "unverified"] | None = None
-    cleanup_note: str | None = None
+    close_note: str | None = None
 
 
 async def _interrupt_live_session_response(
@@ -986,7 +987,7 @@ async def interrupt_current_console_turn(
         interrupt_dispatched=True,
         session_id=str(session_id),
         cleanup=result.cleanup,
-        cleanup_note=result.cleanup_note,
+        close_note=result.close_note,
     )
 
 
@@ -1047,7 +1048,7 @@ async def interrupt_current_console_turn_agents(
         interrupt_dispatched=True,
         session_id=str(session_id),
         cleanup=result.cleanup,
-        cleanup_note=result.cleanup_note,
+        close_note=result.close_note,
     )
 
 

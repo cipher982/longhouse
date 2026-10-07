@@ -87,10 +87,11 @@ class ConsoleTurnInterrupt:
     dispatched: bool
     error: str | None = None
     # A parked close only: what it proved about the invocation's processes
-    # (`complete | survivors | unverified`), and the engine's note when anything
-    # was left. None when the engine did not report it.
+    # (`complete | survivors | unverified`; None when the engine did not report
+    # it), and the engine's note on anything that went wrong while closing,
+    # cleanup and bookkeeping alike.
     cleanup: str | None = None
-    cleanup_note: str | None = None
+    close_note: str | None = None
 
 
 INVOCATION_CLEANUP_OUTCOMES = frozenset({"complete", "survivors", "unverified"})
@@ -247,7 +248,7 @@ async def interrupt_console_turn(
         message = dict(response.message or {})
         error = None
         cleanup = None
-        cleanup_note = None
+        close_note = None
         if not response.transport_ok:
             error = str(response.error or "Console invocation close outcome is unknown")
         elif message.get("ok") is not True:
@@ -262,13 +263,13 @@ async def interrupt_console_turn(
             # Closed is final; whether its processes are gone is a second fact.
             reported_cleanup = str(result.get("cleanup") or "").strip()
             cleanup = reported_cleanup if reported_cleanup in INVOCATION_CLEANUP_OUTCOMES else None
-            cleanup_note = str(result.get("error_note") or "").strip()[:2000] or None
-            if cleanup_note:
+            close_note = str(result.get("error_note") or "").strip()[:2000] or None
+            if close_note:
                 logger.warning(
                     "Console invocation %s closed (cleanup %s) with a note: %s",
                     result.get("invocation_id"),
                     cleanup or "unreported",
-                    cleanup_note,
+                    close_note,
                 )
             await _record_invocation_close_from_reply(
                 client,
@@ -285,7 +286,7 @@ async def interrupt_console_turn(
             dispatched=error is None,
             error=error,
             cleanup=cleanup,
-            cleanup_note=cleanup_note,
+            close_note=close_note,
         )
     if not turn.get("run_id"):
         raise ConsoleTurnUnavailable("no_active_turn", "Session has no active Console turn")

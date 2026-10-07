@@ -863,7 +863,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "d4cfdf3480fabcf290cfeba03bef89a2e1b4b0019c08216f7d0cc6686e7be078"
+      "adapter_digest": "7bd8887657131ae996af6c5de92367af3cfd78989925ff13f155c44ecc004f55"
     },
     {
       "provider": "claude",
@@ -1884,7 +1884,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "b67958847d1aca2a174f84c02bfde3e55565ccccf0ec6d1af453c95e997ce69d"
+      "adapter_digest": "1bdd8720538bbdec2f58b16b125495592667eaa82071f44240017ac0811669d2"
     },
     {
       "provider": "opencode",
@@ -4396,7 +4396,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "22a364f638de27159c083622148682effc43b93e67754fa8bd41dad9db57f33f"
+      "adapter_digest": "9ca1f2ee281c0ab0eb93502be131cf9d90105bc45f7d4e14228ae42fdbec73fb"
     },
     {
       "provider": "omp",
@@ -5068,7 +5068,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "bc17f60c8eefb11c7105fa0074a8d70fd0c34852d575e58a011a8e4175e8ed01"
+      "adapter_digest": "b00a19787dd5de7564cd0c535942fc7abba1dc7511838a59619eddbba6c0cef7"
     }
   ]
 }

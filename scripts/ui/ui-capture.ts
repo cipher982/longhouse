@@ -779,8 +779,8 @@ export async function installSceneMocks(
               client_request_id: "close:invocation-cleanup-fixture",
               origin: "longhouse",
               text:
-                "Stopped 1 background task: tail the dev server log. Some processes were still running, " +
-                "but Longhouse couldn't confirm they were this session's, so it left them alone.",
+                "Stopped 1 background task: tail the dev server log. Longhouse couldn't confirm all its " +
+                "processes exited, and left any that remain alone.",
               intent: "auto",
               status: "delivered",
               delivery_status: "delivered",
