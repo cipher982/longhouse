@@ -353,7 +353,7 @@ struct CodexConsoleWorkerPool {
     /// only while it is younger than the prewarm's own budget; an older one is
     /// a counter that was never released, and must not block every turn.
     spawn_started_at: Option<std::time::Instant>,
-    active_process_groups: HashMap<u32, i32>,
+    active_process_groups: HashMap<u32, (i32, Option<Arc<str>>)>,
     shutting_down: bool,
     spawn_finished: Arc<tokio::sync::Notify>,
     active_finished: Arc<tokio::sync::Notify>,
@@ -951,7 +951,7 @@ async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
     while let Some(mut worker) = pool.workers.pop() {
         if warm_worker_is_alive(&mut worker) {
             if let (Some(pid), Some(pgid)) = (worker.pid, worker.pgid) {
-                pool.active_process_groups.insert(pid, pgid);
+                pool.active_process_groups.insert(pid, (pgid, None));
             }
             return Some(worker);
         }
@@ -967,13 +967,14 @@ fn warm_worker_is_alive(worker: &mut InitializedCodexWorker) -> bool {
     worker.child.try_wait().ok().flatten().is_none()
 }
 
-async fn register_active_worker(worker: &InitializedCodexWorker) -> bool {
+async fn register_active_worker(worker: &InitializedCodexWorker, launch_id: &str) -> bool {
     let mut pool = console_worker_pool().lock().await;
     if pool.shutting_down {
         return false;
     }
     if let (Some(pid), Some(pgid)) = (worker.pid, worker.pgid) {
-        pool.active_process_groups.insert(pid, pgid);
+        pool.active_process_groups
+            .insert(pid, (pgid, Some(Arc::from(launch_id))));
     }
     true
 }
@@ -1353,7 +1354,8 @@ async fn start_new_codex_exec(config: CodexExecRunConfig) -> Result<CodexExecRun
         tokio::time::Instant::now() + TURN_INITIALIZE_BUDGET,
     )
     .await?;
-    if !register_active_worker(&worker).await {
+    let launch_id = uuid::Uuid::new_v4().to_string();
+    if !register_active_worker(&worker, &launch_id).await {
         shutdown_worker_process_group(&mut worker.child, worker.pgid).await?;
         unregister_active_worker(worker.pid).await;
         anyhow::bail!("Codex Console worker rejected because the Machine Agent is shutting down");
@@ -1381,7 +1383,6 @@ async fn start_new_codex_exec(config: CodexExecRunConfig) -> Result<CodexExecRun
             return Err(error);
         }
     };
-    let launch_id = uuid::Uuid::new_v4().to_string();
     let task_config = config.clone();
     tokio::spawn(async move {
         let mut worker = worker;
@@ -2684,13 +2685,13 @@ async fn shutdown_codex_console_worker_pool_within(budget: Duration) {
             std::mem::take(&mut pool.workers),
             pool.active_process_groups
                 .values()
-                .copied()
+                .cloned()
                 .collect::<Vec<_>>(),
         )
     };
-    for pgid in active_process_groups {
-        // These groups have no `Child` handle here — the pool tracks them by
-        // pgid alone — so they are stopped and verified, not reaped.
+    for (pgid, launch_id) in active_process_groups {
+        // Stop and verify tracked active groups, retaining the exact invocation
+        // identity even when its task cannot settle before the shutdown budget.
         let outcome =
             crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
         if !outcome.is_gone() {
@@ -2699,6 +2700,9 @@ async fn shutdown_codex_console_worker_pool_within(budget: Duration) {
                 outcome = outcome.as_str(),
                 "Codex console process group survived SIGKILL during shutdown"
             );
+            if let Some(launch_id) = launch_id.as_deref() {
+                retain_surviving_codex_invocation(launch_id);
+            }
         }
     }
     for mut worker in workers {
