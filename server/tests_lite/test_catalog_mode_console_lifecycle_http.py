@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
