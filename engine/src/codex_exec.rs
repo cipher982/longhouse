@@ -1731,8 +1731,8 @@ fn settle_codex_restart_claim(
     }
     if matches!(claim.state.as_str(), "terminal" | "failed") {
         // Response completion and invocation closure are independent facts.
-        // Its original exact response stays immutable; the claim supplies the
-        // reconstruction base for retrying this distinct closing event.
+        // The response stays immutable. Retain the separate closing record so
+        // the daemon can retry it even if this startup recovery runs only once.
         let terminal_state = claim
             .result
             .as_ref()
@@ -1745,12 +1745,13 @@ fn settle_codex_restart_claim(
             "codex-exec:{}:{}:invocation-closed",
             claim.session_id, claim.run_id
         ));
-        match crate::outbox::enqueue_runtime_event_for_handoff(outbox_dir, &event) {
-            Ok(true) => {
-                registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
-                return Ok(true);
-            }
-            Ok(false) => return Ok(false),
+        registry.retain_invocation_close_event(&claim.run_id, event)?;
+        match crate::outbox::retry_retained_invocation_close_event(
+            registry,
+            outbox_dir,
+            &claim.run_id,
+        ) {
+            Ok(handed_off) => return Ok(handed_off),
             Err(error) => {
                 tracing::warn!(%error, run_id = %claim.run_id, "Codex invocation close remains retryable");
                 return Ok(false);

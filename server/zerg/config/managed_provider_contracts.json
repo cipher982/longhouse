@@ -862,7 +862,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "6256d138f3be0d7e9b057a6d97a7ed717a5c290a1f1c18cd660b71d9dce93f3f"
+      "adapter_digest": "9d29ec9819209986f4ab67b46d6858cdfeea7a6c3e6344737f594eff453f1143"
     },
     {
       "provider": "claude",
@@ -3052,7 +3052,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "10708a7a2b97fa0564b3bc46ac2ace27901fa1e1bc30bdeddf29d50b264538e2"
+      "adapter_digest": "fa5444a83040a297155897235370ae02ad5d33b89a9a4945d7296cccd2a32bd6"
     },
     {
       "provider": "cursor",
@@ -5065,7 +5065,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "d673667778d979267ea99809d8a8276a376ee40b1456be09b098eaf3a968118b"
+      "adapter_digest": "149caef85de2f60c476db7e9594d9c3b6f5a72d646b169d596d3d513826f6c30"
     }
   ]
 }

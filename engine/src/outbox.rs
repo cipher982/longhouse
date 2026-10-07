@@ -288,6 +288,30 @@ pub fn retry_retained_terminal_event(
     registry.mark_terminal_event_handed_off(run_id, &event)
 }
 
+pub fn retry_retained_invocation_close_event(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    run_id: &str,
+) -> anyhow::Result<bool> {
+    let claim = registry.read(run_id)?;
+    if claim.terminal_event.is_some()
+        && !claim.terminal_event_handed_off
+        && !retry_retained_terminal_event(registry, outbox_dir, run_id)?
+    {
+        return Ok(false);
+    }
+    if claim.invocation_close_event_handed_off {
+        return Ok(true);
+    }
+    let Some(event) = claim.invocation_close_event else {
+        return Ok(false);
+    };
+    if !enqueue_runtime_event_for_handoff(outbox_dir, &event)? {
+        return Ok(false);
+    }
+    registry.mark_invocation_close_event_handed_off(run_id, &event)
+}
+
 /// Commit a terminal fact/event into its claim, then hand the retained exact
 /// event to the runtime outbox. The bool is safe-to-retire, not merely enqueue
 /// success; failed writes leave the event pending in the claim for recovery.

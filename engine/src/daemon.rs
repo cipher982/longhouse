@@ -4273,7 +4273,7 @@ fn status_owner_evidence_for_slots(
             let identity = StatusOwnerClaimIdentity::from(claim);
             if turn_claim_has_ended_status(claim) {
                 evidence.claim_identities.insert(owner.clone(), identity);
-                if claim.terminal_event.is_some() && !claim.terminal_event_handed_off {
+                if claim.has_pending_runtime_handoff() {
                     evidence.terminal_pending.insert(owner);
                 } else {
                     evidence.ended.insert(owner);
@@ -5724,7 +5724,7 @@ fn status_owner_evidence_from_claims(
         let identity = StatusOwnerClaimIdentity::from(claim);
         if turn_claim_has_ended_status(claim) {
             evidence.claim_identities.insert(owner.clone(), identity);
-            if claim.terminal_event.is_some() && !claim.terminal_event_handed_off {
+            if claim.has_pending_runtime_handoff() {
                 evidence.terminal_pending.insert(owner);
             } else {
                 evidence.ended.insert(owner);
@@ -5964,11 +5964,29 @@ fn retry_pending_terminal_claim_handoffs() {
     };
     let mut handed_off = 0;
     for claim in claims.iter().filter(|claim| {
-        matches!(claim.state.as_str(), "terminal" | "failed")
-            && claim.terminal_event.is_some()
-            && !claim.terminal_event_handed_off
+        matches!(claim.state.as_str(), "terminal" | "failed") && claim.has_pending_runtime_handoff()
     }) {
-        match crate::outbox::retry_retained_terminal_event(&registry, &outbox_dir, &claim.run_id) {
+        let replay = (|| {
+            if claim.terminal_event.is_some()
+                && !crate::outbox::retry_retained_terminal_event(
+                    &registry,
+                    &outbox_dir,
+                    &claim.run_id,
+                )?
+            {
+                return Ok(false);
+            }
+            if claim.invocation_close_event.is_some() {
+                crate::outbox::retry_retained_invocation_close_event(
+                    &registry,
+                    &outbox_dir,
+                    &claim.run_id,
+                )
+            } else {
+                Ok(true)
+            }
+        })();
+        match replay {
             Ok(true) => handed_off += 1,
             Ok(false) => {}
             Err(error) => tracing::warn!(
@@ -8374,7 +8392,7 @@ mod tests {
 
                     let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()
                         .expect("runtime-event outbox");
-                    let found = std::fs::read_dir(outbox_dir)
+                    let found = std::fs::read_dir(&outbox_dir)
                         .expect("outbox entries")
                         .filter_map(std::result::Result::ok)
                         .filter(|entry| {
@@ -8393,6 +8411,34 @@ mod tests {
                         found,
                         "the exact retained terminal event reaches the outbox"
                     );
+                    // Closing a parked process is recoverable even after its
+                    // response status has already been retired.
+                    registry.record_invocation_state(&run_id, "parked", 2).unwrap();
+                    let mut closing = event.clone();
+                    closing["dedupe_key"] = serde_json::json!(format!("close:{run_id}"));
+                    closing["payload"]["invocation"] =
+                        serde_json::json!({"id": "invocation", "state": "closed", "pending_count": 2});
+                    registry.retain_invocation_close_event(&run_id, closing.clone()).unwrap();
+                    let reloaded = crate::turn_claims::default_registry().unwrap();
+                    assert!(reloaded.read(&run_id).unwrap().has_pending_runtime_handoff());
+                    assert!(super::maybe_start_managed_observation_scan(
+                        temp.path().join("state.db"),
+                        &mut scans,
+                        "invocation_close_replay_test",
+                        false,
+                        &super::ManagedObservationSnapshot::default(),
+                    ));
+                    scans.join_next().await.unwrap().unwrap();
+                    let closed = reloaded.read(&run_id).unwrap();
+                    assert_eq!(closed.invocation_state.as_deref(), Some("closed"));
+                    assert_eq!(closed.invocation_close_event.as_ref(), Some(&closing));
+                    assert!(closed.invocation_close_event_handed_off);
+                    assert_eq!(closed.terminal_event.as_ref(), Some(&event));
+                    assert_eq!(closed.result.as_ref().unwrap()["terminal_state"], "run_completed");
+                    registry.record_invocation_state(&run_id, "parked", 99).unwrap();
+                    let late = registry.read(&run_id).unwrap();
+                    assert_eq!(late.invocation_state.as_deref(), Some("closed"));
+                    assert_eq!(late.pending_count, 2);
                 });
             },
         );

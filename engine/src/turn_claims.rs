@@ -150,9 +150,19 @@ pub struct TurnClaim {
     /// True only after this exact event has been durably handed to the outbox.
     #[serde(default)]
     pub terminal_event_handed_off: bool,
+    /// Closing a parked invocation is independent of its completed response.
+    #[serde(default)]
+    pub invocation_close_event: Option<Value>,
+    #[serde(default)]
+    pub invocation_close_event_handed_off: bool,
 }
 
 impl TurnClaim {
+    pub fn has_pending_runtime_handoff(&self) -> bool {
+        (self.terminal_event.is_some() && !self.terminal_event_handed_off)
+            || (self.invocation_close_event.is_some() && !self.invocation_close_event_handed_off)
+    }
+
     /// Whether this claim's recorded process group id can still be trusted to
     /// name the group this claim spawned.
     ///
@@ -244,6 +254,8 @@ impl TurnClaimRegistry {
             error: None,
             terminal_event: None,
             terminal_event_handed_off: false,
+            invocation_close_event: None,
+            invocation_close_event_handed_off: false,
         };
         let bytes = serde_json::to_vec_pretty(&claim)?;
         match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -389,6 +401,9 @@ impl TurnClaimRegistry {
         pending_count: usize,
     ) -> Result<TurnClaim> {
         let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.invocation_state.as_deref() == Some("closed") {
+            return Ok(claim);
+        }
         claim.invocation_state = Some(invocation_state.to_string());
         claim.pending_count = pending_count;
         claim.updated_at = Utc::now().to_rfc3339();
@@ -618,7 +633,10 @@ impl TurnClaimRegistry {
         } else {
             claim.result = Some(serde_json::json!({"terminal_state": terminal_state}));
         }
-        if let Some(invocation) = event.pointer("/payload/invocation") {
+        if let Some(invocation) = event
+            .pointer("/payload/invocation")
+            .filter(|_| claim.invocation_state.as_deref() != Some("closed"))
+        {
             if let Some(state) = invocation.get("state").and_then(Value::as_str) {
                 claim.invocation_state = Some(state.to_string());
             }
@@ -670,6 +688,62 @@ impl TurnClaimRegistry {
         Ok(claim.terminal_event.is_some()
             && claim.terminal_event_handed_off
             && (claim.state == "terminal" || claim.state == "failed"))
+    }
+
+    /// Retain the exact closing record before attempting its outbox handoff.
+    /// The response event and outcome are never replaced by this transition.
+    pub fn retain_invocation_close_event(
+        &self,
+        run_id: &str,
+        event: Value,
+    ) -> Result<Option<Value>> {
+        anyhow::ensure!(
+            event.get("run_id").and_then(Value::as_str) == Some(run_id)
+                && event
+                    .pointer("/payload/invocation/state")
+                    .and_then(Value::as_str)
+                    == Some("closed"),
+            "invalid invocation closing event for run {run_id}"
+        );
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.invocation_close_event_handed_off {
+            return Ok(None);
+        }
+        if claim.invocation_close_event.is_some() {
+            return Ok(claim.invocation_close_event);
+        }
+        anyhow::ensure!(
+            claim
+                .terminal_event
+                .as_ref()
+                .and_then(|terminal| terminal.get("dedupe_key"))
+                != event.get("dedupe_key"),
+            "invocation close must have a distinct event identity"
+        );
+        claim.invocation_close_event = Some(event);
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim.invocation_close_event)
+    }
+
+    /// Commit closed only after the exact closing event is in the durable outbox.
+    pub fn mark_invocation_close_event_handed_off(
+        &self,
+        run_id: &str,
+        event: &Value,
+    ) -> Result<bool> {
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        if claim.invocation_close_event.as_ref() != Some(event) {
+            return Ok(false);
+        }
+        if claim.invocation_close_event_handed_off {
+            return Ok(true);
+        }
+        claim.invocation_close_event_handed_off = true;
+        claim.invocation_state = Some("closed".to_string());
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(true)
     }
 
     pub fn read(&self, run_id: &str) -> Result<TurnClaim> {
