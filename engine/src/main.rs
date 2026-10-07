@@ -9,6 +9,7 @@ mod claude_lifecycle_hook;
 mod claude_permission_gate;
 mod claude_print;
 mod codex_app_server_canary;
+mod codex_app_server_rpc;
 mod codex_attachments;
 mod codex_bridge;
 mod codex_bridge_ownership;

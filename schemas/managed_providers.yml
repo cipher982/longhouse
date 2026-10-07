@@ -41,6 +41,8 @@ providers:
   - engine/src/claude_channel_server.rs
   - engine/src/codex_bridge.rs
   - engine/src/codex_bridge_ownership.rs
+  # The JSON-RPC wire the bridge and the Console worker share.
+  - engine/src/codex_app_server_rpc.rs
   - engine/src/codex_exec.rs
   - engine/src/console_lifecycle.rs
   - engine/src/codex_ws_relay.rs

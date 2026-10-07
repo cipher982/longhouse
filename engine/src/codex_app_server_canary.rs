@@ -17,12 +17,16 @@ use tokio::process::{Child, ChildStdin, Command};
 
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+use crate::codex_app_server_rpc::{
+    self as rpc, extract_string, is_retryable_thread_subscription_error, thread_rollout_is_ready,
+    RequestIds, StreamEvent, WebSocketEnd,
+};
 use crate::text::truncate_tail_chars;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -147,13 +151,6 @@ pub struct CanarySummary {
 }
 
 #[derive(Debug)]
-enum StreamEvent {
-    Rpc(Value),
-    Stderr(String),
-    StdoutParseError(String),
-}
-
-#[derive(Debug)]
 enum ScheduledAction {
     Steer(String),
     Interrupt,
@@ -164,8 +161,7 @@ struct RpcClient {
     child: Child,
     outbound: RpcOutbound,
     events_rx: mpsc::UnboundedReceiver<StreamEvent>,
-    next_request_id: u64,
-    pending_methods: BTreeMap<u64, String>,
+    ids: RequestIds,
     ws_url: Option<String>,
 }
 
@@ -779,34 +775,8 @@ async fn spawn_client(
     let stderr = child.stderr.take().context("missing app-server stderr")?;
 
     let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let stdout_tx = events_tx.clone();
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            match serde_json::from_str::<Value>(&line) {
-                Ok(value) => {
-                    let _ = stdout_tx.send(StreamEvent::Rpc(value));
-                }
-                Err(err) => {
-                    let _ = stdout_tx.send(StreamEvent::StdoutParseError(format!("{err}: {line}")));
-                }
-            }
-        }
-    });
-    let stderr_tx = events_tx.clone();
-    let (ws_listen_tx, ws_listen_rx) = oneshot::channel();
-    tokio::spawn(async move {
-        let mut maybe_ws_listen_tx = Some(ws_listen_tx);
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(url) = extract_websocket_listen_url(&line) {
-                if let Some(tx) = maybe_ws_listen_tx.take() {
-                    let _ = tx.send(url);
-                }
-            }
-            let _ = stderr_tx.send(StreamEvent::Stderr(line));
-        }
-    });
+    rpc::spawn_stdout_pump(stdout, events_tx.clone());
+    let ws_listen_rx = rpc::spawn_stderr_pump(stderr, events_tx.clone());
 
     logger.write_text(
         "meta",
@@ -845,47 +815,16 @@ async fn spawn_client(
             } else {
                 (upstream_ws_url, None)
             };
-            let request = ws_client_request(&ws_url, relay_auth_token.as_deref())?;
+            let request = rpc::websocket_request(&ws_url, relay_auth_token.as_deref())?;
             let (ws_stream, _response) = connect_async(request)
                 .await
                 .with_context(|| format!("connecting websocket client to {ws_url}"))?;
-            let (mut ws_write, mut ws_read) = ws_stream.split();
-            let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
-            tokio::spawn(async move {
-                while let Some(line) = outbound_rx.recv().await {
-                    if ws_write.send(Message::Text(line.into())).await.is_err() {
-                        break;
-                    }
-                }
-                let _ = ws_write.close().await;
-            });
-            let ws_events_tx = events_tx.clone();
-            let read_throttle_ms = config.ws_read_throttle_ms;
-            tokio::spawn(async move {
-                while let Some(message) = ws_read.next().await {
-                    match message {
-                        Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
-                            Ok(value) => {
-                                let _ = ws_events_tx.send(StreamEvent::Rpc(value));
-                            }
-                            Err(err) => {
-                                let _ = ws_events_tx
-                                    .send(StreamEvent::StdoutParseError(format!("{err}: {text}")));
-                            }
-                        },
-                        Ok(Message::Close(_)) => break,
-                        Ok(_) => {}
-                        Err(err) => {
-                            let _ = ws_events_tx
-                                .send(StreamEvent::Stderr(format!("websocket read error: {err}")));
-                            break;
-                        }
-                    }
-                    if read_throttle_ms > 0 {
-                        tokio::time::sleep(Duration::from_millis(read_throttle_ms)).await;
-                    }
-                }
-            });
+            let outbound_tx = rpc::spawn_websocket_pump(
+                ws_stream,
+                events_tx.clone(),
+                WebSocketEnd::Quiet,
+                Duration::from_millis(config.ws_read_throttle_ms),
+            );
             (RpcOutbound::WebSocket(outbound_tx), Some(ws_url))
         }
     };
@@ -894,33 +833,9 @@ async fn spawn_client(
         child,
         outbound,
         events_rx,
-        next_request_id: 1,
-        pending_methods: BTreeMap::new(),
+        ids: RequestIds::starting_at(1),
         ws_url,
     })
-}
-
-/// The websocket upgrade the canary connects with. `relay_auth_token` is
-/// `Some` exactly when the relay is in front of the app-server; codex's own
-/// loopback listener does not read the header.
-fn ws_client_request(
-    ws_url: &str,
-    relay_auth_token: Option<&str>,
-) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
-    let mut request = ws_url
-        .into_client_request()
-        .with_context(|| format!("building app-server request for {ws_url}"))?;
-    if let Some(token) = relay_auth_token {
-        request.headers_mut().insert(
-            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
-            format!("Bearer {token}")
-                .parse()
-                .context("relay token is not a valid header value")?,
-        );
-    }
-    Ok(request)
 }
 
 fn app_server_command(
@@ -974,10 +889,7 @@ async fn send_notification(
     method: &str,
     params: Value,
 ) -> Result<()> {
-    let payload = json!({
-        "method": method,
-        "params": params,
-    });
+    let payload = rpc::notification(method, params);
     logger.write_value("client_notification", payload.clone())?;
     send_payload(client, &payload).await
 }
@@ -1007,17 +919,8 @@ async fn send_request(
     params: Value,
     deadline: Instant,
 ) -> Result<Value> {
-    let request_id = client.next_request_id;
-    client.next_request_id += 1;
-    client
-        .pending_methods
-        .insert(request_id, method.to_string());
+    let (request_id, payload) = client.ids.begin(method, params);
     *state.sent_requests.entry(method.to_string()).or_insert(0) += 1;
-    let payload = json!({
-        "id": request_id,
-        "method": method,
-        "params": params,
-    });
     logger.write_value("client_request", payload.clone())?;
     send_payload(client, &payload).await?;
 
@@ -1026,24 +929,18 @@ async fn send_request(
         match event {
             StreamEvent::Rpc(value) => {
                 logger.write_value("server_message", value.clone())?;
-                if value.get("id").is_some() && value.get("method").is_some() {
+                if rpc::is_server_request(&value) {
                     handle_server_request(config, value, client, state, logger).await?;
                     continue;
                 }
-                if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                    let method_name = client
-                        .pending_methods
-                        .remove(&id)
-                        .unwrap_or_else(|| format!("request#{id}"));
+                if let Some(id) = rpc::response_id(&value) {
+                    let method_name = client.ids.settle(id);
                     if id == request_id {
-                        if let Some(error) = value.get("error") {
-                            let message = format!("{method_name} failed: {}", error);
+                        if let Some(message) = rpc::response_error(&value, &method_name) {
                             state.response_errors.push(message.clone());
                             bail!(message);
                         }
-                        return Ok(value.get("result").cloned().ok_or_else(|| {
-                            anyhow!("response for {method_name} missing result")
-                        })?);
+                        return rpc::response_result(&value, &method_name);
                     }
                     if let Some(error) = value.get("error") {
                         state.response_errors.push(format!(
@@ -1062,6 +959,9 @@ async fn send_request(
             StreamEvent::StdoutParseError(detail) => {
                 logger.write_text("server_protocol_error", &detail)?;
                 bail!("app-server emitted invalid JSONL on stdout: {detail}");
+            }
+            event @ (StreamEvent::TransportClosed(_) | StreamEvent::ChildExited(_)) => {
+                bail!("canary transport never reports {event:?}");
             }
         }
     }
@@ -1097,19 +997,14 @@ async fn process_event(
     match event {
         StreamEvent::Rpc(value) => {
             logger.write_value("server_message", value.clone())?;
-            if value.get("id").is_some() && value.get("method").is_some() {
+            if rpc::is_server_request(&value) {
                 handle_server_request(config, value, client, state, logger).await?;
                 return Ok(());
             }
-            if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                let method_name = client
-                    .pending_methods
-                    .remove(&id)
-                    .unwrap_or_else(|| format!("request#{id}"));
-                if let Some(error) = value.get("error") {
-                    state
-                        .response_errors
-                        .push(format!("{method_name} failed: {}", error));
+            if let Some(id) = rpc::response_id(&value) {
+                let method_name = client.ids.settle(id);
+                if let Some(message) = rpc::response_error(&value, &method_name) {
+                    state.response_errors.push(message);
                 }
                 return Ok(());
             }
@@ -1122,6 +1017,9 @@ async fn process_event(
         StreamEvent::StdoutParseError(detail) => {
             logger.write_text("server_protocol_error", &detail)?;
             bail!("app-server emitted invalid JSONL on stdout: {detail}");
+        }
+        event @ (StreamEvent::TransportClosed(_) | StreamEvent::ChildExited(_)) => {
+            bail!("canary transport never reports {event:?}");
         }
     }
     Ok(())
@@ -1190,11 +1088,6 @@ async fn subscribe_to_thread(
     Err(last_error.expect("thread subscribe retry loop should capture an error"))
 }
 
-fn is_retryable_thread_subscription_error(message: &str) -> bool {
-    message.contains("no rollout found for thread id")
-        || (message.contains("failed to load rollout") && message.contains("is empty"))
-}
-
 async fn handle_server_request(
     config: &CanaryConfig,
     value: Value,
@@ -1216,35 +1109,11 @@ async fn handle_server_request(
         .entry(method.to_string())
         .or_insert(0) += 1;
 
-    let result = match method {
-        "item/commandExecution/requestApproval" => json!({
-            "decision": if config.auto_approve { "accept" } else { "decline" }
-        }),
-        "item/fileChange/requestApproval" => json!({
-            "decision": if config.auto_approve { "accept" } else { "decline" }
-        }),
-        "item/permissions/requestApproval" => json!({
-            "scope": "turn",
-            "permissions": if config.auto_approve {
-                params.get("permissions").cloned().unwrap_or_else(|| json!({}))
-            } else {
-                json!({})
-            }
-        }),
-        "item/tool/requestUserInput" => json!({
-            "answers": build_request_user_input_answers(&params, config.auto_approve)
-        }),
-        "mcpServer/elicitation/request" => json!({
-            "action": "decline",
-            "content": Value::Null,
-        }),
-        "applyPatchApproval" | "execCommandApproval" => json!({
-            "decision": if config.auto_approve { "Approved" } else { "Denied" }
-        }),
-        _ => bail!(
+    let Some(result) = rpc::approval_answer(method, &params, config.auto_approve, "canary") else {
+        bail!(
             "received unsupported app-server request from server: {}",
             value
-        ),
+        );
     };
 
     send_response(client, logger, request_id, result).await
@@ -1256,38 +1125,9 @@ async fn send_response(
     request_id: Value,
     result: Value,
 ) -> Result<()> {
-    let payload = json!({
-        "id": request_id,
-        "result": result,
-    });
+    let payload = rpc::response(request_id, result);
     logger.write_value("client_response", payload.clone())?;
     send_payload(client, &payload).await
-}
-
-fn build_request_user_input_answers(params: &Value, auto_approve: bool) -> Value {
-    let mut answers = serde_json::Map::new();
-    let Some(questions) = params.get("questions").and_then(Value::as_array) else {
-        return Value::Object(answers);
-    };
-    for question in questions {
-        let Some(id) = question.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let question_answers = if auto_approve {
-            question
-                .get("options")
-                .and_then(Value::as_array)
-                .and_then(|options| options.first())
-                .and_then(|option| option.get("label"))
-                .and_then(Value::as_str)
-                .map(|label| vec![Value::String(label.to_string())])
-                .unwrap_or_else(|| vec![Value::String("canary".to_string())])
-        } else {
-            Vec::new()
-        };
-        answers.insert(id.to_string(), json!({ "answers": question_answers }));
-    }
-    Value::Object(answers)
 }
 
 fn process_rpc_value(value: Value, state: &mut ObservationState) -> Result<()> {
@@ -1375,17 +1215,6 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn extract_websocket_listen_url(line: &str) -> Option<String> {
-    let marker = "listening on:";
-    let (_, tail) = line.split_once(marker)?;
-    let candidate = tail.trim();
-    if candidate.starts_with("ws://") || candidate.starts_with("wss://") {
-        Some(candidate.to_string())
-    } else {
-        None
-    }
 }
 
 async fn spawn_remote_tui(
@@ -1494,14 +1323,6 @@ impl RemoteTuiHandle {
         .await;
         Ok(())
     }
-}
-
-fn extract_string(value: &Value, path: &[&str]) -> Option<String> {
-    let mut current = value;
-    for key in path {
-        current = current.get(*key)?;
-    }
-    current.as_str().map(ToString::to_string)
 }
 
 fn create_isolated_home() -> Result<PathBuf> {
@@ -1688,12 +1509,6 @@ fn home_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("HOME is not set"))
 }
 
-fn thread_rollout_is_ready(path: &Path) -> bool {
-    fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.len() > 0)
-        .unwrap_or(false)
-}
-
 async fn wait_for_thread_rollout(path: &Path, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -1796,11 +1611,11 @@ mod tests {
     #[test]
     fn extract_websocket_listen_url_parses_startup_line() {
         assert_eq!(
-            extract_websocket_listen_url("  listening on: ws://127.0.0.1:4601"),
+            rpc::extract_websocket_listen_url("  listening on: ws://127.0.0.1:4601"),
             Some("ws://127.0.0.1:4601".to_string())
         );
         assert_eq!(
-            extract_websocket_listen_url("readyz: http://127.0.0.1:4601/readyz"),
+            rpc::extract_websocket_listen_url("readyz: http://127.0.0.1:4601/readyz"),
             None
         );
     }
@@ -1811,7 +1626,7 @@ mod tests {
         // bare could not reach the app-server at all -- the proxied lane would
         // fail before observing anything.
         let token = crate::codex_ws_relay::generate_auth_token();
-        let proxied = ws_client_request("ws://127.0.0.1:4601", Some(&token)).unwrap();
+        let proxied = rpc::websocket_request("ws://127.0.0.1:4601", Some(&token)).unwrap();
         assert_eq!(
             proxied
                 .headers()
@@ -1822,7 +1637,7 @@ mod tests {
 
         // Codex's own listener is not behind the relay in that mode and does not
         // read the header; sending a token there would only widen its reach.
-        let direct = ws_client_request("ws://127.0.0.1:4601", None).unwrap();
+        let direct = rpc::websocket_request("ws://127.0.0.1:4601", None).unwrap();
         assert!(direct
             .headers()
             .get(tokio_tungstenite::tungstenite::http::header::AUTHORIZATION)
@@ -2313,21 +2128,35 @@ else:
                 let reply = |value: Value| Message::Text(value.to_string().into());
                 match msg.get("method").and_then(Value::as_str) {
                     Some("initialize") => {
-                        websocket.send(reply(json!({"id": id, "result": {}}))).await.unwrap();
+                        websocket
+                            .send(reply(json!({"id": id, "result": {}})))
+                            .await
+                            .unwrap();
                     }
                     Some("thread/start") => {
-                        websocket.send(reply(json!({"id": id, "result": {"thread": {"id": "thr_ws"}}}))).await.unwrap();
+                        websocket
+                            .send(reply(
+                                json!({"id": id, "result": {"thread": {"id": "thr_ws"}}}),
+                            ))
+                            .await
+                            .unwrap();
                     }
                     Some("turn/start") => {
                         websocket.send(reply(json!({"id": id, "result": {"turn": {"id": "turn_ws", "status": "inProgress"}}}))).await.unwrap();
-                        websocket.send(Message::Binary(vec![9].into())).await.unwrap();
+                        websocket
+                            .send(Message::Binary(vec![9].into()))
+                            .await
+                            .unwrap();
                         websocket.send(reply(json!({"id": 77, "method": "item/fileChange/requestApproval", "params": {}}))).await.unwrap();
                     }
                     None if id == Some(json!(77)) => {
                         websocket.send(reply(json!({"method": "turn/completed", "params": {"turn": {"id": "turn_ws", "status": "completed"}}}))).await.unwrap();
                     }
                     Some(_) => {
-                        websocket.send(reply(json!({"id": id, "result": {}}))).await.unwrap();
+                        websocket
+                            .send(reply(json!({"id": id, "result": {}})))
+                            .await
+                            .unwrap();
                     }
                     None => {}
                 }

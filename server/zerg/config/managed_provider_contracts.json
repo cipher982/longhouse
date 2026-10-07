@@ -37,6 +37,7 @@
         "engine/src/claude_channel_server.rs",
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
+        "engine/src/codex_app_server_rpc.rs",
         "engine/src/codex_exec.rs",
         "engine/src/console_lifecycle.rs",
         "engine/src/codex_ws_relay.rs",
@@ -863,7 +864,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "a5cdf1145710cc2814c67d8b1f8d19184589d116ca1d7ba7c05661b47a02e551"
+      "adapter_digest": "ad38a6b42c57b43734590fbf0ef9fcd15f0481aa0759cc6e13554f55d6f4bcc7"
     },
     {
       "provider": "claude",
