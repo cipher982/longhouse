@@ -434,14 +434,6 @@ enum TimelineBuilder {
         }.joined(separator: ", ")
     }
 
-    static let explorationOverflowVisible = 8
-
-    static func splitExplorationOverflow<T>(_ items: [T], visible: Int = explorationOverflowVisible) -> (earlier: [T], latest: [T]) {
-        guard items.count > visible else { return ([], items) }
-        let idx = items.count - visible
-        return (Array(items.prefix(idx)), Array(items.suffix(visible)))
-    }
-
     /// Build a paired, renderable timeline from raw events.
     /// Mirrors the web pairing logic: assistant-with-tool_name registers in a
     /// Map<tool_call_id, item>. Role=tool events look up their tool_call_id

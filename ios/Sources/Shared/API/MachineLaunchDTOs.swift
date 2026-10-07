@@ -201,33 +201,6 @@ public struct RecentModelsResponse: Decodable, Sendable {
 }
 
 
-public enum RemoteLaunchState: String, Decodable, Sendable {
-    case launching
-    case live
-    case launchingUnknown = "launching_unknown"
-    case launchFailed = "launch_failed"
-    case launchOrphaned = "launch_orphaned"
-    case unknown
-
-    public init(from decoder: Decoder) throws {
-        let value = try decoder.singleValueContainer().decode(String.self)
-        self = RemoteLaunchState(rawValue: value) ?? .unknown
-    }
-}
-
-public enum RemoteExecutionLifetime: String, Codable, Sendable, Hashable, CaseIterable {
-    case oneShot = "one_shot"
-    case liveControl = "live_control"
-}
-
-public struct RemoteSessionLaunchResponse: Decodable, Sendable {
-    public let sessionId: String
-    public let launchState: RemoteLaunchState
-    public let executionLifetime: RemoteExecutionLifetime?
-    public let launchErrorCode: String?
-    public let launchErrorMessage: String?
-}
-
 public struct SessionBranch: Decodable, Sendable {
     public let sessionId: String
     public let threadId: String

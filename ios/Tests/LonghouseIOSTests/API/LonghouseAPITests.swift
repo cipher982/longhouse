@@ -753,48 +753,6 @@ struct LonghouseAPITests {
     }
 
     @Test
-    func unknownLaunchStateDoesNotFailDecode() throws {
-        let data = try #require("""
-        {
-          "session_id": "abc",
-          "launch_state": "new_future_state",
-          "launch_error_code": null,
-          "launch_error_message": null
-        }
-        """.data(using: .utf8))
-
-        let decoded = try JSONDecoder.snakeCase.decode(RemoteSessionLaunchResponse.self, from: data)
-        #expect(decoded.launchState == .unknown)
-    }
-
-    @Test
-    func knownLaunchStatesDecodeFromBackendContract() throws {
-        let cases: [(String, RemoteLaunchState)] = [
-            ("launching", .launching),
-            ("live", .live),
-            ("launching_unknown", .launchingUnknown),
-            ("launch_failed", .launchFailed),
-            ("launch_orphaned", .launchOrphaned),
-        ]
-
-        for (rawState, expected) in cases {
-            let data = try #require("""
-            {
-              "session_id": "abc",
-              "launch_state": "\(rawState)",
-              "execution_lifetime": "one_shot",
-              "launch_error_code": null,
-              "launch_error_message": null
-            }
-            """.data(using: .utf8))
-
-            let decoded = try JSONDecoder.snakeCase.decode(RemoteSessionLaunchResponse.self, from: data)
-            #expect(decoded.launchState == expected)
-            #expect(decoded.executionLifetime == .oneShot)
-        }
-    }
-
-    @Test
     func machineDirectoryEntryUsesCanonicalLaunchProjection() throws {
         let data = try #require("""
         {

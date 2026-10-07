@@ -16,8 +16,4 @@ enum AppBundleLocation {
 
         return normalizedPath == canonicalBundlePath ? nil : normalizedPath
     }
-
-    static func currentUnsupportedBundlePath() -> String? {
-        unsupportedBundlePath(currentBundlePath: Bundle.main.bundleURL.path)
-    }
 }

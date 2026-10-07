@@ -1,3 +1,4 @@
+#if DEBUG
 import SwiftUI
 
 // Mirrors `bottomChrome`: the card rides in a translucent rounded surface
@@ -155,3 +156,4 @@ private struct PauseRequestPreviewChrome<Content: View>: View {
         )
     }
 }
+#endif

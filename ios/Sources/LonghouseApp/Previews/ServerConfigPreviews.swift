@@ -1,3 +1,4 @@
+#if DEBUG
 import SwiftUI
 
 // The server settings for each kind of address the plaintext-http rule
@@ -27,3 +28,4 @@ private func previewAppState(serverURL: String) -> AppState {
     LoginView()
         .environmentObject(previewAppState(serverURL: "http://192.168.68.78:8080"))
 }
+#endif

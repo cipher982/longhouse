@@ -1,3 +1,4 @@
+#if DEBUG
 import SwiftUI
 
 // MARK: - Preview helpers
@@ -1189,3 +1190,4 @@ private func updatesPausedSessionPreview() -> SessionScreenPreview {
         hostUpdateNow: now
     )
 }
+#endif

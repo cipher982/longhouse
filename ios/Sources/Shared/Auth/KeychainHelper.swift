@@ -6,14 +6,6 @@ enum KeychainHelper {
     private static let authTokenKey = "longhouse_auth_token"
     private static let serverURLKey = "longhouse_server_url"
 
-    static func saveAuthToken(_ token: String) {
-        save(key: authTokenKey, value: token)
-    }
-
-    static func loadAuthToken() -> String? {
-        load(key: authTokenKey)
-    }
-
     static func deleteAuthToken() {
         delete(key: authTokenKey)
     }

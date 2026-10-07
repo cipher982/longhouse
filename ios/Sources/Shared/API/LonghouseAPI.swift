@@ -59,10 +59,6 @@ struct LonghouseAPI: Sendable {
         self.init(baseURL: url, allowsAuthRefresh: allowsAuthRefresh, urlSession: urlSession)
     }
 
-    func sessionsNeedingAttention() async throws -> [SessionSummary] {
-        try await timelineSessions(limit: 30).filter(\.needsAttention)
-    }
-
     func recentSessions(limit: Int = 30, deviceId: String? = nil) async throws -> [SessionSummary] {
         try await timelineSessions(limit: limit, deviceId: deviceId)
     }

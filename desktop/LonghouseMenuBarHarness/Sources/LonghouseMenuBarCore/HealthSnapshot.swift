@@ -1117,26 +1117,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "\(base) · \(managedSummaryLabel)"
     }
 
-    public func recentTouchAgeLabel(_ touch: ActivityTouchSnapshot, relativeTo referenceDate: Date) -> String {
-        guard let raw = touch.lastUpdated,
-              let parsed = Self.parseISO8601(raw) else {
-            return "-"
-        }
-        return Self.compactRelativeLabel(for: parsed, relativeTo: referenceDate)
-    }
-
-    public func recentTouchWorkspaceLabel(_ touch: ActivityTouchSnapshot) -> String {
-        let workspace = (touch.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !workspace.isEmpty {
-            return workspace
-        }
-        let provider = (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if provider.isEmpty {
-            return "Unknown"
-        }
-        return Self.providerDisplayName(provider)
-    }
-
     public func recentTouchProviderLabel(_ touch: ActivityTouchSnapshot) -> String {
         let provider = (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if provider.isEmpty {
@@ -1488,14 +1468,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return formatter.localizedString(for: date, relativeTo: referenceDate)
     }
 
-    public func relativeTimestampLabel(_ raw: String?, relativeTo referenceDate: Date) -> String {
-        guard let raw,
-              let parsed = Self.parseISO8601(raw) else {
-            return "Unknown"
-        }
-        return Self.relativeLabel(for: parsed, relativeTo: referenceDate)
-    }
-
     public func compactTimestampLabel(_ raw: String?, relativeTo referenceDate: Date) -> String {
         guard let raw,
               let parsed = Self.parseISO8601(raw) else {
@@ -1818,11 +1790,6 @@ public struct BuildIdentityRecord: Codable, Equatable, Sendable {
         let suffix = dirty ? "\(commitShort).dirty" : commitShort
         return "\(version)-dev+\(suffix)"
     }
-}
-
-public struct BuildIdentityComponent: Codable, Equatable, Sendable {
-    public let name: String
-    public let commitShort: String
 }
 
 public struct EngineStatusPayload: Codable, Equatable, Sendable {
