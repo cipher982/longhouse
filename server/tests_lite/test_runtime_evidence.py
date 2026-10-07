@@ -367,7 +367,9 @@ def test_read_consistency_waits_out_a_cold_catalogd(evidence_runtime, monkeypatc
     # The gate is consistency *of a ready candidate*, so readiness comes first.
     runtime.mark_candidate_ready(attempt_id="owned-attempt")
 
+    from zerg.catalogd.client import CatalogRemoteError
     from zerg.catalogd.client import CatalogUnavailable
+    from zerg.catalogd.protocol import CatalogRpcError
     from zerg.routers import internal_deployments
 
     attempts = {"count": 0}
@@ -376,8 +378,15 @@ def test_read_consistency_waits_out_a_cold_catalogd(evidence_runtime, monkeypatc
         assert method == "deployment.read_consistency.v2"
         attempts["count"] += 1
         # The socket is not published yet: a refusal, not a slow answer.
-        if attempts["count"] <= 3:
+        if attempts["count"] <= 2:
             raise CatalogUnavailable(f"catalogd unavailable for {method}") from ConnectionRefusedError()
+        # Then the control lane is momentarily full: retryable, answered at once.
+        if attempts["count"] == 3:
+            raise CatalogRemoteError(
+                CatalogRpcError(
+                    code="resource_exhausted", message="catalog read lane is full", retryable=True, retry_after_ms=25, details={}
+                )
+            )
         return _consistency_snapshot()
 
     monkeypatch.setattr(internal_deployments, "call_catalogd_sync", flaky)
