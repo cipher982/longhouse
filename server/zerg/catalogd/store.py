@@ -9,6 +9,8 @@ import logging
 import os
 import re
 import time
+from collections.abc import Collection
+from collections.abc import Iterable
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1610,16 +1612,62 @@ class _RowReceipt:
             return None
 
 
-def _console_turn_state_is_fresh(turn: Any, *, observed_at: datetime | None = None) -> bool:
-    """Keep terminal evidence authoritative; age out nonterminal observations."""
+def _console_turn_state_is_fresh(
+    turn: Any,
+    *,
+    observed_at: datetime | None = None,
+    reporting_thread_ids: Collection[str] = (),
+) -> bool:
+    """Keep terminal evidence authoritative; age out nonterminal observations.
+
+    A turn's `updated_at` is when it entered its state, not when anything last
+    vouched for it, so a nonterminal turn older than the horizon is still
+    current while its thread's executing run is reporting
+    (`reporting_thread_ids`, from `_console_threads_with_reporting_run`).
+    """
     if getattr(turn, "terminal_at", None) is not None:
         return True
     updated_at = getattr(turn, "updated_at", None)
-    if not isinstance(updated_at, datetime):
-        return False
-    normalized_updated_at = updated_at.replace(tzinfo=UTC) if updated_at.tzinfo is None else updated_at.astimezone(UTC)
-    current_at = observed_at or datetime.now(UTC)
-    return normalized_updated_at > current_at - _CONSOLE_TURN_FRESHNESS
+    if isinstance(updated_at, datetime):
+        normalized_updated_at = updated_at.replace(tzinfo=UTC) if updated_at.tzinfo is None else updated_at.astimezone(UTC)
+        current_at = observed_at or datetime.now(UTC)
+        if normalized_updated_at > current_at - _CONSOLE_TURN_FRESHNESS:
+            return True
+    return str(getattr(turn, "thread_id", "")) in reporting_thread_ids
+
+
+def _console_threads_with_reporting_run(orm: Session, turns: Iterable[Any], *, observed_at: datetime) -> frozenset[str]:
+    """Threads of `turns` whose executing Console run is still reporting.
+
+    A turn stays `active` through a long tool call, and the turns queued behind
+    it stay `queued`, while the Machine Agent restates the run's status every
+    few seconds (status assertions). Without this, a ten-minute Bash call read
+    as "Console activity is stale" once the turn was fifteen minutes old. The
+    run counts as reporting under the same rule that keeps it the thread's
+    execution owner (`_open_run_holds_live_ownership`).
+    """
+    horizon = observed_at - _CONSOLE_TURN_FRESHNESS
+    stale_thread_ids = {
+        str(turn.thread_id)
+        for turn in turns
+        if getattr(turn, "terminal_at", None) is None
+        and str(getattr(turn, "state", "")) in ("queued", "starting", "active", "draining")
+        and not (isinstance(turn.updated_at, datetime) and (_as_aware_utc(turn.updated_at) or turn.updated_at) > horizon)
+    }
+    if not stale_thread_ids:
+        return frozenset()
+    runs = (
+        orm.query(LiveSessionRun)
+        .join(LiveConsoleTurn, LiveConsoleTurn.run_id == LiveSessionRun.id)
+        .filter(
+            LiveConsoleTurn.thread_id.in_(sorted(stale_thread_ids)),
+            LiveConsoleTurn.state.in_(("starting", "active", "draining")),
+            LiveConsoleTurn.terminal_at.is_(None),
+            LiveSessionRun.ended_at.is_(None),
+        )
+        .all()
+    )
+    return frozenset(str(run.thread_id) for run in runs if _open_run_holds_live_ownership(orm, run=run, observed_at=observed_at))
 
 
 def _input_receipt_dto(
@@ -1628,6 +1676,7 @@ def _input_receipt_dto(
     turn: Any | None = None,
     attachments: list[dict[str, Any]] | None = None,
     origin: str | None = None,
+    reporting_thread_ids: Collection[str] = (),
 ) -> dict[str, Any]:
     turn_identity = None
     origin = str(origin or getattr(turn, "origin", None) or getattr(receipt, "origin", None) or "user")
@@ -1637,7 +1686,7 @@ def _input_receipt_dto(
             "run_id": str(turn.run_id) if turn.run_id is not None else None,
             "state": str(turn.state),
             "origin": origin,
-            "is_fresh": _console_turn_state_is_fresh(turn),
+            "is_fresh": _console_turn_state_is_fresh(turn, reporting_thread_ids=reporting_thread_ids),
         }
     return {
         "id": receipt.id,
@@ -6957,6 +7006,9 @@ class CatalogStore:
                     if receipt is not None
                     else None
                 )
+                reporting_thread_ids = _console_threads_with_reporting_run(
+                    orm, [turn] if turn is not None else [], observed_at=datetime.now(UTC)
+                )
                 attachments_by_receipt = _input_attachment_summaries_by_receipt(
                     orm,
                     session_id=session_id,
@@ -6971,6 +7023,7 @@ class CatalogStore:
                         receipt,
                         turn=turn,
                         attachments=attachments_by_receipt.get(str(receipt.id), []),
+                        reporting_thread_ids=reporting_thread_ids,
                     )
                     if receipt is not None
                     else None
@@ -7123,6 +7176,7 @@ class CatalogStore:
                 if receipts:
                     turns = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id.in_([receipt.id for receipt in receipts])).all()
                     turns_by_receipt = {str(turn.receipt_id): turn for turn in turns}
+                reporting_thread_ids = _console_threads_with_reporting_run(orm, turns_by_receipt.values(), observed_at=datetime.now(UTC))
                 attachments_by_receipt = _input_attachment_summaries_by_receipt(
                     orm,
                     session_id=session_id,
@@ -7137,6 +7191,7 @@ class CatalogStore:
                         receipt,
                         turn=turns_by_receipt.get(str(receipt.id)),
                         attachments=attachments_by_receipt.get(str(receipt.id), []),
+                        reporting_thread_ids=reporting_thread_ids,
                     )
                     for receipt in receipts
                 ],

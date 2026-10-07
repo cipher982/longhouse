@@ -132,8 +132,11 @@ const ATTACHMENTS_LOST_ERROR =
   "Not confirmed, and this browser lost its images; send it again with the images.";
 const UNCONFIRMED_DELIVERY_ERROR =
   "Delivery is not confirmed; retry with the same request.";
+// The server keeps a Console turn fresh while its machine reports the run (a
+// long tool call included), so a stale turn means no signal, not a failure.
+// When the receipt says the agent took the message, the row still says "Sent".
 const STALE_CONSOLE_TURN_DETAIL =
-  "Console activity is stale; current delivery status is unconfirmed.";
+  "no recent signal from its machine, so its status is unknown";
 const LEGACY_MODEL_WARNING =
   "Original model was not recorded; retry uses the server default and may not reproduce the original run.";
 
@@ -2263,7 +2266,7 @@ export function SessionChat({
           key,
           text: row.text,
           attachments,
-          state: "unconfirmed",
+          state: row.status === "delivered" ? "sent" : "unconfirmed",
           detail: STALE_CONSOLE_TURN_DETAIL,
         });
       } else if (turnState === "queued") {
@@ -2349,6 +2352,12 @@ export function SessionChat({
       };
       if (pending.phase === "delivered") {
         inFlight.push({ ...base, state: "sent" });
+      } else if (
+        pending.phase === "unknown" &&
+        pending.deliveryStatus === "delivered" &&
+        pending.detail === STALE_CONSOLE_TURN_DETAIL
+      ) {
+        inFlight.push({ ...base, state: "sent", detail: pending.detail });
       } else if (pending.phase === "unknown") {
         inFlight.push({
           ...base,

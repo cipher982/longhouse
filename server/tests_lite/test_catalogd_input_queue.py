@@ -400,10 +400,20 @@ async def test_catalogd_claims_and_finishes_queued_input_exactly_once(daemon_pat
     engine.dispose()
 
 
-@pytest.mark.parametrize(("turn_age_minutes", "expected_fresh"), [(10, True), (20, False)])
+@pytest.mark.parametrize(
+    ("turn_age_minutes", "run_reporting", "expected_fresh"),
+    [
+        (10, False, True),
+        # A long tool call: the turn entered `active` twenty minutes ago and the
+        # machine still reports the run, so it is current work, not stale.
+        (20, True, True),
+        (20, False, False),
+    ],
+)
 def test_recent_input_list_keeps_nonterminal_console_receipt_past_delivered_window(
     tmp_path,
     turn_age_minutes,
+    run_reporting,
     expected_fresh,
 ):
     engine = create_catalog_engine(tmp_path / "recent-inputs.db")
@@ -420,6 +430,10 @@ def test_recent_input_list_keeps_nonterminal_console_receipt_past_delivered_wind
             assert catalog is not None
             thread_id = catalog.primary_thread_id
             run = db.query(LiveSessionRun).filter_by(thread_id=thread_id).one()
+            if not run_reporting:
+                # The seeded run's only evidence is its control attachment.
+                connection = db.query(LiveSessionConnection).filter_by(run_id=run.id).one()
+                connection.last_health_at = stale_at
             db.add(
                 LiveConsoleTurn(
                     id=str(uuid4()),
@@ -891,3 +905,87 @@ async def test_catalogd_attachment_metadata_is_receipt_scoped_and_bounded(daemon
     with Session(engine) as db:
         assert db.get(LiveSessionInputAttachment, attachment_id).input_receipt_id == receipt_id
     engine.dispose()
+
+
+def test_queued_console_receipt_stays_fresh_behind_a_reporting_long_turn(tmp_path):
+    engine = create_catalog_engine(tmp_path / "queued-behind-long-turn.db")
+    initialize_catalog_schema(engine)
+    session_id, active_receipt_id = _seed_queue(engine, client_request_id="console-active")
+    long_ago = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=40)
+    try:
+        with Session(engine) as db:
+            catalog = db.get(LiveSessionCatalog, str(session_id))
+            assert catalog is not None
+            thread_id = catalog.primary_thread_id
+            run = db.query(LiveSessionRun).filter_by(thread_id=thread_id).one()
+            # The machine stopped stamping the attachment but keeps asserting
+            # the run's status while its tool call runs.
+            db.query(LiveSessionConnection).filter_by(run_id=run.id).one().last_health_at = long_ago
+            runtime = db.query(LiveRuntimeState).filter_by(session_id=session_id).one()
+            runtime.run_id = run.id
+            runtime.last_asserted_at = datetime.now(UTC) - timedelta(seconds=5)
+            active_receipt = db.get(LiveSessionInputReceipt, active_receipt_id)
+            assert active_receipt is not None
+            active_receipt.status = "delivered"
+            db.add(
+                LiveConsoleTurn(
+                    id=str(uuid4()),
+                    session_id=str(session_id),
+                    thread_id=thread_id,
+                    receipt_id=active_receipt_id,
+                    run_id=run.id,
+                    state="active",
+                    provider="codex",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    created_at=long_ago,
+                    updated_at=long_ago,
+                )
+            )
+            queued_receipt = upsert_live_input_receipt(
+                db,
+                owner_id=7,
+                session_id=session_id,
+                provider="codex",
+                text="after the long call",
+                intent="auto",
+                status="queued",
+                client_request_id="console-queued",
+                now=long_ago + timedelta(minutes=1),
+            )
+            db.add(
+                LiveConsoleTurn(
+                    id=str(uuid4()),
+                    session_id=str(session_id),
+                    thread_id=thread_id,
+                    receipt_id=str(queued_receipt.id),
+                    run_id=None,
+                    state="queued",
+                    provider="codex",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    created_at=long_ago + timedelta(minutes=1),
+                    updated_at=long_ago + timedelta(minutes=1),
+                )
+            )
+            db.commit()
+
+        store = CatalogStore(engine)
+        recent = store.list_recent_input_receipts(session_id=str(session_id))
+        by_request = {receipt["client_request_id"]: receipt["turn"] for receipt in recent["receipts"]}
+        assert by_request["console-active"]["is_fresh"] is True
+        assert by_request["console-queued"]["state"] == "queued"
+        assert by_request["console-queued"]["is_fresh"] is True
+        single = store.read_input_receipt(owner_id=7, session_id=str(session_id), client_request_id="console-queued")
+        assert single["receipt"]["turn"]["is_fresh"] is True
+
+        # Once the run's status assertions stop, both read as unknown again.
+        with Session(engine) as db:
+            runtime = db.query(LiveRuntimeState).filter_by(session_id=session_id).one()
+            runtime.last_asserted_at = long_ago
+            runtime.updated_at = long_ago
+            db.commit()
+        recent = store.list_recent_input_receipts(session_id=str(session_id))
+        assert all(receipt["turn"]["is_fresh"] is False for receipt in recent["receipts"])
+    finally:
+        engine.dispose()

@@ -3499,7 +3499,7 @@ describe("SessionChat", () => {
       }
     });
 
-    it("keeps a remote stale Console receipt unconfirmed without polling", async () => {
+    it("shows a remote stale Console receipt as no signal, without polling", async () => {
       const onOutboxChange = vi.fn();
       let listRequests = 0;
       requestMock.mockImplementation((path: string, init?: RequestInit) => {
@@ -3524,6 +3524,21 @@ describe("SessionChat", () => {
               created_at: null,
               attachments: [],
             },
+            {
+              id: 72,
+              client_request_id: "stale-console-delivering",
+              text: "stale undelivered input",
+              intent: "auto",
+              status: "delivering",
+              turn: {
+                turn_id: "stale-turn-2",
+                run_id: "stale-run-2",
+                state: "starting",
+                is_fresh: false,
+              },
+              created_at: null,
+              attachments: [],
+            },
           ]);
         }
         return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -3541,19 +3556,24 @@ describe("SessionChat", () => {
         },
         { queryClient },
       );
+      const noSignal =
+        "no recent signal from its machine, so its status is unknown";
+      const stateByText = () =>
+        Object.fromEntries(
+          lastOutbox(onOutboxChange).map((entry) => [entry.text, entry]),
+        );
       try {
+        // The agent took the first message, so it stays "Sent"; only the
+        // undelivered one is "Not confirmed". Neither claims a failure.
         await waitFor(() =>
-          expect(lastOutbox(onOutboxChange)).toMatchObject([
-            {
-              state: "unconfirmed",
-              text: "stale remote input",
-              detail: "Console activity is stale; current delivery status is unconfirmed.",
-            },
-          ]),
+          expect(stateByText()).toMatchObject({
+            "stale remote input": { state: "sent", detail: noSignal },
+            "stale undelivered input": { state: "unconfirmed", detail: noSignal },
+          }),
         );
         await waitForDuration(2_100);
         expect(listRequests).toBe(1);
-        expect(lastOutbox(onOutboxChange)[0]?.state).toBe("unconfirmed");
+        expect(stateByText()["stale remote input"]?.state).toBe("sent");
       } finally {
         view.unmount();
         queryClient.clear();

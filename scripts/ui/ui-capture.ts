@@ -728,8 +728,50 @@ export async function installSceneMocks(
         return;
       }
 
-      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === "session-research-turn" || scene === "session-running-call" || scene === "session-running-call-uncertain" || scene === "session-console")) {
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === "session-research-turn" || scene === "session-console")) {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+        return;
+      }
+
+      if (
+        pathname === `/api/sessions/${fixture.session.id}/inputs` &&
+        (scene === "session-running-call" || scene === "session-running-call-uncertain")
+      ) {
+        // A message queued behind a 40-minute Bash call. While the machine
+        // still reports the run the server serves the turns fresh, so the row
+        // reads queued; with no signal (the expired claim) it says so plainly.
+        const fresh = scene === "session-running-call";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 9101,
+              live_input_id: "running-call-active-input",
+              client_request_id: "running-call-active-input",
+              text: "Run the Stage A basis search on the NAND family, then record round 4 in the essence doc.",
+              intent: "auto",
+              status: "delivered",
+              delivery_status: "delivered",
+              durable_event_id: "running-call-user-event",
+              attachments: [],
+              turn: { turn_id: "running-call-turn", run_id: "running-call-run", state: "active", is_fresh: fresh },
+              created_at: "2026-04-15T15:24:00Z",
+            },
+            {
+              id: 9102,
+              live_input_id: "running-call-queued-input",
+              client_request_id: "running-call-queued-input",
+              text: "When it finishes, also note the wall-clock time in the doc.",
+              intent: "auto",
+              status: "queued",
+              delivery_status: "queued",
+              attachments: [],
+              turn: { turn_id: "running-call-queued-turn", run_id: null, state: "queued", is_fresh: fresh },
+              created_at: "2026-04-15T15:40:00Z",
+            },
+          ]),
+        });
         return;
       }
 
