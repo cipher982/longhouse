@@ -619,7 +619,6 @@ MEMORY_TMP_TARGETS = frozenset(
     {
         "test",
         "test-backend-single",
-        "ci-backend",
         "test-provider-contract",
         "test-engine",
         "test-engine-single",

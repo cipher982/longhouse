@@ -42,7 +42,7 @@ SOURCE_REVIEW_NOTE ?= Provider release proof invoked from Makefile.
 BASELINE_ROOT ?= .provider-release-proofs
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: help check-push-readiness install-push-gate dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-omp-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-frontend-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-web-api-routes validate-web-layout validate-codemap validate-ios-transcript generate-ios-transcript validate-ws validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-factory-registration validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary cold-open-probe session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture ui-gallery ui-sweep test-ui-sweep import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e engine-compat test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down send-timeline
+.PHONY: help check-push-readiness install-push-gate dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-omp-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-runner test-frontend-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-web-api-routes validate-web-layout validate-codemap validate-ios-transcript generate-ios-transcript validate-ws validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-factory-registration validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary cold-open-probe session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture ui-gallery ui-sweep test-ui-sweep import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e engine-compat test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down send-timeline
 .PHONY: lint-frontend
 .PHONY: test-opencode-console-steer-live-canary
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
@@ -68,7 +68,6 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-provider-contract test-isolation
 .PHONY: affected-check
 .PHONY: validate-affected-check
-.PHONY: ci-validation ci-backend
 
 # ---------------------------------------------------------------------------
 # Help
@@ -542,9 +541,6 @@ cursor-observed-install-qualification: ## Exact installed Cursor full-column sna
 test-cursor-helm-product-e2e: ## Real Longhouse↔Cursor launch/control/archive canary (release-gated)
 	@uv run --project server python scripts/qa/cursor-helm-product-e2e.py $(ARGS)
 
-test-cursor-helm-gate0-unit: ## Cursor Helm Gate 0 harness unit tests
-	@cd server && uv run --extra dev pytest tests_lite/test_cursor_helm_gate0.py tests_lite/test_cursor_helm_product_e2e.py tests_lite/test_cursor_hooks.py tests_lite/test_cursor_permission_policy.py tests_lite/test_permission_gate_routes.py tests_lite/test_catalogd_interactions.py tests_lite/test_managed_provider_contracts.py tests_lite/test_managed_local_transport.py -q
-
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test
 
@@ -680,19 +676,6 @@ test-full: ## Full suite — all tiers (>10min)
 	$(MAKE) test-engine
 	$(MAKE) test-shipper-e2e
 	$(MAKE) test-e2e
-
-# One isolated guest per CI job. Every `make <test goal>` pays a fresh guest
-# (source tarball, git snapshot, editable install, cold imports: 20-60s each on
-# cube), so a job with three steps paid it three times.
-ci-validation: ## @internal CI Validation job: validate, optional lifecycle proof (LIFECYCLE=1), capability proof
-	@$(MAKE) --no-print-directory validate
-	@if [ "$(LIFECYCLE)" = "1" ]; then $(MAKE) --no-print-directory test-managed-launch-lifecycle; fi
-	@$(MAKE) --no-print-directory provider-capability-coordination-proof
-
-ci-backend: ## @internal CI Backend tests job: backend unit tests plus hosted-instance and iOS helper tests
-	@$(MAKE) --no-print-directory test
-	@$(MAKE) --no-print-directory test-hosted-instance
-	@$(MAKE) --no-print-directory test-ios-helper
 
 # CI-referenced test helpers (keep for workflow compatibility)
 test-managed-launch-lifecycle: ## @internal Real Runtime Host + real `longhouse <provider>` launch
@@ -907,6 +890,9 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@python3 scripts/tests/engine-compat-receipt.test.py
 	@cd server && uv run python ../scripts/tests/testflight.test.py
 	@python3 scripts/tests/ios-upload-preconditions.test.py
+	@python3 scripts/tests/ci-profile.test.py
+	@python3 scripts/tests/transcript-coverage.test.py
+	@python3 scripts/tests/session-propagation-sla.test.py
 
 validate-deploy-window-probe: ## @internal Runtime Host restart measurement summary regression test
 	@python3 scripts/tests/deploy-window-probe.test.py
