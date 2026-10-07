@@ -2745,6 +2745,35 @@ def test_answer_pause_request_types_antigravity_as_an_upstream_absence(tmp_path:
         assert result["data"]["observed_provider_version"]
 
 
+def test_runtime_reducer_scenarios_pass_when_process_database_url_is_file_backed(tmp_path: Path, monkeypatch) -> None:
+    # A file-backed DATABASE_URL always implies a split Live Store, which makes
+    # session_runtime leave reduction to catalogd. The weekly full column runs
+    # with exactly that environment; the scenarios must still reduce on their
+    # own co-located engine and leave the process settings as they found them.
+    from zerg import database
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'process' / 'longhouse.db'}")
+    database.refresh_database_settings_from_env()
+    try:
+        assert database.live_store_configured()
+        payload = uah.run_harness(
+            uah.HarnessOptions(
+                providers=("claude",),
+                scenarios=("runtime_phase", "pause_request_detect"),
+                evidence_root=tmp_path / "evidence",
+                provider_bins=_fake_bins(tmp_path),
+            )
+        )
+        assert database.live_store_configured()
+    finally:
+        monkeypatch.undo()
+        database.refresh_database_settings_from_env()
+
+    assert payload["verdict"] == "green", [(r["scenario"], r.get("failure_code")) for r in payload["results"]]
+    for result in payload["results"]:
+        assert result["status"] == "pass"
+
+
 def test_observation_surface_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
