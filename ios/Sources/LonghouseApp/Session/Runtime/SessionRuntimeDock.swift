@@ -323,7 +323,7 @@ struct SessionRuntimeDock: View {
 
     private var observationClockKey: String {
         let claim = hostUpdateState.claim
-        // Typed: an untyped literal of nine `??` terms timed the type checker
+        // Typed: an untyped nine-element literal with seven `??` timed the type checker
         // out on a hosted macOS VM (2026-10-07, Build failed exit 65).
         let parts: [String] = [
             detail.id,
