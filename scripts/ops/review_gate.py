@@ -1136,6 +1136,22 @@ def attested_refusal(repo: str | Path, slug: str, served: str, target: str) -> s
     return None
 
 
+def newest_published(repo: str | Path, slug: str) -> str | None:
+    """The newest main commit with a published runtime image: the commit the ring promoter moves dogfood to.
+    Highest run number whose commit main holds (the listing's order is not reliable; ring_promoter.py agrees)."""
+    proc = subprocess.run(["gh", "api", f"repos/{slug}/actions/workflows/runtime-image.yml/runs?branch={DEFAULT_BRANCH}"
+                           "&status=success&per_page=30", "-q",
+                           '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | "\\(.run_number) \\(.head_sha)"'],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"review-gate: attest: newest published image unknown: {proc.stderr.strip()[:200]}", file=sys.stderr)
+        return None
+    runs = sorted((line.split() for line in proc.stdout.splitlines() if len(line.split()) == 2),
+                  key=lambda r: int(r[0]) if r[0].isdigit() else 0, reverse=True)
+    main = f"refs/remotes/origin/{DEFAULT_BRANCH}"
+    return next((sha for _, sha in runs if re.fullmatch(r"[0-9a-f]{40}", sha) and is_ancestor(repo, sha, main)), None)
+
+
 def post_attestation(slug: str, sha: str, state: str, description: str) -> None:
     proc = subprocess.run(["gh", "api", "--method", "POST", f"repos/{slug}/statuses/{sha}", "-f", f"state={state}",
                            "-f", f"context={ATTEST_CONTEXT}", "-f", f"description={description[:140]}"],
@@ -1173,7 +1189,10 @@ def attest_mode(repo: str, policy: Policy, targets: list[str], served_url: str, 
         # dogfood serves). A reader only trusts it for a ring whose served SHA contains that base.
         bases = [served] + ([dogfood] if dogfood and dogfood != served and is_ancestor(repo, served, dogfood) else [])
         if not targets:
-            targets = ([dogfood] if dogfood else []) + [f"refs/remotes/origin/{DEFAULT_BRANCH}"]
+            # What dogfood serves (production's candidate), the newest published image (dogfood's
+            # candidate, which lags main while main's head changes no runtime path), and main itself.
+            published = newest_published(repo, slug)
+            targets = [t for t in (dogfood, published) if t] + [f"refs/remotes/origin/{DEFAULT_BRANCH}"]
         state_path = store / "attest.json"
         try:
             posted = json.loads(state_path.read_text())
@@ -1318,7 +1337,8 @@ def main(argv: list[str] | None = None) -> int:
     blocking.add_argument("--base", required=True)
     blocking.add_argument("--head", required=True)
     attest = sub.add_parser("attest", help="post the promotion verdict for the candidates as a GitHub commit status")
-    attest.add_argument("--target", action="append", default=[], help="candidate (default: what dogfood serves, and origin/main)")
+    attest.add_argument("--target", action="append", default=[],
+                        help="candidate (default: what dogfood serves, the newest published runtime image, origin/main)")
     attest.add_argument("--served-url", default=PRODUCTION_HEALTH_URL, help="the ring the verdict is computed from (production)")
     attest.add_argument("--dogfood-url", default=DOGFOOD_HEALTH_URL)
     attest.add_argument("--dry-run", action="store_true", help="print what it would post; post and queue nothing")
