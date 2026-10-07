@@ -7922,6 +7922,10 @@ export interface components {
              * @default false
              */
             released_lock: boolean;
+            /** Cleanup */
+            cleanup?: ("complete" | "survivors" | "unverified") | null;
+            /** Cleanup Note */
+            cleanup_note?: string | null;
         };
         /** SessionLaunchFacts */
         SessionLaunchFacts: {

@@ -707,3 +707,162 @@ def test_catalog_mode_http_invocation_closed_event_records_one_longhouse_notice(
     finally:
         api_app.dependency_overrides.clear()
         engine.dispose()
+
+
+_STOPPED_ITEMS = [
+    {"id": "watch-branch", "kind": "monitor", "description": "watch the branch"},
+    {"id": "integration-tests", "kind": "shell", "description": "run the integration tests"},
+]
+_CLOSE_NOTICE = "Stopped 2 background tasks: watch the branch; run the integration tests"
+_CLEANUP_LINES = {
+    "complete": None,
+    "survivors": "Some processes didn't exit and may still be running.",
+    "unverified": ("Some processes were still running, but Longhouse couldn't confirm they were this session's, so it left them alone."),
+}
+
+
+def _close_notices(store, session_id, invocation_id):
+    receipts = store.list_recent_input_receipts(session_id=session_id)["receipts"]
+    return [row for row in receipts if row.get("client_request_id") == f"close:{invocation_id}"]
+
+
+def _expected_notice(cleanup):
+    line = _CLEANUP_LINES.get(cleanup or "")
+    return f"{_CLOSE_NOTICE}. {line}" if line else _CLOSE_NOTICE
+
+
+@pytest.mark.parametrize(
+    ("cleanup", "error_note"),
+    [
+        ("complete", None),
+        ("survivors", "Console process group 4242 survived close: still_alive"),
+        (
+            "unverified",
+            "Console process group 4242 is still alive but could not be verified as this invocation's, so it was not signalled",
+        ),
+        # A close whose publication failed still answers with its process outcome.
+        ("complete", "Console invocation close event is retained for replay"),
+    ],
+)
+def test_catalog_mode_http_parked_stop_reports_cleanup_on_response_and_notice(tmp_path, monkeypatch, cleanup, error_note):
+    engine, store, registry = _catalog_http_stack(tmp_path, monkeypatch, name="console-stop-cleanup")
+    try:
+        with TestClient(api_app, raise_server_exceptions=False) as client:
+            session_id, thread_id, run_id = _create_parked_console_session(client)
+            invocation_id = "invocation-cleanup"
+            result: dict[str, object] = {
+                "closed": True,
+                "invocation_id": invocation_id,
+                "stopped": _STOPPED_ITEMS,
+                "cleanup": cleanup,
+            }
+            if error_note:
+                result["error_note"] = error_note
+            registry.invocation_close_result = result
+
+            stopped = client.post(f"/sessions/{session_id}/turns/current/interrupt")
+            assert stopped.status_code == 200, stopped.text
+            body = stopped.json()
+            assert body["interrupt_dispatched"] is True
+            assert body["cleanup"] == cleanup
+            assert body["cleanup_note"] == error_note
+
+            # The reply alone records the notice: the engine's own event may be
+            # only retained for replay.
+            notices = _close_notices(store, session_id, invocation_id)
+            assert [row["text"] for row in notices] == [_expected_notice(cleanup)]
+            assert notices[0]["origin"] == "longhouse"
+
+            # The engine's event for the same close is a no-op.
+            replay = client.post(
+                "/agents/runtime/events/batch",
+                json={
+                    "events": [
+                        {
+                            "runtime_key": f"claude:{session_id}",
+                            "session_id": session_id,
+                            "thread_id": thread_id,
+                            "run_id": run_id,
+                            "provider": "claude",
+                            "device_id": "cinder",
+                            "source": "claude_console",
+                            "kind": "invocation_closed",
+                            "occurred_at": datetime.now(timezone.utc).isoformat(),
+                            "dedupe_key": f"close:{invocation_id}",
+                            "payload": {
+                                "invocation_id": invocation_id,
+                                "reason": "user_stop",
+                                "cleanup": cleanup,
+                                "stopped": _STOPPED_ITEMS,
+                            },
+                        }
+                    ]
+                },
+                headers={"X-Agents-Token": "dev"},
+            )
+            assert replay.status_code == 200, replay.text
+            assert [row["text"] for row in _close_notices(store, session_id, invocation_id)] == [_expected_notice(cleanup)]
+    finally:
+        api_app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_catalog_mode_http_parked_stop_from_an_engine_without_cleanup_reports_none(tmp_path, monkeypatch):
+    engine, store, registry = _catalog_http_stack(tmp_path, monkeypatch, name="console-stop-legacy-cleanup")
+    try:
+        with TestClient(api_app, raise_server_exceptions=False) as client:
+            session_id, _thread_id, _run_id = _create_parked_console_session(client)
+            registry.invocation_close_result = {
+                "closed": True,
+                "invocation_id": "invocation-legacy",
+                "stopped": _STOPPED_ITEMS,
+                "error_note": "Console process group 4242 survived close: still_alive",
+            }
+            stopped = client.post(f"/sessions/{session_id}/turns/current/interrupt")
+            assert stopped.status_code == 200, stopped.text
+            assert stopped.json()["cleanup"] is None
+            assert stopped.json()["cleanup_note"] == "Console process group 4242 survived close: still_alive"
+            assert [row["text"] for row in _close_notices(store, session_id, "invocation-legacy")] == [_CLOSE_NOTICE]
+    finally:
+        api_app.dependency_overrides.clear()
+        engine.dispose()
+
+
+@pytest.mark.parametrize("cleanup", ["complete", "survivors", "unverified", None, "something-new"])
+def test_catalog_mode_http_invocation_closed_event_carries_cleanup_into_the_notice(tmp_path, monkeypatch, cleanup):
+    """A reload or another client reads the cleanup line from the durable notice."""
+
+    engine, store, _registry = _catalog_http_stack(tmp_path, monkeypatch, name="console-close-cleanup-notice")
+    try:
+        with TestClient(api_app, raise_server_exceptions=False) as client:
+            session_id, thread_id, run_id = _create_parked_console_session(client)
+            invocation_id = "invocation-close-cleanup"
+            payload: dict[str, object] = {"invocation_id": invocation_id, "reason": "user_stop", "stopped": _STOPPED_ITEMS}
+            if cleanup is not None:
+                payload["cleanup"] = cleanup
+            response = client.post(
+                "/agents/runtime/events/batch",
+                json={
+                    "events": [
+                        {
+                            "runtime_key": f"claude:{session_id}",
+                            "session_id": session_id,
+                            "thread_id": thread_id,
+                            "run_id": run_id,
+                            "provider": "claude",
+                            "device_id": "cinder",
+                            "source": "claude_console",
+                            "kind": "invocation_closed",
+                            "occurred_at": datetime.now(timezone.utc).isoformat(),
+                            "dedupe_key": f"close:{invocation_id}",
+                            "payload": payload,
+                        }
+                    ]
+                },
+                headers={"X-Agents-Token": "dev"},
+            )
+            assert response.status_code == 200, response.text
+            assert [row["text"] for row in _close_notices(store, session_id, invocation_id)] == [_expected_notice(cleanup)]
+    finally:
+        api_app.dependency_overrides.clear()
+        engine.dispose()

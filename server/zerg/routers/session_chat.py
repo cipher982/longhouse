@@ -15,6 +15,7 @@ from datetime import timedelta
 from datetime import timezone
 from hashlib import blake2b
 from typing import Any
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -472,6 +473,12 @@ class SessionInterruptResponse(BaseModel):
     exit_code: int | None = None
     error: str | None = None
     released_lock: bool = False
+    # Stop of a parked Console invocation only. The invocation is closed either
+    # way; this says whether its processes are gone (`complete`), outlived the
+    # kill (`survivors`), or were left alone because they could not be proven
+    # this session's (`unverified`). The session's close notice says the same.
+    cleanup: Literal["complete", "survivors", "unverified"] | None = None
+    cleanup_note: str | None = None
 
 
 async def _interrupt_live_session_response(
@@ -975,7 +982,12 @@ async def interrupt_current_console_turn(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": str(exc)}) from exc
     if not result.dispatched:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"code": "interrupt_failed", "message": result.error})
-    return SessionInterruptResponse(interrupt_dispatched=True, session_id=str(session_id))
+    return SessionInterruptResponse(
+        interrupt_dispatched=True,
+        session_id=str(session_id),
+        cleanup=result.cleanup,
+        cleanup_note=result.cleanup_note,
+    )
 
 
 @agents_router.post("/{session_id}/interrupt-live", response_model=SessionInterruptResponse)
@@ -1031,7 +1043,12 @@ async def interrupt_current_console_turn_agents(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": str(exc)}) from exc
     if not result.dispatched:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"code": "interrupt_failed", "message": result.error})
-    return SessionInterruptResponse(interrupt_dispatched=True, session_id=str(session_id))
+    return SessionInterruptResponse(
+        interrupt_dispatched=True,
+        session_id=str(session_id),
+        cleanup=result.cleanup,
+        cleanup_note=result.cleanup_note,
+    )
 
 
 @router.post("/{session_id}/terminate-live", response_model=SessionTerminateResponse)

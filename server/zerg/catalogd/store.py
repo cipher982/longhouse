@@ -1165,7 +1165,18 @@ def _enqueue_console_wake_turn(orm: Session, event: Any, *, observed_at: datetim
     )
 
 
-def _invocation_close_notice(reason: str, stopped: list[Mapping[str, Any]]) -> str:
+# What a close proved about the invocation's processes (the engine's
+# `InvocationCleanup`). Closing provider input closes the invocation; whether its
+# processes are gone is a separate fact, so the notice says when they may not be.
+# Nothing reaps them later: the managed-process janitor only reports.
+INVOCATION_CLEANUP_NOTICES = {
+    "complete": None,
+    "survivors": "Some processes didn't exit and may still be running.",
+    "unverified": "Some processes were still running, but Longhouse couldn't confirm they were this session's, so it left them alone.",
+}
+
+
+def _invocation_close_notice(reason: str, stopped: list[Mapping[str, Any]], cleanup: str | None = None) -> str:
     descriptions = [
         str(item.get("description") or item.get("kind") or item.get("id") or "background work").strip()[:512] for item in stopped
     ]
@@ -1173,8 +1184,13 @@ def _invocation_close_notice(reason: str, stopped: list[Mapping[str, Any]]) -> s
     task_noun = "background task" if count == 1 else "background tasks"
     summary = "; ".join(descriptions)
     if reason == "machine_agent_restart":
-        return f"Longhouse restarted; {count} {task_noun} stopped: {summary}"
-    return f"Stopped {count} {task_noun}: {summary}"
+        notice = f"Longhouse restarted; {count} {task_noun} stopped: {summary}"
+    else:
+        notice = f"Stopped {count} {task_noun}: {summary}"
+    cleanup_line = INVOCATION_CLEANUP_NOTICES.get(cleanup or "")
+    if cleanup_line:
+        notice = f"{notice.rstrip('. ')}. {cleanup_line}"
+    return notice
 
 
 def _record_console_invocation_closed_notice(orm: Session, event: Any, *, observed_at: datetime) -> None:
@@ -1182,6 +1198,9 @@ def _record_console_invocation_closed_notice(orm: Session, event: Any, *, observ
     invocation_id = str(payload.get("invocation_id") or "").strip()
     reason = str(payload.get("reason") or "").strip()
     raw_stopped = payload.get("stopped")
+    # Absent from engines before the cleanup outcome existed; an unknown value
+    # adds no line rather than dropping the notice.
+    cleanup = str(payload.get("cleanup") or "").strip() or None
     session_id = str(event.session_id or "")
     if (
         not invocation_id
@@ -1277,7 +1296,7 @@ def _record_console_invocation_closed_notice(orm: Session, event: Any, *, observ
             client_request_id=client_request_id,
             intent="auto",
             status="delivered",
-            text=_invocation_close_notice(reason, stopped),
+            text=_invocation_close_notice(reason, stopped, cleanup),
             created_at=occurred_at,
             updated_at=occurred_at,
         )

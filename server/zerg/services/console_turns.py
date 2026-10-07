@@ -86,6 +86,66 @@ class ConsoleTurnInterrupt:
     run_id: UUID
     dispatched: bool
     error: str | None = None
+    # A parked close only: what it proved about the invocation's processes
+    # (`complete | survivors | unverified`), and the engine's note when anything
+    # was left. None when the engine did not report it.
+    cleanup: str | None = None
+    cleanup_note: str | None = None
+
+
+INVOCATION_CLEANUP_OUTCOMES = frozenset({"complete", "survivors", "unverified"})
+
+
+async def _record_invocation_close_from_reply(
+    catalog,
+    *,
+    session_id: UUID,
+    parked: dict[str, object],
+    provider: str,
+    device_id: str,
+    result: dict[str, object],
+    cleanup: str | None,
+) -> None:
+    """Write the close notice from the engine's reply.
+
+    The engine also publishes `invocation_closed` through its outbox, but a
+    close whose publication failed is only retained for replay. The reply is
+    the same fact, so the notice (and its cleanup line) does not wait on that
+    replay; both paths share the `close:<invocation_id>` key, so whichever
+    arrives second is a no-op.
+    """
+
+    from zerg.services.session_runtime import RuntimeEventIngest
+
+    invocation_id = str(result.get("invocation_id") or "").strip()
+    stopped = result.get("stopped")
+    if not invocation_id or not isinstance(stopped, list) or not stopped:
+        return
+    payload: dict[str, object] = {"invocation_id": invocation_id, "reason": "user_stop", "stopped": stopped}
+    if cleanup is not None:
+        payload["cleanup"] = cleanup
+    event = RuntimeEventIngest(
+        runtime_key=f"{provider}:{session_id}",
+        session_id=session_id,
+        thread_id=UUID(str(parked["thread_id"])),
+        run_id=UUID(str(parked["run_id"])),
+        provider=provider,
+        device_id=device_id or None,
+        source="console_invocation_close",
+        kind="invocation_closed",
+        occurred_at=datetime.now(timezone.utc),
+        dedupe_key=f"close:{invocation_id}",
+        payload=payload,
+    )
+    try:
+        await catalog.call(
+            "session.runtime.apply.v2",
+            {"events": [event.model_dump(mode="json")]},
+            timeout_seconds=1.0,
+        )
+    except Exception:
+        # The engine's retained close event remains the durable retry path.
+        logger.warning("Failed to record Console invocation close notice from its reply", exc_info=True)
 
 
 async def _persist_native_binding_result(catalog, *, turn: dict[str, object], response_message: dict[str, object]) -> None:
@@ -186,6 +246,8 @@ async def interrupt_console_turn(
         )
         message = dict(response.message or {})
         error = None
+        cleanup = None
+        cleanup_note = None
         if not response.transport_ok:
             error = str(response.error or "Console invocation close outcome is unknown")
         elif message.get("ok") is not True:
@@ -197,19 +259,33 @@ async def interrupt_console_turn(
                 # The engine found no parked invocation for this run (already
                 # closed, drained, or its claim is gone): nothing was stopped.
                 raise ConsoleTurnUnavailable("no_active_turn", "Session has no parked Console invocation to close")
-            if result.get("error_note"):
-                # Closed, but a survivor or an unverifiable process group was
-                # left to the managed-process janitor.
+            # Closed is final; whether its processes are gone is a second fact.
+            reported_cleanup = str(result.get("cleanup") or "").strip()
+            cleanup = reported_cleanup if reported_cleanup in INVOCATION_CLEANUP_OUTCOMES else None
+            cleanup_note = str(result.get("error_note") or "").strip()[:2000] or None
+            if cleanup_note:
                 logger.warning(
-                    "Console invocation %s closed with a note: %s",
+                    "Console invocation %s closed (cleanup %s) with a note: %s",
                     result.get("invocation_id"),
-                    result.get("error_note"),
+                    cleanup or "unreported",
+                    cleanup_note,
                 )
+            await _record_invocation_close_from_reply(
+                client,
+                session_id=session_id,
+                parked=parked,
+                provider=provider,
+                device_id=device_id,
+                result=result,
+                cleanup=cleanup,
+            )
         return ConsoleTurnInterrupt(
             turn_id=UUID(str(parked["turn_id"])),
             run_id=run_id,
             dispatched=error is None,
             error=error,
+            cleanup=cleanup,
+            cleanup_note=cleanup_note,
         )
     if not turn.get("run_id"):
         raise ConsoleTurnUnavailable("no_active_turn", "Session has no active Console turn")
