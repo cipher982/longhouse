@@ -112,6 +112,26 @@ struct TimelineInboxLayoutTests {
     }
 
     @Test
+    func providerAuthenticationSignalsAttentionWithoutAnAnswerableQuestion() {
+        let authRequired = session(
+            id: "auth-required",
+            facts: makeSessionStateFacts(
+                activity: "quiescent",
+                workingSet: "open",
+                primaryOverride: SessionStateLabel(
+                    key: "provider_auth_required",
+                    label: "Provider authentication required",
+                    tone: "blocked",
+                    observedAt: nil
+                )
+            )
+        )
+
+        #expect(authRequired.stateFacts.hasAnswerablePendingInteraction == false)
+        #expect(TimelineSignal.resolve(for: authRequired) == .attention)
+    }
+
+    @Test
     func failedRunRetainsItsLabelWithoutAWaitingSignal() {
         let now = LonghouseDateParser.parse("2026-09-25T16:05:00Z")!
         let failed = session(

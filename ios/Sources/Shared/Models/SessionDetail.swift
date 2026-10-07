@@ -78,7 +78,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     /// A raw provider block is not one: the server mints no headline for it.
     var shouldShowAttentionFallback: Bool {
         guard !isClosed, activePauseRequest == nil else { return false }
-        return stateFacts.pendingInteractionKind != nil
+        return stateFacts.hasAnswerablePendingInteraction
     }
 
     var canSendLive: Bool {

@@ -529,6 +529,75 @@ struct SessionModelsTests {
 
 
     @Test
+    func sessionDetailDoesNotOfferUnanswerablePauseRequest() throws {
+        let pauseRequestJSON = """
+        {
+          "id": "pause-unanswerable",
+          "session_id": "session-card-contract",
+          "runtime_key": "claude:session-card-contract",
+          "kind": "structured_question",
+          "status": "pending",
+          "provider": "claude",
+          "can_respond": false,
+          "title": "Choose storage",
+          "summary": "No response can be sent.",
+          "tool_name": "requestUserInput",
+          "questions": [],
+          "occurred_at": "2026-04-25T20:01:00Z",
+          "last_seen_at": "2026-04-25T20:01:05Z",
+          "resolved_at": null,
+          "expires_at": null
+        }
+        """
+        let json = apiSessionJSON()
+            .replacingOccurrences(
+                of: #""activity": {"state": "quiescent"}"#,
+                with: #""activity": {"state": "quiescent"}, "pending_interaction": {"id": "pause-unanswerable", "kind": "question", "can_respond": false}"#
+            )
+            .replacingOccurrences(
+                of: #""terminal_reason": null"#,
+                with: #""terminal_reason": null, "pause_request": \#(pauseRequestJSON)"#
+            )
+        let detail = try JSONDecoder.snakeCase
+            .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
+            .sessionDetail
+
+        #expect(detail.activePauseRequest == nil)
+        #expect(detail.shouldShowAttentionFallback == false)
+    }
+
+    @Test
+    func sessionDetailDoesNotShowAttentionFallbackForTerminalFailure() throws {
+        let json = apiSessionJSON()
+            .replacingOccurrences(
+                of: #""run": {"lifecycle": "running"}"#,
+                with: #""run": {"lifecycle": "ended", "end_reason": "run_failed"}"#
+            )
+            .replacingOccurrences(
+                of: #""activity": {"state": "quiescent"}"#,
+                with: #""activity": {"state": "blocked"}, "pending_interaction": {"id": "pause-failed", "kind": "question", "can_respond": false}"#
+            )
+            .replacingOccurrences(
+                of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
+                with: #""primary": {"key": "ended", "label": "Run failed", "tone": "blocked"}"#
+            )
+            .replacingOccurrences(of: #""state": "needs_user","#, with: #""state": "blocked","#)
+            .replacingOccurrences(of: #""tone": "idle","#, with: #""tone": "blocked","#)
+            .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Run failed","#)
+            .replacingOccurrences(of: #""detail": "Waiting for next prompt","#, with: #""detail": "The process exited with an error.","#)
+            .replacingOccurrences(of: #""phase_label": "Idle","#, with: #""phase_label": "Run failed","#)
+            .replacingOccurrences(of: #""needs_attention": false,"#, with: #""needs_attention": true,"#)
+            .replacingOccurrences(of: #""is_idle": true,"#, with: #""is_idle": false,"#)
+            .replacingOccurrences(of: #""terminal_reason": null"#, with: #""terminal_reason": "provider_exit""#)
+        let detail = try JSONDecoder.snakeCase
+            .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
+            .sessionDetail
+
+        #expect(detail.stateFacts.terminalFailureLabel == "Run failed")
+        #expect(detail.shouldShowAttentionFallback == false)
+    }
+
+    @Test
     func sessionDetailShowsAttentionFallbackWhenAServedQuestionHasNoPauseRequest() throws {
         let json = apiSessionJSON()
             .replacingOccurrences(
@@ -539,17 +608,32 @@ struct SessionModelsTests {
                 of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
                 with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
             )
-            .replacingOccurrences(of: #""state": "needs_user","#, with: #""state": "blocked","#)
-            .replacingOccurrences(of: #""tone": "idle","#, with: #""tone": "blocked","#)
-            .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Blocked","#)
-            .replacingOccurrences(of: #""detail": "Waiting for next prompt","#, with: #""detail": "Waiting for terminal approval.","#)
-            .replacingOccurrences(of: #""phase_label": "Idle","#, with: #""phase_label": "Blocked","#)
-            .replacingOccurrences(of: #""needs_attention": false,"#, with: #""needs_attention": true,"#)
-            .replacingOccurrences(of: #""is_idle": true,"#, with: #""is_idle": false,"#)
-        let decoded = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+        let detail = try JSONDecoder.snakeCase
+            .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
+            .sessionDetail
 
-        #expect(decoded.activePauseRequest == nil)
-        #expect(decoded.shouldShowAttentionFallback)
+        #expect(detail.activePauseRequest == nil)
+        #expect(detail.shouldShowAttentionFallback)
+    }
+
+    @Test
+    func sessionDetailDoesNotShowAttentionFallbackForBlockedActivityAlone() throws {
+        let json = apiSessionJSON()
+            .replacingOccurrences(
+                of: #""activity": {"state": "quiescent"}"#,
+                with: #""activity": {"state": "blocked"}"#
+            )
+            .replacingOccurrences(
+                of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
+                with: #""primary": {"key": "activity_unknown", "label": "Activity unknown", "tone": "quiet"}"#
+            )
+        let detail = try JSONDecoder.snakeCase
+            .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
+            .sessionDetail
+
+        #expect(detail.stateFacts.activityState == "blocked")
+        #expect(detail.stateFacts.hasAnswerablePendingInteraction == false)
+        #expect(detail.shouldShowAttentionFallback == false)
     }
 
     @Test

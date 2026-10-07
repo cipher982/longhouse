@@ -372,7 +372,9 @@ function SessionDetailWorkspaceRoute({
   const interaction = getSessionInteractionCapabilities({
     session: branchSourceSession,
   });
+  // A failed-run primary means no current interaction owns the composer.
   const activePauseRequest =
+    !sessionHasFailedRun(branchSourceSession) &&
     branchSourceSession.session_state.pending_interaction != null &&
     branchSourceSession.runtime_display?.pause_request?.status === "pending"
       ? branchSourceSession.runtime_display.pause_request

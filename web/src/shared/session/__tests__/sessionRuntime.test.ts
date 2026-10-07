@@ -276,6 +276,21 @@ describe("resolveTimelineSignal", () => {
     expect(sig({ tone: "blocked" })).toBe("unknown");
   });
 
+  it("signals provider authentication without treating it as an answerable question", () => {
+    const session = makeSession({
+      session_state: makeSessionStateFacts({ activity: "quiescent" }),
+    });
+    session.session_state.presentation.primary = {
+      key: "provider_auth_required",
+      label: "Provider authentication required",
+      tone: "blocked",
+      observed_at: null,
+    };
+
+    expect(needsSessionAttention(session)).toBe(false);
+    expect(resolveTimelineSignal(session)).toBe("attention");
+  });
+
   it("keeps a failed run out of blocked-activity attention", () => {
     const session_state = makeSessionStateFacts({ activity: "blocked" });
     session_state.run = { lifecycle: "ended", end_reason: "run_failed" };

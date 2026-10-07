@@ -1285,6 +1285,47 @@ describe("SessionDetailPage", () => {
     ).toBeInTheDocument();
   });
 
+
+  it("does not let a failed run's terminal-only request block resume", () => {
+    const pauseRequest = makePauseRequest({ can_respond: false });
+    const session = makeSession({
+      runtime_display: makeRuntimeDisplay({
+        state: "blocked",
+        tone: "blocked",
+        headline: "Run failed",
+        detail: "Earlier run failed",
+        phase_label: "Run failed",
+        compact_tool_label: null,
+        is_live: false,
+        is_executing: false,
+        is_idle: false,
+        needs_attention: false,
+        activity_recency: "stale",
+        terminal_reason: "provider_exit",
+        pause_request: pauseRequest,
+      }),
+    });
+    session.session_state.pending_interaction!.can_respond = false;
+    session.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
+    session.session_state.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: null,
+    };
+    session.session_state.control.actions.resume = { state: "available" };
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+
+    expect(screen.queryByTestId("session-pause-panel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-resume-button")).toBeInTheDocument();
+    expect(screen.getByTestId("session-chat")).not.toHaveAttribute(
+      "data-disabled-reason",
+      "Answer the provider question in the terminal before sending another prompt.",
+    );
+  });
+
   it("renders non-answerable provider pause requests as terminal-only", () => {
     const pauseRequest = makePauseRequest({
       can_respond: false,
