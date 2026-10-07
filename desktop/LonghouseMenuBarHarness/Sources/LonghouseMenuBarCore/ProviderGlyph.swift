@@ -27,7 +27,7 @@ struct ProviderGlyph: View {
 
     private var assetPDF: (file: String, subdirectory: String)? {
         switch key {
-        case "codex", "openai":
+        case "codex":
             return ("codex", "ProviderAssets.xcassets/ProviderCodex.imageset")
         case "claude":
             return ("claude", "ProviderAssets.xcassets/ProviderClaude.imageset")

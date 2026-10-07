@@ -2213,7 +2213,7 @@ struct SessionModelsTests {
             .data(using: .utf8)!
     }
 
-        private func hostDetailJSON(_ state: String) -> Data {
+    private func hostDetailJSON(_ state: String) -> Data {
         let text = String(decoding: minimalDetailJSON, as: UTF8.self)
             .replacingOccurrences(of: "\"host_state\": \"online\"", with: "\"host_state\": \"\(state)\"")
         return text.data(using: .utf8)!

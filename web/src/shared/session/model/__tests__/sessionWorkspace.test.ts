@@ -675,7 +675,7 @@ describe("getSessionInteractionCapabilities", () => {
           reply_to_live_session_available: false,
           input_mode: "read_only",
           composer_enabled: false,
-          composer_disabled_reason: "This live Codex session is connected, but this control path cannot accept typed input.",
+          composer_disabled_reason: "This control path cannot accept typed input.",
           send_disabled_reason: "input_not_supported",
         }),
       }),
@@ -683,7 +683,7 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.composerDisabledReason).toBe(
-      "This live Codex session is connected, but this control path cannot accept typed input.",
+      "This control path cannot accept typed input.",
     );
   });
 
