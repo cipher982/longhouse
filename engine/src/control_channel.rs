@@ -2335,6 +2335,7 @@ async fn execute_invocation_close(
         "closed": true,
         "invocation_id": outcome.invocation_id,
         "stopped": stopped,
+        "cleanup": outcome.cleanup.as_str(),
     });
     if let Some(error_note) = outcome.error_note {
         response["error_note"] = Value::String(error_note);
@@ -5606,6 +5607,7 @@ mod tests {
                 config.machine_name = "close-test-machine".to_string();
                 let result = execute_command(&frame, &config).await.unwrap();
                 assert_eq!(result["closed"], true);
+                assert_eq!(result["cleanup"], "complete");
                 if outbox_failure {
                     assert!(result["error_note"]
                         .as_str()

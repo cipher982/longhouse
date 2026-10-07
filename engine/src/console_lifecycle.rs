@@ -29,6 +29,30 @@ impl InvocationCloseReason {
     }
 }
 
+/// What a close proved about the invocation's processes.
+///
+/// Closing provider input closes the invocation; whether its process group is
+/// gone is a separate fact, and the user is told when it is not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvocationCleanup {
+    /// No process of the invocation's group is left.
+    Complete,
+    /// The group was proven ours and killed, but a process outlived SIGKILL.
+    Survivors,
+    /// A live group could not be proven ours, so it was never signalled.
+    Unverified,
+}
+
+impl InvocationCleanup {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Survivors => "survivors",
+            Self::Unverified => "unverified",
+        }
+    }
+}
+
 pub trait ConsoleInput: Send + Sync {
     fn send_input<'a>(&'a self, text: &'a str, images: &'a [PathBuf]) -> InputFuture<'a>;
     fn close_input(&self) -> InputFuture<'_>;
@@ -688,6 +712,7 @@ impl ConsoleInvocation {
         let outcome = InvocationCloseOutcome {
             invocation_id: self.launch_id.clone(),
             stopped: std::mem::take(&mut state.pending).into_values().collect(),
+            cleanup: InvocationCleanup::Complete,
             error_note: None,
         };
         discard_retained_wakes(&self.provider, &self.provider_thread_id);
@@ -840,6 +865,8 @@ pub fn unregister(launch_id: &str) {
 pub struct InvocationCloseOutcome {
     pub invocation_id: String,
     pub stopped: Vec<PendingItem>,
+    pub cleanup: InvocationCleanup,
+    /// Everything that went wrong, cleanup and bookkeeping alike.
     pub error_note: Option<String>,
 }
 
@@ -877,7 +904,7 @@ pub async fn close_parked_invocation(
     // owns it.
     let (_, process_group_id) = invocation.process_identity();
     let stopped = invocation.pending_items();
-    let mut error_note = stop_invocation_group(claim, process_group_id).await;
+    let (cleanup, mut error_note) = stop_invocation_group(claim, process_group_id).await;
     if let Some(message) = &error_note {
         tracing::error!(run_id = %claim.run_id, "{message}");
     }
@@ -909,6 +936,7 @@ pub async fn close_parked_invocation(
                 machine_name,
                 source,
                 InvocationCloseReason::UserStop,
+                cleanup,
                 &stopped,
             );
             if let Ok(false) = published {
@@ -959,6 +987,7 @@ pub async fn close_parked_invocation(
 
     let mut outcome = invocation.finish_user_close();
     invocation.process_exited();
+    outcome.cleanup = cleanup;
     outcome.error_note = error_note;
     Ok(Some(outcome))
 }
@@ -975,7 +1004,7 @@ pub async fn close_parked_invocation(
 const OWNER_REAP_SETTLE: Duration = Duration::from_secs(1);
 
 /// Stop the invocation's process group if it is still provably ours, and
-/// return a note for anything left alive.
+/// return what that proved plus a note for anything left alive.
 ///
 /// The group is signalled only after a recorded process (pid, birth time and
 /// current pgid) shows it is still ours, checked immediately before signalling.
@@ -985,9 +1014,9 @@ const OWNER_REAP_SETTLE: Duration = Duration::from_secs(1);
 async fn stop_invocation_group(
     claim: &crate::turn_claims::TurnClaim,
     process_group_id: i32,
-) -> Option<String> {
+) -> (InvocationCleanup, Option<String>) {
     if !crate::process_group::group_is_alive(process_group_id) {
-        return None;
+        return (InvocationCleanup::Complete, None);
     }
     let verified = claim.process_group_id == Some(process_group_id)
         && claim.process_group_is_from_this_boot()
@@ -995,23 +1024,29 @@ async fn stop_invocation_group(
             .is_some_and(|inventory| claim.has_live_group_identity(&inventory));
     if !verified {
         if crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await {
-            return None;
+            return (InvocationCleanup::Complete, None);
         }
-        return Some(format!(
-            "Console process group {process_group_id} is still alive but could not be verified \
-             as this invocation's, so it was not signalled"
-        ));
+        return (
+            InvocationCleanup::Unverified,
+            Some(format!(
+                "Console process group {process_group_id} is still alive but could not be \
+                 verified as this invocation's, so it was not signalled"
+            )),
+        );
     }
     let shutdown = crate::process_group::shutdown_group(process_group_id, Duration::ZERO).await;
     if shutdown.is_gone()
         || crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await
     {
-        return None;
+        return (InvocationCleanup::Complete, None);
     }
-    Some(format!(
-        "Console process group {process_group_id} survived close: {}",
-        shutdown.as_str()
-    ))
+    (
+        InvocationCleanup::Survivors,
+        Some(format!(
+            "Console process group {process_group_id} survived close: {}",
+            shutdown.as_str()
+        )),
+    )
 }
 
 fn append_close_error(error_note: &mut Option<String>, message: String) {
@@ -1056,6 +1091,7 @@ pub fn publish_invocation_closed(
     machine_name: &str,
     source: &str,
     reason: InvocationCloseReason,
+    cleanup: InvocationCleanup,
     stopped: &[PendingItem],
 ) -> Result<bool> {
     anyhow::ensure!(
@@ -1089,6 +1125,7 @@ pub fn publish_invocation_closed(
             "payload": {
                 "invocation_id": invocation_id,
                 "reason": reason.as_str(),
+                "cleanup": cleanup.as_str(),
                 "stopped": stopped,
             }
         }),
@@ -1705,6 +1742,7 @@ mod tests {
             "box",
             "claude_console",
             InvocationCloseReason::UserStop,
+            InvocationCleanup::Unverified,
             &stopped,
         )
         .unwrap_err();
@@ -1712,6 +1750,7 @@ mod tests {
         let retained = registry.read(&run_id).unwrap();
         let close = retained.invocation_close_event.expect("close retained");
         assert_eq!(close["payload"]["stopped"][0]["id"], "task-1");
+        assert_eq!(close["payload"]["cleanup"], "unverified");
         assert!(!retained.invocation_close_event_handed_off);
 
         // The daemon's replay hands off the close with its cleared delegation.
@@ -1748,9 +1787,9 @@ mod tests {
         let claim = spawned_claim(pid, Some("Thu Jan  1 00:00:00 1970".to_string()));
         assert!(claim.process_group_is_from_this_boot());
 
-        let note = stop_invocation_group(&claim, pid as i32)
-            .await
-            .expect("an unverified live group is named in the close note");
+        let (cleanup, note) = stop_invocation_group(&claim, pid as i32).await;
+        assert_eq!(cleanup, InvocationCleanup::Unverified);
+        let note = note.expect("an unverified live group is named in the close note");
 
         assert!(note.contains("could not be verified"), "{note}");
         assert!(note.contains("not signalled"), "{note}");
@@ -1777,7 +1816,10 @@ mod tests {
         // The provider monitor owns the Child and reaps it.
         let monitor = tokio::spawn(async move { child.wait().await });
 
-        assert_eq!(stop_invocation_group(&claim, pid as i32).await, None);
+        assert_eq!(
+            stop_invocation_group(&claim, pid as i32).await,
+            (InvocationCleanup::Complete, None)
+        );
 
         assert!(!crate::process_group::group_is_alive(pid as i32));
         assert!(!monitor.await.unwrap().unwrap().success());
@@ -1808,7 +1850,10 @@ mod tests {
             }
         });
 
-        assert_eq!(stop_invocation_group(&claim, pid as i32).await, None);
+        assert_eq!(
+            stop_invocation_group(&claim, pid as i32).await,
+            (InvocationCleanup::Complete, None)
+        );
 
         assert!(!crate::process_group::group_is_alive(pid as i32));
         assert!(!monitor.await.unwrap().success());

@@ -1784,6 +1784,16 @@ fn settle_codex_restart_claim(
                 machine_name,
                 CODEX_EXEC_RUNTIME_SOURCE,
                 InvocationCloseReason::MachineAgentRestart,
+                // The live-worker path publishes only after the group is gone;
+                // a dead leader can still leave unsignalled group members.
+                if claim
+                    .process_group_id
+                    .is_some_and(crate::process_group::group_is_alive)
+                {
+                    crate::console_lifecycle::InvocationCleanup::Unverified
+                } else {
+                    crate::console_lifecycle::InvocationCleanup::Complete
+                },
                 &stopped,
             ) {
                 Ok(handed_off) => return Ok(handed_off),
