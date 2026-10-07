@@ -82,7 +82,7 @@ describe("sessionStatus", () => {
     expect(workClaimExpired(facts, NOW)).toBe(true);
   });
 
-  it("does not let an expired parent claim retire a keyed interaction", () => {
+  it("does not let an expired parent claim retire an answerable keyed interaction", () => {
     // The server only serves delegated work once the parent loop is quiescent,
     // so the old client fence against "delegated over expired parent" has no
     // input left to guard; what remains is that a question never expires.
@@ -93,14 +93,18 @@ describe("sessionStatus", () => {
     });
     expect(sessionNeedsInteraction(interaction, NOW)).toBe(true);
     expect(workClaimExpired(interaction, NOW)).toBe(false);
+  });
+
+  it("does not keep an unanswerable stale interaction on the attention axis", () => {
     const unanswerable = makeSessionStateFacts({
-      activity: "executing",
-      activityValidUntil: iso(-1),
+      activity: "quiescent",
       pendingInteraction: true,
     });
     unanswerable.pending_interaction!.can_respond = false;
+    unanswerable.presentation.primary = { key: "idle", label: "Idle", tone: "idle" };
+    reserve(unanswerable);
+    expect(servedSignal(unanswerable, NOW)).toBe("quiet");
     expect(sessionNeedsInteraction(unanswerable, NOW)).toBe(false);
-    expect(workClaimExpired(unanswerable, NOW)).toBe(true);
   });
 
   it("counts a served live tone as working while the loop itself is quiescent", () => {
