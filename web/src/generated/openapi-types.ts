@@ -8692,8 +8692,6 @@ export interface components {
              * @description Remote launch execution lifetime: one_shot|live_control; null when there is no launch attempt
              */
             execution_lifetime?: ("one_shot" | "live_control") | null;
-            /** @description Attribution for the user whose signed share token or legacy ?shared_by=<id> link surfaced this session. Null when attribution is absent, the user is gone, or the sharer is the current viewer. */
-            sharer?: components["schemas"]["SessionSharerResponse"] | null;
         };
         /** SessionResumeIntentResponse */
         SessionResumeIntentResponse: {
@@ -8815,26 +8813,6 @@ export interface components {
             terminal_reason: components["schemas"]["TerminalReason"] | null;
             /** @description Active structured provider question, when the runtime is waiting for an answer. */
             pause_request?: components["schemas"]["SessionPauseRequestProjectionResponse"] | null;
-        };
-        /**
-         * SessionSharerResponse
-         * @description Public-safe attribution for the user who shared this session link.
-         *
-         *     Resolved server-side from a ``?shared_by=<user_id>`` query param. The pill
-         *     on the session header is the only consumer; the same field doubles as
-         *     "who is the owner of this session" in single-tenant deployments.
-         */
-        SessionSharerResponse: {
-            /**
-             * Id
-             * @description Sharing user id
-             */
-            id: number;
-            /**
-             * Display Name
-             * @description Display name (null falls back to email local on the client)
-             */
-            display_name?: string | null;
         };
         /** SessionStateAxisComparison */
         SessionStateAxisComparison: {

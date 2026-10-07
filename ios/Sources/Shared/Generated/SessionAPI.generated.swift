@@ -273,11 +273,6 @@ struct APISessionRuntimeDisplayResponse: Codable, Hashable, Sendable {
     let pauseRequest: APISessionPauseRequestProjectionResponse?
 }
 
-struct APISessionSharerResponse: Codable, Hashable, Sendable {
-    let id: Int
-    let displayName: String?
-}
-
 struct APISessionActivityFacts: Codable, Hashable, Sendable {
     let state: String
     let rawKind: String?
@@ -552,7 +547,6 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let userState: String?
     let userHiddenFromTimeline: Bool?
     let executionLifetime: String?
-    let sharer: APISessionSharerResponse?
 }
 
 struct APITimelineSessionCardResponse: Codable, Hashable, Sendable {

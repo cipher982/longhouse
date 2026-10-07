@@ -690,18 +690,6 @@ class TimelineCardPresentationResponse(UTCBaseModel):
     border_tone: str = Field("inactive", description="Stable tone token for the card edge/outline")
 
 
-class SessionSharerResponse(UTCBaseModel):
-    """Public-safe attribution for the user who shared this session link.
-
-    Resolved server-side from a ``?shared_by=<user_id>`` query param. The pill
-    on the session header is the only consumer; the same field doubles as
-    "who is the owner of this session" in single-tenant deployments.
-    """
-
-    id: int = Field(..., description="Sharing user id")
-    display_name: Optional[str] = Field(None, description="Display name (null falls back to email local on the client)")
-
-
 class TurnEndResponse(BaseModel):
     """The provider's own accounting for the turn that ended on this event."""
 
@@ -904,14 +892,6 @@ class SessionResponse(UTCBaseModel):
     execution_lifetime: Optional[ExecutionLifetime] = Field(
         None,
         description="Remote launch execution lifetime: one_shot|live_control; null when there is no launch attempt",
-    )
-    sharer: Optional[SessionSharerResponse] = Field(
-        None,
-        description=(
-            "Attribution for the user whose signed share token or legacy "
-            "?shared_by=<id> link surfaced this session. Null when attribution "
-            "is absent, the user is gone, or the sharer is the current viewer."
-        ),
     )
 
 
@@ -2116,7 +2096,6 @@ def build_live_launch_placeholder_response(
     *,
     now: datetime | None = None,
     transcript_preview: TranscriptPreview | None = None,
-    sharer: SessionSharerResponse | None = None,
 ) -> SessionResponse:
     """Build a read-only first-paint session response before archive convergence."""
 
@@ -2277,7 +2256,6 @@ def build_live_launch_placeholder_response(
         timeline_card=build_session_timeline_card_response(session_state=session_state),
         user_state=user_state,
         execution_lifetime=launch_readiness.execution_lifetime,
-        sharer=sharer,
     )
 
 
