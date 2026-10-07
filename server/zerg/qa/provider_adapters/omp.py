@@ -52,7 +52,11 @@ class OmpHarnessAdapter(UniversalProviderAdapter):
         # A fixture with none of OMP's native row types is a generic parse
         # fixture (the universal smoke feeds every provider the same one), not
         # an OMP archive; there is no native shape to hold it to.
-        native_rows = any(isinstance(row, dict) and row.get("type") in {"session", "message", "agent_end"} for row in rows)
+        native_rows = any(
+            isinstance(row, dict)
+            and (row.get("type") in {"session", "agent_end"} or (row.get("type") == "message" and isinstance(row.get("message"), dict)))
+            for row in rows
+        )
         native["native_archive_checked"] = native_rows
         package.write_json("assertions/omp-native-settlement.json", native)
         result["omp_native_settlement"] = native

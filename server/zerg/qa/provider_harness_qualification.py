@@ -101,6 +101,8 @@ _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
     "send_receive": ("unsupported_gap", "send_receive_not_safe_no_token"),
     "resume_unsupported": ("not_applicable", None),
+    # Only Codex declares fork_thread.
+    "console_thread_fork": ("not_applicable", None),
 }
 
 _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
@@ -110,6 +112,8 @@ _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
     "resume_unsupported": ("not_applicable", None),
+    # Only Codex declares fork_thread.
+    "console_thread_fork": ("not_applicable", None),
 }
 
 _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
@@ -136,6 +140,8 @@ _EXPECTED_CURSOR_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
     "resume_unsupported": ("not_applicable", None),
+    # Only Codex declares fork_thread.
+    "console_thread_fork": ("not_applicable", None),
 }
 
 _FULL_COLUMN_LIMITS = {

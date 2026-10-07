@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import hashlib
 import json
 import os
@@ -766,6 +767,7 @@ def _co_located_store_settings() -> Iterator[None]:
 
 
 def _with_co_located_store_settings(method: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(method)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         with _co_located_store_settings():
             return method(*args, **kwargs)
