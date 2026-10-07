@@ -98,13 +98,6 @@ if (!container.hasChildNodes() || queryUiEffects !== null || envUiEffects !== nu
   container.setAttribute("data-ui-effects", uiEffects);
 }
 
-// Marketing mode toggle - enables vivid styling for screenshots
-// Activated via ?marketing=true
-const isMarketingMode = params.get("marketing") === "true";
-if (isMarketingMode) {
-  document.body.classList.add("marketing-mode");
-}
-
 // Deterministic mode flags for video recording
 // ?clock=frozen - freeze time display (Apple-style 9:41 AM)
 const clockFrozen = params.get("clock") === "frozen";
