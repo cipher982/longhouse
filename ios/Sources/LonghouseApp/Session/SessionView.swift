@@ -522,7 +522,18 @@ struct SessionView: View {
                 createdAt: receipt.createdAt.flatMap(LonghouseDateParser.parse) ?? .distantPast
             )
         }
-        return localInputs + systemReceiptInputs
+        // Sends from any client (and steers the provider never wrote down)
+        // that the transcript does not show, at the time they were sent.
+        let userEvents = viewModel.items.compactMap { item -> SessionEvent? in
+            if case .user(let event) = item { return event }
+            return nil
+        }
+        let placedReceiptInputs = UnrecordedInputs.placedInputs(
+            receipts: viewModel.detail?.inputReceipts ?? [],
+            userEvents: userEvents,
+            excluding: Set(localInputs.map(\.clientRequestId))
+        )
+        return localInputs + systemReceiptInputs + placedReceiptInputs
     }
 
     private var transcript: some View {

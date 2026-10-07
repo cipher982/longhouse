@@ -35,6 +35,11 @@ export interface OutboxEntry {
   /** Warning shown when a legacy row cannot reproduce its original model. */
   warning?: string | null;
   actions?: OutboxEntryAction[];
+  /**
+   * When set, the entry is a settled receipt the transcript does not show, and
+   * it renders at this time among the transcript rows instead of at the tail.
+   */
+  at?: string | null;
 }
 
 const STATE_LABEL: Record<OutboxEntryState, string> = {

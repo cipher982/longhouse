@@ -1936,6 +1936,95 @@ export function buildSessionConsoleFixture(): SessionDetailFixture {
 }
 
 /**
+ * Sends the transcript never recorded (Bug C, 2026-10-07): the Console session
+ * where a steer and two phone sends were delivered but Claude never wrote them
+ * down, so web showed none of them. Each receipt below is what the server
+ * serves; the transcript rows come from the prose-idle session.
+ *  - 15:14 is linked to its transcript row: it must render once, as that row.
+ *  - 15:22 has the same text as its transcript row but no link (the linker
+ *    refused an ambiguous resend): it must render once, as that row.
+ *  - 15:16 phone send and 15:44:30 steer were delivered and never recorded:
+ *    they stand at their send time, between the rows around them.
+ *  - 16:03 was handed over, then its run failed before Claude read it: it
+ *    reads "Not delivered", not "Sent".
+ * Invented content.
+ */
+export const SESSION_UNRECORDED_INPUT_RECEIPTS = [
+  {
+    id: 9101,
+    live_input_id: "linked-input",
+    client_request_id: "web-linked-input",
+    durable_event_id: "fixture-linked-event",
+    text: "Oh maybe I got confused earlier. Is the model trained per language, or once on all of them?",
+    intent: "auto",
+    status: "delivered",
+    delivery_status: "delivered",
+    attachments: [],
+    turn: { turn_id: "linked-turn", receipt_id: "linked-input", run_id: "linked-run", state: "completed", origin: "user", is_fresh: true },
+    created_at: "2026-04-15T15:13:59Z",
+  },
+  {
+    id: 9102,
+    live_input_id: "phone-unrecorded",
+    client_request_id: "ios-phone-unrecorded",
+    text: "Use the same random seed for every language so the runs are comparable.",
+    intent: "auto",
+    status: "delivered",
+    delivery_status: "delivered",
+    attachments: [],
+    turn: { turn_id: "phone-turn", receipt_id: "phone-unrecorded", run_id: "phone-run", state: "completed", origin: "user", is_fresh: true },
+    created_at: "2026-04-15T15:16:00Z",
+  },
+  {
+    id: 9103,
+    live_input_id: "unlinked-echo",
+    client_request_id: "ios-unlinked-echo",
+    text: "I was thinking RL could help here too, rewarding programs that pass hidden tests. Worth it at this size?",
+    intent: "auto",
+    status: "delivered",
+    delivery_status: "delivered",
+    attachments: [],
+    turn: { turn_id: "echo-turn", receipt_id: "unlinked-echo", run_id: "echo-run", state: "completed", origin: "user", is_fresh: true },
+    created_at: "2026-04-15T15:21:59Z",
+  },
+  {
+    id: 9104,
+    live_input_id: "steer-unrecorded",
+    client_request_id: "ios-steer-unrecorded",
+    text: "TLDR: what is each phase generating, and how?",
+    intent: "steer",
+    status: "delivered",
+    delivery_status: "delivered",
+    attachments: [],
+    turn: null,
+    created_at: "2026-04-15T15:44:30Z",
+  },
+  {
+    id: 9105,
+    live_input_id: "lost-input",
+    client_request_id: "ios-lost-input",
+    text: "Start the full comparison now.",
+    intent: "auto",
+    status: "delivered",
+    delivery_status: "delivered",
+    attachments: [],
+    turn: { turn_id: "lost-turn", receipt_id: "lost-input", run_id: "lost-run", state: "failed", origin: "user", is_fresh: true },
+    created_at: "2026-04-15T16:03:10Z",
+  },
+] as const;
+
+export function buildSessionUnrecordedInputsFixture(): SessionDetailFixture {
+  const fixture = buildSessionConsoleFixture();
+  const linked = fixture.projection.items.find(
+    (item) => item.kind === "event" && item.event.role === "user" && item.event.timestamp === "2026-04-15T15:14:00Z",
+  );
+  if (linked?.kind === "event") {
+    linked.event.input_origin = { authored_via: "longhouse", origin: "user", client_request_id: "web-linked-input" };
+  }
+  return fixture;
+}
+
+/**
  * The session rail's list: the timeline's first page, with the open session
  * plus neighbours spanning live work, an active question, auth required, an
  * unread Console result, failure, idle, ended and uncertain states.

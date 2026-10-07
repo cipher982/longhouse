@@ -46,6 +46,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-wake-origin
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-unrecorded-inputs
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-resume
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-ended   # the ended-run notice, resume and branch, no modal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
@@ -70,6 +71,7 @@ import {
   buildSessionParkedCloseFixture,
   buildSessionProseIdleFixture,
   buildSessionConsoleFixture,
+  buildSessionUnrecordedInputsFixture,
   buildRailSessionsFixture,
   buildSessionQuestionFixture,
   buildSessionAttentionFixture,
@@ -79,6 +81,7 @@ import {
   SESSION_DETAIL_STRESS_NOW,
   SESSION_DETAIL_STRESS_SESSION_ID,
   SESSION_WAKE_ORIGIN_INPUT_RECEIPTS,
+  SESSION_UNRECORDED_INPUT_RECEIPTS,
   SESSION_TONES,
   type SessionTone,
 } from "../ui-fixtures/sessionDetailStress";
@@ -146,6 +149,7 @@ const SCENES = [
   "session-input-outbox",
   "session-remote-image-outbox",
   "session-wake-origin",
+  "session-unrecorded-inputs",
   "session-question",
   "session-attention",
   "session-resume",
@@ -208,6 +212,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-input-outbox",
   "session-remote-image-outbox",
   "session-wake-origin",
+  "session-unrecorded-inputs",
   "session-question",
   "session-attention",
   "session-resume",
@@ -387,6 +392,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-input-outbox" ||
     scene === "session-remote-image-outbox" ||
     scene === "session-wake-origin" ||
+    scene === "session-unrecorded-inputs" ||
     scene === "session-question" ||
     scene === "session-attention" ||
     scene === "session-resume" ||
@@ -552,6 +558,8 @@ export async function installSceneMocks(
           ? buildSessionProseIdleFixture()
         : scene === "session-console"
           ? buildSessionConsoleFixture()
+        : scene === "session-unrecorded-inputs"
+          ? buildSessionUnrecordedInputsFixture()
         : scene === "session-question"
           ? buildSessionQuestionFixture()
           : scene === "session-attention"
@@ -697,6 +705,15 @@ export async function installSceneMocks(
 
       if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === "session-console")) {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+        return;
+      }
+
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && scene === "session-unrecorded-inputs") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(SESSION_UNRECORDED_INPUT_RECEIPTS),
+        });
         return;
       }
 
@@ -1463,6 +1480,14 @@ async function captureBundle(
     );
     await wakeRow.waitFor({ state: "visible", timeout: 10_000 });
     await wakeRow.scrollIntoViewIfNeeded();
+  }
+  if (scene === "session-unrecorded-inputs") {
+    // Frame the steer placed mid-transcript, with the rows around it.
+    const steerRow = page.locator('[data-testid="session-outbox-row"]', {
+      hasText: "TLDR: what is each phase generating",
+    });
+    await steerRow.waitFor({ state: "visible", timeout: 10_000 });
+    await steerRow.scrollIntoViewIfNeeded();
   }
   if (scene === "session-parked-close") {
     const closeRow = page

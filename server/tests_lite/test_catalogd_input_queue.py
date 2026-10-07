@@ -447,6 +447,8 @@ def test_recent_input_list_keeps_nonterminal_console_receipt_past_delivered_wind
                 client_request_id="console-completed-old",
                 now=stale_at,
             )
+            # In the transcript, so the recent window alone decides.
+            terminal_receipt.durable_event_id = "event-completed-old"
             db.add(
                 LiveConsoleTurn(
                     id=str(uuid4()),
@@ -471,6 +473,72 @@ def test_recent_input_list_keeps_nonterminal_console_receipt_past_delivered_wind
         assert recent["receipts"][0]["turn"]["state"] == "active"
         assert recent["receipts"][0]["turn"]["is_fresh"] is expected_fresh
         assert recent["queued_count"] == 0
+    finally:
+        engine.dispose()
+
+
+def test_recent_input_list_keeps_delivered_user_sends_missing_from_the_transcript(tmp_path):
+    engine = create_catalog_engine(tmp_path / "unlinked-inputs.db")
+    initialize_catalog_schema(engine)
+    session_id, queued_receipt_id = _seed_queue(engine, client_request_id="still-queued")
+    old = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=6)
+    try:
+        with Session(engine) as db:
+            catalog = db.get(LiveSessionCatalog, str(session_id))
+            assert catalog is not None
+
+            def receipt(client_request_id, *, intent="auto", minutes=0, durable_event_id=None):
+                row = upsert_live_input_receipt(
+                    db,
+                    owner_id=7,
+                    session_id=session_id,
+                    provider="claude",
+                    text=client_request_id,
+                    intent=intent,
+                    status="delivered",
+                    client_request_id=client_request_id,
+                    now=old + timedelta(minutes=minutes),
+                )
+                row.durable_event_id = durable_event_id
+                row.created_at = old + timedelta(minutes=minutes)
+                return str(row.id)
+
+            def turn(receipt_id, *, origin, state="completed"):
+                db.add(
+                    LiveConsoleTurn(
+                        id=str(uuid4()),
+                        session_id=str(session_id),
+                        thread_id=catalog.primary_thread_id,
+                        receipt_id=receipt_id,
+                        run_id=None,
+                        state=state,
+                        origin=origin,
+                        provider="claude",
+                        device_id="cinder",
+                        cwd="/workspace/longhouse",
+                        created_at=old,
+                        updated_at=old,
+                        terminal_at=old,
+                    )
+                )
+
+            lost_send = receipt("ios-lost-send", minutes=1)
+            turn(lost_send, origin="user", state="failed")
+            steer = receipt("ios-steer", intent="steer", minutes=2)
+            transcribed = receipt("web-transcribed", minutes=3, durable_event_id="event-1")
+            turn(transcribed, origin="user")
+            wake = receipt("wake:task:1", minutes=4)
+            turn(wake, origin="wake")
+            db.commit()
+
+        recent = CatalogStore(engine).list_recent_input_receipts(session_id=str(session_id))
+
+        # Oldest first; the queued one was seeded now, after all of these.
+        assert [row["id"] for row in recent["receipts"]] == [lost_send, steer, queued_receipt_id]
+        assert recent["receipts"][0]["turn"]["state"] == "failed"
+        assert recent["receipts"][1]["turn"] is None
+        assert transcribed not in {row["id"] for row in recent["receipts"]}
+        assert wake not in {row["id"] for row in recent["receipts"]}
     finally:
         engine.dispose()
 

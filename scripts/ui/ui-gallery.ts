@@ -40,6 +40,7 @@ const JOBS: Job[] = [
   { page: "session-detail", scene: "session-prose-idle" },
   { page: "session-detail", scene: "session-prose-idle", variant: "terminal" },
   { page: "session-detail", scene: "session-console" },
+  { page: "session-detail", scene: "session-unrecorded-inputs" },
   { page: "session-detail", scene: "session-detail-stress" },
   { page: "session-detail", scene: "session-detail-stress", variant: "terminal" },
   { page: "session-detail", scene: "session-tones" },

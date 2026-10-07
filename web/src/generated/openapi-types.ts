@@ -7841,6 +7841,11 @@ export interface components {
              * @description Durable transcript event this send became, once linked
              */
             event_id?: string | null;
+            /**
+             * Turn State
+             * @description State of the Console turn this send started, if any: queued|starting|active|draining|completed|failed|cancelled
+             */
+            turn_state?: string | null;
         };
         /**
          * SessionInputRequest

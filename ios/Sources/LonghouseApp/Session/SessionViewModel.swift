@@ -3664,19 +3664,36 @@ final class SessionViewModel: ObservableObject {
         )
     }
 
-    /// An optimistic send row is resolved by identity only. The server links
-    /// each delivered receipt to the durable user event it became at ingest,
-    /// so the receipt says the echo exists even when a long turn has already
-    /// pushed that event out of the loaded tail. A loaded event stamped with
-    /// the same origin is the same fact seen from the page. Text and time
-    /// never decide: repeated identical prompts and abandoned drafts made
-    /// that guess wrong in both directions.
+    /// An optimistic send row is resolved by its served receipt. The server
+    /// links each delivered receipt to the durable user event it became at
+    /// ingest, so the receipt says the echo exists even when a long turn has
+    /// already pushed that event out of the loaded tail. A loaded event stamped
+    /// with the same origin is the same fact seen from the page. Where the
+    /// server's linker refused an ambiguous resend, a loaded row with the same
+    /// text written after that receipt was accepted stands for it, one row per
+    /// receipt (`UnrecordedInputs.shownByTranscript`); the local draft's own
+    /// text never decides. A settled receipt with no row hands the row over to
+    /// the served receipt, which every client places at its send time.
     static func resolvedSubmittedInputIds(
         submittedInputs: [SubmittedInput],
         events: [SessionEvent],
         receipts: [SessionInputReceipt]
     ) -> Set<String> {
-        let linkedRequestIds = Set(receipts.compactMap { $0.eventId == nil ? nil : $0.clientRequestId })
+        let linkedRequestIds = UnrecordedInputs.shownByTranscript(
+            receipts: receipts,
+            userEvents: events.filter { $0.role == "user" }
+        )
+        // Delivered and settled, with no transcript row: the served receipt now
+        // stands at its send time for every client, so this phone's own row
+        // hands over to it instead of sitting at the tail as "Sent" forever.
+        let settledRequestIds = Set(receipts.compactMap { receipt -> String? in
+            guard receipt.eventId == nil,
+                  receipt.createdAt.flatMap(LonghouseDateParser.parse) != nil,
+                  UnrecordedInputs.isSettledDelivery(receipt),
+                  !UnrecordedInputs.failedBeforeRecorded(receipt)
+            else { return nil }
+            return receipt.clientRequestId
+        })
         var resolved = Set<String>()
         for input in submittedInputs {
             guard input.phase == .sent
@@ -3690,6 +3707,10 @@ final class SessionViewModel: ObservableObject {
             // row. A queued turn has not started, so it keeps its row.
             if input.turnId != nil && input.phase != .sent && input.phase != .working { continue }
             if linkedRequestIds.contains(input.clientRequestId) {
+                resolved.insert(input.id)
+                continue
+            }
+            if input.phase == .sent, settledRequestIds.contains(input.clientRequestId) {
                 resolved.insert(input.id)
                 continue
             }

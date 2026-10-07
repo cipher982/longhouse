@@ -139,6 +139,7 @@ def input_receipts_from_rows(receipts: object) -> list[dict[str, Any]]:
                 "origin": str(receipt.get("origin") or "user"),
                 "created_at": receipt.get("created_at"),
                 "event_id": receipt.get("durable_event_id"),
+                "turn_state": receipt.get("turn_state"),
             }
         )
     return projected

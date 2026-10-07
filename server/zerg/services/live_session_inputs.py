@@ -33,6 +33,10 @@ from zerg.utils.time import normalize_utc
 logger = logging.getLogger(__name__)
 
 RECENT_DELIVERED_WINDOW_SECS = 5 * 60
+# Delivered user sends that never became a transcript row stay listed past the
+# recent window: a client renders them at their receipt time, since nothing
+# else shows them. Newest first, per session.
+UNLINKED_DELIVERED_HISTORY_LIMIT = 50
 
 NONTERMINAL_CONSOLE_TURN_STATES = frozenset(
     {
@@ -219,6 +223,30 @@ def list_recent_live_input_receipts(db: Session, *, session_id: UUID | str) -> l
         .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())
         .all()
     )
+    # A user send (or steer) the provider never recorded has no transcript row,
+    # so its receipt is the only record of it. Wake turns are Longhouse's own
+    # notices, not messages anyone typed.
+    wake_receipt_ids = db.query(LiveConsoleTurn.receipt_id).filter(
+        LiveConsoleTurn.session_id == _session_key(session_id),
+        LiveConsoleTurn.origin == "wake",
+        LiveConsoleTurn.receipt_id.isnot(None),
+    )
+    unlinked_delivered = (
+        db.query(LiveSessionInputReceipt)
+        .filter(
+            LiveSessionInputReceipt.session_id == _session_key(session_id),
+            LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERED,
+            LiveSessionInputReceipt.durable_event_id.is_(None),
+            (LiveSessionInputReceipt.origin.is_(None)) | (LiveSessionInputReceipt.origin == "user"),
+            ~LiveSessionInputReceipt.id.in_(wake_receipt_ids),
+        )
+        .order_by(LiveSessionInputReceipt.created_at.desc(), LiveSessionInputReceipt.id.desc())
+        .limit(UNLINKED_DELIVERED_HISTORY_LIMIT)
+        .all()
+    )
+    listed = {row.id for row in rows}
+    rows.extend(row for row in unlinked_delivered if row.id not in listed)
+    rows.sort(key=lambda row: (normalize_utc(row.created_at), row.id))
     return [_snapshot(row) for row in rows]
 
 

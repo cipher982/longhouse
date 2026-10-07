@@ -58,6 +58,7 @@ import { OutboxRow, type OutboxEntry } from "./OutboxRow";
 import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./liteBodies";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
 import { errorDetails } from "@/shared/ui/errorDetails";
+import { parseUTC } from "@/shared/lib/dateUtils";
 
 type EventFilter = "all" | "messages" | "tools";
 
@@ -115,8 +116,27 @@ interface TimelinePaneProps {
   renderMedia?: boolean;
   /** Session provider; its glyph marks assistant turns on the transcript trace. */
   provider?: string | null;
-  /** Sends the transcript has not echoed yet; rendered after the last row. */
+  /** Sends the transcript has not echoed yet; rendered after the last row,
+   *  except settled ones carrying `at`, which stand at that time among the rows. */
   outbox?: OutboxEntry[];
+}
+
+function timelineItemTimeMs(item: TimelineItem): number {
+  const timestamp =
+    item.kind === "seam"
+      ? item.seam.timestamp
+      : item.kind === "action"
+        ? item.action.timestamp
+        : item.kind === "tool"
+          ? item.interaction.timestamp
+          : item.kind === "activity_group"
+            ? item.group.timestamp
+            : item.event.timestamp;
+  return parseUTC(timestamp).getTime();
+}
+
+function outboxTimeMs(entry: OutboxEntry): number {
+  return entry.at ? parseUTC(entry.at).getTime() : Number.NaN;
 }
 
 function nonEmptyText(value: unknown): string | null {
@@ -1484,21 +1504,23 @@ export function TimelinePane({
   // the user just acted and expects to see their message land. Filtered or
   // searched views hide the outbox, so they are left where they are.
   // Keyed on sends, not visibility: clearing a filter is not a send.
-  const prevOutboxCountRef = useRef(outbox.length);
+  // Settled receipts placed among the rows are history, not a send.
+  const tailOutboxCount = outbox.filter((entry) => !entry.at).length;
+  const prevOutboxCountRef = useRef(tailOutboxCount);
   // The typed query, not the debounced one: a send right after typing a
   // search is still a send made while reading filtered history.
   const outboxVisible =
-    eventFilter === "all" && !searchQuery.trim() && outbox.length > 0;
+    eventFilter === "all" && !searchQuery.trim() && tailOutboxCount > 0;
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     const prevCount = prevOutboxCountRef.current;
-    prevOutboxCountRef.current = outbox.length;
-    if (!container || !outboxVisible || outbox.length <= prevCount) return;
+    prevOutboxCountRef.current = tailOutboxCount;
+    if (!container || !outboxVisible || tailOutboxCount <= prevCount) return;
     container.scrollTop = container.scrollHeight;
     wasAtBottomRef.current = true;
     setUnreadCount(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a send, not a visibility change, scrolls
-  }, [outbox.length]);
+  }, [tailOutboxCount]);
 
   // The live preview is the provider answering now, so a send the Runtime
   // Host already delivered came before it: render those above the preview
@@ -1512,12 +1534,44 @@ export function TimelinePane({
     livePreviewStart -= 1;
   }
   const hasLivePreview = livePreviewStart < filteredItems.length;
+  const tailOutbox = visibleOutbox.filter((entry) => !entry.at);
   const outboxBeforePreview = hasLivePreview
-    ? visibleOutbox.filter((entry) => entry.state === "sent")
+    ? tailOutbox.filter((entry) => entry.state === "sent")
     : EMPTY_OUTBOX;
   const outboxAfterPreview = hasLivePreview
-    ? visibleOutbox.filter((entry) => entry.state !== "sent")
-    : visibleOutbox;
+    ? tailOutbox.filter((entry) => entry.state !== "sent")
+    : tailOutbox;
+  // A settled input the transcript does not show stands at the time it was
+  // sent. One older than the loaded page waits for that page: placing it at
+  // the top would claim it came before everything loaded.
+  const durableItems = filteredItems.slice(0, livePreviewStart);
+  const firstDurableMs = durableItems.length
+    ? timelineItemTimeMs(durableItems[0])
+    : Number.NaN;
+  const placedOutbox = visibleOutbox
+    .filter((entry) => {
+      const at = outboxTimeMs(entry);
+      if (!Number.isFinite(at)) return false;
+      return !hasPreviousPage || !Number.isFinite(firstDurableMs) || at >= firstDurableMs;
+    })
+    .sort((a, b) => outboxTimeMs(a) - outboxTimeMs(b));
+
+  function renderDurableRows(): ReactNode[] {
+    const rows: ReactNode[] = [];
+    let next = 0;
+    for (const item of durableItems) {
+      const itemMs = timelineItemTimeMs(item);
+      while (next < placedOutbox.length && outboxTimeMs(placedOutbox[next]) < itemMs) {
+        const entry = placedOutbox[next++];
+        rows.push(<OutboxRow key={entry.key} entry={entry} />);
+      }
+      rows.push(renderTimelineItem(item));
+    }
+    for (const entry of placedOutbox.slice(next)) {
+      rows.push(<OutboxRow key={entry.key} entry={entry} />);
+    }
+    return rows;
+  }
 
   const renderTimelineItem = (item: TimelineItem) => {
     if (item.kind === "seam") {
@@ -1771,7 +1825,7 @@ export function TimelinePane({
           // normal (non-scrolling) block, so its height is the true content
           // height and the line spans the whole transcript.
           <div className="timeline-pane__rows">
-          {filteredItems.slice(0, livePreviewStart).map(renderTimelineItem)}
+          {renderDurableRows()}
           {outboxBeforePreview.map((entry) => (
             <OutboxRow key={entry.key} entry={entry} />
           ))}

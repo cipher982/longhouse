@@ -1884,7 +1884,7 @@ def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int =
     turn_table = LiveConsoleTurn.__table__
     rows = (
         connection.execute(
-            select(table, turn_table.c.origin.label("turn_origin"))
+            select(table, turn_table.c.origin.label("turn_origin"), turn_table.c.state.label("turn_state"))
             .select_from(table.outerjoin(turn_table, turn_table.c.receipt_id == table.c.id))
             .where(table.c.session_id == session_id)
             .order_by(table.c.created_at.desc(), table.c.id.desc())
@@ -1893,7 +1893,9 @@ def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int =
         .mappings()
         .all()
     )
-    return [_input_receipt_dto(_RowReceipt(row), origin=row["turn_origin"]) for row in rows]
+    # The turn's state tells a client whether a delivered send that never became
+    # a transcript row was lost (its run failed before the provider read it).
+    return [{**_input_receipt_dto(_RowReceipt(row), origin=row["turn_origin"]), "turn_state": row["turn_state"]} for row in rows]
 
 
 def _session_read_media_refs(connection: Connection, *, session_id: str) -> list[dict[str, Any]]:

@@ -466,7 +466,8 @@ extension APISessionInputReceiptResponse {
             createdAt: createdAt,
             eventId: eventId,
             text: text,
-            origin: origin ?? "user"
+            origin: origin ?? "user",
+            turnState: turnState
         )
     }
 }

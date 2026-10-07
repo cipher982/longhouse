@@ -2070,6 +2070,60 @@ describe("SessionChat", () => {
     expect(screen.queryByText("Request failed (502)")).not.toBeInTheDocument();
   });
 
+  it("shows delivered inputs the transcript never recorded at their send time, once", async () => {
+    // Bug C: sends from another client (or a steer Claude never wrote down)
+    // were invisible on web; a linked or echoed one must not repeat.
+    const onOutboxChange = vi.fn();
+    const turn = (state: string) => ({ turn_id: `turn-${state}`, state, origin: "user" as const });
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      const requestPath = String(path);
+      if (requestPath.endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (requestPath.endsWith("/inputs") && !init) {
+        return Promise.resolve([
+          { client_request_id: "ios-steer", text: "TLDR please", intent: "steer", status: "delivered", turn: null, created_at: "2026-10-07T04:35:20Z" },
+          { client_request_id: "ios-lost", text: "keep pushing", intent: "auto", status: "delivered", turn: turn("failed"), created_at: "2026-10-07T13:17:33Z" },
+          { client_request_id: "web-linked", durable_event_id: "evt-1", text: "linked", intent: "auto", status: "delivered", turn: turn("completed"), created_at: "2026-10-07T03:37:05Z" },
+          { client_request_id: "ios-echoed", text: "echoed", intent: "auto", status: "delivered", turn: turn("completed"), created_at: "2026-10-07T05:18:54Z" },
+          { client_request_id: "wake:1", text: "Background task finished", intent: "auto", status: "delivered", origin: "wake", turn: { ...turn("completed"), origin: "wake" }, created_at: "2026-10-07T05:30:00Z" },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      onOutboxChange,
+      timelineItems: [
+        {
+          kind: "message",
+          event: {
+            id: 7,
+            role: "user",
+            content_text: "echoed",
+            tool_name: null,
+            tool_input_json: null,
+            tool_output_text: null,
+            tool_call_id: null,
+            timestamp: "2026-10-07T05:18:56Z",
+            in_active_context: true,
+          },
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      const calls = onOutboxChange.mock.calls;
+      const entries = (calls[calls.length - 1]?.[0] ?? []) as OutboxEntry[];
+      const user = entries.filter((entry) => entry.origin !== "wake");
+      expect(user).toEqual([
+        expect.objectContaining({ text: "TLDR please", state: "sent", at: "2026-10-07T04:35:20Z" }),
+        expect.objectContaining({ text: "keep pushing", state: "failed", at: "2026-10-07T13:17:33Z" }),
+      ]);
+    });
+  });
+
   it("keeps an accepted terminal Console failure when exact receipt lookup fails", async () => {
     const user = userEvent.setup();
     const onOutboxChange = vi.fn();
@@ -2605,6 +2659,60 @@ describe("SessionChat", () => {
 
 
 
+
+    it("hands a settled send the transcript lacks to its served receipt", async () => {
+      // Bug C: "updates?" stayed pinned as "Sent" under every later row
+      // because only this browser's outbox knew it. Once delivery settles,
+      // the served receipt places it at its send time instead.
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      let row: Record<string, unknown> | null = null;
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        const requestPath = String(path);
+        if (requestPath.endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (requestPath.includes("/inputs?client_request_id=")) {
+          return Promise.resolve(row ? [row] : []);
+        }
+        if (requestPath.endsWith("/inputs") && !init) {
+          return Promise.resolve(row ? [row] : []);
+        }
+        if (requestPath.endsWith("/input") && init?.method === "POST") {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          row = {
+            id: 8,
+            client_request_id: payload.client_request_id,
+            text: "updates?",
+            intent: "auto",
+            status: "delivered",
+            created_at: "2026-10-07T00:46:24Z",
+          };
+          return Promise.resolve({
+            disposition: "accepted",
+            outcome: "sent",
+            input_id: 8,
+            intent: "auto",
+            client_request_id: payload.client_request_id,
+            queued: [row],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      renderSessionChat({ chatMode: "managed_local", timelineItems: [], onOutboxChange });
+
+      await user.type(screen.getByRole("textbox"), "updates?");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toEqual([
+          expect.objectContaining({
+            text: "updates?",
+            state: "sent",
+            at: "2026-10-07T00:46:24Z",
+          }),
+        ]),
+      );
+    });
 
     it("matches a delivered send by the server input id alone", async () => {
       const user = userEvent.setup();

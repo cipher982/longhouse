@@ -227,6 +227,9 @@ struct SessionInputReceipt: Codable, Hashable, Sendable {
     let origin: String?
     /// The durable user event this send became, once ingest linked it.
     let eventId: String?
+    /// The Console turn this send started, if it started one. `failed` on a
+    /// send with no transcript row means the agent never read it.
+    let turnState: String?
 
     init(
         clientRequestId: String?,
@@ -235,7 +238,8 @@ struct SessionInputReceipt: Codable, Hashable, Sendable {
         createdAt: String?,
         eventId: String?,
         text: String? = nil,
-        origin: String? = nil
+        origin: String? = nil,
+        turnState: String? = nil
     ) {
         self.clientRequestId = clientRequestId
         self.intent = intent
@@ -244,6 +248,7 @@ struct SessionInputReceipt: Codable, Hashable, Sendable {
         self.text = text
         self.origin = origin
         self.eventId = eventId
+        self.turnState = turnState
     }
 }
 

@@ -97,6 +97,114 @@ struct SessionInputReconciliationTests {
         #expect(resolved.isEmpty)
     }
 
+    private func served(
+        _ requestId: String,
+        text: String = "ship it",
+        at createdAt: String,
+        intent: String = "auto",
+        eventId: String? = nil,
+        origin: String = "user",
+        turnState: String? = "completed"
+    ) -> SessionInputReceipt {
+        SessionInputReceipt(
+            clientRequestId: requestId,
+            intent: intent,
+            status: "delivered",
+            createdAt: createdAt,
+            eventId: eventId,
+            text: text,
+            origin: origin,
+            turnState: turnState
+        )
+    }
+
+    private func userEvent(_ id: String, text: String, at timestamp: String) -> SessionEvent {
+        SessionEvent(
+            id: id,
+            role: "user",
+            contentText: text,
+            toolName: nil,
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: nil,
+            toolCallState: nil,
+            timestamp: timestamp,
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil,
+            cursor: id
+        )
+    }
+
+    /// Bug C: a send that settled without a transcript row hands this phone's
+    /// "Sent" row over to the served receipt; a lost or running one keeps it.
+    @Test
+    func settledSendWithoutTranscriptRowHandsOverToItsReceipt() {
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("done"), input("lost", phase: .failed), input("running", phase: .working, turnId: "t")],
+            events: [],
+            receipts: [
+                served("done", at: "2026-10-07T00:46:24Z"),
+                served("lost", at: "2026-10-07T13:17:33Z", turnState: "failed"),
+                served("running", at: "2026-10-07T15:01:28Z", turnState: "active"),
+            ]
+        )
+        #expect(resolved == ["done"])
+    }
+
+    /// Bug C: the lost 13:17 send and its 15:01 resend share text; the one
+    /// transcript row stands for the resend only.
+    @Test
+    func transcriptRowStandsForTheNewestSameTextReceiptBeforeIt() {
+        let shown = UnrecordedInputs.shownByTranscript(
+            receipts: [
+                served("ios-lost", text: "keep pushing", at: "2026-10-07T13:17:33Z"),
+                served("web-resend", text: "keep pushing", at: "2026-10-07T15:01:28Z"),
+            ],
+            userEvents: [userEvent("e1", text: "keep  pushing", at: "2026-10-07T15:01:30Z")]
+        )
+        #expect(shown == ["web-resend"])
+    }
+
+    @Test
+    func servedReceiptsTheTranscriptLacksArePlacedOnce() {
+        let placed = UnrecordedInputs.placedInputs(
+            receipts: [
+                served("ios-steer", text: "TLDR please", at: "2026-10-07T04:35:20Z", intent: "steer", turnState: nil),
+                served("ios-lost", text: "keep pushing", at: "2026-10-07T13:17:33Z", turnState: "failed"),
+                served("web-linked", text: "linked", at: "2026-10-07T03:37:05Z", eventId: "evt-1"),
+                served("ios-echoed", text: "echoed", at: "2026-10-07T05:18:54Z"),
+                served("wake:1", text: "Background task finished", at: "2026-10-07T05:30:00Z", origin: "wake"),
+                served("ios-mine", text: "mine", at: "2026-10-07T06:00:00Z"),
+                served("ios-running", text: "running", at: "2026-10-07T07:00:00Z", turnState: "active"),
+            ],
+            userEvents: [userEvent("e1", text: "echoed", at: "2026-10-07T05:18:56Z")],
+            excluding: ["ios-mine"]
+        )
+        #expect(placed.map(\.clientRequestId) == ["ios-steer", "ios-lost"])
+        #expect(placed.map(\.phase) == [.sent, .failed])
+        #expect(placed.allSatisfy { $0.placedAtSendTime })
+    }
+
+    @Test
+    func placedReceiptStandsAtItsSendTimeAmongTranscriptRows() {
+        let items = TimelineBuilder.build(events: [
+            userEvent("e1", text: "first", at: "2026-10-07T04:00:00Z"),
+            userEvent("e2", text: "second", at: "2026-10-07T05:00:00Z"),
+        ])
+        let placed = UnrecordedInputs.placedInputs(
+            receipts: [
+                served("ios-steer", text: "TLDR please", at: "2026-10-07T04:35:20Z", intent: "steer", turnState: nil),
+                served("ios-old", text: "before the page", at: "2026-10-07T03:00:00Z"),
+            ],
+            userEvents: [],
+            excluding: []
+        )
+        let rows = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: placed)
+        #expect(rows.map(\.body) == ["first", "TLDR please", "second"])
+        #expect(rows[1].status == "sent placed")
+    }
+
     @Test
     func decisionRowsStayUntilTheirOwnPathClearsThem() {
         let resolved = SessionViewModel.resolvedSubmittedInputIds(

@@ -1414,4 +1414,50 @@ describe("TimelinePane outbox", () => {
     expect(order).toEqual(["event-1", "sent", "event--3", "queued"]);
     expect(screen.getAllByTestId("session-outbox-row")[0]).toHaveTextContent("Sent");
   });
+
+  it("places a settled receipt the transcript lacks at the time it was sent", () => {
+    const at = (id: number, timestamp: string): TimelineItem => {
+      const item = makeTimelineMessage(id, `row ${id}`);
+      if (item.kind !== "message") throw new Error("fixture must be a message");
+      return { ...item, event: { ...item.event, timestamp } };
+    };
+    const props = {
+      items: [at(10, "2026-03-19T16:00:00Z"), at(11, "2026-03-19T16:10:00Z")],
+      totalEntries: 2,
+      loadedEntries: 2,
+      abandonedEvents: 0,
+      showAbandonedBranches: false,
+      onShowAbandonedBranchesChange: vi.fn(),
+      isFetchingPreviousPage: false,
+      onFetchPreviousPage: vi.fn(),
+      selectedKey: null,
+      onSelectKey: vi.fn(),
+      outbox: [
+        { key: "tail", text: "still sending", state: "sending" as const },
+        { key: "steer", text: "a steer", state: "sent" as const, at: "2026-03-19T16:05:00Z" },
+        // Older than the loaded page: it belongs to a page not loaded yet.
+        { key: "old", text: "an old send", state: "sent" as const, at: "2026-03-19T15:00:00Z" },
+      ],
+    };
+    const order = () =>
+      [...document.querySelectorAll('[data-testid="session-outbox-row"], #event-10, #event-11')].map(
+        (node) => node.id || node.querySelector(".tl-msg__body")?.textContent,
+      );
+
+    // The older-page sentinel needs an observer; jsdom has none.
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const { rerender } = render(<TimelinePane {...props} hasPreviousPage />);
+    expect(order()).toEqual(["event-10", "a steer", "event-11", "still sending"]);
+    expect(screen.queryByText("an old send")).not.toBeInTheDocument();
+
+    rerender(<TimelinePane {...props} hasPreviousPage={false} />);
+    expect(screen.getAllByTestId("session-outbox-row")[0]).toHaveTextContent("an old send");
+    vi.unstubAllGlobals();
+  });
 });

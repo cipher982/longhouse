@@ -932,6 +932,10 @@ class SessionInputReceiptResponse(BaseModel):
     origin: str = Field("user", description="Turn origin: user|wake")
     created_at: Optional[datetime] = Field(None, description="When the send was accepted")
     event_id: Optional[str] = Field(None, description="Durable transcript event this send became, once linked")
+    turn_state: Optional[str] = Field(
+        None,
+        description="State of the Console turn this send started, if any: queued|starting|active|draining|completed|failed|cancelled",
+    )
 
 
 class SessionResponse(UTCBaseModel):

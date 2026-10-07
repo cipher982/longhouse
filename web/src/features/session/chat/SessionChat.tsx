@@ -61,6 +61,11 @@ import {
   isActivityStalled,
 } from "@/shared/session/activityEvidence";
 import { workingStatusLabel } from "@/shared/session/sessionStatus";
+import {
+  failedBeforeRecorded,
+  isSettledDelivery,
+  receiptsShownByTranscript,
+} from "./unrecordedInputs";
 import "./session-chat.css";
 
 interface PendingManagedLocalInput {
@@ -1015,15 +1020,31 @@ export function SessionChat({
   }, [exactInputRowsKey, pendingManagedLocalInputs]);
 
   useEffect(() => {
+    const listed = queuedInputsQuery.data ?? [];
+    const shownByTranscript = new Set(
+      Array.from(receiptsShownByTranscript(listed, timelineItems)).map(
+        (row) => row.client_request_id,
+      ),
+    );
     const linkedIds = pendingManagedLocalInputs
       .filter((pending) => ACCEPTED_INPUT_PHASES.has(pending.phase))
       .filter((pending) => {
+        const listedReceipt = listed.find(
+          (row) => row.client_request_id === pending.clientRequestId,
+        );
         const receipt =
-          exactInputRows.get(pending.clientRequestId) ??
-          queuedInputsQuery.data?.find(
-            (row) => row.client_request_id === pending.clientRequestId,
-          );
-        return inTranscript(receipt);
+          exactInputRows.get(pending.clientRequestId) ?? listedReceipt;
+        // The transcript shows it, or its delivery settled and the served
+        // receipt list now carries it: either way the server's record owns
+        // the row from here, for this browser and every other client alike.
+        return (
+          inTranscript(receipt) ||
+          shownByTranscript.has(pending.clientRequestId) ||
+          (pending.phase === "delivered" &&
+            listedReceipt?.created_at != null &&
+            isSettledDelivery(listedReceipt) &&
+            !failedBeforeRecorded(listedReceipt))
+        );
       })
       .map((pending) => pending.clientRequestId);
     if (linkedIds.length === 0) return;
@@ -1038,6 +1059,7 @@ export function SessionChat({
     pendingManagedLocalInputs,
     queuedInputsQuery.data,
     session.id,
+    timelineItems,
   ]);
   useEffect(() => {
     if (pendingManagedLocalInputs.length === 0) return;
@@ -2196,12 +2218,15 @@ export function SessionChat({
     const failed: OutboxEntry[] = [];
     const inFlight: OutboxEntry[] = [];
     const queued: OutboxEntry[] = [];
+    const placed: OutboxEntry[] = [];
 
     const dismissedReceipts = readDismissedInputIds(session.id);
+    const shownByTranscript = receiptsShownByTranscript(rows, timelineItems);
     for (const row of rows) {
       const clientRequestId = row.client_request_id;
       if (
         inTranscript(row) ||
+        shownByTranscript.has(row) ||
         (clientRequestId &&
           (pendingIds.has(clientRequestId) || dismissedReceipts.has(clientRequestId)))
       ) {
@@ -2275,8 +2300,30 @@ export function SessionChat({
           state: "queued",
           actions: [cancelAction(row)],
         });
-      } else if (stoppedAfterDelivery(row)) {
-        // Delivered, then stopped: the transcript already shows it.
+      } else if (isSettledDelivery(row) && row.created_at) {
+        // Delivered, and the transcript does not show it: a steer the
+        // provider never wrote down, a send from another client, or one its
+        // run lost. The receipt is the only record, so it stands at the time
+        // it was sent, among the transcript rows, for every client.
+        const lost = failedBeforeRecorded(row);
+        placed.push({
+          key,
+          text: row.text,
+          attachments,
+          at: row.created_at,
+          state: lost ? "failed" : "sent",
+          detail: lost ? "the run ended before the agent read it" : null,
+          actions:
+            lost && clientRequestId
+              ? [
+                  {
+                    label: "Dismiss",
+                    onClick: () =>
+                      outboxActionsRef.current.discard(clientRequestId),
+                  },
+                ]
+              : undefined,
+        });
       } else if (
         row.status === "failed" ||
         (row.status === "cancelled" && row.last_error)
@@ -2391,13 +2438,15 @@ export function SessionChat({
         ],
       });
     }
-    return [...failed, ...inFlight, ...queued];
+    return [...placed, ...failed, ...inFlight, ...queued];
   }, [
     exactInputRows,
     isManagedLocal,
     isSubmitting,
     pendingManagedLocalInputs,
     queuedInputsQuery.data,
+    session.id,
+    timelineItems,
     turnEndedDraft,
   ]);
   useEffect(() => {

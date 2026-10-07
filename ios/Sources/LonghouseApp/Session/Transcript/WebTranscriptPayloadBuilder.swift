@@ -103,9 +103,24 @@ extension WebTranscriptView {
             return timelineItems.map(payloadItem)
         }
 
+        // A served receipt the transcript lacks stands at its send time. One
+        // older than the loaded rows waits for that page to load.
+        let firstLoadedDate = timelineItems.first.flatMap { LonghouseDateParser.parse($0.sortTimestamp) }
+        var placedInputs = visibleSubmittedInputs
+            .filter { input in
+                input.placedAtSendTime && firstLoadedDate.map { input.createdAt >= $0 } != false
+            }
+            .sorted { $0.createdAt < $1.createdAt }
         var rows: [WebTranscriptPayloadItem] = []
-        var remainingSubmittedInputs = visibleSubmittedInputs
+        var remainingSubmittedInputs = visibleSubmittedInputs.filter { !$0.placedAtSendTime }
         for item in timelineItems {
+            let isLivePreview = liveProvisionalAssistantDate(item) != nil
+            let itemDate = LonghouseDateParser.parse(item.sortTimestamp)
+            while let next = placedInputs.first,
+                  isLivePreview || itemDate.map({ next.createdAt < $0 }) == true {
+                rows.append(payloadSubmittedInput(next))
+                placedInputs.removeFirst()
+            }
             if let previewDate = liveProvisionalAssistantDate(item) {
                 let insertion = submittedInputsToPlaceBeforeLivePreview(
                     remainingSubmittedInputs,
@@ -120,6 +135,7 @@ extension WebTranscriptView {
             rows.append(payloadItem(item))
         }
 
+        rows.append(contentsOf: placedInputs.map(payloadSubmittedInput))
         rows.append(contentsOf: remainingSubmittedInputs.map(payloadSubmittedInput))
         return rows
     }
@@ -358,7 +374,9 @@ extension WebTranscriptView {
             body: input.text,
             fullBody: nil,
             collapsed: false,
-            status: input.phase.rawValue,
+            // A placed receipt is not this phone's to edit or discard: the
+            // extra class keeps its styling and drops the row's actions.
+            status: input.placedAtSendTime ? "\(input.phase.rawValue) placed" : input.phase.rawValue,
             duration: nil,
             input: nil,
             output: nil,

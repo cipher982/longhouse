@@ -138,6 +138,7 @@ struct APISessionInputReceiptResponse: Codable, Hashable, Sendable {
     let origin: String?
     let createdAt: String?
     let eventId: String?
+    let turnState: String?
 }
 
 struct APISessionRecapResponse: Codable, Hashable, Sendable {
