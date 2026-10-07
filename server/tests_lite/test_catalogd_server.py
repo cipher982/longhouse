@@ -62,6 +62,7 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
             "schema_version": CATALOG_SCHEMA_VERSION,
             "commit_seq": "0",
             "pid": os.getpid(),
+            "runtime_boot_id": None,
             "ready": True,
             "writer_admission": {
                 "depth": 0,
