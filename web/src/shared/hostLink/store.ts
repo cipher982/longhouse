@@ -33,12 +33,18 @@ export interface HostLinkSnapshot {
 
 export type HostHealthFetcher = () => Promise<HostHealthResponse>;
 
+// Only a real git SHA names the page's build. A page built without one
+// ("dev", or the timestamp an image build without .git once stamped) has an
+// unknown identity, which is not "older than the server": comparing it
+// showed every hosted visitor "Longhouse updated · Reload" on first load.
+const GIT_SHA = /^[0-9a-f]{40}$/;
+
 function pageBuildCommit(): string | null {
   if (typeof document === "undefined") return null;
   const commit = document.querySelector<HTMLMetaElement>(
     'meta[name="longhouse-build-commit"]',
   )?.content.trim();
-  return commit || null;
+  return commit && GIT_SHA.test(commit) ? commit : null;
 }
 
 function timestampMs(value: string | null | undefined): number | null {

@@ -294,3 +294,36 @@ describe("host-link schema copy", () => {
     }
   });
 });
+
+describe("page build identity", () => {
+  const serving = { runtime: { epoch: "runtime-1", admission: "open" as const } };
+  const served = "d15791ec4434085c71f8f90945f6fb784e00fb0b";
+
+  async function snapshotWithMeta(content: string) {
+    const meta = document.createElement("meta");
+    meta.name = "longhouse-build-commit";
+    meta.content = content;
+    document.head.appendChild(meta);
+    try {
+      const store = new HostLinkStore({});
+      const stop = store.startMonitoring(async () => ({ ...serving, build: { commit: served } }));
+      await store.refreshHealth();
+      stop();
+      return store.getSnapshot();
+    } finally {
+      meta.remove();
+    }
+  }
+
+  it("never offers a reload when the page's own commit is unknown", async () => {
+    // What an image build without .git stamped: every hosted visitor saw
+    // "Longhouse updated · Reload" on first load (2026-10-07).
+    expect((await snapshotWithMeta("muy1tjzh")).reloadAvailable).toBe(false);
+    expect((await snapshotWithMeta("dev")).reloadAvailable).toBe(false);
+  });
+
+  it("offers a reload when the page's real commit differs from the server's", async () => {
+    expect((await snapshotWithMeta("767a1ba6d74949956bee8f83463b227d8f24dcf8")).reloadAvailable).toBe(true);
+    expect((await snapshotWithMeta(served)).reloadAvailable).toBe(false);
+  });
+});

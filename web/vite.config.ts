@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
@@ -24,19 +24,39 @@ function loadDevProxy(): { target: string; bearer: string } | null {
   }
 }
 
-/** Replace build identity placeholders in index.html with the current git SHA. */
+/**
+ * The commit this web build is from: the build identity the runtime image
+ * stages (LONGHOUSE_BUILD_IDENTITY, the same file the server reports from),
+ * else git, else null. An image build has no .git, so without the identity
+ * file it stamped a timestamp, which never matched the server's commit.
+ */
+function resolveBuildCommit(): string | null {
+  const identityPath = process.env.LONGHOUSE_BUILD_IDENTITY;
+  if (identityPath && existsSync(identityPath)) {
+    const commit = JSON.parse(readFileSync(identityPath, "utf8")).commit;
+    if (typeof commit === "string" && commit) return commit;
+  }
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Replace build identity placeholders in index.html with the build's commit. */
 function buildHashPlugin(): Plugin {
   let hash = "dev";
   let commit = "dev";
   return {
     name: "build-hash",
     configResolved() {
-      try {
-        commit = execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+      const resolved = resolveBuildCommit();
+      if (resolved) {
+        commit = resolved;
         hash = commit.slice(0, 7);
-      } catch {
+      } else {
+        // Still busts config.js caching; the page's identity stays unknown.
         hash = Date.now().toString(36);
-        commit = hash;
       }
     },
     transformIndexHtml(html) {

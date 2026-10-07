@@ -70,8 +70,12 @@ COPY video/scripts/ ./video/scripts/
 WORKDIR /app/web
 
 # Build for production (same-origin mode - no cross-origin API URLs needed)
-# The backend will serve both static files and API from the same origin
-RUN bun run build
+# The backend will serve both static files and API from the same origin.
+# The page names the commit the server reports, from the build identity
+# generate_build_identity.py stages (gitignored, so mounted, not copied: a
+# build without it still succeeds and the page's identity stays unknown).
+RUN --mount=type=bind,source=server/zerg,target=/tmp/zerg-identity \
+    LONGHOUSE_BUILD_IDENTITY=/tmp/zerg-identity/build_identity.json bun run build
 
 # =============================================================================
 # Stage 1.5: Build pysqlite3 wheel with pinned SQLite amalgamation
