@@ -52,6 +52,7 @@ from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
+from zerg.managed_phase_contract import managed_phase_definitions
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
 from zerg.services.apns_sender import clear_live_activity_push_stamp
@@ -89,7 +90,9 @@ _catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
-VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
+# Presence posts carry raw phases from the managed phase contract; "finished"
+# is local-health-only and never posted as presence.
+VALID_STATES = frozenset(item.normalized_raw_phase for item in managed_phase_definitions() if not item.local_health_only)
 _HOT_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
 
 # States that trigger auto-resume of snoozed sessions (genuine work restart)

@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Generate the engine's wire-phase vocabulary from the managed phase contract.
+"""Generate the engine's wire-phase vocabulary (and the web's presence states) from the managed phase contract.
 
 Python reads `managed_phase_contract.json` at runtime, so it cannot drift. The
 engine had no link to the contract at all -- only a comment pointing at it --
@@ -25,6 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = ROOT / "server" / "zerg" / "config" / "managed_phase_contract.json"
 OUTPUT = ROOT / "engine" / "src" / "managed_phase_contract.rs"
+TS_OUTPUT = ROOT / "web" / "src" / "generated" / "presence-states.ts"
 
 
 def _load_phases() -> list[dict]:
@@ -92,6 +93,29 @@ def render() -> str:
     return _rustfmt("\n".join(lines))
 
 
+def render_ts() -> str:
+    """The wire phases as the web's presence vocabulary."""
+    wire = [item["raw_phase"] for item in _load_phases() if not item.get("local_health_only", False)]
+    members = ", ".join(f'"{name}"' for name in wire)
+    return "\n".join(
+        [
+            "// GENERATED FILE - DO NOT EDIT.",
+            "// Source: server/zerg/config/managed_phase_contract.json",
+            "// Regenerate: make generate-phase-contract",
+            "",
+            "// Phases an adapter may put on the wire; presence posts carry these.",
+            f"export const WIRE_PRESENCE_STATES = [{members}] as const;",
+            "",
+            "export type WirePresenceState = (typeof WIRE_PRESENCE_STATES)[number];",
+            "",
+            "export function isWirePresenceState(value: string | null | undefined): value is WirePresenceState {",
+            "  return (WIRE_PRESENCE_STATES as readonly string[]).includes(value ?? \"\");",
+            "}",
+            "",
+        ]
+    )
+
+
 def _rustfmt(source: str) -> str:
     """Return the rustfmt-normalized form.
 
@@ -116,18 +140,20 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="Fail if the checked-in file is stale.")
     args = parser.parse_args()
 
-    rendered = render()
-    current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
+    outputs = {OUTPUT: render(), TS_OUTPUT: render_ts()}
 
     if args.check:
-        if current != rendered:
-            print(f"{OUTPUT.relative_to(ROOT)} is stale; run `make generate-phase-contract`", file=sys.stderr)
+        stale = [path for path, text in outputs.items() if not path.exists() or path.read_text(encoding="utf-8") != text]
+        for path in stale:
+            print(f"{path.relative_to(ROOT)} is stale; run `make generate-phase-contract`", file=sys.stderr)
+        if stale:
             return 1
-        print(f"{OUTPUT.relative_to(ROOT)} matches the contract")
+        print("phase contract outputs match the contract")
         return 0
 
-    OUTPUT.write_text(rendered, encoding="utf-8")
-    print(f"wrote {OUTPUT.relative_to(ROOT)}")
+    for path, text in outputs.items():
+        path.write_text(text, encoding="utf-8")
+        print(f"wrote {path.relative_to(ROOT)}")
     return 0
 
 

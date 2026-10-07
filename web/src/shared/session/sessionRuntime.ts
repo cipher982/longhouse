@@ -4,14 +4,9 @@ import type {
   SessionRuntimeDisplay,
   SessionStateFacts,
 } from "@/shared/api/agents";
+import { isWirePresenceState, type WirePresenceState } from "@/generated/presence-states";
 import { workClaimExpired, sessionIsWorking } from "./sessionStatus";
-export type KnownPresenceState =
-  | "thinking"
-  | "running"
-  | "idle"
-  | "needs_user"
-  | "blocked"
-  | "stalled";
+export type KnownPresenceState = WirePresenceState;
 export type RuntimeTone = "inactive" | "quiet" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
 
 type TimelineRuntimeOverlay = {
@@ -133,17 +128,7 @@ export function resolveSessionOwnershipLabel(
 }
 
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
-  if (
-    state === "thinking" ||
-    state === "running" ||
-    state === "idle" ||
-    state === "needs_user" ||
-    state === "blocked" ||
-    state === "stalled"
-  ) {
-    return state;
-  }
-  return null;
+  return isWirePresenceState(state) ? state : null;
 }
 
 export function resolveSessionRuntimeState(

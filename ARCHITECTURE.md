@@ -285,11 +285,11 @@ Never edit these by hand. `make validate` fails when one is stale.
 | --- | --- | --- |
 | `web/src/generated/openapi-types.ts`, `ios/Sources/Shared/Generated/SessionAPI.generated.swift` | server routes and models | `make generate-sdk` (`server/scripts/export_openapi.py`, `scripts/generate/ios_api_models.py`) |
 | `web/src/generated/ws-messages.ts`, `server/zerg/generated/ws_messages.py` | `schemas/ws-protocol-asyncapi.yml` | `make regen-ws` (`scripts/generate/generate-ws-types-modern.py`) |
-| `web/src/generated/provider-brands.ts`, `server/zerg/generated/provider_brands.py`, `ios/Sources/Shared/Generated/ProviderBrands.generated.swift`, `desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift` | `config/provider-brands.json` | `make generate-provider-brands` (`scripts/generate/provider_brands.py`) |
+| `web/src/generated/provider-brands.ts`, `server/zerg/generated/provider_brands.py`, `ios/Sources/Shared/Generated/ProviderBrands.generated.swift`, `desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift` | `config/provider-brands.json`, `schemas/managed_providers.yml` (managed provider ids) | `make generate-provider-brands` (`scripts/generate/provider_brands.py`) |
 | `web/src/generated/provider-capabilities.ts` | `schemas/managed_providers.yml` | `make generate-provider-capabilities` (`scripts/generate/provider_capabilities_ts.py`) |
-| `web/src/shared/session/model/toolTiers.generated.ts`, `ios/Sources/Shared/Generated/ToolTiers.generated.swift` | `config/tool-tiers.json` | `scripts/generate/tool_tiers.py` |
+| `web/src/shared/session/model/toolTiers.generated.ts`, `ios/Sources/Shared/Generated/ToolTiers.generated.swift` | `config/tool-tiers.json` | `scripts/generate/tool_tiers.py` (`make validate-tool-tiers` checks) |
 | `server/zerg/config/managed_provider_contracts.json` | `schemas/managed_providers.yml` | `scripts/generate/generate_managed_provider_contracts.py --write` |
-| `engine/src/managed_phase_contract.rs` | `server/zerg/config/managed_phase_contract.json` | `make generate-phase-contract` |
+| `engine/src/managed_phase_contract.rs`, `web/src/generated/presence-states.ts` | `server/zerg/config/managed_phase_contract.json` | `make generate-phase-contract` |
 | `engine/src/managed_identity_contract.rs` | `schemas/managed_providers.yml` | `make generate-managed-identity` |
 | `docs/generated/provider_census.json` | tracked source files | `make generate-provider-census` |
 | `docs/generated/provider_factory_plan.json`, `docs/generated/provider_factory_status_tables.md` | provider schema and proofs | `make generate-provider-factory-plan` |
