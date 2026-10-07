@@ -28,7 +28,9 @@ primary="$(cd "$common/.." && pwd)"
 log="$common/review-receipts/attest.log"
 cache="$common/review-receipts/attester"
 mkdir -p "$cache"
-run="git -C '$primary' fetch --quiet origin; for f in review_gate.py review-policy.toml; do git -C '$primary' show origin/main:scripts/ops/\$f > '$cache'/\$f.tmp && mv '$cache'/\$f.tmp '$cache'/\$f; done; exec python3 '$cache/review_gate.py' --repo '$primary' attest"
+# Both files refresh together or not at all (the previous pair keeps running), then the gate runs.
+run="git -C '$primary' fetch --quiet origin; git -C '$primary' show origin/main:scripts/ops/review_gate.py > '$cache/review_gate.py.tmp' && git -C '$primary' show origin/main:scripts/ops/review-policy.toml > '$cache/review-policy.toml.tmp' && mv '$cache/review_gate.py.tmp' '$cache/review_gate.py' && mv '$cache/review-policy.toml.tmp' '$cache/review-policy.toml'; exec python3 '$cache/review_gate.py' --repo '$primary' attest"
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 plist="$HOME/Library/LaunchAgents/$label.plist"
 mkdir -p "$(dirname "$plist")"
 tmp="$(mktemp "$plist.XXXXXX")"
@@ -43,14 +45,14 @@ cat >"$tmp" <<PLIST
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>$run</string>
+    <string>$(xml_escape "$run")</string>
   </array>
   <key>StartInterval</key><integer>120</integer>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Background</string>
   <key>LowPriorityIO</key><true/>
-  <key>StandardOutPath</key><string>$log</string>
-  <key>StandardErrorPath</key><string>$log</string>
+  <key>StandardOutPath</key><string>$(xml_escape "$log")</string>
+  <key>StandardErrorPath</key><string>$(xml_escape "$log")</string>
 </dict>
 </plist>
 PLIST
