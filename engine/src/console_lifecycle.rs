@@ -6,10 +6,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub type InputFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+pub const USER_STOP_INPUT_GRACE: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvocationCloseReason {
+    UserStop,
+    MachineAgentRestart,
+}
+
+impl InvocationCloseReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserStop => "user_stop",
+            Self::MachineAgentRestart => "machine_agent_restart",
+        }
+    }
+}
 
 pub trait ConsoleInput: Send + Sync {
     fn send_input<'a>(&'a self, text: &'a str, images: &'a [PathBuf]) -> InputFuture<'a>;
@@ -56,7 +74,7 @@ pub struct TurnBinding {
     pub origin: TurnOrigin,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PendingItem {
     pub id: String,
     pub kind: String,
@@ -146,6 +164,7 @@ struct State {
     buffered_events: Vec<BufferedEvent>,
     deferred_idle: Option<IdleSignal>,
     input_pending: bool,
+    closing: bool,
 }
 
 pub struct ConsoleInvocation {
@@ -187,6 +206,7 @@ impl ConsoleInvocation {
                 buffered_events: Vec::new(),
                 deferred_idle: None,
                 input_pending: false,
+                closing: false,
             }),
             stopped: AtomicBool::new(false),
             stopped_notify: tokio::sync::Notify::new(),
@@ -208,6 +228,21 @@ impl ConsoleInvocation {
             .len()
     }
 
+    pub fn pending_items(&self) -> Vec<PendingItem> {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .values()
+            .cloned()
+            .collect()
+    }
+    pub fn persist_pending_claim(&self) -> Result<()> {
+        let binding = self.latest_turn();
+        crate::turn_claims::default_registry()?
+            .record_invocation_pending_items(&binding.run_id, self.pending_items())?;
+        Ok(())
+    }
     pub fn latest_turn(&self) -> TurnBinding {
         self.state
             .lock()
@@ -237,7 +272,7 @@ impl ConsoleInvocation {
     ) -> Result<()> {
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            if state.phase != InvocationState::Parked || state.pending.is_empty() {
+            if state.phase != InvocationState::Parked || state.pending.is_empty() || state.closing {
                 bail!("Console invocation is not parked with pending work");
             }
             if binding.origin != TurnOrigin::User {
@@ -266,6 +301,7 @@ impl ConsoleInvocation {
                 || state.current_turn.is_none()
                 || state.pending_wake_id.is_some()
                 || state.queued_turn.is_some()
+                || state.closing
             {
                 bail!("Console invocation cannot queue another user turn");
             }
@@ -326,7 +362,7 @@ impl ConsoleInvocation {
                 return None;
             }
         }
-        if state.phase != InvocationState::Parked || state.pending.is_empty() {
+        if state.phase != InvocationState::Parked || state.pending.is_empty() || state.closing {
             return None;
         }
         state.phase = InvocationState::Responding;
@@ -358,6 +394,7 @@ impl ConsoleInvocation {
             || state.phase != InvocationState::Responding
             || state.current_turn.is_some()
             || state.pending_wake_id.as_deref() != Some(wake_id)
+            || state.closing
         {
             return Err(WakeTargetGone.into());
         }
@@ -395,6 +432,7 @@ impl ConsoleInvocation {
             || binding.origin != TurnOrigin::Wake
             || state.current_turn.is_some()
             || state.pending_wake_id.is_some()
+            || state.closing
             || !matches!(
                 state.phase,
                 InvocationState::Parked | InvocationState::Closed
@@ -478,6 +516,9 @@ impl ConsoleInvocation {
         recent_items: Vec<PendingItem>,
     ) -> (bool, bool) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closing {
+            return (false, false);
+        }
         let mut pending = BTreeMap::new();
         for item in items {
             pending.insert(item.id.clone(), item);
@@ -493,6 +534,9 @@ impl ConsoleInvocation {
     }
     pub fn remove_pending_item(&self, id: &str) -> (bool, bool) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closing {
+            return (false, false);
+        }
         let changed = state.pending.remove(id).is_some();
         if changed {
             state.recent_items.retain(|item| item.id != id);
@@ -509,6 +553,9 @@ impl ConsoleInvocation {
         updates: Vec<(PendingItem, bool)>,
     ) -> (bool, bool) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closing {
+            return (false, false);
+        }
         let mut changed = state.pending.remove(placeholder_id).is_some();
         let recent_len = state.recent_items.len();
         state.recent_items.retain(|item| item.id != placeholder_id);
@@ -524,6 +571,9 @@ impl ConsoleInvocation {
     }
     pub fn update_pending_item(&self, item: PendingItem, is_pending: bool) -> (bool, bool) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closing {
+            return (false, false);
+        }
         let changed = update_pending_item(&mut state, item, is_pending);
         let close = state.phase == InvocationState::Parked && state.pending.is_empty();
         if close {
@@ -565,6 +615,9 @@ impl ConsoleInvocation {
 
     pub fn idle(self: &Arc<Self>, signal: IdleSignal) -> Option<IdleOutcome> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closing {
+            return None;
+        }
         if state.input_pending {
             state.deferred_idle = Some(signal);
             return None;
@@ -600,6 +653,45 @@ impl ConsoleInvocation {
             retain_unbound_wake(response);
         }
         Some(outcome)
+    }
+
+    fn begin_user_close(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.phase != InvocationState::Parked
+            || state.pending.is_empty()
+            || state.current_turn.is_some()
+            || state.queued_turn.is_some()
+            || state.closing
+        {
+            return false;
+        }
+        state.closing = true;
+        true
+    }
+
+    fn cancel_user_close(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .closing = false;
+    }
+
+    fn finish_user_close(&self) -> InvocationCloseOutcome {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.phase = InvocationState::Closed;
+        state.closing = false;
+        state.pending_wake_id = None;
+        state.buffered_events.clear();
+        state.deferred_idle = None;
+        state.input_pending = false;
+        state.recent_items.clear();
+        let outcome = InvocationCloseOutcome {
+            invocation_id: self.launch_id.clone(),
+            stopped: std::mem::take(&mut state.pending).into_values().collect(),
+            error_note: None,
+        };
+        discard_retained_wakes(&self.provider, &self.provider_thread_id);
+        outcome
     }
 
     pub async fn close_input(&self) -> Result<()> {
@@ -742,6 +834,303 @@ pub fn unregister(launch_id: &str) {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     registered.retain(|_, invocation| invocation.launch_id != launch_id);
+}
+
+#[derive(Clone, Debug)]
+pub struct InvocationCloseOutcome {
+    pub invocation_id: String,
+    pub stopped: Vec<PendingItem>,
+    pub error_note: Option<String>,
+}
+
+pub async fn close_parked_invocation(
+    invocation: &Arc<ConsoleInvocation>,
+    claim: &crate::turn_claims::TurnClaim,
+    machine_name: &str,
+    source: &str,
+    outbox_dir: Result<PathBuf>,
+) -> Result<Option<InvocationCloseOutcome>> {
+    let latest_turn = invocation.latest_turn();
+    if claim.launch_id.as_deref() != Some(invocation.launch_id.as_str())
+        || claim.provider != invocation.provider
+        || claim.provider_thread_id.as_deref() != Some(invocation.provider_thread_id.as_str())
+        || claim.run_id != latest_turn.run_id
+        || claim.state != "terminal"
+        || claim.invocation_state.as_deref() != Some("parked")
+        || claim.pending_count == 0
+        || !invocation.begin_user_close()
+    {
+        return Ok(None);
+    }
+
+    if let Err(error) = invocation.close_input().await {
+        invocation.cancel_user_close();
+        return Err(error).context("closing Console provider input");
+    }
+    tokio::time::sleep(USER_STOP_INPUT_GRACE).await;
+
+    // Stop the group before anything is recorded or announced. Provider input
+    // is already closed, so the invocation can never take another turn: it is
+    // closed from here on even if a process survives SIGKILL (an
+    // uninterruptible kernel wait) or the group cannot be proven ours. Either
+    // way the error note says what was left, and the managed-process janitor
+    // owns it.
+    let (_, process_group_id) = invocation.process_identity();
+    let stopped = invocation.pending_items();
+    let mut error_note = stop_invocation_group(claim, process_group_id).await;
+    if let Some(message) = &error_note {
+        tracing::error!(run_id = %claim.run_id, "{message}");
+    }
+
+    // Provider input is closed, so the invocation is closed whatever happens
+    // below: every failure only adds to the note.
+    match crate::turn_claims::default_registry() {
+        Ok(claims) => {
+            if let Err(error) =
+                claims.record_invocation_pending_items(&claim.run_id, stopped.clone())
+            {
+                tracing::warn!(
+                    %error,
+                    run_id = %claim.run_id,
+                    "Failed to persist stopped Console pending items"
+                );
+                append_close_error(
+                    &mut error_note,
+                    format!("failed to persist stopped Console pending items: {error}"),
+                );
+            }
+            let published = outbox_dir
+                .context("resolving Console close event outbox")
+                .and_then(|outbox_dir| {
+                    publish_invocation_closed(
+                        &claims,
+                        &outbox_dir,
+                        claim,
+                        machine_name,
+                        source,
+                        InvocationCloseReason::UserStop,
+                        &stopped,
+                    )
+                });
+            if let Err(error) = published {
+                tracing::warn!(
+                    %error,
+                    run_id = %claim.run_id,
+                    "Failed to publish Console invocation close"
+                );
+                append_close_error(
+                    &mut error_note,
+                    format!("failed to publish Console invocation close: {error}"),
+                );
+            }
+            if let Err(error) =
+                claims.record_invocation_state(&claim.run_id, "closed", stopped.len())
+            {
+                tracing::warn!(
+                    %error,
+                    run_id = %claim.run_id,
+                    "Failed to mark Console invocation claim closed"
+                );
+                append_close_error(
+                    &mut error_note,
+                    format!("failed to mark Console invocation claim closed: {error}"),
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                run_id = %claim.run_id,
+                "Failed to open Console turn claim registry while closing invocation"
+            );
+            append_close_error(
+                &mut error_note,
+                format!("failed to open Console turn claim registry: {error}"),
+            );
+        }
+    }
+
+    unregister(&invocation.launch_id);
+
+    let mut outcome = invocation.finish_user_close();
+    invocation.process_exited();
+    outcome.error_note = error_note;
+    Ok(Some(outcome))
+}
+
+/// How long the provider's own monitor gets to finish with the group before a
+/// close calls anything left a survivor.
+///
+/// The leader is our child, held by the monitor task, and `killpg(pgid, 0)`
+/// counts it until that task reaps it. Claude and OMP monitors poll
+/// `try_wait` every 100 ms; Codex tears its worker down with
+/// `shutdown_owned_child` as soon as input closes, which the 2 s
+/// `USER_STOP_INPUT_GRACE` already covers. One second is ten monitor polls,
+/// enough to absorb a slow process-inventory scan in a monitor iteration.
+const OWNER_REAP_SETTLE: Duration = Duration::from_secs(1);
+
+/// Stop the invocation's process group if it is still provably ours, and
+/// return a note for anything left alive.
+///
+/// The group is signalled only after a recorded process (pid, birth time and
+/// current pgid) shows it is still ours, checked immediately before signalling.
+/// A pgid is never reallocated while any member lives, so a live group that
+/// fails that check is either ours with no recorded member left to prove it,
+/// or a reused id and ours is gone. Neither is signalled.
+async fn stop_invocation_group(
+    claim: &crate::turn_claims::TurnClaim,
+    process_group_id: i32,
+) -> Option<String> {
+    if !crate::process_group::group_is_alive(process_group_id) {
+        return None;
+    }
+    let verified = claim.process_group_id == Some(process_group_id)
+        && claim.process_group_is_from_this_boot()
+        && crate::process_identity::try_collect_process_facts_by_pid()
+            .is_some_and(|inventory| claim.has_live_group_identity(&inventory));
+    if !verified {
+        if crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await {
+            return None;
+        }
+        return Some(format!(
+            "Console process group {process_group_id} is still alive but could not be verified \
+             as this invocation's, so it was not signalled"
+        ));
+    }
+    let shutdown = crate::process_group::shutdown_group(process_group_id, Duration::ZERO).await;
+    if shutdown.is_gone()
+        || crate::process_group::wait_for_group_exit(process_group_id, OWNER_REAP_SETTLE).await
+    {
+        return None;
+    }
+    Some(format!(
+        "Console process group {process_group_id} survived close: {}",
+        shutdown.as_str()
+    ))
+}
+
+fn append_close_error(error_note: &mut Option<String>, message: String) {
+    if let Some(existing) = error_note {
+        existing.push_str("; ");
+        existing.push_str(&message);
+    } else {
+        *error_note = Some(message);
+    }
+}
+
+pub fn stopped_items_for_claim(claim: &crate::turn_claims::TurnClaim) -> Vec<PendingItem> {
+    if !claim.pending_items.is_empty() {
+        return claim.pending_items.clone();
+    }
+    if claim.pending_count == 0 {
+        return Vec::new();
+    }
+    vec![PendingItem {
+        id: "unknown".to_string(),
+        kind: "background".to_string(),
+        status: "stopped".to_string(),
+        description: Some(format!(
+            "{} background task(s); task details were not recorded",
+            claim.pending_count
+        )),
+    }]
+}
+
+/// Publish an invocation's closure through its claim.
+///
+/// The exact `invocation_closed` event is retained in the claim before any
+/// handoff, so the daemon replays it until it reaches the durable outbox (and
+/// that handoff is what makes the claim's `closed` final). The empty delegation
+/// snapshot that clears the pending work follows it. Returns whether the close
+/// event was handed off now; false leaves it to the daemon's replay.
+pub fn publish_invocation_closed(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &std::path::Path,
+    claim: &crate::turn_claims::TurnClaim,
+    machine_name: &str,
+    source: &str,
+    reason: InvocationCloseReason,
+    stopped: &[PendingItem],
+) -> Result<bool> {
+    anyhow::ensure!(
+        !stopped.is_empty(),
+        "an invocation close must name what it stopped"
+    );
+    let close_time = chrono::Utc::now();
+    let occurred_at = close_time.to_rfc3339();
+    let delegation_observed_at = (close_time + chrono::Duration::nanoseconds(1)).to_rfc3339();
+    let stopped = stopped
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "id": item.id,
+                "kind": item.kind,
+                "description": item.description,
+            })
+        })
+        .collect::<Vec<_>>();
+    let invocation_id = claim.launch_id.as_deref().unwrap_or(&claim.run_id);
+    registry.retain_invocation_close_event(
+        &claim.run_id,
+        serde_json::json!({
+            "runtime_key": format!("{}:{}", claim.provider, claim.session_id),
+            "session_id": claim.session_id,
+            "thread_id": claim.thread_id,
+            "run_id": claim.run_id,
+            "provider": claim.provider,
+            "device_id": machine_name,
+            "source": source,
+            "kind": "invocation_closed",
+            "occurred_at": occurred_at,
+            "dedupe_key": format!("close:{invocation_id}"),
+            "payload": {
+                "invocation_id": invocation_id,
+                "reason": reason.as_str(),
+                "stopped": stopped,
+            }
+        }),
+    )?;
+    let handed_off = match crate::outbox::retry_retained_invocation_close_event(
+        registry,
+        outbox_dir,
+        &claim.run_id,
+    ) {
+        Ok(handed_off) => handed_off,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                run_id = %claim.run_id,
+                "Console invocation close event remains retained for replay"
+            );
+            false
+        }
+    };
+    crate::outbox::enqueue_runtime_event(
+        outbox_dir,
+        &serde_json::json!({
+            "runtime_key": format!("{}:{}", claim.provider, claim.session_id),
+            "session_id": claim.session_id,
+            "thread_id": claim.thread_id,
+            "run_id": claim.run_id,
+            "provider": claim.provider,
+            "device_id": machine_name,
+            "source": source,
+            "kind": "delegation_signal",
+            "occurred_at": delegation_observed_at.clone(),
+            "dedupe_key": format!("close:{invocation_id}:delegation"),
+            "payload": {
+                "delegation": {
+                    "count": 0,
+                    "kinds": {},
+                    "items": [],
+                    "recent_items": [],
+                    "observed_at": delegation_observed_at,
+                }
+            }
+        }),
+    )
+    .context("enqueueing the cleared delegation snapshot")?;
+    Ok(handed_off)
 }
 
 type RetainedWakeRegistry = HashMap<String, RetainedWake>;
@@ -1282,6 +1671,127 @@ mod tests {
         assert!(lookup_retained_wake(&second.invocation_id, &second.wake_id).is_some());
     }
 
+    /// A sleeper leading its own process group, with a second member so the
+    /// group outlives nothing but a group-wide signal.
+    fn spawn_owned_group() -> tokio::process::Child {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("sleep 300 & sleep 300")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.spawn().expect("spawn test process group")
+    }
+
+    /// The claim a parking provider writes at spawn, for a leader `pid`.
+    fn spawned_claim(pid: u32, start: Option<String>) -> crate::turn_claims::TurnClaim {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(dir.path().to_path_buf());
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "claude")
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                pid,
+                pid as i32,
+                start,
+                "claude-print",
+                "launch-1",
+                Some("provider-thread"),
+                "",
+                "",
+                serde_json::json!({}),
+            )
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn close_never_signals_a_live_group_it_cannot_prove_is_ours() {
+        // The recorded leader's birth time does not match the live process
+        // holding that pid: exactly what a reused pgid looks like.
+        let mut child = spawn_owned_group();
+        let pid = child.id().unwrap();
+        let claim = spawned_claim(pid, Some("Thu Jan  1 00:00:00 1970".to_string()));
+        assert!(claim.process_group_is_from_this_boot());
+
+        let note = stop_invocation_group(&claim, pid as i32)
+            .await
+            .expect("an unverified live group is named in the close note");
+
+        assert!(note.contains("could not be verified"), "{note}");
+        assert!(note.contains("not signalled"), "{note}");
+        assert!(
+            matches!(child.try_wait(), Ok(None)),
+            "an unverified group was signalled"
+        );
+        assert!(crate::process_group::group_is_alive(pid as i32));
+        crate::process_group::shutdown_owned_child(
+            &mut child,
+            Some(pid as i32),
+            crate::process_group::DEFAULT_GRACE,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn close_stops_a_group_whose_recorded_leader_is_still_ours() {
+        let mut child = spawn_owned_group();
+        let pid = child.id().unwrap();
+        let start = crate::turn_claims::process_start_time_for_pid(Some(pid));
+        assert!(start.is_some(), "spawn-time identity probe failed");
+        let claim = spawned_claim(pid, start);
+        // The provider monitor owns the Child and reaps it.
+        let monitor = tokio::spawn(async move { child.wait().await });
+
+        assert_eq!(stop_invocation_group(&claim, pid as i32).await, None);
+
+        assert!(!crate::process_group::group_is_alive(pid as i32));
+        assert!(!monitor.await.unwrap().unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn close_waits_for_the_monitor_to_reap_before_calling_the_group_a_survivor() {
+        // A monitor that reaps less often than the kill-confirm budget leaves
+        // the dead leader a zombie past `shutdown_group`'s own check, and
+        // `killpg(pgid, 0)` still counts it. That is macOS behaviour; the
+        // Linux test container does not count the zombie, so this only bites
+        // when run natively on a Mac.
+        const MONITOR_POLL: Duration = Duration::from_millis(700);
+        assert!(MONITOR_POLL > crate::process_group::KILL_CONFIRM_BUDGET);
+        assert!(MONITOR_POLL * 2 < crate::process_group::KILL_CONFIRM_BUDGET + OWNER_REAP_SETTLE);
+        let mut child = spawn_owned_group();
+        let pid = child.id().unwrap();
+        let claim = spawned_claim(
+            pid,
+            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+        );
+        let monitor = tokio::spawn(async move {
+            loop {
+                if let Ok(Some(status)) = child.try_wait() {
+                    return status;
+                }
+                tokio::time::sleep(MONITOR_POLL).await;
+            }
+        });
+
+        assert_eq!(stop_invocation_group(&claim, pid as i32).await, None);
+
+        assert!(!crate::process_group::group_is_alive(pid as i32));
+        assert!(!monitor.await.unwrap().success());
+    }
+
     #[tokio::test]
     async fn retained_wake_responses_expire_after_ten_minutes() {
         assert_eq!(RETAINED_WAKE_TTL, Duration::from_secs(600));
@@ -1344,6 +1854,7 @@ pub(crate) mod conformance {
         WakePending,
         UserSend,
         WakeDrained,
+        StopWhileParked,
         Restart,
         WakeUserSend,
         WakeUnboundDrained,
@@ -1359,12 +1870,13 @@ pub(crate) mod conformance {
     pub(crate) type ScenarioFuture = Pin<Box<dyn Future<Output = ScenarioOutcome> + 'static>>;
     pub(crate) type ScenarioRunner = fn(LifecycleScenario) -> ScenarioFuture;
 
-    const PHASE_ONE_SCENARIOS: [(u8, LifecycleScenario); 6] = [
+    const PHASE_ONE_SCENARIOS: [(u8, LifecycleScenario); 7] = [
         (1, LifecycleScenario::Plain),
         (2, LifecycleScenario::Background),
         (3, LifecycleScenario::WakePending),
         (4, LifecycleScenario::UserSend),
         (5, LifecycleScenario::WakeDrained),
+        (6, LifecycleScenario::StopWhileParked),
         (8, LifecycleScenario::Restart),
     ];
 

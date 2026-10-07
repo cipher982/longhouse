@@ -130,6 +130,8 @@ pub struct TurnClaim {
     #[serde(default)]
     pub pending_count: usize,
     #[serde(default)]
+    pub pending_items: Vec<crate::console_lifecycle::PendingItem>,
+    #[serde(default)]
     pub origin: Option<String>,
     #[serde(default)]
     pub adopted_parked_invocation: bool,
@@ -191,6 +193,34 @@ impl TurnClaim {
             _ => false,
         }
     }
+
+    /// Whether a process this claim recorded is still alive, with the same
+    /// birth time, inside the recorded process group.
+    ///
+    /// This is what proves a live group is still ours rather than a reused
+    /// pgid: a pid that is still a live process is never reallocated, and a
+    /// matching start time rules out the pid having been reused already. An
+    /// entry without a recorded start time proves nothing.
+    pub fn has_live_group_identity(
+        &self,
+        inventory: &HashMap<u32, crate::process_identity::ProcessFact>,
+    ) -> bool {
+        let Some(pgid) = self.process_group_id else {
+            return false;
+        };
+        self.owned_processes.iter().any(|owned| {
+            if owned.process_group_id != pgid {
+                return false;
+            }
+            let Some(expected_start) = owned.process_start_time.as_deref() else {
+                return false;
+            };
+            inventory.get(&owned.pid).is_some_and(|facts| {
+                facts.lstart == expected_start
+                    && unsafe { libc::getpgid(owned.pid as libc::pid_t) } == pgid
+            })
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -248,6 +278,7 @@ impl TurnClaimRegistry {
             launch_id: None,
             invocation_state: None,
             pending_count: 0,
+            pending_items: Vec::new(),
             origin: None,
             adopted_parked_invocation: false,
             stdout_path: None,
@@ -412,20 +443,44 @@ impl TurnClaimRegistry {
         }
         claim.invocation_state = Some(invocation_state.to_string());
         claim.pending_count = pending_count;
+        if pending_count == 0 {
+            claim.pending_items.clear();
+        }
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    pub fn record_invocation_pending_items(
+        &self,
+        run_id: &str,
+        pending_items: Vec<crate::console_lifecycle::PendingItem>,
+    ) -> Result<TurnClaim> {
+        let (_lock, mut claim) = self.read_for_update(run_id)?;
+        // A closed invocation keeps the work it stopped; late callbacks from
+        // its provider monitor cannot rewrite that record.
+        if claim.invocation_state.as_deref() == Some("closed") {
+            return Ok(claim);
+        }
+        claim.pending_count = pending_items.len();
+        claim.pending_items = pending_items;
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
         Ok(claim)
     }
 
     /// Explicit recovery rollback after owned-process shutdown was not verified.
-    /// Ordinary late lifecycle callbacks cannot reopen a closed invocation.
+    /// Ordinary late lifecycle callbacks cannot reopen a closed invocation, and
+    /// neither can this once a closing event is retained: that close was
+    /// decided (a user stop whose group outlived SIGKILL is still closed, with
+    /// the survivor left to the janitor) and only its handoff is pending.
     pub fn record_shutdown_survived(
         &self,
         run_id: &str,
         pending_count: usize,
     ) -> Result<TurnClaim> {
         let (_lock, mut claim) = self.read_for_update(run_id)?;
-        if claim.invocation_close_event_handed_off {
+        if claim.invocation_close_event.is_some() {
             return Ok(claim);
         }
         claim.invocation_state = Some("parked".to_string());
@@ -1053,6 +1108,17 @@ mod tests {
                 serde_json::json!({"transport": "cursor_print"}),
             )
             .unwrap();
+        registry
+            .record_invocation_pending_items(
+                &run_id,
+                vec![crate::console_lifecycle::PendingItem {
+                    id: "task-1".to_string(),
+                    kind: "monitor".to_string(),
+                    status: "running".to_string(),
+                    description: Some("watch files".to_string()),
+                }],
+            )
+            .unwrap();
         registry.mark_cancel_requested(&run_id).unwrap();
 
         let reopened = TurnClaimRegistry::new(temp.path().to_path_buf());
@@ -1061,6 +1127,12 @@ mod tests {
         assert_eq!(claim.pid, Some(42));
         assert_eq!(claim.process_group_id, Some(42));
         assert_eq!(claim.adapter.as_deref(), Some("cursor_print"));
+        assert_eq!(claim.pending_count, 1);
+        assert_eq!(claim.pending_items[0].id, "task-1");
+        assert_eq!(
+            claim.pending_items[0].description.as_deref(),
+            Some("watch files")
+        );
         assert_eq!(
             claim.provider_thread_id.as_deref(),
             Some("provider-thread-11")
@@ -1349,6 +1421,34 @@ mod tests {
         assert_eq!(recoverable.invocation_state.as_deref(), Some("parked"));
         assert_eq!(recoverable.pending_count, 2);
         assert!(!recoverable.invocation_close_event_handed_off);
+    }
+
+    #[test]
+    fn a_retained_close_is_not_rolled_back_by_a_surviving_group() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        let run_id = id(84);
+        registry
+            .claim(&run_id, &id(85), &id(86), None, None, "claude")
+            .unwrap();
+        registry
+            .retain_invocation_close_event(
+                &run_id,
+                serde_json::json!({
+                    "kind": "invocation_closed",
+                    "run_id": run_id,
+                    "dedupe_key": "close:invocation",
+                    "payload": {"reason": "user_stop"}
+                }),
+            )
+            .unwrap();
+        registry
+            .record_invocation_state(&run_id, "closed", 1)
+            .unwrap();
+        registry.record_shutdown_survived(&run_id, 1).unwrap();
+        let closed = registry.read(&run_id).unwrap();
+        assert_eq!(closed.invocation_state.as_deref(), Some("closed"));
+        assert!(!closed.invocation_close_event_handed_off);
     }
 
     #[test]

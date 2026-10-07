@@ -60,6 +60,7 @@ const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
 const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_TURN_START: &str = "session.turn.start";
+const COMMAND_INVOCATION_CLOSE: &str = "session.invocation.close";
 const COMMAND_TURN_INTERRUPT: &str = "session.turn.interrupt";
 const COMMAND_TURN_STEER: &str = "session.turn.steer";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
@@ -499,6 +500,20 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
                 "{provider_name}.turn_start: manifest support and real Console admission diverge"
             ));
         }
+        let close_support = format!("{provider_name}.invocation_close");
+        let supports_invocation_close = provider
+            .get("machine_control_supports")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.as_str() == Some(close_support.as_str()))
+            });
+        if supports_invocation_close && !matches!(provider_name, "claude" | "codex" | "omp") {
+            return Err(format!(
+                "{provider_name}: invocation_close is only admitted for claude, codex, and omp"
+            ));
+        }
         if provider.get("support_tier").and_then(Value::as_str) == Some("maintenance") {
             let console_adapter = provider
                 .get("console_adapter")
@@ -514,6 +529,7 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
                     support.ends_with(".turn_start")
                         || support.ends_with(".turn_interrupt")
                         || support.ends_with(".turn_steer")
+                        || support.ends_with(".invocation_close")
                 });
             if console_adapter || turn_start || console_support {
                 return Err(format!(
@@ -1294,6 +1310,9 @@ async fn execute_command(
     let durable_command_id = frame.get("command_id").and_then(Value::as_str);
 
     match command_type.as_str() {
+        COMMAND_INVOCATION_CLOSE => {
+            execute_invocation_close(frame, &payload, &session_id, config).await
+        }
         COMMAND_TURN_START => execute_turn_start(frame, &payload, &session_id, config).await,
         COMMAND_TURN_STEER => {
             let run_id = payload_required_string(&payload, "run_id")?;
@@ -2193,6 +2212,134 @@ async fn execute_command(
             message: format!("Unsupported command_type={other}"),
         }),
     }
+}
+
+async fn execute_invocation_close(
+    frame: &Value,
+    payload: &Value,
+    session_id: &str,
+    config: &ShipperConfig,
+) -> std::result::Result<Value, CommandError> {
+    let command_id = required_string(frame, "command_id")?;
+    let run_id = payload_required_string(payload, "run_id")?;
+    let thread_id = payload_required_string(payload, "thread_id")?;
+    let provider = payload_required_string(payload, "provider")?;
+    let reason = payload_required_string(payload, "reason")?;
+    if command_id != format!("{run_id}:close") || reason != "user_stop" {
+        return Err(CommandError {
+            code: "invalid_command".to_string(),
+            message:
+                "session.invocation.close requires command_id <run_id>:close and reason user_stop"
+                    .to_string(),
+        });
+    }
+
+    let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
+    let claim = match registry.read(&run_id) {
+        Ok(claim) => claim,
+        Err(_) => {
+            return Ok(json!({
+                "closed": false,
+                "invocation_id": Value::Null,
+                "stopped": [],
+            }));
+        }
+    };
+    let invocation_id = claim.launch_id.clone();
+    let expected_adapter = match provider.as_str() {
+        "claude" => CLAUDE_PRINT_ADAPTER,
+        "codex" => CODEX_EXEC_ADAPTER,
+        "omp" => OMP_PRINT_ADAPTER,
+        _ => "",
+    };
+    if expected_adapter.is_empty()
+        || claim.session_id != session_id
+        || claim.thread_id != thread_id
+        || claim.provider != provider
+        || claim.adapter.as_deref() != Some(expected_adapter)
+        || claim.state != "terminal"
+        || claim.invocation_state.as_deref() != Some("parked")
+        || claim.pending_count == 0
+    {
+        return Ok(json!({
+            "closed": false,
+            "invocation_id": invocation_id,
+            "stopped": [],
+        }));
+    }
+    let Some(invocation_id) = invocation_id else {
+        return Ok(json!({
+            "closed": false,
+            "invocation_id": Value::Null,
+            "stopped": [],
+        }));
+    };
+    let Some(invocation) = crate::console_lifecycle::lookup_launch(&invocation_id) else {
+        return Ok(json!({
+            "closed": false,
+            "invocation_id": invocation_id,
+            "stopped": [],
+        }));
+    };
+    if invocation.provider != provider || invocation.latest_turn().run_id != run_id {
+        return Ok(json!({
+            "closed": false,
+            "invocation_id": invocation_id,
+            "stopped": [],
+        }));
+    }
+
+    let outcome = match provider.as_str() {
+        "claude" => {
+            crate::claude_print::close_parked_claude_invocation(
+                &claim,
+                invocation,
+                &config.machine_name,
+            )
+            .await
+        }
+        "codex" => {
+            crate::codex_exec::close_parked_codex_invocation(
+                &claim,
+                invocation,
+                &config.machine_name,
+            )
+            .await
+        }
+        "omp" => {
+            crate::omp_print::close_parked_omp_invocation(&claim, invocation, &config.machine_name)
+                .await
+        }
+        _ => unreachable!("provider was admitted above"),
+    }
+    .map_err(CommandError::command_failed)?;
+    let Some(outcome) = outcome else {
+        return Ok(json!({
+            "closed": false,
+            "invocation_id": invocation_id,
+            "stopped": [],
+        }));
+    };
+    let stopped = outcome
+        .stopped
+        .iter()
+        .map(|item| {
+            json!({
+                "id": item.id,
+                "kind": item.kind,
+                "description": item.description,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut response = json!({
+        "closed": true,
+        "invocation_id": outcome.invocation_id,
+        "stopped": stopped,
+    });
+    if let Some(error_note) = outcome.error_note {
+        response["error_note"] = Value::String(error_note);
+    }
+    Ok(response)
 }
 
 async fn execute_turn_start(
@@ -3540,6 +3687,7 @@ fn command_requires_restart_fence(frame: &Value) -> bool {
                 | COMMAND_ANSWER_PAUSE
                 | COMMAND_TERMINATE
                 | COMMAND_TURN_INTERRUPT
+                | COMMAND_INVOCATION_CLOSE
                 | COMMAND_TURN_STEER
         )
     )
@@ -4144,6 +4292,7 @@ mod tests {
         ("codex", "turn_start", COMMAND_TURN_START),
         ("codex", "turn_steer", COMMAND_TURN_STEER),
         ("codex", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("codex", "invocation_close", COMMAND_INVOCATION_CLOSE),
         ("opencode", "turn_start", COMMAND_TURN_START),
         ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "answer_pause", COMMAND_ANSWER_PAUSE),
@@ -4155,6 +4304,7 @@ mod tests {
         ("claude", "turn_start", COMMAND_TURN_START),
         ("claude", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("claude", "turn_steer", COMMAND_TURN_STEER),
+        ("claude", "invocation_close", COMMAND_INVOCATION_CLOSE),
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "steer", COMMAND_STEER_TEXT),
@@ -4181,6 +4331,7 @@ mod tests {
         ("omp", "turn_start", COMMAND_TURN_START),
         ("omp", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("omp", "turn_steer", COMMAND_TURN_STEER),
+        ("omp", "invocation_close", COMMAND_INVOCATION_CLOSE),
         ("opencode", "turn_steer", COMMAND_TURN_STEER),
     ];
 
@@ -5211,6 +5362,23 @@ mod tests {
     }
 
     #[test]
+    fn managed_provider_contract_manifest_rejects_invocation_close_without_pending_work() {
+        let mut payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON).unwrap();
+        let pi = payload["providers"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|provider| provider["provider"] == "pi")
+            .unwrap();
+        pi["machine_control_supports"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("pi.invocation_close"));
+
+        let error = validate_managed_provider_contract_manifest(&payload).unwrap_err();
+        assert!(error.contains("invocation_close is only admitted"));
+    }
+    #[test]
     fn manifest_machine_control_supports_have_engine_dispatch_paths() {
         for support in manifest_machine_control_supports() {
             let (provider, operation) = support
@@ -5259,6 +5427,246 @@ mod tests {
     }
 
     #[test]
+    fn invocation_close_support_is_limited_to_work_owning_adapters() {
+        let supports = manifest_machine_control_supports();
+        for provider in ["claude", "codex", "omp"] {
+            let support = format!("{provider}.invocation_close");
+            assert!(supports.contains(&support), "missing {support}");
+            assert_eq!(
+                support_dispatch_command(provider, "invocation_close"),
+                Some(COMMAND_INVOCATION_CLOSE)
+            );
+        }
+        for provider in ["antigravity", "cursor", "opencode", "pi"] {
+            let support = format!("{provider}.invocation_close");
+            assert!(!supports.contains(&support), "unexpected {support}");
+            assert_eq!(support_dispatch_command(provider, "invocation_close"), None);
+        }
+    }
+
+    #[test]
+    fn invocation_close_for_unknown_run_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let frame = json!({
+            "command_type": COMMAND_INVOCATION_CLOSE,
+            "command_id": format!("{run_id}:close"),
+            "session_id": session_id,
+            "payload": {
+                "provider": "claude",
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "reason": "user_stop",
+            }
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                execute_command(&frame, &ShipperConfig::default())
+                    .await
+                    .unwrap()
+            })
+        });
+        assert_eq!(result["closed"], false);
+        assert!(result["invocation_id"].is_null());
+        assert_eq!(result["stopped"], json!([]));
+    }
+
+    struct CloseTestInput;
+
+    impl crate::console_lifecycle::ConsoleInput for CloseTestInput {
+        fn send_input<'a>(
+            &'a self,
+            _text: &'a str,
+            _images: &'a [PathBuf],
+        ) -> crate::console_lifecycle::InputFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close_input(&self) -> crate::console_lifecycle::InputFuture<'_> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn invocation_close_dispatches_to_claude_and_posts_close_snapshot() {
+        exercise_claude_invocation_close(false);
+    }
+
+    #[test]
+    fn invocation_close_outbox_failure_still_closes_and_unregisters() {
+        exercise_claude_invocation_close(true);
+    }
+
+    fn exercise_claude_invocation_close(outbox_failure: bool) {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        if outbox_failure {
+            let agent_dir = temp.path().join("agent");
+            std::fs::create_dir_all(&agent_dir).unwrap();
+            std::fs::write(agent_dir.join("runtime-events-outbox"), "not a directory").unwrap();
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                let mut child = tokio::process::Command::new("sleep")
+                    .arg("30")
+                    .process_group(0)
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap();
+                let pid = child.id().unwrap();
+                let process_group_id = i32::try_from(pid).unwrap();
+                let child_reaper = tokio::spawn(async move { child.wait().await.unwrap() });
+                let run_id = Uuid::new_v4().to_string();
+                let session_id = Uuid::new_v4().to_string();
+                let thread_id = Uuid::new_v4().to_string();
+                let provider_thread_id = Uuid::new_v4().to_string();
+                let launch_id = Uuid::new_v4().to_string();
+                let registry = default_turn_claim_registry().unwrap();
+                registry
+                    .claim(&run_id, &session_id, &thread_id, None, None, "claude")
+                    .unwrap();
+                registry
+                    .mark_spawned_invocation(
+                        &run_id,
+                        pid,
+                        process_group_id,
+                        process_start_time_for_pid(Some(pid)),
+                        CLAUDE_PRINT_ADAPTER,
+                        &launch_id,
+                        Some(&provider_thread_id),
+                        "",
+                        "",
+                        json!({"transport": "claude_print"}),
+                    )
+                    .unwrap();
+                registry
+                    .record_invocation_turn(&run_id, "user", false)
+                    .unwrap();
+                let pending = crate::console_lifecycle::PendingItem {
+                    id: "task-1".to_string(),
+                    kind: "monitor".to_string(),
+                    status: "running".to_string(),
+                    description: Some("watch files".to_string()),
+                };
+                registry
+                    .record_invocation_pending_items(&run_id, vec![pending.clone()])
+                    .unwrap();
+                registry
+                    .mark_terminal(&run_id, "run_completed", None)
+                    .unwrap();
+                registry
+                    .record_invocation_state(&run_id, "parked", 1)
+                    .unwrap();
+                let invocation = Arc::new(crate::console_lifecycle::ConsoleInvocation::new(
+                    "claude",
+                    provider_thread_id,
+                    launch_id.clone(),
+                    pid,
+                    process_group_id,
+                    crate::console_lifecycle::TurnBinding {
+                        run_id: run_id.clone(),
+                        turn_id: None,
+                        client_request_id: None,
+                        origin: crate::console_lifecycle::TurnOrigin::User,
+                    },
+                    Arc::new(CloseTestInput),
+                ));
+                invocation.replace_pending(vec![pending], Vec::new());
+                invocation
+                    .idle(crate::console_lifecycle::IdleSignal {
+                        terminal_state: "run_completed".to_string(),
+                        exit_code: Some(0),
+                        stderr: None,
+                    })
+                    .unwrap();
+                crate::console_lifecycle::register(invocation).unwrap();
+                let frame = json!({
+                    "command_type": COMMAND_INVOCATION_CLOSE,
+                    "command_id": format!("{run_id}:close"),
+                    "session_id": session_id,
+                    "payload": {
+                        "provider": "claude",
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "reason": "user_stop",
+                    }
+                });
+                assert!(command_requires_restart_fence(&frame));
+                let mut config = test_config();
+                config.machine_name = "close-test-machine".to_string();
+                let result = execute_command(&frame, &config).await.unwrap();
+                assert_eq!(result["closed"], true);
+                if outbox_failure {
+                    assert!(result["error_note"]
+                        .as_str()
+                        .is_some_and(|message| !message.is_empty()));
+                } else {
+                    assert!(result.get("error_note").is_none());
+                }
+                assert_eq!(result["invocation_id"], launch_id);
+                assert_eq!(result["stopped"][0]["id"], "task-1");
+                assert_eq!(result["stopped"][0]["kind"], "monitor");
+                assert_eq!(result["stopped"][0]["description"], "watch files");
+                let status = child_reaper.await.unwrap();
+                assert!(!status.success());
+                let closed_claim = registry.read(&run_id).unwrap();
+                assert_eq!(closed_claim.invocation_state.as_deref(), Some("closed"));
+                assert_eq!(closed_claim.pending_count, 1);
+                assert_eq!(closed_claim.pending_items[0].id, "task-1");
+                assert!(crate::console_lifecycle::lookup_launch(&launch_id).is_none());
+                assert!(!crate::process_group::group_is_alive(process_group_id));
+                let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+                // The close event is retained in the claim either way; only a
+                // successful outbox handoff marks it handed off. The daemon
+                // replays a retained one until it lands.
+                let retained = closed_claim
+                    .invocation_close_event
+                    .as_ref()
+                    .expect("close event is retained for replay");
+                assert_eq!(retained["kind"], "invocation_closed");
+                assert_eq!(retained["payload"]["reason"], "user_stop");
+                assert_eq!(
+                    closed_claim.invocation_close_event_handed_off,
+                    !outbox_failure
+                );
+                if outbox_failure {
+                    assert!(std::fs::read_dir(outbox).is_err());
+                } else {
+                    let events = std::fs::read_dir(outbox)
+                        .unwrap()
+                        .flatten()
+                        .filter_map(|entry| std::fs::read(entry.path()).ok())
+                        .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                        .collect::<Vec<_>>();
+                    let closed = events
+                        .iter()
+                        .find(|event| {
+                            event["session_id"] == session_id
+                                && event["kind"] == "invocation_closed"
+                        })
+                        .expect("close event is durable");
+                    assert_eq!(closed["payload"]["reason"], "user_stop");
+                    assert!(events.iter().any(|event| {
+                        event["session_id"] == session_id
+                            && event["kind"] == "delegation_signal"
+                            && event["payload"]["delegation"]["count"] == 0
+                    }));
+                }
+            });
+        });
+    }
+
+    #[test]
     fn unsupported_engine_dispatch_paths_stay_unadvertised() {
         let supports = manifest_machine_control_supports();
         for (provider, operation) in [
@@ -5276,6 +5684,10 @@ mod tests {
             ("codex", "terminate"),
             ("codex", "launch"),
             ("codex", "continue"),
+            ("antigravity", "invocation_close"),
+            ("cursor", "invocation_close"),
+            ("opencode", "invocation_close"),
+            ("pi", "invocation_close"),
         ] {
             let support = format!("{provider}.{operation}");
             assert!(

@@ -1834,6 +1834,7 @@ if args[:2] == ["--mode", "rpc"]:
                 | LifecycleScenario::WakePending
                 | LifecycleScenario::UserSend
                 | LifecycleScenario::WakeDrained
+                | LifecycleScenario::StopWhileParked
                 | LifecycleScenario::WakeUserSend
                 | LifecycleScenario::WakeUnboundDrained
                 | LifecycleScenario::WakeImmediateUnbound => {

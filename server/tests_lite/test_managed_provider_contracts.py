@@ -337,6 +337,7 @@ def test_codex_contract_keeps_helm_and_console_controls():
         "codex.turn_start",
         "codex.turn_steer",
         "codex.turn_interrupt",
+        "codex.invocation_close",
     )
     assert codex.machine_control_operations == (
         "send",
@@ -348,6 +349,7 @@ def test_codex_contract_keeps_helm_and_console_controls():
         "turn_start",
         "turn_steer",
         "turn_interrupt",
+        "invocation_close",
     )
     # Antigravity joined on 2026-08-20 with a live-token canary that drives the
     # Console adapter's own argv, so this set is derived, not curated.
@@ -385,6 +387,7 @@ def test_claude_contract_is_first_class_channel_control_provider():
         "claude.turn_start",
         "claude.turn_interrupt",
         "claude.turn_steer",
+        "claude.invocation_close",
     )
 
 
@@ -562,7 +565,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         "turn_interrupt": "session.turn.interrupt",
         "turn_steer": "session.turn.steer",
     }
-    extra_operations = {"resume_run_once"}
+    extra_operations = {"resume_run_once", "invocation_close"}
 
     for contract in all_managed_provider_contracts():
         supports = set(contract.machine_control_supports)
@@ -646,6 +649,25 @@ def test_machine_control_support_validation_rejects_non_executable_tokens(mutato
 
     with pytest.raises(ValueError, match=message):
         _validate_machine_control_supports(item)
+
+
+@pytest.mark.parametrize("provider", ("claude", "codex", "omp"))
+def test_invocation_close_support_is_limited_to_console_adapters(provider):
+    item = {
+        "provider": provider,
+        "turn_start": True,
+        "machine_control_supports": [f"{provider}.invocation_close"],
+    }
+    _validate_machine_control_supports(item)
+
+    with pytest.raises(ValueError, match="only supported for claude, codex, and omp"):
+        _validate_machine_control_supports(
+            {
+                "provider": "opencode",
+                "turn_start": True,
+                "machine_control_supports": ["opencode.invocation_close"],
+            }
+        )
 
 
 def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():

@@ -507,6 +507,7 @@ providers:
   # `turn/steer` and `turn/interrupt`.
   - codex.turn_steer
   - codex.turn_interrupt
+  - codex.invocation_close
   transcript_signals:
     delegation.spawn:
       disposition: not_implemented
@@ -1054,6 +1055,7 @@ providers:
   - claude.turn_interrupt
   # Console steer: the lifecycle hook delivers it at the next tool boundary or Stop.
   - claude.turn_steer
+  - claude.invocation_close
   # Transcript signals: what the provider's own terminal shows that lives on
   # transcript lines the render surface never renders. Each cell names the raw
   # source, the golden fixture that proves the parser, the live canary that
@@ -2828,7 +2830,7 @@ providers:
   turn_start: true
   fork_thread: false
   live_proof: false
-  machine_control_supports: [omp.send, omp.interrupt, omp.steer, omp.terminate, omp.turn_start, omp.turn_interrupt, omp.turn_steer]
+  machine_control_supports: [omp.send, omp.interrupt, omp.steer, omp.terminate, omp.turn_start, omp.turn_interrupt, omp.turn_steer, omp.invocation_close]
   operation_evidence:
     launch_local:
       disposition: implemented

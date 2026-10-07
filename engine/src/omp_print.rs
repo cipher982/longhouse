@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
 use crate::console_lifecycle::{
-    ConsoleInvocation, IdleOutcome, IdleSignal, InvocationState, PendingItem, TurnBinding,
-    TurnOrigin, WakeRequest,
+    ConsoleInvocation, IdleOutcome, IdleSignal, InvocationCloseReason, InvocationState,
+    PendingItem, TurnBinding, TurnOrigin, WakeRequest,
 };
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
@@ -1223,11 +1223,61 @@ pub async fn steer_omp_print_turn(
     crate::console_rpc::steer(&fifo, &stdout_path, text).await
 }
 
+pub async fn close_parked_omp_invocation(
+    claim: &crate::turn_claims::TurnClaim,
+    invocation: Arc<ConsoleInvocation>,
+    machine_name: &str,
+) -> Result<Option<crate::console_lifecycle::InvocationCloseOutcome>> {
+    crate::console_lifecycle::close_parked_invocation(
+        &invocation,
+        claim,
+        machine_name,
+        OMP_RUNTIME_SOURCE,
+        crate::config::get_agent_runtime_events_outbox_dir(),
+    )
+    .await
+}
+
+/// Publish a recovered parked invocation's closure. True when the claim may be
+/// marked closed: nothing was pending, or the close event is retained for
+/// replay.
+fn publish_recovered_omp_close(
+    registry: &crate::turn_claims::TurnClaimRegistry,
+    outbox_dir: &Path,
+    claim: &crate::turn_claims::TurnClaim,
+    machine_name: &str,
+) -> bool {
+    if claim.pending_count == 0 {
+        return true;
+    }
+    let stopped = crate::console_lifecycle::stopped_items_for_claim(claim);
+    match crate::console_lifecycle::publish_invocation_closed(
+        registry,
+        outbox_dir,
+        claim,
+        machine_name,
+        OMP_RUNTIME_SOURCE,
+        InvocationCloseReason::MachineAgentRestart,
+        &stopped,
+    ) {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                run_id = %claim.run_id,
+                "Failed to publish recovered OMP Console close"
+            );
+            false
+        }
+    }
+}
+
 pub async fn recover_omp_print_turns(
     machine_name: &str,
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
+    let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
     let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     let mut closed_launch_ids = std::collections::HashSet::new();
@@ -1243,6 +1293,9 @@ pub async fn recover_omp_print_turns(
                 if cleanup_recovered_process_group(&claim.run_id, &claim, claim.process_group_id)
                     .await
                 {
+                    if !publish_recovered_omp_close(&registry, &outbox_dir, &claim, machine_name) {
+                        continue;
+                    }
                     if let Err(error) = registry.record_invocation_state(
                         &claim.run_id,
                         "closed",
@@ -1261,7 +1314,45 @@ pub async fn recover_omp_print_turns(
                     );
                 }
             }
-            ClaimLiveness::Gone | ClaimLiveness::Live => {
+            ClaimLiveness::Gone => {
+                if claim.pending_count > 0
+                    && claim
+                        .process_group_id
+                        .is_some_and(crate::process_group::group_is_alive)
+                    && !cleanup_recovered_process_group(
+                        &claim.run_id,
+                        &claim,
+                        claim.process_group_id,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        run_id = %claim.run_id,
+                        "Could not verify cleanup of recovered OMP background work"
+                    );
+                    continue;
+                }
+                if !publish_recovered_omp_close(&registry, &outbox_dir, &claim, machine_name) {
+                    continue;
+                }
+                if let Err(error) =
+                    registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
+                {
+                    tracing::warn!(%error, run_id = %claim.run_id, "OMP recovery claim remains retryable");
+                    continue;
+                }
+                if let Some(launch_id) = claim.launch_id.as_deref() {
+                    closed_launch_ids.insert(launch_id.to_string());
+                }
+            }
+            ClaimLiveness::Live => {
+                if claim.pending_count > 0 {
+                    tracing::warn!(
+                        run_id = %claim.run_id,
+                        "Leaving unverified live parked OMP invocation for a later recovery pass"
+                    );
+                    continue;
+                }
                 if let Err(error) =
                     registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)
                 {
@@ -1805,6 +1896,7 @@ async fn monitor_omp_print(
 fn record_invocation_claim_state(invocation: &ConsoleInvocation) {
     let binding = invocation.latest_turn();
     if let Ok(claims) = crate::turn_claims::default_registry() {
+        let _ = claims.record_invocation_pending_items(&binding.run_id, invocation.pending_items());
         let _ = claims.record_invocation_state(
             &binding.run_id,
             invocation.state().as_str(),
@@ -2131,6 +2223,7 @@ async fn complete_idle(
     sink: &OmpPrintSink,
     outcome: IdleOutcome,
 ) -> bool {
+    let _ = invocation.persist_pending_claim();
     let turn_sink = sink.for_binding(&outcome.binding);
     if outcome.has_active_turn {
         turn_sink
@@ -4134,6 +4227,7 @@ mod tests {
             r##"#!/usr/bin/env python3
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -4294,10 +4388,14 @@ for line in sys.stdin:
             out({"type":"agent_start"})
             out({"type":"message_start","message":{"role":"assistant","content":[]}})
             out({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"first response"}})
-        elif prompt.startswith(("scenario=background", "scenario=user", "scenario=wake", "scenario=drain", "scenario=restart")):
+        elif prompt.startswith(("scenario=background", "scenario=stop", "scenario=user", "scenario=wake", "scenario=drain", "scenario=restart")):
             user_message(prompt)
             out({"type":"agent_start"})
             start_job("job-1")
+            if prompt == "scenario=stop":
+                background = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                with open(source + ".bgpid", "w", encoding="utf-8") as stream:
+                    stream.write(str(background.pid))
             assistant_message(prompt, start=False)
             if prompt.startswith("scenario=wake"):
                 threading.Thread(target=finish_in_background, args=("job-1", True), daemon=True).start()
@@ -4623,7 +4721,8 @@ for line in sys.stdin:
                 | LifecycleScenario::WakePending
                 | LifecycleScenario::UserSend
                 | LifecycleScenario::WakeDrained
-                | LifecycleScenario::Restart => {
+                | LifecycleScenario::Restart
+                | LifecycleScenario::StopWhileParked => {
                     run_omp_scenario_inner(scenario).await;
                     ScenarioOutcome::Passed
                 }
@@ -4675,6 +4774,7 @@ for line in sys.stdin:
             LifecycleScenario::UserSend => "scenario=user",
             LifecycleScenario::WakeDrained => "scenario=sentinel",
             LifecycleScenario::Restart => "scenario=restart",
+            LifecycleScenario::StopWhileParked => "scenario=stop",
             _ => unreachable!(),
         };
         let claims = crate::turn_claims::default_registry().unwrap();
@@ -4759,6 +4859,83 @@ for line in sys.stdin:
                     .contains("cleanup pending work"));
                 wait_for_process_group_exit(first_pgid).await;
                 assert!(!crate::process_group::group_is_alive(first_pgid));
+            }
+            LifecycleScenario::StopWhileParked => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                assert_eq!(first_claim.pending_count, 1);
+                let _ = wait_for_runtime_event(&session_id, "delegation_signal").await;
+                let background_pid: u32 =
+                    std::fs::read_to_string(format!("{}.bgpid", first.session_file))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                assert!(
+                    crate::process_identity::try_collect_process_fact(background_pid).is_some()
+                );
+                let invocation = crate::console_lifecycle::lookup_launch(&first.launch_id).unwrap();
+                let stopped =
+                    close_parked_omp_invocation(&first_claim, invocation, "omp-lifecycle-test")
+                        .await
+                        .unwrap()
+                        .expect("parked OMP invocation should close");
+                assert_eq!(stopped.stopped.len(), 1);
+                assert_eq!(stopped.stopped[0].id, "job-1");
+                let closed_claim = claims.read(&first_run_id).unwrap();
+                assert_eq!(closed_claim.invocation_state.as_deref(), Some("closed"));
+                assert_eq!(closed_claim.pending_count, 1);
+                assert_eq!(closed_claim.pending_items[0].id, "job-1");
+                wait_for_process_group_exit(first_pgid).await;
+                assert!(
+                    crate::process_identity::try_collect_process_fact(background_pid).is_none()
+                );
+                let closed = wait_for_runtime_event(&session_id, "invocation_closed").await;
+                assert_eq!(closed["run_id"], first_run_id);
+                assert_eq!(closed["provider"], "omp");
+                assert_eq!(closed["source"], OMP_RUNTIME_SOURCE);
+                assert_eq!(closed["payload"]["invocation_id"], first.launch_id);
+                assert_eq!(closed["payload"]["reason"], "user_stop");
+                assert_eq!(closed["payload"]["stopped"][0]["id"], "job-1");
+                let empty = runtime_events()
+                    .into_iter()
+                    .find(|event| {
+                        event["session_id"] == session_id
+                            && event["kind"] == "delegation_signal"
+                            && event["dedupe_key"]
+                                == format!("close:{}:delegation", first.launch_id)
+                    })
+                    .expect("empty delegation snapshot after close");
+                assert_eq!(empty["payload"]["delegation"]["count"], 0);
+
+                let resumed_run_id = Uuid::new_v4().to_string();
+                claims
+                    .claim(&resumed_run_id, &session_id, &thread_id, None, None, "omp")
+                    .unwrap();
+                let resumed = start_omp_print_turn(lifecycle_config(
+                    temp.path(),
+                    &fake_omp,
+                    &session_id,
+                    &thread_id,
+                    &resumed_run_id,
+                    "fresh turn after stop",
+                    first.provider_thread_id.clone(),
+                    Some(PathBuf::from(&first.session_file)),
+                    "user",
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+                assert_ne!(resumed.pid, Some(first_pid));
+                assert_ne!(resumed.launch_id, first.launch_id);
+                assert_eq!(resumed.provider_thread_id, first.provider_thread_id);
+                assert_eq!(
+                    wait_for_terminal(&resumed_run_id)
+                        .await
+                        .invocation_state
+                        .as_deref(),
+                    Some("closed")
+                );
+                wait_for_process_group_exit(resumed.process_group_id.unwrap()).await;
             }
             LifecycleScenario::WakePending | LifecycleScenario::WakeDrained => {
                 assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
@@ -4907,6 +5084,23 @@ for line in sys.stdin:
                     );
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
+                let events = runtime_events()
+                    .into_iter()
+                    .filter(|event| event["session_id"] == session_id)
+                    .collect::<Vec<_>>();
+                let closed = events
+                    .iter()
+                    .find(|event| event["kind"] == "invocation_closed")
+                    .expect("OMP restart close event");
+                assert_eq!(closed["run_id"], first_run_id);
+                assert_eq!(closed["source"], OMP_RUNTIME_SOURCE);
+                assert_eq!(closed["payload"]["reason"], "machine_agent_restart");
+                assert_eq!(closed["payload"]["stopped"][0]["id"], "job-1");
+                assert!(events.iter().any(|event| {
+                    event["kind"] == "delegation_signal"
+                        && event["dedupe_key"] == format!("close:{}:delegation", first.launch_id)
+                        && event["payload"]["delegation"]["count"] == 0
+                }));
             }
             _ => unreachable!(),
         }

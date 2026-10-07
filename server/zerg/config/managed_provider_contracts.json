@@ -756,7 +756,8 @@
         "codex.resume_run_once",
         "codex.turn_start",
         "codex.turn_steer",
-        "codex.turn_interrupt"
+        "codex.turn_interrupt",
+        "codex.invocation_close"
       ],
       "transcript_signals": {
         "delegation.spawn": {
@@ -862,7 +863,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "14998f7f5e7d9659ab9bdc40337662385b6e83eff55e45ef30f2d71e67ad332a"
+      "adapter_digest": "0e903cac663c40757414b1b83fd9d54ab3c05893c6dda5515de4b004b9d53953"
     },
     {
       "provider": "claude",
@@ -1732,7 +1733,8 @@
         "claude.answer_pause",
         "claude.turn_start",
         "claude.turn_interrupt",
-        "claude.turn_steer"
+        "claude.turn_steer",
+        "claude.invocation_close"
       ],
       "transcript_signals": {
         "delegation.spawn": {
@@ -1882,7 +1884,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "b2f2091738d3aaa68da0c6f456105e8b5cdb481b4d1028b2db903a3606c82580"
+      "adapter_digest": "6a123ea866309a953483bb7b3237b5b3541a03df29a7179b34f28873462957e2"
     },
     {
       "provider": "opencode",
@@ -3052,7 +3054,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "849a60ab3444f05bef309bd32da228e629a298a006e437141ed92ea31b49210c"
+      "adapter_digest": "7e8ba5fa3de269db4fcc87fe30681ba59eeeb255f6366c56940d0a763811fa53"
     },
     {
       "provider": "cursor",
@@ -4394,7 +4396,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "86b14a88f09c1d0465c59d9dc10178bc414fe45ad797b9fc64ba4b72cd24580e"
+      "adapter_digest": "feadc878b9c5e80c12235af4c2e1e1070bcc02962c62a43fafdde6f0a4fce4dd"
     },
     {
       "provider": "omp",
@@ -4554,7 +4556,8 @@
         "omp.terminate",
         "omp.turn_start",
         "omp.turn_interrupt",
-        "omp.turn_steer"
+        "omp.turn_steer",
+        "omp.invocation_close"
       ],
       "operation_evidence": {
         "launch_local": {
@@ -5065,7 +5068,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "f5c62ebaae99e22860515ff3c57ea72c12b2edc5adf7fa293e0ce34293d33ea8"
+      "adapter_digest": "5082ab6b0a37f0acdba5b48fccdb14f11021575a82f3b95ec6ae7d4c3f7e1e5e"
     }
   ]
 }

@@ -37,8 +37,14 @@ retires only after confirmed durable handoff, without deleting pending work or
 history; delayed callbacks cannot remove or reclaim a successor's status.
 Codex restart closure uses the stateless `invocation_closed` contract, retained
 separately and replayed by the daemon without rewriting the response outcome.
-Tentative close intent can roll back when shutdown survives; a confirmed
-closing handoff is final. The first exact terminal payload takes precedence
+Claude, Codex and OMP publish restart closure and the user's Stop of a parked
+invocation (`session.invocation.close`) the same way, naming the pending work
+it stopped and clearing the delegation snapshot. Stop signals the process
+group only after a recorded member (pid, birth time, pgid) proves it ours; once
+provider input is closed the invocation is closed, and a survivor or an
+unverifiable group is reported in the reply's `error_note` for the janitor.
+Tentative close intent can roll back when shutdown survives; a retained
+closing event is final. The first exact terminal payload takes precedence
 over earlier thin metadata; conflicting later exact payloads fail explicitly.
 Unknown ownership never renews remote liveness; its reconstructable observation
 expires after 24 hours with an exact-version guard, without declaring execution

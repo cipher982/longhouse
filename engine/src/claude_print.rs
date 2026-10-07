@@ -21,8 +21,8 @@ use tokio::process::{Child, ChildStdin, Command};
 
 use crate::console_adapter::{read_growth, stderr_tail, ClaimLiveness};
 use crate::console_lifecycle::{
-    ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationState, PendingItem,
-    TurnBinding, TurnOrigin,
+    ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationCloseReason,
+    InvocationState, PendingItem, TurnBinding, TurnOrigin,
 };
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
@@ -823,6 +823,7 @@ async fn complete_idle(
     sink: &ClaudePrintSink,
     outcome: IdleOutcome,
 ) -> bool {
+    let _ = invocation.persist_pending_claim();
     let turn_sink = sink.for_binding(&outcome.binding);
     if outcome.has_active_turn {
         turn_sink
@@ -857,11 +858,27 @@ async fn complete_idle(
     }
 }
 
+pub async fn close_parked_claude_invocation(
+    claim: &crate::turn_claims::TurnClaim,
+    invocation: Arc<ConsoleInvocation>,
+    machine_name: &str,
+) -> Result<Option<crate::console_lifecycle::InvocationCloseOutcome>> {
+    crate::console_lifecycle::close_parked_invocation(
+        &invocation,
+        claim,
+        machine_name,
+        CLAUDE_RUNTIME_SOURCE,
+        crate::config::get_agent_runtime_events_outbox_dir(),
+    )
+    .await
+}
+
 pub async fn recover_claude_print_turns(
-    _machine_name: &str,
+    machine_name: &str,
     _local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
+    let outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
     let Some(inventory) = crate::process_identity::try_collect_process_facts_by_pid() else {
         tracing::warn!("Process inventory unavailable; leaving Claude Console claims untouched");
         return Ok(0);
@@ -902,14 +919,14 @@ pub async fn recover_claude_print_turns(
             .filter(|pgid| crate::process_group::group_is_alive(*pgid))
         {
             if !claim.process_group_is_from_this_boot()
-                || !claim_has_live_group_identity(&claim, &inventory)
+                || !claim.has_live_group_identity(&inventory)
             {
                 tracing::warn!(
                     run_id = %claim.run_id,
                     process_group_id = pgid,
                     "Claude process group is live but its exact identity cannot be verified"
                 );
-                if !process_gone {
+                if claim.pending_count > 0 || !process_gone {
                     continue;
                 }
             } else {
@@ -942,7 +959,7 @@ pub async fn recover_claude_print_turns(
                 provider_thread_id: claim.provider_thread_id.clone().unwrap_or_default(),
                 launch_id: launch_id.to_string(),
                 process_group_id: claim.process_group_id,
-                machine_name: _machine_name.to_string(),
+                machine_name: machine_name.to_string(),
                 local_db_path: _local_db_path.clone(),
                 runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
             };
@@ -956,31 +973,29 @@ pub async fn recover_claude_print_turns(
             )
             .await;
         }
+        if parked && claim.pending_count > 0 {
+            let stopped = crate::console_lifecycle::stopped_items_for_claim(&claim);
+            if let Err(error) = crate::console_lifecycle::publish_invocation_closed(
+                &registry,
+                &outbox_dir,
+                &claim,
+                machine_name,
+                CLAUDE_RUNTIME_SOURCE,
+                InvocationCloseReason::MachineAgentRestart,
+                &stopped,
+            ) {
+                tracing::warn!(
+                    %error,
+                    run_id = %claim.run_id,
+                    "Failed to publish recovered Claude Console close"
+                );
+                continue;
+            }
+        }
         let _ = registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count);
         recovered += 1;
     }
     Ok(recovered)
-}
-
-fn claim_has_live_group_identity(
-    claim: &crate::turn_claims::TurnClaim,
-    inventory: &std::collections::HashMap<u32, crate::process_identity::ProcessFact>,
-) -> bool {
-    let Some(pgid) = claim.process_group_id else {
-        return false;
-    };
-    claim.owned_processes.iter().any(|owned| {
-        if owned.process_group_id != pgid {
-            return false;
-        }
-        let Some(expected_start) = owned.process_start_time.as_deref() else {
-            return false;
-        };
-        inventory.get(&owned.pid).is_some_and(|facts| {
-            facts.lstart == expected_start
-                && unsafe { libc::getpgid(owned.pid as libc::pid_t) } == pgid
-        })
-    })
 }
 
 /// Enter a running Claude Console turn with `text` (see
@@ -1988,6 +2003,7 @@ async fn apply_registry_update(
         RegistryUpdate::Item(item, pending) => invocation.update_pending_item(item, pending),
     };
     if changed || close {
+        let _ = invocation.persist_pending_claim();
         if let Some((binding, snapshot)) = invocation.delegation_snapshot() {
             sink.for_binding(&binding)
                 .post_delegation_snapshot(snapshot)
@@ -2568,6 +2584,7 @@ mod tests {
                 r#"#!/usr/bin/env python3
 import json
 import pathlib
+import subprocess
 import sys
 import time
 
@@ -2605,7 +2622,10 @@ if count <= int((root / "failures").read_text()):
     emit({"type": "result", "subtype": "success", "is_error": True})
     sys.exit(1)
 
-if prompt.startswith("scenario=background") or prompt.startswith("scenario=park") or prompt.startswith("scenario=restart") or prompt.startswith("scenario=wake") or prompt.startswith("scenario=drain"):
+if prompt.startswith("scenario=background") or prompt.startswith("scenario=park") or prompt.startswith("scenario=restart") or prompt.startswith("scenario=wake") or prompt.startswith("scenario=drain") or prompt.startswith("scenario=stop"):
+    if prompt.startswith("scenario=stop"):
+        background = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        (root / "task.pid").write_text(str(background.pid))
     emit({"type": "system", "subtype": "background_tasks_changed", "tasks": [task]})
     assistant("waiting for background work")
     emit({"type": "result", "subtype": "success", "is_error": False})
@@ -2879,6 +2899,7 @@ for _ in sys.stdin:
             LifecycleScenario::WakeUserSend => "scenario=wake_user",
             LifecycleScenario::WakeImmediateUnbound => "scenario=wake_immediate",
             LifecycleScenario::Restart => "scenario=restart",
+            LifecycleScenario::StopWhileParked => "scenario=stop",
         };
         let first = start_fake_turn(
             &home,
@@ -2955,6 +2976,84 @@ for _ in sys.stdin:
                     }));
                 }
                 assert_eq!(fake.pids().len(), 1);
+                assert_fake_groups_gone(&fake).await;
+            }
+            LifecycleScenario::StopWhileParked => {
+                assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
+                assert_eq!(first_claim.pending_count, 1);
+                let delegation = wait_for_event(&home, &session_id, "delegation_signal").await;
+                assert_eq!(
+                    delegation["payload"]["delegation"]["items"][0]["id"],
+                    "task-1"
+                );
+                let process_group_id = first.process_group_id.unwrap();
+                let background_pid: u32 = std::fs::read_to_string(fake.dir.path().join("task.pid"))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!(
+                    crate::process_identity::try_collect_process_fact(background_pid).is_some()
+                );
+                let invocation = crate::console_lifecycle::lookup_launch(&first.launch_id).unwrap();
+                let started = std::time::Instant::now();
+                let stopped = close_parked_claude_invocation(&first_claim, invocation, "fake-box")
+                    .await
+                    .unwrap()
+                    .expect("parked Claude invocation should close");
+                assert!(started.elapsed() >= crate::console_lifecycle::USER_STOP_INPUT_GRACE);
+                assert_eq!(stopped.stopped.len(), 1);
+                assert_eq!(stopped.stopped[0].id, "task-1");
+                assert!(!crate::process_group::group_is_alive(process_group_id));
+                assert!(
+                    crate::process_identity::try_collect_process_fact(background_pid).is_none()
+                );
+                let events = home.events();
+                let closed = events
+                    .iter()
+                    .find(|event| event["kind"] == "invocation_closed")
+                    .expect("user-stop close event");
+                assert_eq!(closed["run_id"], first.run_id);
+                assert_eq!(closed["provider"], "claude");
+                assert_eq!(closed["source"], CLAUDE_RUNTIME_SOURCE);
+                assert_eq!(closed["payload"]["invocation_id"], first.launch_id);
+                assert_eq!(closed["payload"]["reason"], "user_stop");
+                assert_eq!(
+                    closed["payload"]["stopped"][0]["description"],
+                    "watch project files"
+                );
+                let empty = events
+                    .iter()
+                    .find(|event| {
+                        event["kind"] == "delegation_signal"
+                            && event["dedupe_key"]
+                                == format!("close:{}:delegation", first.launch_id)
+                    })
+                    .expect("empty delegation snapshot after close");
+                assert_eq!(empty["payload"]["delegation"]["count"], 0);
+
+                let resumed = start_fake_turn(
+                    &home,
+                    &fake,
+                    &session_id,
+                    &thread_id,
+                    "fresh turn after stop",
+                    Some(first.provider_thread_id.clone()),
+                    "user",
+                    None,
+                    None,
+                )
+                .await;
+                assert_ne!(resumed.pid, first.pid);
+                assert_ne!(resumed.launch_id, first.launch_id);
+                assert_eq!(resumed.provider_thread_id, first.provider_thread_id);
+                assert_eq!(
+                    wait_for_terminal(&resumed.run_id)
+                        .await
+                        .invocation_state
+                        .as_deref(),
+                    Some("closed")
+                );
+                assert_eq!(fake.pids().len(), 2);
                 assert_fake_groups_gone(&fake).await;
             }
             LifecycleScenario::WakeUserSend => {
@@ -3296,6 +3395,25 @@ for _ in sys.stdin:
                     .read(&first.run_id)
                     .unwrap();
                 assert_eq!(recovered.invocation_state.as_deref(), Some("closed"));
+                let recovered_events = home.events();
+                let closed = recovered_events
+                    .iter()
+                    .find(|event| event["kind"] == "invocation_closed")
+                    .expect("restart close event");
+                assert_eq!(closed["run_id"], first.run_id);
+                assert_eq!(closed["provider"], "claude");
+                assert_eq!(closed["source"], CLAUDE_RUNTIME_SOURCE);
+                assert_eq!(closed["payload"]["reason"], "machine_agent_restart");
+                assert_eq!(closed["payload"]["stopped"][0]["id"], "task-1");
+                let empty = recovered_events
+                    .iter()
+                    .find(|event| {
+                        event["kind"] == "delegation_signal"
+                            && event["dedupe_key"]
+                                == format!("close:{}:delegation", first.launch_id)
+                    })
+                    .expect("empty delegation snapshot after restart close");
+                assert_eq!(empty["payload"]["delegation"]["count"], 0);
                 assert_fake_groups_gone(&fake).await;
             }
         }

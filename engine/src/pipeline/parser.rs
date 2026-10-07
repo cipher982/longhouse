@@ -2302,6 +2302,28 @@ fn claude_task_tag_value(body: &str, tag: &str) -> Option<String> {
     (!value.is_empty()).then_some(bounded_text(&value, 2_000))
 }
 
+fn claude_task_tag_values(body: &str, tag: &str) -> Vec<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut remaining = body;
+    let mut values = Vec::new();
+    while let Some(start) = remaining.find(&open) {
+        let after_open = &remaining[start + open.len()..];
+        let Some(end) = after_open.find(&close) else {
+            break;
+        };
+        let value = after_open[..end]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !value.is_empty() {
+            values.push(bounded_text(&value, 2_000));
+        }
+        remaining = &after_open[end + close.len()..];
+    }
+    values
+}
+
 fn claude_task_notification_summary(content: &str) -> Option<String> {
     let trimmed = content.trim();
     let body_and_tail = trimmed.strip_prefix("<task-notification>")?;
@@ -2317,6 +2339,28 @@ fn claude_task_notification_summary(content: &str) -> Option<String> {
         let reminder_close = "</system-reminder>";
         let end = reminder.find(reminder_close)?;
         tail = reminder[end + reminder_close.len()..].trim();
+    }
+    let task_ids = claude_task_tag_values(body, "task-id");
+    if task_ids
+        .iter()
+        .any(|task_id| task_id.starts_with("__orphan_summary__:"))
+    {
+        let ids = task_ids
+            .iter()
+            .filter(|task_id| !task_id.starts_with("__orphan_summary__:"))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Some(if ids.is_empty() {
+            "Background tasks from the previous run were no longer running".to_string()
+        } else {
+            bounded_text(
+                &format!(
+                    "Background tasks from the previous run were no longer running: {}",
+                    ids.join(", ")
+                ),
+                2_000,
+            )
+        });
     }
     if let Some(summary) = claude_task_tag_value(body, "summary") {
         return Some(summary);
@@ -6145,6 +6189,58 @@ mod tests {
         assert!(result.events.iter().any(|event| {
             event.role == Role::User && event.content_text.as_deref() == Some("Build the feature.")
         }));
+    }
+
+    #[test]
+    fn claude_orphan_task_summary_is_calm_and_keeps_the_raw_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = r#"<task-notification>
+<task-id>task-a</task-id>
+<task-id>task-b</task-id>
+<task-id>__orphan_summary__:shell</task-id>
+<status>stopped</status>
+<summary>2 background shell command tasks didn't finish before the previous session ended. Task ids: task-a, task-b.</summary>
+<note>No completion record was found in the previous session. The tasks might still be running.</note>
+</task-notification>"#;
+        let raw_line = json!({
+            "parentUuid": "parent-placeholder",
+            "isSidechain": false,
+            "promptId": "prompt-placeholder",
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": content
+            },
+            "uuid": "orphan-notification",
+            "timestamp": "2026-10-06T15:41:42.052Z",
+            "origin": {
+                "kind": "task-notification"
+            },
+            "promptSource": "system",
+            "queueSkipAttachments": true,
+            "queueTranscriptOnly": true,
+            "userType": "external",
+            "entrypoint": "sdk-cli",
+            "cwd": "/Users/example",
+            "sessionId": "session-placeholder",
+        })
+        .to_string();
+        let path = make_jsonl_file(
+            dir.path(),
+            "claude-orphan-summary.jsonl",
+            &[raw_line.as_str()],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        let event = &result.events[0];
+        assert_eq!(event.role, Role::System);
+        assert_eq!(
+            event.content_text.as_deref(),
+            Some("Background tasks from the previous run were no longer running: task-a, task-b")
+        );
+        assert_eq!(event.raw_type, "claude_task_notification");
+        assert_eq!(event.raw_line.as_deref(), Some(raw_line.as_str()));
     }
 
     #[test]

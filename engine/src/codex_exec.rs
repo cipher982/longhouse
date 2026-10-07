@@ -19,8 +19,8 @@ use tokio::io::{AsyncWriteExt, Lines};
 use tokio::process::Command;
 
 use crate::console_lifecycle::{
-    ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationState, PendingItem,
-    TurnBinding, TurnOrigin, WakeRequest,
+    ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationCloseReason,
+    InvocationState, PendingItem, TurnBinding, TurnOrigin, WakeRequest,
 };
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
@@ -1285,6 +1285,7 @@ async fn complete_codex_idle(
     sink: &CodexExecRuntimeSink,
     outcome: IdleOutcome,
 ) {
+    let _ = invocation.persist_pending_claim();
     if outcome.has_active_turn {
         sink.post_terminal(
             &outcome.signal.terminal_state,
@@ -1307,6 +1308,27 @@ async fn complete_codex_idle(
     if outcome.invocation_state == InvocationState::Closed {
         let _ = invocation.close_input().await;
     }
+}
+
+pub async fn close_parked_codex_invocation(
+    claim: &crate::turn_claims::TurnClaim,
+    invocation: Arc<ConsoleInvocation>,
+    machine_name: &str,
+) -> Result<Option<crate::console_lifecycle::InvocationCloseOutcome>> {
+    let outcome = crate::console_lifecycle::close_parked_invocation(
+        &invocation,
+        claim,
+        machine_name,
+        CODEX_EXEC_RUNTIME_SOURCE,
+        crate::config::get_agent_runtime_events_outbox_dir(),
+    )
+    .await?;
+    if let Some(outcome) = &outcome {
+        if let Ok(mut inputs) = codex_console_input_registry().lock() {
+            inputs.remove(&outcome.invocation_id);
+        }
+    }
+    Ok(outcome)
 }
 pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
     if config.origin == "wake" {
@@ -1745,33 +1767,24 @@ fn settle_codex_restart_claim(
             // Response completion and invocation closure are independent facts.
             // The response stays immutable. Retain the separate closing record so
             // the daemon can retry it even if this startup recovery runs only once.
-            let invocation_id = claim.launch_id.as_deref().unwrap_or(&claim.run_id);
-            let event = json!({
-                "runtime_key": format!("codex:{}", claim.session_id),
-                "session_id": claim.session_id,
-                "run_id": claim.run_id,
-                "thread_id": claim.thread_id,
-                "provider": "codex",
-                "device_id": machine_name,
-                "source": CODEX_EXEC_RUNTIME_SOURCE,
-                "kind": "invocation_closed",
-                "occurred_at": Utc::now().to_rfc3339(),
-                "dedupe_key": format!("close:{invocation_id}"),
-                "payload": {
-                    "invocation_id": invocation_id,
-                    "reason": "machine_agent_restart",
-                    "stopped": [{
-                        "kind": "invocation",
-                        "id": invocation_id,
-                        "description": "Codex app-server invocation"
-                    }]
-                }
-            });
-            registry.retain_invocation_close_event(&claim.run_id, event)?;
-            match crate::outbox::retry_retained_invocation_close_event(
+            let mut stopped = crate::console_lifecycle::stopped_items_for_claim(&claim);
+            if stopped.is_empty() {
+                let invocation_id = claim.launch_id.as_deref().unwrap_or(&claim.run_id);
+                stopped.push(PendingItem {
+                    id: invocation_id.to_string(),
+                    kind: "invocation".to_string(),
+                    status: "stopped".to_string(),
+                    description: Some("Codex app-server invocation".to_string()),
+                });
+            }
+            match crate::console_lifecycle::publish_invocation_closed(
                 registry,
                 outbox_dir,
-                &claim.run_id,
+                &claim,
+                machine_name,
+                CODEX_EXEC_RUNTIME_SOURCE,
+                InvocationCloseReason::MachineAgentRestart,
+                &stopped,
             ) {
                 Ok(handed_off) => return Ok(handed_off),
                 Err(error) => {
@@ -2392,6 +2405,7 @@ async fn trigger_codex_wake(
         pending.remove(&id);
         projection.completed_commands.remove(&id);
     }
+    let _ = invocation.persist_pending_claim();
     if let Some(Some(wake)) = wake {
         sink.post_wake_signal(&wake).await;
     }
@@ -4895,7 +4909,7 @@ for line in sys.stdin:
         let codex_bin = temp.join("codex");
         let input_log = temp.join("turn-inputs.txt");
         let script = r#"#!/usr/bin/env python3
-import json, sys, time
+import json, subprocess, sys, time
 scenario = "__SCENARIO__"
 input_log = __INPUT_LOG__
 pending = {}
@@ -4946,8 +4960,13 @@ for line in sys.stdin:
         emit({"method": "turn/started", "params": {"turn": {"id": turn_id, "status": "inProgress"}}})
         if scenario == "UserDuringPendingWake" and turn_count == 2:
             time.sleep(1)
-        if turn_count == 1 and scenario != "Plain":
+        fresh_stop_resume = scenario == "StopWhileParked" and input_text == "fresh turn after stop"
+        if turn_count == 1 and scenario != "Plain" and not fresh_stop_resume:
             start_item("exec-1", "python3 -c 'print(\"first\")'")
+            if scenario == "StopWhileParked":
+                background = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                with open(input_log + ".pid", "w", encoding="utf-8") as stream:
+                    stream.write(str(background.pid))
             if scenario == "WakePending":
                 start_item("exec-2", "python3 -c 'print(\"second\")'")
         elif scenario in ("Background", "UserSend") or (scenario == "WakePending" and turn_count >= 3):
@@ -5055,6 +5074,18 @@ for line in sys.stdin:
         .expect("Codex invocation did not close");
     }
 
+    fn runtime_outbox_events() -> Vec<Value> {
+        let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+        fs::read_dir(outbox)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+            .filter_map(|path| fs::read(path).ok())
+            .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+            .collect()
+    }
+
     fn run_codex_scenario(
         scenario: crate::console_lifecycle::conformance::LifecycleScenario,
     ) -> crate::console_lifecycle::conformance::ScenarioFuture {
@@ -5106,7 +5137,8 @@ for line in sys.stdin:
             LifecycleScenario::Background
             | LifecycleScenario::UserSend
             | LifecycleScenario::WakePending
-            | LifecycleScenario::WakeDrained => {
+            | LifecycleScenario::WakeDrained
+            | LifecycleScenario::StopWhileParked => {
                 assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
                 let expected_pending = if scenario == LifecycleScenario::WakePending {
                     2
@@ -5140,6 +5172,77 @@ for line in sys.stdin:
             }
             LifecycleScenario::Restart => unreachable!(),
             _ => return ScenarioOutcome::Unsupported("not_implemented:scenario_not_in_phase_one"),
+        }
+        if scenario == LifecycleScenario::StopWhileParked {
+            let background_pid: u32 = fs::read_to_string(format!("{}.pid", input_log.display()))
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(crate::process_identity::try_collect_process_fact(background_pid).is_some());
+            let invocation = crate::console_lifecycle::lookup_launch(&launch_id).unwrap();
+            let stopped =
+                close_parked_codex_invocation(&first_claim, invocation, "codex-lifecycle-test")
+                    .await
+                    .unwrap()
+                    .expect("parked Codex invocation should close");
+            assert_eq!(stopped.stopped.len(), 1);
+            assert_eq!(stopped.stopped[0].id, "exec-1");
+            assert!(!crate::process_group::group_is_alive(
+                first.process_group_id.unwrap()
+            ));
+            assert!(crate::process_identity::try_collect_process_fact(background_pid).is_none());
+            wait_for_codex_invocation_closed(&launch_id).await;
+
+            let close_events = runtime_outbox_events()
+                .into_iter()
+                .filter(|event| event["session_id"] == first.session_id)
+                .collect::<Vec<_>>();
+            let closed = close_events
+                .iter()
+                .find(|event| event["kind"] == "invocation_closed")
+                .expect("Codex user-stop close event");
+            assert_eq!(closed["run_id"], first.run_id);
+            assert_eq!(closed["provider"], "codex");
+            assert_eq!(closed["source"], CODEX_EXEC_RUNTIME_SOURCE);
+            assert_eq!(closed["payload"]["invocation_id"], launch_id);
+            assert_eq!(closed["payload"]["reason"], "user_stop");
+            assert_eq!(closed["payload"]["stopped"][0]["id"], "exec-1");
+            let empty = close_events
+                .iter()
+                .find(|event| {
+                    event["kind"] == "delegation_signal"
+                        && event["dedupe_key"] == format!("close:{launch_id}:delegation")
+                })
+                .expect("empty delegation snapshot after close");
+            assert_eq!(empty["payload"]["delegation"]["count"], 0);
+
+            let mut resumed_config =
+                scenario_run_config(temp.path(), &api_url, &fake_codex, "fresh turn after stop");
+            resumed_config.session_id = first.session_id.clone();
+            resumed_config.thread_id = first_config.thread_id.clone();
+            resumed_config.resume_thread_id = Some("provider-thread".to_string());
+            resumed_config.origin = "user".to_string();
+            claim_codex_test_run(&resumed_config);
+            let resumed = start_codex_exec_once(resumed_config).await.unwrap();
+            assert_ne!(resumed.pid, first.pid);
+            assert_ne!(resumed.process_group_id, first.process_group_id);
+            let resumed_terminal = wait_for_captured_event(&mut received, &mut events, |event| {
+                event["run_id"] == resumed.run_id && event["kind"] == "terminal_signal"
+            })
+            .await;
+            assert_eq!(
+                resumed_terminal["payload"]["terminal_state"],
+                "run_completed"
+            );
+            let resumed_claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(&resumed.run_id)
+                .unwrap();
+            assert_eq!(resumed_claim.invocation_state.as_deref(), Some("closed"));
+            assert_eq!(resumed_claim.pending_count, 0);
+            wait_for_codex_invocation_closed(&resumed_claim.launch_id.clone().unwrap()).await;
+            assert_fake_process_group_gone(resumed.process_group_id.unwrap()).await;
+            return ScenarioOutcome::Passed;
         }
 
         if matches!(
@@ -5278,6 +5381,20 @@ for line in sys.stdin:
             )
             .unwrap();
         registry
+            .record_invocation_pending_items(
+                &run_id,
+                vec![PendingItem {
+                    id: "exec-1".to_string(),
+                    kind: "shell".to_string(),
+                    status: "running".to_string(),
+                    description: Some("python3 background command".to_string()),
+                }],
+            )
+            .unwrap();
+        registry
+            .mark_terminal(&run_id, "run_completed", None)
+            .unwrap();
+        registry
             .record_invocation_state(&run_id, "parked", 1)
             .unwrap();
         let process_facts = crate::process_identity::try_collect_process_facts_by_pid().unwrap();
@@ -5289,20 +5406,36 @@ for line in sys.stdin:
         );
         let claim = registry.read(&run_id).unwrap();
         assert_eq!(claim.state, "terminal");
-        assert_eq!(claim.result.unwrap()["terminal_state"], "run_cancelled");
+        assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
         assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
         assert_eq!(claim.pending_count, 1);
         let status = child_reaper.join().unwrap().unwrap();
         assert!(!status.success());
-        let event_path = fs::read_dir(&outbox)
+        let events = fs::read_dir(&outbox)
             .unwrap()
             .flatten()
-            .find(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
-            .expect("restart closure must be durable")
-            .path();
-        let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
-        assert_eq!(event["payload"]["terminal_reason"], "machine_agent_restart");
-        assert_eq!(event["payload"]["invocation"]["state"], "closed");
+            .filter(|entry| {
+                entry.path().extension().and_then(|value| value.to_str()) == Some("json")
+            })
+            .filter_map(|entry| fs::read(entry.path()).ok())
+            .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .collect::<Vec<_>>();
+        assert!(!events
+            .iter()
+            .any(|event| event["kind"] == "terminal_signal"));
+        let closed = events
+            .iter()
+            .find(|event| event["kind"] == "invocation_closed")
+            .expect("restart invocation-closed event must be durable");
+        assert_eq!(closed["run_id"], run_id);
+        assert_eq!(closed["source"], CODEX_EXEC_RUNTIME_SOURCE);
+        assert_eq!(closed["payload"]["reason"], "machine_agent_restart");
+        assert_eq!(closed["payload"]["stopped"][0]["id"], "exec-1");
+        assert!(events.iter().any(|event| {
+            event["kind"] == "delegation_signal"
+                && event["dedupe_key"] == format!("close:{launch_id}:delegation")
+                && event["payload"]["delegation"]["count"] == 0
+        }));
     }
 
     #[tokio::test]
@@ -6190,14 +6323,21 @@ for line in sys.stdin:
         assert_eq!(reloaded.terminal_event.as_ref(), Some(&original));
         assert_eq!(reloaded.invocation_state.as_deref(), Some("closed"));
         assert_eq!(reloaded.pending_count, 2);
-        let event_path = fs::read_dir(&blocked)
+        let events = fs::read_dir(&blocked)
             .unwrap()
             .flatten()
-            .find(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
-            .unwrap()
-            .path();
-        let closing: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
-        assert_eq!(closing["kind"], "invocation_closed");
+            .filter(|entry| {
+                entry.path().extension().and_then(|value| value.to_str()) == Some("json")
+            })
+            .map(|entry| serde_json::from_slice::<Value>(&fs::read(entry.path()).unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        let closing = events
+            .iter()
+            .find(|event| event["kind"] == "invocation_closed")
+            .expect("restart closure must be durably queued");
+        assert!(events.iter().any(|event| {
+            event["kind"] == "delegation_signal" && event["payload"]["delegation"]["count"] == 0
+        }));
         assert_eq!(closing["payload"]["reason"], "machine_agent_restart");
         assert!(closing["payload"].get("terminal_state").is_none());
         assert_ne!(closing["dedupe_key"], original["dedupe_key"]);

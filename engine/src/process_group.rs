@@ -169,8 +169,10 @@ pub fn leader_group_for(_pid: u32) -> Option<i32> {
 /// return value reflects reality rather than the last signal sent.
 ///
 /// For groups whose leader is **not** our direct child — a pid recovered from a
-/// state file, or one spawned by a previous engine process, which is every
-/// caller in the engine today. If you hold a `Child` for the leader, use
+/// state file, or one spawned by a previous engine process. The one exception
+/// is closing a parked Console invocation, whose `Child` belongs to a provider
+/// monitor task that reaps it concurrently; that caller waits for the monitor
+/// before it believes `Survived`. If you hold a `Child` for the leader, use
 /// [`shutdown_owned_child`] instead: an unreaped child of ours stays a zombie,
 /// `killpg(pgid, 0)` still succeeds on it, and this would poll until the budget
 /// expired and then report `Survived` for a process that had in fact stopped.
@@ -203,8 +205,8 @@ pub async fn shutdown_group(_pgid: i32, _grace: Duration) -> GroupShutdown {
 /// Poll until the group is gone or `budget` expires. True when it is gone.
 ///
 /// Not `cfg(unix)`-gated: `group_is_alive` is always false off unix, so this
-/// returns immediately there and both callers stay platform-neutral.
-async fn wait_for_group_exit(pgid: i32, budget: Duration) -> bool {
+/// returns immediately there and every caller stays platform-neutral.
+pub async fn wait_for_group_exit(pgid: i32, budget: Duration) -> bool {
     wait_for_group_exit_until(pgid, tokio::time::Instant::now() + budget).await
 }
 

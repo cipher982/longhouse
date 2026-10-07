@@ -99,6 +99,9 @@ MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     # A Console steer enters a running Console turn, so it rides on Console
     # turn support rather than the Helm-only steer_active_turn flag.
     "turn_steer": "turn_start",
+    # Closing parked work is a Console capability, admitted only where
+    # turn_start is supported.
+    "invocation_close": "turn_start",
 }
 _MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS = {
     "resume_run_once": ("can_resume",),
@@ -423,6 +426,8 @@ def _validate_machine_control_supports(item: dict[str, Any]) -> None:
             raise ValueError(
                 f"managed provider contract {provider}: machine_control_supports entry {support!r} must use provider prefix {provider}"
             )
+        if suffix == "invocation_close" and provider not in {"claude", "codex", "omp"}:
+            raise ValueError(f"managed provider contract {provider}: invocation_close is only supported for claude, codex, and omp")
         operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(suffix)
         if operation is None:
             raise ValueError(
