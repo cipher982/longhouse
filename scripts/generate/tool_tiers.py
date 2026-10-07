@@ -9,6 +9,7 @@ Outputs:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -360,10 +361,15 @@ public enum ShellClassifierConstants {{
 
 def main() -> int:
     data = load()
-    TS_OUT.write_text(render_ts(data))
-    SWIFT_OUT.write_text(render_swift(data))
-    print(f"wrote {TS_OUT}")
-    print(f"wrote {SWIFT_OUT}")
+    outputs = {TS_OUT: render_ts(data), SWIFT_OUT: render_swift(data)}
+    if "--check" in sys.argv[1:]:
+        stale = [path for path, text in outputs.items() if not path.is_file() or path.read_text() != text]
+        for path in stale:
+            print(f"{path.relative_to(REPO)} is out of date; run python3 scripts/generate/tool_tiers.py")
+        return 1 if stale else 0
+    for path, text in outputs.items():
+        path.write_text(text)
+        print(f"wrote {path}")
     return 0
 
 
