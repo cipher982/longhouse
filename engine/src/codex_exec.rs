@@ -18,6 +18,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::io::{AsyncWriteExt, Lines};
 use tokio::process::Command;
 
+use crate::codex_app_server_rpc::{self as jsonrpc, RequestIds};
 use crate::console_lifecycle::{
     ConsoleInput, ConsoleInvocation, IdleOutcome, IdleSignal, InvocationCloseReason,
     InvocationState, PendingItem, TurnBinding, TurnOrigin, WakeRequest,
@@ -331,7 +332,7 @@ async fn console_control_within(
 struct AppServerRpc {
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
-    next_id: u64,
+    ids: RequestIds,
     seq: u64,
 }
 
@@ -1090,32 +1091,30 @@ async fn spawn_initialized_codex_worker(
     let mut rpc = AppServerRpc {
         stdin,
         lines: BufReader::new(stdout).lines(),
-        next_id: 2,
+        ids: RequestIds::starting_at(1),
         seq: 0,
     };
     let initialize_result = tokio::time::timeout(initialize_budget, async {
-        rpc.write(&json!({
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "clientInfo": {
-                    "name": "longhouse_console",
-                    "title": "Longhouse Console",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-                "capabilities": { "experimentalApi": true },
-            }
-        }))
+        let initialize_id = rpc.ids.allocate();
+        rpc.write(&jsonrpc::request(
+            initialize_id,
+            "initialize",
+            jsonrpc::initialize_params(
+                "longhouse_console",
+                "Longhouse Console",
+                json!({ "experimentalApi": true }),
+            ),
+        ))
         .await?;
         loop {
             let value = rpc.next_value().await?;
-            if value.get("id").and_then(Value::as_u64) == Some(1) {
+            if jsonrpc::response_id(&value) == Some(initialize_id) {
                 if let Some(error) = value.get("error") {
                     anyhow::bail!("Codex worker initialize failed: {error}");
                 }
                 break;
             }
-            if value.get("id").is_some() && value.get("method").is_some() {
+            if jsonrpc::is_server_request(&value) {
                 rpc.respond_to_server_request(&value).await?;
             }
         }
@@ -2500,29 +2499,28 @@ async fn run_app_server_turn(
             let value = tokio::select! {
                 value = rpc.next_value() => value?,
                 Some(control) = steer_rx.recv() => {
-                    let id = rpc.next_id;
-                    rpc.next_id += 1;
+                    let id = rpc.ids.allocate();
                     let (request, reply) = match control {
                         ConsoleControl::Steer { text, reply } => (
-                            json!({
-                                "id": id,
-                                "method": "turn/steer",
-                                "params": {
+                            jsonrpc::request(
+                                id,
+                                "turn/steer",
+                                json!({
                                     "threadId": provider_thread_id,
                                     "expectedTurnId": expected_turn_id,
                                     "input": crate::codex_attachments::build_user_input_items_from_paths(&text, &[]),
-                                },
-                            }),
+                                }),
+                            ),
                             reply,
                         ),
                         ConsoleControl::Interrupt { reply } => {
                             interrupt_requested = true;
                             (
-                                json!({
-                                    "id": id,
-                                    "method": "turn/interrupt",
-                                    "params": {"threadId": provider_thread_id, "turnId": expected_turn_id},
-                                }),
+                                jsonrpc::request(
+                                    id,
+                                    "turn/interrupt",
+                                    json!({"threadId": provider_thread_id, "turnId": expected_turn_id}),
+                                ),
                                 reply,
                             )
                         }
@@ -2540,13 +2538,11 @@ async fn run_app_server_turn(
                 }
             };
             if value.get("method").is_none() {
-                if let Some((reply, method)) = value
-                    .get("id")
-                    .and_then(Value::as_u64)
-                    .and_then(|id| pending_steers.remove(&id))
+                if let Some((reply, method)) =
+                    jsonrpc::response_id(&value).and_then(|id| pending_steers.remove(&id))
                 {
-                    let outcome = match value.get("error") {
-                        Some(error) => Err(format!("{method} failed: {error}")),
+                    let outcome = match jsonrpc::response_error(&value, &method) {
+                        Some(message) => Err(message),
                         None => Ok(()),
                     };
                     if outcome.is_ok() {
@@ -2556,7 +2552,7 @@ async fn run_app_server_turn(
                     continue;
                 }
             }
-            if value.get("id").is_some() && value.get("method").is_some() {
+            if jsonrpc::is_server_request(&value) {
                 rpc.respond_to_server_request(&value).await?;
                 continue;
             }
@@ -2756,10 +2752,11 @@ impl AppServerRpc {
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
-        self.write(&json!({"method": method, "params": params}))
-            .await
+        self.write(&jsonrpc::notification(method, params)).await
     }
 
+    /// Send a request and read until its response, answering server requests
+    /// and posting every other message to `sink` along the way.
     async fn request(
         &mut self,
         method: &str,
@@ -2767,53 +2764,51 @@ impl AppServerRpc {
         sink: &CodexExecRuntimeSink,
         projection: &mut AppServerProjection,
     ) -> Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.write(&json!({"id": id, "method": method, "params": params}))
-            .await?;
-        loop {
-            let value = self.next_value().await?;
-            if value.get("id").and_then(Value::as_u64) == Some(id) && value.get("method").is_none()
-            {
-                if let Some(error) = value.get("error") {
-                    anyhow::bail!("{method} failed: {error}");
-                }
-                return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-            }
-            if value.get("id").is_some() && value.get("method").is_some() {
-                self.respond_to_server_request(&value).await?;
-            } else {
-                self.seq += 1;
-                sink.post_app_server_event(self.seq, &value, projection)
-                    .await;
-            }
-        }
+        self.request_observed(method, params, Some(sink), projection)
+            .await
     }
 
+    /// `request` that only folds other messages into `projection`.
     async fn request_quiet(
         &mut self,
         method: &str,
         params: Value,
         projection: &mut AppServerProjection,
     ) -> Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.write(&json!({"id": id, "method": method, "params": params}))
-            .await?;
+        self.request_observed(method, params, None, projection)
+            .await
+    }
+
+    async fn request_observed(
+        &mut self,
+        method: &str,
+        params: Value,
+        sink: Option<&CodexExecRuntimeSink>,
+        projection: &mut AppServerProjection,
+    ) -> Result<Value> {
+        let id = self.ids.allocate();
+        self.write(&jsonrpc::request(id, method, params)).await?;
         loop {
             let value = self.next_value().await?;
-            if value.get("id").and_then(Value::as_u64) == Some(id) && value.get("method").is_none()
-            {
-                if let Some(error) = value.get("error") {
-                    anyhow::bail!("{method} failed: {error}");
+            if jsonrpc::response_id(&value) == Some(id) && value.get("method").is_none() {
+                if let Some(message) = jsonrpc::response_error(&value, method) {
+                    anyhow::bail!(message);
                 }
                 return Ok(value.get("result").cloned().unwrap_or(Value::Null));
             }
-            if value.get("id").is_some() && value.get("method").is_some() {
+            if jsonrpc::is_server_request(&value) {
                 self.respond_to_server_request(&value).await?;
-            } else {
-                self.seq += 1;
-                projection.apply(&value);
+                continue;
+            }
+            self.seq += 1;
+            match sink {
+                Some(sink) => {
+                    sink.post_app_server_event(self.seq, &value, projection)
+                        .await
+                }
+                None => {
+                    projection.apply(&value);
+                }
             }
         }
     }
@@ -2835,17 +2830,10 @@ impl AppServerRpc {
     async fn respond_to_server_request(&mut self, request: &Value) -> Result<()> {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-        let result = match method {
-            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-                json!({"decision": "decline"})
-            }
-            "item/permissions/requestApproval" => json!({"scope": "turn", "permissions": {}}),
-            "item/tool/requestUserInput" => json!({"answers": {}}),
-            "mcpServer/elicitation/request" => json!({"action": "decline", "content": null}),
-            "applyPatchApproval" | "execCommandApproval" => json!({"decision": "Denied"}),
-            _ => anyhow::bail!("unsupported Codex app-server request: {method}"),
+        let Some(result) = jsonrpc::console_decline_answer(method) else {
+            anyhow::bail!("unsupported Codex app-server request: {method}");
         };
-        self.write(&json!({"id": id, "result": result})).await
+        self.write(&jsonrpc::response(id, result)).await
     }
 }
 
@@ -6574,7 +6562,9 @@ elif method == "golden/bye":
 
     #[tokio::test]
     async fn codex_rpc_golden_console_worker() {
-        use crate::codex_rpc_golden::{assert_golden, outcome, recorded_lines, write_recording_fake};
+        use crate::codex_rpc_golden::{
+            assert_golden, outcome, recorded_lines, write_recording_fake,
+        };
         let temp = tempfile::tempdir().unwrap();
         let scratch = [temp.path()];
         let (bin, raw_log) = write_recording_fake(temp.path(), GOLDEN_CONSOLE_FAKE);
@@ -6596,7 +6586,12 @@ elif method == "golden/bye":
 
         let result = worker
             .rpc
-            .request("golden/serverRequests", json!({"a": 1}), &sink, &mut projection)
+            .request(
+                "golden/serverRequests",
+                json!({"a": 1}),
+                &sink,
+                &mut projection,
+            )
             .await;
         steps.push(json!({"step": "request", "outcome": outcome(&result, &scratch), "seq": worker.rpc.seq}));
         let result = worker
