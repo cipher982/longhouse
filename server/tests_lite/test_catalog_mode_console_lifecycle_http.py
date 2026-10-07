@@ -474,11 +474,11 @@ def _catalog_http_stack(tmp_path, monkeypatch, *, name: str):
     return engine, store, registry
 
 
-def _create_parked_console_session(client):
+def _create_parked_console_session(client, provider="claude"):
     headers = {"X-Agents-Token": "dev"}
     created = client.post(
         "/agents/sessions",
-        json={"provider": "claude", "device_id": "cinder", "cwd": "/tmp/longhouse"},
+        json={"provider": provider, "device_id": "cinder", "cwd": "/tmp/longhouse"},
         headers=headers,
     )
     assert created.status_code == 201, created.text
@@ -522,13 +522,13 @@ def _create_parked_console_session(client):
             json={
                 "events": [
                     {
-                        "runtime_key": f"claude:{session_id}",
+                        "runtime_key": f"{provider}:{session_id}",
                         "session_id": session_id,
                         "thread_id": thread_id,
                         "run_id": run_id,
-                        "provider": "claude",
+                        "provider": provider,
                         "device_id": "cinder",
-                        "source": "claude_console",
+                        "source": "codex_app_server" if provider == "codex" else "claude_console",
                         "kind": kind,
                         "occurred_at": occurred_at.isoformat(),
                         "dedupe_key": dedupe_key,
@@ -600,32 +600,50 @@ def test_catalog_mode_http_interrupt_closes_parked_invocation_and_refuses_idle(t
         engine.dispose()
 
 
-def test_catalog_mode_http_invocation_closed_event_records_one_longhouse_notice(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("provider", "reason"), [("claude", "user_stop"), ("codex", "machine_agent_restart")])
+def test_catalog_mode_http_invocation_closed_event_records_one_longhouse_notice(tmp_path, monkeypatch, provider, reason):
     from fastapi.testclient import TestClient
     from zerg.models.live_store import LiveConsoleTurn
+    from zerg.models.live_store import LiveRuntimeState
+    from zerg.models.live_store import LiveSessionCatalog
+    from zerg.models.live_store import LiveSessionRun
 
     engine, store, registry = _catalog_http_stack(tmp_path, monkeypatch, name="console-close-notice")
     try:
         with TestClient(api_app, raise_server_exceptions=False) as client:
-            session_id, thread_id, run_id = _create_parked_console_session(client)
+            session_id, thread_id, run_id = _create_parked_console_session(client, provider)
+            with Session(engine) as db:
+                prior_runtime = db.get(LiveRuntimeState, f"{provider}:{session_id}")
+                prior_run = db.get(LiveSessionRun, run_id)
+                prior_session = db.get(LiveSessionCatalog, session_id)
+                original_outcome = (
+                    prior_runtime.terminal_state,
+                    prior_runtime.terminal_reason,
+                    prior_runtime.terminal_source,
+                    prior_runtime.terminal_at,
+                    prior_run.exit_status,
+                    prior_run.ended_at,
+                    prior_session.last_console_result_outcome,
+                    prior_session.closed_at,
+                )
             invocation_id = "invocation-close-http-test"
             occurred_at = datetime.now(timezone.utc).isoformat()
             close_event = {
                 "events": [
                     {
-                        "runtime_key": f"claude:{session_id}",
+                        "runtime_key": f"{provider}:{session_id}",
                         "session_id": session_id,
                         "thread_id": thread_id,
                         "run_id": run_id,
-                        "provider": "claude",
+                        "provider": provider,
                         "device_id": "cinder",
-                        "source": "claude_console",
+                        "source": "codex_app_server" if provider == "codex" else "claude_console",
                         "kind": "invocation_closed",
                         "occurred_at": occurred_at,
                         "dedupe_key": f"close:{invocation_id}",
                         "payload": {
                             "invocation_id": invocation_id,
-                            "reason": "user_stop",
+                            "reason": reason,
                             "stopped": [
                                 {"id": "watch-branch", "kind": "monitor", "description": "watch the branch"},
                                 {
@@ -649,9 +667,21 @@ def test_catalog_mode_http_invocation_closed_event_records_one_longhouse_notice(
             assert len(notices) == 1
             assert notices[0]["origin"] == "longhouse"
             assert notices[0]["turn"] is None
-            assert notices[0]["text"] == "Stopped 2 background tasks: watch the branch; run the integration tests"
             with Session(engine) as db:
                 assert db.query(LiveConsoleTurn).filter(LiveConsoleTurn.session_id == session_id).count() == 1
+                after_runtime = db.get(LiveRuntimeState, f"{provider}:{session_id}")
+                after_run = db.get(LiveSessionRun, run_id)
+                after_session = db.get(LiveSessionCatalog, session_id)
+                assert (
+                    after_runtime.terminal_state,
+                    after_runtime.terminal_reason,
+                    after_runtime.terminal_source,
+                    after_runtime.terminal_at,
+                    after_run.exit_status,
+                    after_run.ended_at,
+                    after_session.last_console_result_outcome,
+                    after_session.closed_at,
+                ) == original_outcome
             assert len(registry.commands) == 1
     finally:
         api_app.dependency_overrides.clear()

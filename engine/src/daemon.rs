@@ -8413,14 +8413,25 @@ mod tests {
                     );
                     // Closing a parked process is recoverable even after its
                     // response status has already been retired.
-                    registry.record_invocation_state(&run_id, "parked", 2).unwrap();
+                    registry
+                        .record_invocation_state(&run_id, "parked", 2)
+                        .unwrap();
                     let mut closing = event.clone();
+                    closing["kind"] = serde_json::json!("invocation_closed");
                     closing["dedupe_key"] = serde_json::json!(format!("close:{run_id}"));
-                    closing["payload"]["invocation"] =
-                        serde_json::json!({"id": "invocation", "state": "closed", "pending_count": 2});
-                    registry.retain_invocation_close_event(&run_id, closing.clone()).unwrap();
+                    closing["payload"] = serde_json::json!({
+                        "invocation_id": run_id,
+                        "reason": "machine_agent_restart",
+                        "stopped": [{"kind": "invocation", "id": run_id}]
+                    });
+                    registry
+                        .retain_invocation_close_event(&run_id, closing.clone())
+                        .unwrap();
                     let reloaded = crate::turn_claims::default_registry().unwrap();
-                    assert!(reloaded.read(&run_id).unwrap().has_pending_runtime_handoff());
+                    assert!(reloaded
+                        .read(&run_id)
+                        .unwrap()
+                        .has_pending_runtime_handoff());
                     assert!(super::maybe_start_managed_observation_scan(
                         temp.path().join("state.db"),
                         &mut scans,
@@ -8434,8 +8445,13 @@ mod tests {
                     assert_eq!(closed.invocation_close_event.as_ref(), Some(&closing));
                     assert!(closed.invocation_close_event_handed_off);
                     assert_eq!(closed.terminal_event.as_ref(), Some(&event));
-                    assert_eq!(closed.result.as_ref().unwrap()["terminal_state"], "run_completed");
-                    registry.record_invocation_state(&run_id, "parked", 99).unwrap();
+                    assert_eq!(
+                        closed.result.as_ref().unwrap()["terminal_state"],
+                        "run_completed"
+                    );
+                    registry
+                        .record_invocation_state(&run_id, "parked", 99)
+                        .unwrap();
                     let late = registry.read(&run_id).unwrap();
                     assert_eq!(late.invocation_state.as_deref(), Some("closed"));
                     assert_eq!(late.pending_count, 2);

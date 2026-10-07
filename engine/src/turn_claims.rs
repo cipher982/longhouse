@@ -401,7 +401,7 @@ impl TurnClaimRegistry {
         pending_count: usize,
     ) -> Result<TurnClaim> {
         let (_lock, mut claim) = self.read_for_update(run_id)?;
-        if claim.invocation_state.as_deref() == Some("closed") {
+        if claim.invocation_close_event_handed_off {
             return Ok(claim);
         }
         claim.invocation_state = Some(invocation_state.to_string());
@@ -635,7 +635,7 @@ impl TurnClaimRegistry {
         }
         if let Some(invocation) = event
             .pointer("/payload/invocation")
-            .filter(|_| claim.invocation_state.as_deref() != Some("closed"))
+            .filter(|_| !claim.invocation_close_event_handed_off)
         {
             if let Some(state) = invocation.get("state").and_then(Value::as_str) {
                 claim.invocation_state = Some(state.to_string());
@@ -698,11 +698,8 @@ impl TurnClaimRegistry {
         event: Value,
     ) -> Result<Option<Value>> {
         anyhow::ensure!(
-            event.get("run_id").and_then(Value::as_str) == Some(run_id)
-                && event
-                    .pointer("/payload/invocation/state")
-                    .and_then(Value::as_str)
-                    == Some("closed"),
+            event.get("kind").and_then(Value::as_str) == Some("invocation_closed")
+                && event.get("run_id").and_then(Value::as_str) == Some(run_id),
             "invalid invocation closing event for run {run_id}"
         );
         let (_lock, mut claim) = self.read_for_update(run_id)?;
@@ -1299,6 +1296,26 @@ mod tests {
             "run_completed"
         );
         assert!(!reloaded.terminal_event_handed_off);
+    }
+
+    #[test]
+    fn tentative_close_can_roll_back_after_shutdown_survives() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        let run_id = id(81);
+        registry
+            .claim(&run_id, &id(82), &id(83), None, None, "claude")
+            .unwrap();
+        registry
+            .record_invocation_state(&run_id, "closed", 2)
+            .unwrap();
+        registry
+            .record_invocation_state(&run_id, "parked", 2)
+            .unwrap();
+        let recoverable = registry.read(&run_id).unwrap();
+        assert_eq!(recoverable.invocation_state.as_deref(), Some("parked"));
+        assert_eq!(recoverable.pending_count, 2);
+        assert!(!recoverable.invocation_close_event_handed_off);
     }
 
     #[test]

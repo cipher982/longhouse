@@ -1725,55 +1725,75 @@ fn settle_codex_restart_claim(
     claim: &crate::turn_claims::TurnClaim,
     detail: &str,
 ) -> Result<bool> {
-    let claim = registry.read(&claim.run_id)?;
-    if claim.invocation_state.as_deref() == Some("closed") {
-        return Ok(false);
-    }
-    if matches!(claim.state.as_str(), "terminal" | "failed") {
-        // Response completion and invocation closure are independent facts.
-        // The response stays immutable. Retain the separate closing record so
-        // the daemon can retry it even if this startup recovery runs only once.
-        let terminal_state = claim
-            .result
-            .as_ref()
-            .and_then(|result| result.get("terminal_state"))
-            .and_then(Value::as_str)
-            .unwrap_or("run_cancelled");
-        let mut event =
-            codex_exec_recovery_terminal_event(&claim, machine_name, terminal_state, detail);
-        event["dedupe_key"] = Value::String(format!(
-            "codex-exec:{}:{}:invocation-closed",
-            claim.session_id, claim.run_id
-        ));
-        registry.retain_invocation_close_event(&claim.run_id, event)?;
-        match crate::outbox::retry_retained_invocation_close_event(
+    let result = (|| -> Result<bool> {
+        let claim = registry.read(&claim.run_id)?;
+        if claim.invocation_state.as_deref() == Some("closed") {
+            return Ok(false);
+        }
+        if matches!(claim.state.as_str(), "terminal" | "failed") {
+            // Response completion and invocation closure are independent facts.
+            // The response stays immutable. Retain the separate closing record so
+            // the daemon can retry it even if this startup recovery runs only once.
+            let invocation_id = claim.launch_id.as_deref().unwrap_or(&claim.run_id);
+            let event = json!({
+                "runtime_key": format!("codex:{}", claim.session_id),
+                "session_id": claim.session_id,
+                "run_id": claim.run_id,
+                "thread_id": claim.thread_id,
+                "provider": "codex",
+                "device_id": machine_name,
+                "source": CODEX_EXEC_RUNTIME_SOURCE,
+                "kind": "invocation_closed",
+                "occurred_at": Utc::now().to_rfc3339(),
+                "dedupe_key": format!("close:{invocation_id}"),
+                "payload": {
+                    "invocation_id": invocation_id,
+                    "reason": "machine_agent_restart",
+                    "stopped": [{
+                        "kind": "invocation",
+                        "id": invocation_id,
+                        "description": "Codex app-server invocation"
+                    }]
+                }
+            });
+            registry.retain_invocation_close_event(&claim.run_id, event)?;
+            match crate::outbox::retry_retained_invocation_close_event(
+                registry,
+                outbox_dir,
+                &claim.run_id,
+            ) {
+                Ok(handed_off) => return Ok(handed_off),
+                Err(error) => {
+                    tracing::warn!(%error, run_id = %claim.run_id, "Codex invocation close remains retryable");
+                    return Ok(false);
+                }
+            }
+        }
+        let event =
+            codex_exec_recovery_terminal_event(&claim, machine_name, "run_cancelled", detail);
+        match crate::outbox::retain_and_enqueue_terminal_event(
             registry,
             outbox_dir,
             &claim.run_id,
+            "run_cancelled",
+            Some(detail.to_string()),
+            event,
         ) {
-            Ok(handed_off) => return Ok(handed_off),
+            Ok((_, safe_to_retire)) => Ok(safe_to_retire),
             Err(error) => {
-                tracing::warn!(%error, run_id = %claim.run_id, "Codex invocation close remains retryable");
-                return Ok(false);
+                tracing::warn!(
+                    %error,
+                    run_id = %claim.run_id,
+                    "Failed to retain recovered Codex Console terminal event"
+                );
+                Ok(false)
             }
         }
-    }
-    let event = codex_exec_recovery_terminal_event(&claim, machine_name, "run_cancelled", detail);
-    match crate::outbox::retain_and_enqueue_terminal_event(
-        registry,
-        outbox_dir,
-        &claim.run_id,
-        "run_cancelled",
-        Some(detail.to_string()),
-        event,
-    ) {
-        Ok((_, safe_to_retire)) => Ok(safe_to_retire),
+    })();
+    match result {
+        Ok(settled) => Ok(settled),
         Err(error) => {
-            tracing::warn!(
-                %error,
-                run_id = %claim.run_id,
-                "Failed to retain recovered Codex Console terminal event"
-            );
+            tracing::warn!(%error, run_id = %claim.run_id, "Codex restart claim remains retryable");
             Ok(false)
         }
     }
@@ -3288,6 +3308,13 @@ impl CodexExecRuntimeSink {
                     self.session_id,
                     self.run_id
                 );
+                // A semantic conflict must not bypass the immutable response
+                // through the direct pump or fallback outbox.
+                let terminal_event = crate::turn_claims::default_registry()
+                    .and_then(|registry| registry.read(&self.run_id))
+                    .ok()
+                    .and_then(|claim| claim.terminal_event)
+                    .unwrap_or(terminal_event);
                 match crate::config::get_agent_runtime_events_outbox_dir().and_then(|outbox| {
                     crate::outbox::enqueue_runtime_event_for_handoff(&outbox, &terminal_event)
                 }) {
@@ -6086,9 +6113,47 @@ for line in sys.stdin:
             .unwrap()
             .path();
         let closing: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
-        assert_eq!(closing["payload"]["invocation"]["state"], "closed");
-        assert_eq!(closing["payload"]["terminal_state"], "run_completed");
+        assert_eq!(closing["kind"], "invocation_closed");
+        assert_eq!(closing["payload"]["reason"], "machine_agent_restart");
+        assert!(closing["payload"].get("terminal_state").is_none());
         assert_ne!(closing["dedupe_key"], original["dedupe_key"]);
         assert!(codex_recovery_claims(&registry).unwrap().is_empty());
+    }
+    #[test]
+    fn one_unwritable_restart_claim_does_not_abort_later_settlement() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let claims_dir = temp.path().join("claims");
+        let registry = crate::turn_claims::TurnClaimRegistry::new(claims_dir.clone());
+        let good = uuid::Uuid::new_v4().to_string();
+        let bad = uuid::Uuid::new_v4().to_string();
+        for run_id in [&good, &bad] {
+            seed_codex_claim(&registry, run_id, Some(u32::MAX), Some("old-birth".into()));
+            registry
+                .record_invocation_state(run_id, "parked", 2)
+                .unwrap();
+            registry
+                .mark_terminal(run_id, "run_completed", None)
+                .unwrap();
+        }
+        let lock_path = claims_dir.join(format!(".{bad}.lock"));
+        fs::remove_file(&lock_path).unwrap();
+        fs::create_dir(&lock_path).unwrap();
+        let settled = reconcile_codex_exec_claims(
+            &registry,
+            &temp.path().join("outbox"),
+            "cinder",
+            Some(std::collections::HashMap::new()),
+        )
+        .unwrap();
+        assert_eq!(settled, 1);
+        assert_eq!(
+            registry.read(&bad).unwrap().invocation_state.as_deref(),
+            Some("parked")
+        );
+        assert_eq!(
+            registry.read(&good).unwrap().invocation_state.as_deref(),
+            Some("closed")
+        );
     }
 }
