@@ -82,10 +82,13 @@ def _read(path: str) -> bytes | None:
         return None
 
 
-def _blob(content: bytes | None) -> str:
+def _blob(path: str, content: bytes | None) -> str:
+    """The blob `git add` would write for this content at this path (--path applies the same clean filters,
+    autocrlf and .gitattributes). Empty when unknown: post-commit then leaves the path alone."""
     if content is None:
         return ""
-    return subprocess.run(["git", "hash-object", "--stdin"], input=content, capture_output=True, check=True).stdout.decode().strip()
+    proc = subprocess.run(["git", "hash-object", "--stdin", "--path", path], input=content, capture_output=True)
+    return proc.stdout.decode().strip() if proc.returncode == 0 else ""
 
 
 def _index_blob(path: str) -> str:
@@ -129,7 +132,7 @@ def fix(name: str, cmd: str, ok_exit: set[int], watch: list[str], how: str, file
         with open(directory / "staged", "a") as fh:
             # path and the blob it held before the fix: post-commit touches the real index only where it
             # still holds exactly that (the stale copy `commit -o` leaves), never another staged edit.
-            fh.write("".join(f"{p}\t{_blob(before[p])}\n" for p in safe))
+            fh.write("".join(f"{p}\t{_blob(p, before[p])}\n" for p in safe))
         print(f"autofix: {name}: fixed and re-staged {', '.join(safe)}")
     if unsafe:
         print(f"autofix: {name} would change {', '.join(unsafe)}, which also has unstaged changes, so it was not fixed "
@@ -152,7 +155,7 @@ def post_commit() -> int:
     # then the index becomes HEAD for that path, and nothing anyone staged or changed since is touched.
     settled = [e[0] for e in entries if len(e) == 2 and Path(e[0]).exists()
                and git("diff", "--quiet", "HEAD", "--", e[0], check=False).returncode == 0
-               and _index_blob(e[0]) == e[1]]
+               and e[1] and _index_blob(e[0]) == e[1]]
     if settled:
         git("add", "--", *settled, check=False)
     return 0

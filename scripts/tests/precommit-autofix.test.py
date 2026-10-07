@@ -165,8 +165,18 @@ class AutofixTests(unittest.TestCase):
         self.assertFalse((state / "staged").exists())
 
     def blob(self, text: str) -> str:
-        return subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=self.dir, input=text + "\n",
+        return subprocess.run(["git", "hash-object", "-w", "--stdin", "--path", "a.txt"], cwd=self.dir, input=text + "\n",
                               capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_post_commit_settles_under_line_ending_filters(self):
+        # With autocrlf, the blob `git add` writes is the cleaned (LF) content; the record must match it.
+        self.git("config", "core.autocrlf", "true")
+        (self.dir / "a.txt").write_bytes(b"hello\r\n")
+        self.git("add", "a.txt")
+        self.snapshot()
+        self.assertEqual(self.fix("a.txt").returncode, 0)
+        state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
+        self.assertEqual((state / "staged").read_text(), f"a.txt\t{self.blob('hello')}\n")
 
     def test_post_commit_never_touches_a_path_whose_working_tree_moved_on(self):
         (self.dir / "a.txt").write_text("edited after the commit\n")

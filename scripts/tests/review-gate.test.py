@@ -1029,6 +1029,14 @@ class AutoReviewTests(unittest.TestCase):
         gate.autoreview_worker(self.repo.dir)
         self.assertEqual(self.jobs()[0]["state"], "done")
 
+    def test_a_job_whose_commits_were_reviewed_meanwhile_is_not_run(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="push")
+        self.repo.receipt(self.base)  # reviewed by hand before a worker got to it
+        gate.autoreview_worker(self.repo.dir)
+        self.assertEqual(self.calls_made(), [])
+        self.assertEqual(self.jobs()[0]["state"], "done")
+
     def test_a_job_stranded_by_a_dead_worker_gets_a_worker_from_the_next_trigger_or_queue(self):
         self.repo.commit("a", {"server/a.py": "1"})
         policy = self.repo.policy()

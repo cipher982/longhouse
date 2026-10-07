@@ -704,11 +704,19 @@ def autoreview_worker(repo: str | Path) -> int:
             if not job:
                 time.sleep(max(1, min(60, min(j.get("not_before", 0) for j in queued) - _now())))
                 continue
-            auto_log(repo, f"running {job['id']} attempt {job['attempts']}")
             try:
-                attempt = run_job(repo, job, hatch)
-            except Exception as exc:  # noqa: BLE001 - one bad job must not strand the rest of the queue
-                attempt = {"at": _stamp(), "exit": None, "error": f"{type(exc).__name__}: {exc}", "receipt": None}
+                # A job can outlive its need (someone reviewed the range by hand, or it sat stranded): skip it.
+                already = not any(v.needs_receipt for v in check_commits(repo, _job_commits(repo, job), load_events(repo)))
+            except GateError:
+                already = False
+            if already:
+                attempt = {"at": _stamp(), "exit": None, "receipt": None, "note": "already covered; not run"}
+            else:
+                auto_log(repo, f"running {job['id']} attempt {job['attempts']}")
+                try:
+                    attempt = run_job(repo, job, hatch)
+                except Exception as exc:  # noqa: BLE001 - one bad job must not strand the rest of the queue
+                    attempt = {"at": _stamp(), "exit": None, "error": f"{type(exc).__name__}: {exc}", "receipt": None}
             try:
                 covered = not any(v.needs_receipt for v in check_commits(repo, _job_commits(repo, job), load_events(repo)))
             except GateError as exc:
