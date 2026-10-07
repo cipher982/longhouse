@@ -62,3 +62,45 @@ def test_demo_mode_requested_follows_demo_mode_env(monkeypatch):
     monkeypatch.delenv("APP_MODE", raising=False)
     monkeypatch.setenv("DEMO_MODE", "1")
     assert serve._demo_mode_requested() is True
+
+
+def test_demo_corpus_lists_all_of_its_aged_sessions(monkeypatch, tmp_path):
+    """longhouse.ai went empty when its corpus, built once, aged out of the recent window."""
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.services.session_listing_types import DEFAULT_LIST_DAYS_BACK
+    from zerg.services.session_listing_types import resolve_search_days_back
+
+    monkeypatch.delenv("APP_MODE", raising=False)
+    monkeypatch.delenv("LONGHOUSE_DEMO_CORPUS", raising=False)
+    monkeypatch.setenv("DEMO_MODE", "0")
+    assert resolve_search_days_back(None, has_query=False) == DEFAULT_LIST_DAYS_BACK
+    monkeypatch.setenv("LONGHOUSE_DEMO_CORPUS", "1")  # serve --demo
+    assert resolve_search_days_back(None, has_query=False) is None
+    monkeypatch.delenv("LONGHOUSE_DEMO_CORPUS")
+    monkeypatch.setenv("DEMO_MODE", "1")  # the public demo
+    assert resolve_search_days_back(None, has_query=False) is None
+    assert resolve_search_days_back(7, has_query=False) == 7
+
+    monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(tmp_path / "objects"))
+    paths = build_demo_database(tmp_path / "longhouse-demo.db", anchor=datetime(2026, 9, 22, tzinfo=UTC))
+    engine = create_catalog_engine(paths["live"])
+    try:
+        page = CatalogStore(engine).list_session_timeline(
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            hide_autonomous=False,
+            include_automation=False,
+            device_id=None,
+            days_back=resolve_search_days_back(None, has_query=False),
+            limit=50,
+            offset=0,
+            owner_id=1,
+            include_state_heads=True,
+        )
+    finally:
+        engine.dispose()
+    assert page["total"] > 0

@@ -63,6 +63,7 @@ from zerg.services.machines_directory import build_machines_directory
 from zerg.services.machines_summary import build_machines_summary
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import resolve_search_days_back
+from zerg.services.session_listing_types import demo_corpus_listing
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_views import FiltersResponse
@@ -704,11 +705,18 @@ async def preview_timeline_session(
 @router.get("/filters", response_model=FiltersResponse)
 async def get_timeline_filters(
     response: Response,
-    days_back: int = Query(90, ge=1, le=3650, description="Days to look back for distinct values"),
+    days_back: Optional[int] = Query(
+        None,
+        ge=1,
+        le=3650,
+        description="Days to look back for distinct values. Omit for 90 (all history on a demo corpus).",
+    ),
     include_hidden: bool = Query(False, description="Include hidden and automation sessions in filter values"),
     current_user=Depends(get_current_browser_caller),
 ):
     response.headers["Cache-Control"] = "private, max-age=60"
+    if days_back is None:
+        days_back = 3650 if demo_corpus_listing() else 90
 
     from collections import Counter
 

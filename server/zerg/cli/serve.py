@@ -665,6 +665,9 @@ def serve(
         if not demo_db_path.exists():
             typer.echo("Building demo database with sample data...")
             _build_demo_db(demo_db_path)
+        # Sample data, not DEMO_MODE (which also disables auth): this only
+        # lists the whole corpus as it ages, as the public demo does.
+        os.environ["LONGHOUSE_DEMO_CORPUS"] = "1"
         typer.secho("Demo mode: using sample data", fg=typer.colors.CYAN)
         typer.echo("")
     elif db:

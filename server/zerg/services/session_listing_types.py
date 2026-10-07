@@ -26,7 +26,25 @@ def resolve_search_days_back(explicit: int | None, *, has_query: bool) -> int | 
     """
     if explicit is not None:
         return explicit
-    return None if has_query else DEFAULT_LIST_DAYS_BACK
+    if has_query or demo_corpus_listing():
+        return None
+    return DEFAULT_LIST_DAYS_BACK
+
+
+def demo_corpus_listing() -> bool:
+    """Whether this runtime serves a demo corpus, which lists all of its sessions.
+
+    A demo corpus (the public demo's DEMO_MODE, or `serve --demo`'s sample
+    data) is a handful of sessions written once, relative to when it was
+    built. With the recent window it aged out and longhouse.ai served an
+    empty timeline (corpus from 2026-09-22, empty by 2026-10-06), so its
+    default listings and filter values cover all of it instead.
+    """
+    import os
+
+    from zerg.config import get_settings_unchecked
+
+    return os.environ.get("LONGHOUSE_DEMO_CORPUS") == "1" or get_settings_unchecked().demo_mode
 
 
 @dataclass(frozen=True)

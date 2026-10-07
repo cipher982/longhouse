@@ -13588,8 +13588,8 @@ export interface operations {
     get_timeline_filters_timeline_filters_get: {
         parameters: {
             query?: {
-                /** @description Days to look back for distinct values */
-                days_back?: number;
+                /** @description Days to look back for distinct values. Omit for 90 (all history on a demo corpus). */
+                days_back?: number | null;
                 /** @description Include hidden and automation sessions in filter values */
                 include_hidden?: boolean;
             };
