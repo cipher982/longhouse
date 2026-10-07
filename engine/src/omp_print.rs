@@ -227,6 +227,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         &session_dir,
         &session_file,
         omp_supports_no_ui(&config.omp_bin),
+        !fresh_session,
     );
     // RPC stdin: see `console_rpc`. The prompt and a later steer are written
     // there; stdout still goes to the file the monitors tail.
@@ -470,9 +471,16 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
 }
 
 /// The line of a provider's stderr that names its failure: the last one that
-/// starts with "error", else the last non-empty line (stack frames follow it).
+/// starts with "error", else the last line that is not a stack frame or a
+/// numbered source excerpt.
 fn provider_error_line(tail: &str) -> Option<String> {
-    let lines = tail.lines().map(str::trim).filter(|line| !line.is_empty());
+    let lines = tail.lines().map(str::trim).filter(|line| {
+        !line.is_empty()
+            && !line.starts_with("at ")
+            && line
+                .split_once(" | ")
+                .is_none_or(|(gutter, _)| !gutter.trim().chars().all(|c| c.is_ascii_digit()))
+    });
     lines
         .clone()
         .filter(|line| line.to_ascii_lowercase().starts_with("error"))
@@ -2319,10 +2327,8 @@ pub fn build_omp_args(
     session_dir: &Path,
     session_file: &Path,
     headless_extensions: bool,
+    resuming: bool,
 ) -> Vec<String> {
-    let has_existing_session = std::fs::metadata(session_file)
-        .map(|metadata| metadata.len() > 0)
-        .unwrap_or(false);
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
     if headless_extensions {
         // Extensions run headless: no extension_ui_request dialogs for a host.
@@ -2334,7 +2340,7 @@ pub fn build_omp_args(
         "--resume".into(),
         session_file.to_string_lossy().into_owned(),
     ]);
-    if has_existing_session {
+    if resuming {
         args.push("--continue".into());
     }
     if let Some(profile) = profile.map(str::trim).filter(|value| !value.is_empty()) {
@@ -3626,6 +3632,10 @@ mod tests {
             Some("plain last line")
         );
         assert_eq!(provider_error_line(" \n"), None);
+        assert_eq!(
+            provider_error_line("Session refused\n    at open (/omp:1:1)\n").as_deref(),
+            Some("Session refused")
+        );
     }
     use crate::console_lifecycle::conformance::{
         self, LifecycleScenario, ScenarioFuture, ScenarioOutcome, ScenarioRunner,
@@ -3639,6 +3649,7 @@ mod tests {
             Path::new("/sessions"),
             Path::new("/sessions/exact.jsonl"),
             true,
+            false,
         );
         assert_eq!(
             args,
@@ -3670,9 +3681,13 @@ mod tests {
     fn existing_omp_session_args_request_native_continuation() {
         let temp = tempfile::tempdir().unwrap();
         let session_file = temp.path().join("session.jsonl");
+        // A first launch also hands OMP a header-only file, so the file is
+        // never the signal: only a resume asks for --continue.
         std::fs::write(&session_file, b"{\"type\":\"session\"}\n").unwrap();
-        let args = build_omp_args(None, None, temp.path(), &session_file, true);
-        assert!(args.iter().any(|arg| arg == "--continue"));
+        let resumed = build_omp_args(None, None, temp.path(), &session_file, true, true);
+        assert!(resumed.iter().any(|arg| arg == "--continue"));
+        let fresh = build_omp_args(None, None, temp.path(), &session_file, true, false);
+        assert!(!fresh.iter().any(|arg| arg == "--continue"));
     }
 
     #[test]
@@ -3682,6 +3697,7 @@ mod tests {
             None,
             Path::new("/sessions"),
             Path::new("/sessions/exact.jsonl"),
+            false,
             false,
         );
         assert_eq!(args[..2], ["--mode", "rpc"]);

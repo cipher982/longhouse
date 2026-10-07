@@ -2512,12 +2512,7 @@ async fn run_app_server_turn(
                     return Err(anyhow::Error::new(CodexTurnInterrupted));
                 }
                 if status != "completed" {
-                    match json_string(&value, &["params", "turn", "error", "message"]) {
-                        Some(message) => {
-                            anyhow::bail!("Codex turn ended with status {status}: {message}")
-                        }
-                        None => anyhow::bail!("Codex turn ended with status {status}"),
-                    }
+                    anyhow::bail!(codex_turn_failure(&status, &value));
                 }
                 if let Some(path) = thread_path {
                     sink.wake_transcript_shipper(path, &completed_turn_id, "turn_completed")
@@ -2762,6 +2757,15 @@ impl AppServerRpc {
             _ => anyhow::bail!("unsupported Codex app-server request: {method}"),
         };
         self.write(&json!({"id": id, "result": result})).await
+    }
+}
+
+/// A failed turn names Codex's own reason (`params.turn.error.message`), so a
+/// 401 reaches the session as itself rather than as a bare status.
+fn codex_turn_failure(status: &str, completed: &Value) -> String {
+    match json_string(completed, &["params", "turn", "error", "message"]) {
+        Some(message) => format!("Codex turn ended with status {status}: {message}"),
+        None => format!("Codex turn ended with status {status}"),
     }
 }
 
@@ -3597,6 +3601,24 @@ fn find_codex_rollout_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_failed_turn_carries_the_codex_error_message() {
+        let failed = serde_json::json!({
+            "method": "turn/completed",
+            "params": {"turn": {"id": "t1", "status": "failed",
+                "error": {"message": "unexpected status 401 Unauthorized: Incorrect API key provided"}}},
+        });
+        assert_eq!(
+            super::codex_turn_failure("failed", &failed),
+            "Codex turn ended with status failed: unexpected status 401 Unauthorized: Incorrect API key provided"
+        );
+        let bare = serde_json::json!({"params": {"turn": {"status": "failed"}}});
+        assert_eq!(
+            super::codex_turn_failure("failed", &bare),
+            "Codex turn ended with status failed"
+        );
+    }
+
     #[tokio::test]
     async fn stop_during_turn_start_waits_for_the_turn_to_register() {
         let run_id = "stop-during-start";

@@ -515,8 +515,9 @@ pub fn reserve_session_path(session_dir: &Path) -> Result<PathBuf> {
 /// its native id. OMP 18.7 refuses `--resume` on an empty file ("the session
 /// file holds no entries") and on a missing one, so a first launch must hand
 /// it a file that already names its session; OMP appends from there exactly
-/// as it does on any resume. Call only once the source claim exists, so
-/// discovery never sees an unclaimed header.
+/// as it does on any resume. Write it after the source claim so discovery
+/// never mints the header as a Shadow session; Helm's unclaimed fallback (a
+/// failed claim write) is the same exposure stock OMP's own header had.
 pub fn write_new_session_header(path: &Path, cwd: &Path) -> Result<String> {
     let mut file = OpenOptions::new()
         .write(true)
