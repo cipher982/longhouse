@@ -54,6 +54,8 @@ from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
 from zerg.catalogd.fact_reducer import MAX_VALUE_JSON_BYTES
 from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import ReducerResult
+from zerg.catalogd.fact_reducer import _advance_commit_seq
+from zerg.catalogd.fact_reducer import _current_commit_seq
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
 from zerg.catalogd.fact_reducer import read_registry_lifecycle_heads
@@ -17270,22 +17272,6 @@ def _active_session_ids(connection, *, limit: int, days_back: int, observed_at: 
         .limit(limit)
     ).all()
     return [str(row[0]) for row in rows]
-
-
-def _current_commit_seq(connection) -> int:
-    value = connection.execute(select(catalog_meta.c.commit_seq).where(catalog_meta.c.singleton == 1)).scalar_one()
-    if type(value) is not int or value < 0:
-        raise RuntimeError("catalog commit_seq is invalid")
-    return value
-
-
-def _advance_commit_seq(connection, now: datetime) -> int:
-    return connection.execute(
-        update(catalog_meta)
-        .where(catalog_meta.c.singleton == 1)
-        .values(commit_seq=catalog_meta.c.commit_seq + 1, updated_at=now.isoformat())
-        .returning(catalog_meta.c.commit_seq)
-    ).scalar_one()
 
 
 def _runtime_activity_facts(

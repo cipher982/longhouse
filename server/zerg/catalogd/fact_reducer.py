@@ -714,7 +714,10 @@ def _prune_fact_family(connection: Connection, family: str, *, head_count: int |
 
 
 def _current_commit_seq(connection: Connection) -> int:
-    return int(connection.execute(select(catalog_meta.c.commit_seq).where(catalog_meta.c.singleton == 1)).scalar_one())
+    value = connection.execute(select(catalog_meta.c.commit_seq).where(catalog_meta.c.singleton == 1)).scalar_one()
+    if type(value) is not int or value < 0:
+        raise RuntimeError("catalog commit_seq is invalid")
+    return value
 
 
 def _advance_commit_seq(connection: Connection, at: datetime) -> int:
