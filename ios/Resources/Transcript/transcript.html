@@ -1059,6 +1059,11 @@ summary::-webkit-details-marker {
       `;
 	}
 	function providerNotification(item) {
+		if (item.origin === "longhouse") return `
+        <div class="tool row notice static" data-testid="session-provider-notification" data-origin="longhouse">
+          <div class="tool-head"><span class="tool-title">${escapeHtml((item.body || "").trim())}</span></div>
+        </div>
+      `;
 		const { title, hint, body } = summarizeProviderNotice(item.body);
 		if (body === null) return `
         <div class="tool row notice static" data-testid="session-provider-notification">

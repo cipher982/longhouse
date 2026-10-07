@@ -187,6 +187,18 @@ describe("rows", () => {
       expect(row.querySelector(".tool-title")?.textContent).toBe('Background command "Run the checks" completed (exit code 0)');
     });
 
+    it("shows Longhouse's own close notice whole, even past the header length cap", () => {
+      const text =
+        "Stopped 1 background task: tail the dev server log. Longhouse couldn't confirm all its " +
+        "processes exited, and left any that remain alone.";
+      expect(text.length).toBeGreaterThan(120);
+      render({ items: [{ id: "close", kind: "providerNotification", body: text, origin: "longhouse" }] });
+
+      expect(root().querySelector("details")).toBeNull();
+      const row = root().querySelector('div.tool.notice.static[data-origin="longhouse"]')!;
+      expect(row.querySelector(".tool-title")?.textContent).toBe(text);
+    });
+
     it("escapes the notice text", () => {
       render({ items: [notice("provider-notification:5", "Job <b>done</b>.\n<script>alert(1)</script>")] });
 

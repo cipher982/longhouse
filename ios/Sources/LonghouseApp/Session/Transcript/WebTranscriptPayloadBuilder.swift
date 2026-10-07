@@ -222,7 +222,8 @@ extension WebTranscriptView {
             if event.inputOrigin?.origin == "wake" || event.inputOrigin?.origin == "longhouse" {
                 return providerNotificationPayload(
                     id: item.id,
-                    text: event.contentText ?? "Background task finished"
+                    text: event.contentText ?? "Background task finished",
+                    origin: event.inputOrigin?.origin
                 )
             }
             return messagePayload(
@@ -313,9 +314,12 @@ extension WebTranscriptView {
         )
     }
 
+    /// `origin` "longhouse" marks Longhouse's own notice (a close receipt):
+    /// the document shows its whole text, never a header cut at the length cap.
     private nonisolated static func providerNotificationPayload(
         id: String,
-        text: String
+        text: String,
+        origin: String? = nil
     ) -> WebTranscriptPayloadItem {
         WebTranscriptPayloadItem(
             id: id,
@@ -331,7 +335,7 @@ extension WebTranscriptView {
             input: nil,
             output: nil,
             calls: [],
-            origin: nil,
+            origin: origin == "longhouse" ? origin : nil,
             media: nil
         )
     }
@@ -343,7 +347,7 @@ extension WebTranscriptView {
 
     private nonisolated static func payloadSubmittedInput(_ input: SubmittedInput) -> WebTranscriptPayloadItem {
         if input.origin == "wake" || input.origin == "longhouse" {
-            return providerNotificationPayload(id: input.id, text: input.text)
+            return providerNotificationPayload(id: input.id, text: input.text, origin: input.origin)
         }
         return WebTranscriptPayloadItem(
             id: input.id,

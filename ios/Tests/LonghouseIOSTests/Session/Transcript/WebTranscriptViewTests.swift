@@ -178,6 +178,7 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(closeRows.map(\.kind), ["providerNotification"])
         XCTAssertNil(closeRows.first?.role)
         XCTAssertEqual(closeRows.first?.body, closeText)
+        XCTAssertEqual(closeRows.first?.origin, "longhouse", "the document shows Longhouse's notice whole")
         let wakeEvent = makeUserEvent(
             id: 44,
             content: "provider's wake input",

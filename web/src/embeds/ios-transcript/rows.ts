@@ -99,7 +99,17 @@ export function action(item: TranscriptItem): string {
 /// A background job's notice, as a tool-shaped row: the header is the title,
 /// the first line of output the hint, the full text behind a tap. A notice
 /// that is only its header has nothing to open, so it is a plain row.
+/// Longhouse's own notice (origin "longhouse", e.g. a Stop's close receipt) is
+/// short server-authored prose whose last sentence may be the point, so it is
+/// shown whole, as the web timeline shows it.
 export function providerNotification(item: TranscriptItem): string {
+  if (item.origin === "longhouse") {
+    return `
+        <div class="tool row notice static" data-testid="session-provider-notification" data-origin="longhouse">
+          <div class="tool-head"><span class="tool-title">${escapeHtml((item.body || "").trim())}</span></div>
+        </div>
+      `;
+  }
   const { title, hint, body } = summarizeProviderNotice(item.body);
   if (body === null) {
     return `
