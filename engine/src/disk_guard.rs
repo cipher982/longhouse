@@ -42,6 +42,22 @@ const LEVELS: [(Level, f64, f64); 2] = [(Level::Critical, 15.0, 10.0), (Level::L
 /// Slower than this, a projected time-to-full is noise (logs, caches, swap
 /// breathing) rather than a runaway writer.
 const MIN_PROJECTED_RATE_GIB_PER_MIN: f64 = 0.25;
+
+/// Commands whose writes are bounded by a finite input: a copy, a download, a
+/// package fetch. A steep slope from one of these cannot continue
+/// indefinitely, so on its own it is not evidence of the runaway this guard
+/// exists to catch — the 2026-09-25 incident was a build loop, not a transfer.
+/// Absolute free-space thresholds still apply to these writers.
+const BOUNDED_WRITER_COMMANDS: [&str; 11] = [
+    "rsync", "cp", "scp", "sftp", "ditto", "curl", "wget", "uv", "pip", "pip3", "pipx",
+];
+
+/// A projected time-to-full must hold for this many consecutive ticks before it
+/// raises the level on its own. One 60-second slope is not proof: a bounded copy
+/// finishes inside a tick or two, while the 2026-09-25 ramp burned for about two
+/// minutes — eight ticks — and is still caught.
+const SUSTAINED_PROJECTION_TICKS: u32 = 3;
+
 /// Step down only when the lower level would still hold with this much less
 /// free space, for `RECOVERY_TICKS` consecutive ticks, so a level does not
 /// flap (and re-notify) around a threshold.
@@ -79,14 +95,34 @@ impl Level {
     }
 }
 
-pub(crate) fn classify(free_gib: f64, burn_gib_per_min: f64) -> Level {
-    let eta = eta_minutes(free_gib, burn_gib_per_min);
-    for (level, free_below, eta_below) in LEVELS {
-        if free_gib < free_below || eta.is_some_and(|eta| eta < eta_below) {
+/// Level implied by free space alone. Unambiguous, so it never needs
+/// corroboration across ticks.
+pub(crate) fn absolute_level(free_gib: f64) -> Level {
+    for (level, free_below, _) in LEVELS {
+        if free_gib < free_below {
             return level;
         }
     }
     Level::Ok
+}
+
+/// Level implied by projected time-to-full. Only meaningful when corroborated,
+/// because a bounded writer produces the same slope as a runaway.
+pub(crate) fn projected_level(free_gib: f64, burn_gib_per_min: f64) -> Level {
+    let Some(eta) = eta_minutes(free_gib, burn_gib_per_min) else {
+        return Level::Ok;
+    };
+    for (level, _, eta_below) in LEVELS {
+        if eta < eta_below {
+            return level;
+        }
+    }
+    Level::Ok
+}
+
+/// The level both signals would justify if the projection were trusted.
+pub(crate) fn classify(free_gib: f64, burn_gib_per_min: f64) -> Level {
+    absolute_level(free_gib).max(projected_level(free_gib, burn_gib_per_min))
 }
 
 fn eta_minutes(free_gib: f64, burn_gib_per_min: f64) -> Option<f64> {
@@ -94,16 +130,39 @@ fn eta_minutes(free_gib: f64, burn_gib_per_min: f64) -> Option<f64> {
         .then(|| free_gib.max(0.0) / burn_gib_per_min)
 }
 
-/// Escalates immediately, recovers only after sustained margin.
+/// Space thresholds escalate immediately. A projected time-to-full must repeat
+/// before it escalates, and a bounded writer is never projected at all.
+/// Recovers only after sustained margin.
 #[derive(Debug, Default)]
 pub(crate) struct Policy {
     level: Level,
     calm_ticks: u32,
+    projected_ticks: u32,
 }
 
 impl Policy {
-    pub(crate) fn update(&mut self, free_gib: f64, burn_gib_per_min: f64) -> Level {
-        let raw = classify(free_gib, burn_gib_per_min);
+    pub(crate) fn update(
+        &mut self,
+        free_gib: f64,
+        burn_gib_per_min: f64,
+        bounded_writer: bool,
+    ) -> Level {
+        let projected = if bounded_writer {
+            Level::Ok
+        } else {
+            projected_level(free_gib, burn_gib_per_min)
+        };
+        if projected > self.level {
+            self.projected_ticks += 1;
+        } else {
+            self.projected_ticks = 0;
+        }
+        let sustained = if self.projected_ticks >= SUSTAINED_PROJECTION_TICKS {
+            projected
+        } else {
+            Level::Ok
+        };
+        let raw = absolute_level(free_gib).max(sustained);
         if raw >= self.level {
             self.level = raw;
             self.calm_ticks = 0;
@@ -355,17 +414,20 @@ impl DiskGuard {
         let free_gib = free as f64 / GIB;
         let burn = burn_rate(&self.samples);
         let eta = eta_minutes(free_gib, burn);
-        let previous_level = self.level;
-        self.level = self.policy.update(free_gib, burn);
-        let level = self.level;
-
-        let activity = if level > Level::Ok || burn >= SNAPSHOT_RATE_GIB_PER_MIN {
+        // Observe before classifying: whether the dominant writer is a bounded
+        // transfer decides whether its slope may raise a level at all.
+        let activity = if self.level > Level::Ok || burn >= SNAPSHOT_RATE_GIB_PER_MIN {
             self.observe_processes(sessions)
         } else {
             self.previous_counters = None;
             self.window.clear();
             Vec::new()
         };
+        let previous_level = self.level;
+        self.level = self
+            .policy
+            .update(free_gib, burn, dominant_writer_is_bounded(&activity));
+        let level = self.level;
 
         let mut outcome = TickOutcome::default();
         if level > Level::Ok {
@@ -461,6 +523,29 @@ impl DiskGuard {
         }
         attribute(&procs, &window_bytes, sessions)
     }
+}
+
+/// True when the session writing the most is running a command whose output is
+/// bounded by a finite input, so its slope cannot continue indefinitely.
+fn dominant_writer_is_bounded(activity: &[SessionActivity]) -> bool {
+    activity
+        .iter()
+        .filter(|session| session.bytes >= STEER_MIN_BYTES)
+        .max_by_key(|session| session.bytes)
+        .is_some_and(|session| {
+            BOUNDED_WRITER_COMMANDS.contains(&command_name(&session.top_command))
+        })
+}
+
+/// The executable name with any leading path and trailing arguments stripped.
+fn command_name(command: &str) -> &str {
+    command
+        .rsplit('/')
+        .next()
+        .unwrap_or(command)
+        .split_whitespace()
+        .next()
+        .unwrap_or(command)
 }
 
 /// Sessions to tell now: measurable writers not told at this level within
@@ -674,14 +759,80 @@ mod tests {
     #[test]
     fn policy_escalates_at_once_and_recovers_with_margin() {
         let mut policy = Policy::default();
-        assert_eq!(policy.update(12.0, 0.0), Level::Critical);
+        assert_eq!(policy.update(12.0, 0.0, false), Level::Critical);
         // Just over the line: inside the margin, no flapping.
-        assert_eq!(policy.update(16.0, 0.0), Level::Critical);
+        assert_eq!(policy.update(16.0, 0.0, false), Level::Critical);
         // Clear of the margin, but recovery needs consecutive calm ticks.
-        assert_eq!(policy.update(21.0, 0.0), Level::Critical);
-        assert_eq!(policy.update(21.0, 0.0), Level::Low);
-        // A new burst escalates immediately.
-        assert_eq!(policy.update(21.0, 5.0), Level::Critical);
+        assert_eq!(policy.update(21.0, 0.0, false), Level::Critical);
+        assert_eq!(policy.update(21.0, 0.0, false), Level::Low);
+    }
+
+    #[test]
+    fn projected_escalation_needs_corroborating_ticks() {
+        let mut policy = Policy::default();
+        // 21 GiB free at 5 GiB/min projects 4.2 min -> Critical, but one tick is
+        // not proof: a bounded copy produces the same slope.
+        assert_eq!(policy.update(21.0, 5.0, false), Level::Low);
+        assert_eq!(policy.update(21.0, 5.0, false), Level::Low);
+        assert_eq!(policy.update(21.0, 5.0, false), Level::Critical);
+    }
+
+    #[test]
+    fn a_bounded_writer_never_raises_a_level_on_its_slope() {
+        // 2026-10-07: a 3.3 GB rsync at 7.4 GiB/min took the guard to Critical
+        // with 43 GiB free. That is above the 40 GiB low floor, so the only
+        // trigger was the projection — and the copy was finite.
+        let mut policy = Policy::default();
+        for _ in 0..SUSTAINED_PROJECTION_TICKS + 2 {
+            assert_eq!(policy.update(43.4, 7.39, true), Level::Ok);
+        }
+        // The identical slope from a build loop escalates only once corroborated.
+        let mut runaway = Policy::default();
+        for _ in 0..SUSTAINED_PROJECTION_TICKS - 1 {
+            assert_eq!(runaway.update(43.4, 7.39, false), Level::Ok);
+        }
+        assert_eq!(runaway.update(43.4, 7.39, false), Level::Critical);
+    }
+
+    #[test]
+    fn free_space_alone_still_escalates_immediately_for_a_bounded_writer() {
+        let mut policy = Policy::default();
+        assert_eq!(policy.update(12.0, 7.39, true), Level::Critical);
+    }
+
+    #[test]
+    fn a_runaway_build_is_still_caught_without_a_bounded_writer() {
+        // The 2026-09-25 ramp: 18.8 GiB free, losing 9.5 GiB/min, for minutes.
+        let mut policy = Policy::default();
+        let mut level = Level::Ok;
+        for _ in 0..8 {
+            level = policy.update(18.8, 9.5, false);
+        }
+        assert_eq!(level, Level::Critical);
+    }
+
+    #[test]
+    fn command_name_strips_paths_and_arguments() {
+        assert_eq!(command_name("/usr/bin/rsync"), "rsync");
+        assert_eq!(command_name("rsync"), "rsync");
+        assert_eq!(command_name("/opt/homebrew/bin/uv run"), "uv");
+    }
+
+    #[test]
+    fn only_a_bounded_dominant_writer_suppresses_the_projection() {
+        let activity = |command: &str| {
+            vec![SessionActivity {
+                session_id: "s".into(),
+                provider: "omp".into(),
+                bytes: STEER_MIN_BYTES + 1,
+                top_command: command.to_string(),
+            }]
+        };
+        assert!(dominant_writer_is_bounded(&activity("/usr/bin/rsync")));
+        assert!(dominant_writer_is_bounded(&activity("curl")));
+        assert!(!dominant_writer_is_bounded(&activity("cargo")));
+        assert!(!dominant_writer_is_bounded(&activity("xcodebuild")));
+        assert!(!dominant_writer_is_bounded(&[]));
     }
 
     #[test]
