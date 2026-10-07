@@ -12,9 +12,10 @@ export interface RailActiveSession {
   stateText: string;
   tone: "live" | "attention" | "unknown" | "cool";
   statusKey?: string | null;
-  statusTone?: string;
-  /** True only for a current answer/approval interaction. */
+  /** True when the session has an explicit active answer/approval request. */
   needsUser?: boolean;
+  /** Canonical failed run/launch state; independent of unread-result wording. */
+  failed?: boolean;
 }
 
 /** One rail row: the session, its Timeline tier, and the Timeline's lamp. */

@@ -40,19 +40,31 @@ function isUserActive(session: Pick<AgentSession, "user_state">): boolean {
   return session.user_state == null || session.user_state === "active";
 }
 
-/**
- * True only for an active session whose served headline is a pending
- * interaction: an explicit question or approval ("Needs you"). Narrower than
- * the attention dot, which also lights for a stall or a failed launch.
- */
 export function needsSessionAttention(
   session: Pick<AgentSession, "session_state" | "user_state">,
 ): boolean {
+  return !isSessionClosed(session)
+    && (session.user_state == null || session.user_state === "active")
+    && session.session_state.pending_interaction != null;
+}
+
+/** Is a pending question/approval still answerable in the current session run? */
+export function needsSessionResponse(
+  session: Pick<AgentSession, "session_state" | "user_state">,
+): boolean {
   const primaryKey = session.session_state.presentation.primary?.key;
-  const hasCurrentInteraction =
-    session.session_state.pending_interaction != null &&
-    (primaryKey === "needs_answer" || primaryKey === "needs_approval");
-  return !isSessionClosed(session) && isUserActive(session) && hasCurrentInteraction;
+  return needsSessionAttention(session)
+    && session.session_state.run?.lifecycle !== "ended"
+    && (primaryKey === "needs_answer" || primaryKey === "needs_approval");
+}
+
+/** A canonical failed or failed-launch presentation for compact status surfaces. */
+export function sessionHasFailedRun(
+  session: Pick<AgentSession, "session_state">,
+): boolean {
+  const primary = session.session_state.presentation.primary;
+  return primary?.key === "launch_failed"
+    || (primary?.key === "ended" && primary.tone === "blocked");
 }
 
 /**

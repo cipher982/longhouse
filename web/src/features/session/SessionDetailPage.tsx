@@ -52,8 +52,9 @@ import {
 } from "@/shared/instruments/toolActivity";
 import {
   isSessionClosed,
-  needsSessionAttention,
+  needsSessionResponse,
   resolveSessionRuntimeState,
+  sessionHasFailedRun,
 } from "@/shared/session/sessionRuntime";
 import { TimelinePane } from "./TimelinePane";
 import { useWallClock } from "@/shared/hooks/useWallClock";
@@ -322,8 +323,8 @@ function SessionDetailWorkspaceRoute({
       stateText: state.text,
       tone: state.tone,
       statusKey: primary?.key ?? null,
-      statusTone: primary?.tone,
-      needsUser: needsSessionAttention(session),
+      needsUser: needsSessionResponse(session),
+      failed: sessionHasFailedRun(session),
     };
   }, [session, nowMs, turnStartMs]);
   useReportActiveSession(railReport);

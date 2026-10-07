@@ -2146,7 +2146,7 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
           ended_at: now,
           end_reason: "run_failed",
         },
-        activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: now, valid_until: null },
+        activity: { state: "unknown", raw_kind: null, tool: null, observed_at: now, valid_until: null },
         delegation: { state: "none", count: 0, kinds: {}, source: "codex", observed_at: now, valid_until: null, items: [], recent_items: [] },
         last_result_at: now,
         presentation: {

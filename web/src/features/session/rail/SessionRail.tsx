@@ -24,7 +24,7 @@ import { hearthModeForLamp, hearthSnapshotFromSession } from "@/shared/instrumen
 import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
 import { delegatedWorkLabel, pendingInteractionLabel, workingStatusLabel } from "@/shared/session/sessionStatus";
 import { getRowStatus } from "@/features/timeline/SessionRow";
-import { needsSessionAttention } from "@/shared/session/sessionRuntime";
+import { needsSessionResponse, sessionHasFailedRun } from "@/shared/session/sessionRuntime";
 import { buildInboxLayout, historySortKey, isAutomationSession } from "@/features/timeline/timelineInboxModel";
 import { getProjectLabel, getSessionCardText } from "@/shared/session/sessionLabels";
 import {
@@ -122,19 +122,16 @@ const TONE_FOR_LAMP: Record<StatusLampState, RailActiveSession["tone"]> = {
  */
 export function railStatusFlag({
   lamp,
-  statusTone,
   statusKey,
   needsUser,
+  failed,
 }: {
   lamp: StatusLampState;
-  statusTone?: string;
   statusKey?: string | null;
   needsUser?: boolean;
+  failed?: boolean;
 }): string | null {
-  if (lamp === "failed") return "Failed";
-  if (statusKey === "launch_failed" || (statusKey === "ended" && statusTone === "blocked")) {
-    return "Failed";
-  }
+  if (lamp === "failed" || failed) return "Failed";
   if (statusKey === "provider_auth_required") return "Sign in";
   if (needsUser) return "Needs you";
   return null;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TimelineRuntimeSession } from "../sessionRuntime";
 import {
   isSessionClosed,
+  needsSessionResponse,
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
   resolveTimelineSignal,
@@ -184,7 +185,7 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.needsAttention).toBe(false);
   });
-  it("lights the dot for a failed launch without calling it a question", () => {
+  it("preserves shared attention parity while suppressing failed-launch rail action", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
       activity: "quiescent",
@@ -200,9 +201,8 @@ describe("resolveSessionRuntimeState", () => {
     session_state.presentation.signal = mirrorServedSignal(session_state.presentation.primary);
     const session = makeSession({ session_state, user_state: "active" });
 
-    // A stale interaction under a failed launch is not "Needs you" ...
-    expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
-    // ... but the served dot says the user owes something.
+    expect(resolveSessionRuntimeState(session).needsAttention).toBe(true);
+    expect(needsSessionResponse(session)).toBe(false);
     expect(resolveTimelineSignal(session)).toBe("attention");
   });
 });

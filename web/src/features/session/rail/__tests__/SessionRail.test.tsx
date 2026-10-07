@@ -142,10 +142,11 @@ describe("rail status word", () => {
   it("labels questions, authentication, and failures distinctly", () => {
     expect(railStatusFlag({ lamp: "waiting", needsUser: true })).toBe("Needs you");
     expect(railStatusFlag({ lamp: "waiting", needsUser: false })).toBeNull();
+    expect(railStatusFlag({ lamp: "waiting", statusKey: "needs_answer", needsUser: false })).toBeNull();
     expect(railStatusFlag({ lamp: "idle", statusKey: "provider_auth_required" })).toBe("Sign in");
-    expect(railStatusFlag({ lamp: "idle", statusKey: "ended", statusTone: "blocked" })).toBe("Failed");
+    expect(railStatusFlag({ lamp: "idle", failed: true })).toBe("Failed");
     expect(railStatusFlag({ lamp: "failed" })).toBe("Failed");
-    expect(railStatusFlag({ lamp: "idle", statusTone: "blocked" })).toBeNull();
+    expect(railStatusFlag({ lamp: "idle", needsUser: false })).toBeNull();
     for (const lamp of ["working", "idle", "ended", "done", "unknown"] as const) {
       expect(railStatusFlag({ lamp })).toBeNull();
     }
@@ -550,11 +551,31 @@ describe("rail rows follow the Timeline's tiers", () => {
     expect(rows[0]).toMatchObject({ stateText: "Idle", lamp: "idle", group: "recent" });
   });
 
-  it("flags an explicit question, but not a failed run or a generic stall", () => {
+  it("keeps failed and unread outcomes distinct from answer requests", () => {
     const question = card("question", {}, { activity: "quiescent", pendingInteraction: true });
-    const failed = card("failed", {}, { activity: "quiescent" });
-    failed.head.session_state.run = { lifecycle: "ended", end_reason: "exit_nonzero" };
+    const failed = card("failed", {}, { activity: "unknown" });
+    failed.head.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
     failed.head.session_state.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: "2026-10-06T11:00:00Z",
+    };
+    const endedQuestion = card("ended-question", {}, { activity: "unknown", pendingInteraction: true });
+    endedQuestion.head.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
+    endedQuestion.head.session_state.presentation.primary = {
+      key: "needs_answer",
+      label: "Needs answer",
+      tone: "blocked",
+      observed_at: "2026-10-06T11:00:00Z",
+    };
+    const unreadFailed = card(
+      "unread-failed",
+      {},
+      { activity: "unknown", mode: "console", unread: true, lastResultAt: "2026-10-06T11:00:00Z" },
+    );
+    unreadFailed.head.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
+    unreadFailed.head.session_state.presentation.primary = {
       key: "ended",
       label: "Run failed",
       tone: "blocked",
@@ -562,11 +583,13 @@ describe("rail rows follow the Timeline's tiers", () => {
     };
     const stalled = card("stalled", {}, { activity: "stalled" });
 
-    const rows = buildRailRows([question, failed, stalled], Date.parse("2026-10-06T12:30:00Z"), null);
+    const rows = buildRailRows([question, failed, endedQuestion, unreadFailed, stalled], Date.parse("2026-10-06T12:30:00Z"), null);
     const byId = new Map(rows.map((row) => [row.id, row]));
 
     expect(railStatusFlag(byId.get("question")!)).toBe("Needs you");
     expect(railStatusFlag(byId.get("failed")!)).toBe("Failed");
+    expect(railStatusFlag(byId.get("ended-question")!)).toBeNull();
+    expect(railStatusFlag(byId.get("unread-failed")!)).toBe("Failed");
     expect(railStatusFlag(byId.get("stalled")!)).toBeNull();
   });
   it("preserves explicit status when the active page replaces its list row", () => {
@@ -578,7 +601,7 @@ describe("rail rows follow the Timeline's tiers", () => {
       stateText: "Run failed",
       tone: "attention",
       statusKey: "ended",
-      statusTone: "blocked",
+      failed: true,
       needsUser: false,
     })[0];
     const question = buildRailRows([], Date.parse("2026-10-06T12:30:00Z"), {
@@ -589,7 +612,6 @@ describe("rail rows follow the Timeline's tiers", () => {
       stateText: "Needs answer",
       tone: "attention",
       statusKey: "needs_answer",
-      statusTone: "blocked",
       needsUser: true,
     })[0];
 
