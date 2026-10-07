@@ -66,6 +66,20 @@ describe("getSessionHeaderState", () => {
     expect(state).toEqual({ tone: "attention", text: "Needs answer" });
   });
 
+  it("does not present an unanswerable question as header attention", () => {
+    const state = getSessionHeaderState(
+      session({
+        pendingInteraction: { id: "1", can_respond: false },
+        primaryTone: "blocked",
+        primaryKey: "needs_answer",
+        primaryLabel: "Needs answer",
+      }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "cool", text: "Idle" });
+  });
+
+
   it("reads a blocked/stalled presentation tone as attention even when activity.state is quiescent", () => {
     const state = getSessionHeaderState(
       session({ primaryTone: "stalled", primaryLabel: "No progress for 31m" }),
