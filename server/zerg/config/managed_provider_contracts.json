@@ -4396,7 +4396,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "f555a8e97e823de36a86fdfad0c7eec64e6017ed28a2ae99ce4609cfb5a0d4a4"
+      "adapter_digest": "51a97cdf233f0d7a34600922a02c82ec83a529f48793a29003a252d4e84307da"
     },
     {
       "provider": "omp",

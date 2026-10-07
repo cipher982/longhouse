@@ -957,51 +957,6 @@ fn read_resume_state(session_id: &str, cwd: &Path, _binary: &str) -> Result<PiHe
     Ok(state)
 }
 
-struct PiTerminal {
-    fd: libc::c_int,
-    parent_pgrp: libc::pid_t,
-    attributes: libc::termios,
-    old_sigttou: libc::sighandler_t,
-}
-
-impl PiTerminal {
-    fn capture() -> Result<Self> {
-        use std::os::unix::io::AsRawFd;
-        let fd = std::io::stdin().as_raw_fd();
-        let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
-        if unsafe { libc::tcgetattr(fd, attributes.as_mut_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error()).context("read invoking terminal state");
-        }
-        Ok(Self {
-            fd,
-            parent_pgrp: unsafe { libc::tcgetpgrp(fd) },
-            attributes: unsafe { attributes.assume_init() },
-            old_sigttou: unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) },
-        })
-    }
-
-    fn give_to(&self, pgid: libc::pid_t) -> Result<()> {
-        if self.parent_pgrp >= 0 && unsafe { libc::tcsetpgrp(self.fd, pgid) } != 0 {
-            return Err(std::io::Error::last_os_error()).context("hand terminal to stock Pi");
-        }
-        // The child may already have stopped on its first background TTY read.
-        unsafe { libc::kill(-pgid, libc::SIGCONT) };
-        Ok(())
-    }
-}
-
-impl Drop for PiTerminal {
-    fn drop(&mut self) {
-        unsafe {
-            if self.parent_pgrp >= 0 {
-                libc::tcsetpgrp(self.fd, self.parent_pgrp);
-            }
-            libc::tcsetattr(self.fd, libc::TCSANOW, &self.attributes);
-            libc::signal(libc::SIGTTOU, self.old_sigttou);
-        }
-    }
-}
-
 fn run_pi_provider(
     command: &mut Command,
     server: &PiHelmServer,
@@ -1012,13 +967,20 @@ fn run_pi_provider(
         signal_hook::flag::register_usize(signal_number, signal.clone(), signal_number as usize)
             .context("install Pi Helm signal cleanup")?;
     }
-    let terminal = PiTerminal::capture()?;
+    let terminal = crate::managed_terminal::ForegroundTerminal::capture()
+        .context("read invoking terminal state")?;
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().context("spawn stock Pi Helm TUI")?;
     let pid = child.id();
     let pgid = pid as libc::pid_t;
-    if let Err(error) = terminal.give_to(pgid).and_then(|()| after_spawn(pid)) {
+    // The child may already have stopped on its first background TTY read;
+    // `give_to` also sends SIGCONT.
+    if let Err(error) = terminal
+        .give_to(pgid)
+        .context("hand terminal to stock Pi")
+        .and_then(|()| after_spawn(pid))
+    {
         terminate_pi_group(pgid, &mut child);
         return Err(error);
     }
