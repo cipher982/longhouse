@@ -61,7 +61,7 @@ export function sessionIsWorking(facts: StatusFacts, nowMs: number): boolean {
   return servedSignal(facts, nowMs) === "working";
 }
 
-/** Is the session waiting on the user (a question, an approval, a stall, a failed launch)? */
+/** Does the current Runtime Host presentation carry a broad attention signal? */
 export function sessionNeedsInteraction(facts: StatusFacts, nowMs: number): boolean {
   return servedSignal(facts, nowMs) === "attention";
 }
