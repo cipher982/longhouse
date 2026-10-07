@@ -145,6 +145,7 @@ describe("rail status word", () => {
     expect(railStatusFlag({ lamp: "waiting", statusKey: "needs_answer", needsUser: false })).toBeNull();
     expect(railStatusFlag({ lamp: "idle", statusKey: "provider_auth_required" })).toBe("Sign in");
     expect(railStatusFlag({ lamp: "idle", failed: true })).toBe("Failed");
+    expect(railStatusFlag({ lamp: "failed", failed: true, needsUser: true })).toBe("Needs you");
     expect(railStatusFlag({ lamp: "failed" })).toBe("Failed");
     expect(railStatusFlag({ lamp: "idle", needsUser: false })).toBeNull();
     for (const lamp of ["working", "idle", "ended", "done", "unknown"] as const) {
@@ -557,13 +558,13 @@ describe("rail rows follow the Timeline's tiers", () => {
     failed.head.session_state.pending_interaction!.can_respond = false;
     failed.head.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
     failed.head.session_state.presentation.primary = {
-      key: "needs_answer",
-      label: "Needs answer",
+      key: "ended",
+      label: "Run failed",
       tone: "blocked",
       observed_at: "2026-10-06T11:00:00Z",
     };
     const answerableEnded = card("answerable-ended", {}, { activity: "unknown", pendingInteraction: true });
-    answerableEnded.head.session_state.run = { lifecycle: "ended", end_reason: "run_completed" };
+    answerableEnded.head.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
     answerableEnded.head.session_state.presentation.primary = {
       key: "needs_answer",
       label: "Needs answer",
@@ -574,9 +575,9 @@ describe("rail rows follow the Timeline's tiers", () => {
     unanswerableUnknown.head.session_state.pending_interaction!.can_respond = false;
     unanswerableUnknown.head.session_state.run = { lifecycle: "unknown" };
     unanswerableUnknown.head.session_state.presentation.primary = {
-      key: "needs_answer",
-      label: "Needs answer",
-      tone: "blocked",
+      key: "activity_unknown",
+      label: "Activity unknown",
+      tone: "quiet",
       observed_at: "2026-10-06T11:00:00Z",
     };
     const unreadFailed = card(

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TimelineRuntimeSession } from "../sessionRuntime";
 import {
   isSessionClosed,
-  needsSessionResponse,
+  needsSessionAttention,
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
   resolveTimelineSignal,
@@ -185,7 +185,7 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.needsAttention).toBe(false);
   });
-  it("preserves shared attention parity while suppressing failed-launch rail action", () => {
+  it("suppresses a stale interaction after failed launch", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
       activity: "quiescent",
@@ -201,11 +201,10 @@ describe("resolveSessionRuntimeState", () => {
     session_state.presentation.signal = mirrorServedSignal(session_state.presentation.primary);
     const session = makeSession({ session_state, user_state: "active" });
 
-    expect(resolveSessionRuntimeState(session).needsAttention).toBe(true);
-    expect(needsSessionResponse(session)).toBe(false);
-    expect(resolveTimelineSignal(session)).toBe("attention");
+    expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
+    expect(resolveTimelineSignal(session)).toBe("quiet");
   });
-  it("does not mark an unanswerable interaction as a rail response request", () => {
+  it("does not signal a question that Longhouse cannot answer", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
       activity: "quiescent",
@@ -219,9 +218,8 @@ describe("resolveSessionRuntimeState", () => {
     };
     const session = makeSession({ session_state, user_state: "active" });
 
-    expect(resolveSessionRuntimeState(session).needsAttention).toBe(true);
-    expect(needsSessionResponse(session)).toBe(false);
-    expect(resolveTimelineSignal(session)).toBe("attention");
+    expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
+    expect(resolveTimelineSignal(session)).toBe("quiet");
   });
 });
 

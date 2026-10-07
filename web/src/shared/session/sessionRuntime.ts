@@ -40,35 +40,25 @@ function isUserActive(session: Pick<AgentSession, "user_state">): boolean {
   return session.user_state == null || session.user_state === "active";
 }
 
+/** True only for an active, answerable question or approval. */
 export function needsSessionAttention(
-  session: Pick<AgentSession, "session_state" | "user_state">,
-): boolean {
-  return !isSessionClosed(session)
-    && (session.user_state == null || session.user_state === "active")
-    && session.session_state.pending_interaction != null;
-}
-
-/** Is a pending question/approval answerable from Longhouse? */
-export function needsSessionResponse(
   session: Pick<AgentSession, "session_state" | "user_state">,
 ): boolean {
   const facts = session.session_state;
   const primaryKey = facts.presentation.primary?.key;
-  return needsSessionAttention(session)
+  return !isSessionClosed(session)
+    && (session.user_state == null || session.user_state === "active")
     && facts.pending_interaction?.can_respond === true
     && (primaryKey === "needs_answer" || primaryKey === "needs_approval");
 }
 
-/** Failed-run evidence, even when a stale interaction still owns the headline. */
+/** Failed-run presentation authored by the canonical state projector. */
 export function sessionHasFailedRun(
   session: Pick<AgentSession, "session_state">,
 ): boolean {
-  const facts = session.session_state;
-  const primary = facts.presentation.primary;
-  const run = facts.run;
+  const primary = session.session_state.presentation.primary;
   return primary?.key === "launch_failed"
-    || (primary?.key === "ended" && primary.tone === "blocked")
-    || (run?.lifecycle === "ended" && run.end_reason != null && FAILED_RUN_END_REASONS[run.end_reason] === true);
+    || (primary?.key === "ended" && primary.tone === "blocked");
 }
 
 /**

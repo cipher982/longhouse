@@ -6,6 +6,7 @@ func makeSessionStateFacts(
     owned: Bool = true,
     mode: String? = nil,
     pendingInteractionKind: String? = nil,
+    pendingInteractionCanRespond: Bool? = nil,
     launchState: String? = nil,
     closed: Bool = false,
     /// Overrides the run axis independently of `closed`. Exiting a terminal
@@ -35,11 +36,18 @@ func makeSessionStateFacts(
     primaryOverride: SessionStateLabel? = nil
 ) -> SessionStateFacts {
     let available = SessionStateAction(state: "available", reason: nil)
+    let canRespond = pendingInteractionCanRespond ?? (pendingInteractionKind != nil)
     let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
     let primary: SessionStateLabel = primaryOverride ?? {
         if closed { return SessionStateLabel(key: "closed", label: "Closed", tone: "closed", observedAt: nil) }
-        if pendingInteractionKind != nil {
-            return SessionStateLabel(key: "needs_answer", label: "Needs answer", tone: "blocked", observedAt: nil)
+        if pendingInteractionKind != nil && canRespond {
+            let approval = pendingInteractionKind == "permission" || pendingInteractionKind == "approval" || pendingInteractionKind == "plan_approval"
+            return SessionStateLabel(
+                key: approval ? "needs_approval" : "needs_answer",
+                label: approval ? "Needs approval" : "Needs answer",
+                tone: "blocked",
+                observedAt: nil
+            )
         }
         switch activity {
         case "executing": return SessionStateLabel(key: "executing", label: tool.map { "Using \($0)" } ?? "Running", tone: "running", observedAt: nil)
@@ -86,6 +94,7 @@ func makeSessionStateFacts(
         // resume can also branch unless a test says otherwise.
         branch: (branchAvailable ?? resumeAvailable) ? available : unavailable,
         pendingInteractionKind: pendingInteractionKind,
+        pendingInteractionCanRespond: pendingInteractionKind == nil ? nil : canRespond,
         transcriptConvergence: transcriptConvergence,
         primary: primary,
         // The server drops the access label entirely for an ended Helm run:

@@ -52,7 +52,7 @@ import {
 } from "@/shared/instruments/toolActivity";
 import {
   isSessionClosed,
-  needsSessionResponse,
+  needsSessionAttention,
   resolveSessionRuntimeState,
   sessionHasFailedRun,
 } from "@/shared/session/sessionRuntime";
@@ -315,16 +315,17 @@ function SessionDetailWorkspaceRoute({
     if (!session) return null;
     const state = getSessionHeaderState(session, nowMs, turnStartMs);
     const primary = session.session_state.presentation.primary;
+    const needsUser = needsSessionAttention(session);
     const failed = sessionHasFailedRun(session);
     return {
       id: session.id,
       title: getSessionCardText(session, { titleMaxChars: 80 }).title,
       provider: session.provider ?? null,
       host: session.control?.source_runner_name?.trim() || session.device_id || null,
-      stateText: failed && primary?.key !== "launch_failed" ? "Run failed" : state.text,
+      stateText: failed && !needsUser && primary?.key !== "launch_failed" ? "Run failed" : state.text,
       tone: state.tone,
       statusKey: primary?.key ?? null,
-      needsUser: needsSessionResponse(session),
+      needsUser,
       failed,
     };
   }, [session, nowMs, turnStartMs]);

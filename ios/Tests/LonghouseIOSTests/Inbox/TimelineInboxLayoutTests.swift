@@ -82,6 +82,36 @@ struct TimelineInboxLayoutTests {
     }
 
     @Test
+    func needsYouIncludesOnlyAnswerableInteractions() {
+        let answerableEnded = session(
+            id: "answerable-ended",
+            facts: makeSessionStateFacts(
+                activity: "quiescent",
+                pendingInteractionKind: "question",
+                pendingInteractionCanRespond: true,
+                runLifecycle: "ended",
+                workingSet: "open"
+            )
+        )
+        let providerLocal = session(
+            id: "provider-local",
+            facts: makeSessionStateFacts(
+                activity: "quiescent",
+                pendingInteractionKind: "question",
+                pendingInteractionCanRespond: false,
+                workingSet: "open"
+            )
+        )
+
+        let layout = buildTimelineInboxLayout([answerableEnded, providerLocal])
+
+        #expect(layout.needsYou.map(\.id) == ["answerable-ended"])
+        #expect(layout.open.map(\.id) == ["provider-local"])
+        #expect(TimelineSignal.resolve(for: answerableEnded) == .attention)
+        #expect(TimelineSignal.resolve(for: providerLocal) == .quiet)
+    }
+
+    @Test
     func sectionsKeepAFrozenOrderWhileTheEvidenceClockMoves() {
         // Two snapshots of the same two open sessions. Between them every
         // anchor moved — the engine re-stamps heads for idle sessions too, so
@@ -206,7 +236,7 @@ struct TimelineInboxLayoutTests {
             compactToolLabel: nil,
             isLive: facts.workingSet == "open",
             isExecuting: facts.activityState == "executing",
-            needsAttention: facts.pendingInteractionKind != nil,
+            needsAttention: facts.hasAnswerablePendingInteraction,
             isIdle: facts.activityState == "quiescent",
             isStalled: facts.activityState == "stalled",
             isManagedLocalTruth: true,

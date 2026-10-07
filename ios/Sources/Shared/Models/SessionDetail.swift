@@ -363,7 +363,7 @@ extension SessionDetail {
     func ledgerEvidence(asOf now: Date = Date()) -> SessionLedgerEvidence {
         guard !isClosed else { return .quiet }
         let base = stateFacts.ledgerEvidence(
-            hasPendingInteraction: activePauseRequest != nil,
+            hasPendingInteraction: activePauseRequest?.canRespond == true,
             asOf: now
         )
         if base == .working, ["offline", "stale"].contains(runtimeDisplay.hostState) {

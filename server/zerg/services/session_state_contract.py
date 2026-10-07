@@ -32,7 +32,7 @@ from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 4
-PRESENTATION_POLICY_VERSION = 4
+PRESENTATION_POLICY_VERSION = 5
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -1150,7 +1150,28 @@ def _primary(
         return SessionPresentationLabel(key="launch_failed", label="Launch failed", tone="blocked")
     if run is not None and run.lifecycle == "starting":
         return SessionPresentationLabel(key="starting", label="Starting", tone="active", observed_at=run.started_at)
-    if interaction is not None:
+    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
+        return SessionPresentationLabel(
+            key="provider_auth_required",
+            label="Provider authentication required",
+            tone="blocked",
+            observed_at=run.ended_at,
+        )
+    # Keep a terminal failure visible when its stale interaction cannot be
+    # answered; an answerable question still owns the primary presentation.
+    if (
+        run is not None
+        and run.lifecycle == "ended"
+        and run.end_reason in FAILED_RUN_END_REASONS
+        and not (interaction is not None and interaction.can_respond)
+    ):
+        return SessionPresentationLabel(
+            key="ended",
+            label="Run failed",
+            tone="blocked",
+            observed_at=run.ended_at,
+        )
+    if interaction is not None and interaction.can_respond:
         if interaction.kind == "question":
             return SessionPresentationLabel(
                 key="needs_answer",
@@ -1187,23 +1208,15 @@ def _primary(
             tone="active",
             observed_at=delegation.observed_at,
         )
-    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
-        return SessionPresentationLabel(
-            key="provider_auth_required",
-            label="Provider authentication required",
-            tone="blocked",
-            observed_at=run.ended_at,
-        )
     if activity.state == "quiescent":
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if mode == "console" and run is not None and run.lifecycle == "ended" and run.end_reason in {"run_completed", "exit_0"}:
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=run.ended_at)
     if run is not None and run.lifecycle == "ended":
-        failed = run.end_reason in FAILED_RUN_END_REASONS
         return SessionPresentationLabel(
             key="ended",
-            label="Run failed" if failed else "Ended",
-            tone="blocked" if failed else "closed",
+            label="Ended",
+            tone="closed",
             observed_at=run.ended_at,
         )
     if mode == "console" and run is not None and run.lifecycle == "running" and not _console_evidence_expired(activity):

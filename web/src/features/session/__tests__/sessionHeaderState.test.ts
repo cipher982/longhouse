@@ -56,8 +56,9 @@ describe("getSessionHeaderState", () => {
   it("reads a real provider question as attention, with the server's own copy", () => {
     const state = getSessionHeaderState(
       session({
-        pendingInteraction: { id: "1" },
+        pendingInteraction: { id: "1", can_respond: true },
         primaryTone: "blocked",
+        primaryKey: "needs_answer",
         primaryLabel: "Needs answer",
       }),
       Date.now(),

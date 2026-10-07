@@ -2158,7 +2158,7 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
         },
         last_result_at: now,
         presentation: {
-          primary: { key: "needs_answer", label: "Needs answer", tone: "blocked", observed_at: now },
+          primary: { key: "ended", label: "Run failed", tone: "blocked", observed_at: now },
           access: null,
           transcript: null,
         },

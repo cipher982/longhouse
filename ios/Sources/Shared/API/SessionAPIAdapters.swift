@@ -125,6 +125,7 @@ private extension APISessionStateFacts {
             branch: control.actions.branch?.sessionStateAction
                 ?? SessionStateAction(state: "unavailable", reason: "not_supported"),
             pendingInteractionKind: pendingInteraction?.kind,
+            pendingInteractionCanRespond: pendingInteraction?.canRespond,
             transcriptConvergence: transcript.convergence,
             primary: presentation.primary?.sessionStateLabel,
             access: presentation.access?.sessionStateLabel,

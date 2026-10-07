@@ -125,7 +125,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
         if isClosed || !isUserActive { return false }
-        return stateFacts.pendingInteractionKind != nil
+        return stateFacts.hasAnswerablePendingInteraction
     }
     var isExecuting: Bool { isExecuting(asOf: Date()) }
 

@@ -24,6 +24,11 @@ struct SessionStateSignal: Hashable, Codable, Sendable {
 }
 
 extension SessionStateFacts {
+    var hasAnswerablePendingInteraction: Bool {
+        pendingInteractionKind != nil
+            && pendingInteractionCanRespond == true
+            && (primary?.key == "needs_answer" || primary?.key == "needs_approval")
+    }
     /// Is the served activity evidence still inside its window?
     ///
     /// Mirrors `web/src/shared/session/activityEvidence.ts`. Expired evidence becomes
@@ -279,6 +284,7 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     /// offerable.
     let branch: SessionStateAction
     let pendingInteractionKind: String?
+    var pendingInteractionCanRespond: Bool? = nil
     let transcriptConvergence: String
     let primary: SessionStateLabel?
     let access: SessionStateLabel?

@@ -19,6 +19,7 @@ private func previewStateFacts(
     lastResultOutcome: String?,
     workingSet overrideWorkingSet: String?,
     pendingInteractionKind explicitPendingInteraction: String?,
+    pendingInteractionCanRespond explicitCanRespond: Bool? = nil,
     activityTool: String? = nil
 ) -> SessionStateFacts {
     let available = SessionStateAction(state: "available", reason: nil)
@@ -27,13 +28,17 @@ private func previewStateFacts(
     let activity: String = switch statusTone {
     case "thinking": "thinking"
     case "running": "executing"
-    case "blocked": "blocked"
+    case "blocked": "quiescent"
     case "stalled": "stalled"
     case "idle": "quiescent"
     default: closed ? "quiescent" : "unknown"
     }
     let pendingInteractionKind = explicitPendingInteraction
-        ?? (statusTone == "blocked" ? "permission" : nil)
+    let pendingInteractionCanRespond = explicitCanRespond ?? (pendingInteractionKind != nil)
+    let answerableInteraction = pendingInteractionKind != nil && pendingInteractionCanRespond
+    let isApproval = ["permission", "approval", "plan_approval"].contains(pendingInteractionKind ?? "")
+    let primaryKey = answerableInteraction ? (isApproval ? "needs_approval" : "needs_answer") : statusTone
+    let primaryLabel = answerableInteraction ? (isApproval ? "Needs approval" : "Needs answer") : statusLabel
     let workingSet = overrideWorkingSet
         ?? ((!closed && (pendingInteractionKind != nil || activity == "thinking" || activity == "executing"))
             ? "open"
@@ -67,11 +72,12 @@ private func previewStateFacts(
         resume: unavailable,
         branch: unavailable,
         pendingInteractionKind: pendingInteractionKind,
+        pendingInteractionCanRespond: pendingInteractionKind == nil ? nil : pendingInteractionCanRespond,
         transcriptConvergence: "current",
         primary: SessionStateLabel(
-            key: statusTone,
-            label: statusLabel,
-            tone: statusTone,
+            key: primaryKey,
+            label: primaryLabel,
+            tone: answerableInteraction ? "blocked" : statusTone,
             observedAt: nil
         ),
         access: nil,
@@ -104,6 +110,7 @@ private func mockSession(
     lastResultOutcome: String? = nil,
     workingSet: String? = nil,
     pendingInteractionKind: String? = nil,
+    pendingInteractionCanRespond: Bool? = nil,
     turns: Int = 4,
     tools: Int = 12,
     replies: Int? = nil,
@@ -124,6 +131,7 @@ private func mockSession(
         lastResultOutcome: lastResultOutcome,
         workingSet: workingSet,
         pendingInteractionKind: pendingInteractionKind,
+        pendingInteractionCanRespond: pendingInteractionCanRespond,
         activityTool: activityTool
     )
     let card = TimelineCardPresentation(
@@ -142,7 +150,7 @@ private func mockSession(
         compactToolLabel: nil,
         isLive: activityRecency == "live",
         isExecuting: statusTone == "running" || statusTone == "thinking",
-        needsAttention: statusTone == "blocked",
+        needsAttention: stateFacts.hasAnswerablePendingInteraction,
         isIdle: statusLabel == "Idle",
         isStalled: false,
         isManagedLocalTruth: isManaged,
@@ -241,11 +249,26 @@ private func mockSession(
             title: "Approval Needed for Shell Command",
             summary: "The managed session is waiting on a permission decision before it can continue the current turn.",
             provider: "gemini",
-            statusLabel: "Blocked Shell",
+            statusLabel: "Needs approval",
             statusTone: "blocked",
             activityRecency: "live",
             anchorSecondsAgo: 20,
-            seenAtSecondsAgo: 20
+            seenAtSecondsAgo: 20,
+            pendingInteractionKind: "permission"
+        ),
+        mockSession(
+            id: "7-local",
+            project: "runtime",
+            title: "Question in provider terminal",
+            summary: "This question is active locally but cannot be answered from Longhouse.",
+            provider: "gemini",
+            statusLabel: "Idle",
+            statusTone: "idle",
+            activityRecency: "live",
+            anchorSecondsAgo: 25,
+            seenAtSecondsAgo: 25,
+            pendingInteractionKind: "question",
+            pendingInteractionCanRespond: false
         ),
         mockSession(
             id: "8",

@@ -93,6 +93,14 @@ describe("sessionStatus", () => {
     });
     expect(sessionNeedsInteraction(interaction, NOW)).toBe(true);
     expect(workClaimExpired(interaction, NOW)).toBe(false);
+    const unanswerable = makeSessionStateFacts({
+      activity: "executing",
+      activityValidUntil: iso(-1),
+      pendingInteraction: true,
+    });
+    unanswerable.pending_interaction!.can_respond = false;
+    expect(sessionNeedsInteraction(unanswerable, NOW)).toBe(false);
+    expect(workClaimExpired(unanswerable, NOW)).toBe(true);
   });
 
   it("counts a served live tone as working while the loop itself is quiescent", () => {

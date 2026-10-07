@@ -384,7 +384,7 @@ def test_a_keyed_interaction_is_still_what_makes_a_wait_visible():
                 "kind": kind,
                 "status": "pending",
                 "occurred_at": NOW - timedelta(seconds=4),
-                "can_respond": False,
+                "can_respond": True,
             },
         )
 
@@ -392,6 +392,47 @@ def test_a_keyed_interaction_is_still_what_makes_a_wait_visible():
         assert primary is not None, kind
         assert primary.key == key, kind
         assert primary.label == label, kind
+
+
+@pytest.mark.parametrize(
+    ("can_respond", "expected_key", "expected_label"),
+    [(False, "ended", "Run failed"), (True, "needs_answer", "Needs answer")],
+)
+def test_failed_run_yields_to_interaction_only_when_it_can_be_answered(can_respond, expected_key, expected_label):
+    facts = _facts(
+        runtime=_runtime(phase=None, confidence="stale", terminal_state="run_failed"),
+        pause_request={
+            "id": "pause-terminal",
+            "kind": "structured_question",
+            "status": "pending",
+            "occurred_at": NOW - timedelta(seconds=4),
+            "can_respond": can_respond,
+        },
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+    )
+
+    assert facts.pending_interaction is not None
+    assert facts.pending_interaction.can_respond is can_respond
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == expected_key
+    assert facts.presentation.primary.label == expected_label
+
+def test_unanswerable_interaction_does_not_claim_a_wait():
+    facts = _facts(
+        runtime=_runtime(phase="idle"),
+        pause_request={
+            "id": "pause-local-only",
+            "kind": "structured_question",
+            "status": "pending",
+            "occurred_at": NOW - timedelta(seconds=4),
+            "can_respond": False,
+        },
+    )
+
+    assert facts.pending_interaction is not None
+    assert facts.pending_interaction.can_respond is False
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "idle"
 
 
 def test_transcript_lag_never_becomes_provider_working():
