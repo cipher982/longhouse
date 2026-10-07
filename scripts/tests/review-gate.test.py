@@ -825,6 +825,87 @@ class PromotionRuleTests(unittest.TestCase):
         self.repo.receipt(self.served)  # re-review of the whole range
         self.assertEqual(self.promote(), [])
 
+    # --- a finding blocks only the commits it is about, and only for history it belongs to ---
+
+    def located(self, fid, severity, path):
+        return {"id": fid, "severity": severity, "where": f"{path}:1", "summary": "about " + path}
+
+    def test_a_receipt_of_a_proposal_that_never_landed_has_no_say(self):
+        # 2026-10-07: a withdrawn revert was reviewed from a base far behind main, so its receipt listed
+        # landed commits too; its finding (about the revert) refused every one of them.
+        a = self.repo.commit("feature a", {"server/zerg/a.py": "1"})
+        self.repo.receipt(self.served, a)  # a's own, clean
+        b = self.repo.commit("feature b", {"server/zerg/b.py": "1"})  # landed with no review of its own yet
+        self.repo.git("checkout", "-q", "-b", "proposal")
+        revert = self.repo.commit("Revert feature a", {"server/zerg/a.py": "0"})
+        self.repo.receipt(self.served, revert, findings=[self.located("F1", "blocking", "server/zerg/a.py")])
+        self.repo.git("checkout", "-q", "main")
+        self.repo.git("branch", "-q", "-D", "proposal")
+        verdicts = self.promote(target=b)
+        # a is untouched by the proposal's finding; b gets no coverage from a receipt of history that never landed.
+        self.assertEqual([(v.commit.sha, v.reasons) for v in verdicts], [(b, ["no review receipt"])])
+
+    def test_a_clean_review_of_a_proposal_still_covers_the_part_of_it_that_landed(self):
+        # 2026-10-07: a reviewed pair of deletions landed one commit at a time; the first had landed alone.
+        x = self.repo.commit("delete modules", {"server/zerg/x.py": "1"})
+        self.repo.git("checkout", "-q", "-b", "proposal")
+        y = self.repo.commit("delete functions", {"server/zerg/y.py": "1"})
+        self.repo.receipt(self.served, y)  # x and y, clean
+        self.repo.git("checkout", "-q", "main")
+        self.repo.git("branch", "-q", "-D", "proposal")
+        self.assertEqual(self.promote(target=x), [])
+        self.assertNotEqual(x, y)
+
+    def test_a_finding_blocks_only_the_commit_whose_file_it_names(self):
+        a = self.repo.commit("feature a", {"server/zerg/a.py": "1"})
+        x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
+        c = self.repo.commit("feature c", {"server/zerg/c.py": "1"})
+        rid = self.repo.receipt(self.served, c, findings=[self.located("F1", "material", "server/zerg/x.py")])
+        (verdict,) = self.promote()
+        self.assertEqual(verdict.commit.sha, x)  # still blocks x, the commit it is about
+        self.assertIn(f"unresolved material finding {rid} F1", verdict.reasons[0])
+        self.assertNotIn(a, [v.commit.sha for v in self.promote()])
+        self.assertNotIn(c, [v.commit.sha for v in self.promote()])
+
+    def test_a_finding_that_names_no_reviewed_file_is_about_its_receipt_not_the_whole_range(self):
+        a = self.repo.commit("feature a", {"server/zerg/a.py": "1"})
+        self.repo.receipt(self.served, a)
+        b = self.repo.commit("feature b", {"server/zerg/b.py": "1"})
+        c = self.repo.commit("feature c", {"server/zerg/c.py": "1"})
+        self.repo.receipt(a, c, findings=[finding("F1", "blocking")])  # where "x:1": no reviewed commit changed x
+        self.assertEqual([v.commit.sha for v in self.promote()], [b, c])  # not a
+
+    def test_a_finding_on_a_commit_that_was_later_fixed_and_re_reviewed_no_longer_blocks(self):
+        x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
+        old = self.repo.receipt(self.served, x, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
+        fix = self.repo.commit("fix x", {"server/zerg/x.py": "2"})
+        self.repo.receipt(x, fix)  # the fix alone, clean: says nothing about x
+        self.assertEqual([v.commit.sha for v in self.promote()], [x])
+        self.repo.receipt(self.served, x)  # x again, alone, clean: a re-run is not a fix
+        self.assertEqual([v.commit.sha for v in self.promote()], [x])
+        self.repo.receipt(self.served, fix)  # x together with its fix, nothing open about x
+        self.assertEqual(self.promote(), [])
+        self.assertNotIn(old, [r for v in self.promote() for r in v.reasons])
+
+    def test_a_re_review_that_still_finds_the_problem_does_not_supersede(self):
+        x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
+        self.repo.receipt(self.served, x, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
+        fix = self.repo.commit("attempted fix", {"server/zerg/other.py": "2"})
+        self.repo.receipt(self.served, fix, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
+        (verdict,) = self.promote()
+        self.assertEqual(verdict.commit.sha, x)
+        self.assertEqual(len(verdict.reasons), 2)  # both reviews' findings are open about x
+
+    def test_a_review_whose_head_landed_after_the_target_still_covers_it(self):
+        a = self.repo.commit("feature a", {"server/zerg/a.py": "1"})
+        b = self.repo.commit("feature b", {"server/zerg/b.py": "1"})
+        self.repo.receipt(self.served, b, findings=[self.located("F1", "blocking", "server/zerg/b.py")])
+        self.repo.git("update-ref", "refs/remotes/origin/main", b)
+        self.assertEqual(self.promote(target=a), [])  # landed on main; its finding is about b, not a
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main")
+        # No landed history holds b: a proposal with an open finding has no say, so a needs its own review.
+        self.assertEqual([(v.commit.sha, v.reasons) for v in self.promote(target=a)], [(a, ["no review receipt"])])
+
     def test_refusal_lists_the_commits_and_a_receipt_command(self):
         sha = self.repo.commit("feature a", {"server/zerg/a.py": "1"})
         result = self.repo.run("promotion", "--target", "HEAD", "--served", self.served)

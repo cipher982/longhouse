@@ -291,6 +291,213 @@ def open_findings(events: list[dict], receipt: dict) -> list[dict]:
             if f.get("severity") in GATED_SEVERITIES and latest.get(f.get("id")) not in RESOLVING]
 
 
+def remote_main_shas(repo: str | Path) -> list[str]:
+    return git(repo, "for-each-ref", "--format=%(objectname)", f"refs/remotes/*/{DEFAULT_BRANCH}", check=False).split()
+
+
+class Landed:
+    """The history a verdict is about: `tips` (the target, plus every remote main) down to `excludes`
+    (the range's lower bound). A receipt speaks for that history when its head landed in it: the head
+    is an ancestor of a tip, or the same patch as a commit of the range (a rebase after the review).
+    Anything else reviewed a proposal that was discarded or did not land as reviewed (see
+    Receipts.counts for what such a receipt may still say)."""
+
+    def __init__(self, repo: str | Path, tips: list[str], excludes: list[str]):
+        self.repo = repo
+        self.tips = list(dict.fromkeys(t for t in tips if t))
+        self.excludes = [e for e in excludes if e]
+        self._shas: set[str] | None = None
+        self._patches: set[str] | None = None
+        self._memo: dict[tuple[str, str | None], bool] = {}
+
+    @classmethod
+    def for_range(cls, repo: str | Path, base: str | None, head: str) -> "Landed":
+        return cls(repo, [resolve(repo, head), *remote_main_shas(repo)], [base] if base else [])
+
+    @classmethod
+    def for_revs(cls, repo: str | Path, revs: list[str]) -> "Landed":
+        """From the rev-list arguments that name a range (`A..B`, `^X`, `B --not X --glob=...`): the range's
+        positive ends are tips, its negative ends excludes; every remote main is a tip too, so a receipt whose
+        head landed after the target (a review of a longer stretch of main) still speaks for it."""
+        tips, excludes, negate = [], [], False
+        for rev in revs:
+            if rev == "--not":
+                negate = True
+            elif ".." in rev and "..." not in rev:
+                a, b = rev.split("..", 1)
+                excludes.append(a)
+                tips.append(resolve(repo, b or "HEAD"))
+            elif rev.startswith("^"):
+                excludes.append(rev[1:])
+            elif negate or rev.startswith("--"):
+                (excludes if negate else tips).append(rev)
+            else:
+                tips.append(resolve(repo, rev))
+        return cls(repo, [*tips, *remote_main_shas(repo)], excludes)
+
+    def _range_args(self) -> list[str]:
+        return [*self.tips, *(["--not", *self.excludes] if self.excludes else [])]
+
+    def shas(self) -> set[str]:
+        if self._shas is None:
+            self._shas = set(git(self.repo, "rev-list", *self._range_args(), check=False).split())
+        return self._shas
+
+    def patches(self) -> set[str]:
+        """Stable patch-ids of the range's commits, computed once and only when a head is not found by SHA."""
+        if self._patches is None:
+            # Same diff options as Commit.patch_id, so a patch-id matches whichever way it was computed.
+            log = git(self.repo, "log", "--no-merges", "--no-color", "--no-ext-diff", "--no-renames", "-p",
+                      *self._range_args(), check=False)
+            out = git(self.repo, "patch-id", "--stable", stdin=log, check=False) if log.strip() else ""
+            self._patches = {line.split()[0] for line in out.splitlines() if line.split()}
+        return self._patches
+
+    def holds(self, sha: str, patch_id: str | None) -> bool:
+        key = (sha, patch_id)
+        if key not in self._memo:
+            self._memo[key] = bool(
+                sha in self.shas()
+                or any(subprocess.run(["git", "merge-base", "--is-ancestor", sha, tip], cwd=self.repo,
+                                      capture_output=True).returncode == 0 for tip in self.tips)
+                or (patch_id and patch_id in self.patches()))
+        return self._memo[key]
+
+
+def _default_landed(repo: str | Path, commits: list[Commit]) -> Landed:
+    """For a caller that names only commits: their own history down to the first one's parents."""
+    first = commits[0].sha if commits else None
+    parents = git(repo, "rev-list", "--parents", "-n", "1", first).split()[1:] if first else []
+    return Landed(repo, [*(c.sha for c in commits), *remote_main_shas(repo)], parents)
+
+
+def _head_patch(receipt: dict) -> str | None:
+    entries = receipt.get("commits") or []
+    head = next((c for c in entries if c.get("sha") == receipt.get("head")), None)
+    if head is None and entries and not receipt.get("head"):
+        head = entries[-1]
+    return head.get("patch_id") if head else None
+
+
+def _keys(entries: list[dict]) -> set[str]:
+    return {k for c in entries for k in (c.get("sha"), c.get("patch_id")) if k}
+
+
+def finding_path(where: str | None) -> str | None:
+    """`where` is `path:line[-line]` as the reviewer writes it; the path is everything before the first colon."""
+    token = (where or "").strip().strip("`").split(":", 1)[0].strip().strip("`")
+    return token or None
+
+
+class Receipts:
+    """The review receipts as one target's history sees them (see Landed), with each gated finding
+    attributed to the commits it is about.
+
+    Attribution: a finding names a location (`where`). It is about the commits of its receipt that
+    changed that file; when it names no file a reviewed commit changed (or the commit cannot be read),
+    it is about every commit of its receipt, never about the rest of a promotion range.
+
+    A receipt whose head did not land (a proposal: withdrawn, reworked, or landed only in part) still
+    covers the commits of it that did land, by SHA or patch, but only while it holds no open gated
+    finding. One that does has no say at all, coverage included: its finding may be about the part that
+    never landed, and attribution by file cannot always tell (a revert touches its original's file), so
+    the landed commits need a review of what landed instead. Nothing gets through that the old rule
+    refused: there, every finding of every covering receipt blocked.
+
+    Supersession: an open finding stops counting for a commit once a later complete review covers the
+    commit, reaches past everything the first review saw (its head is not a commit of the first
+    review: it read the fix too), and has no open finding of its own about the commit. A re-review of
+    exactly the same commits does not supersede anything: that would be review shopping, not a fix."""
+
+    def __init__(self, repo: str | Path, events: list[dict], landed: Landed):
+        self.repo = repo
+        self.events = events
+        self.landed = landed
+        self.reviews = [e for e in events if e.get("type") == "review"]
+        self.order = {r["id"]: i for i, r in enumerate(self.reviews)}
+        self.by_sha: dict[str, list[dict]] = {}
+        self.by_merge: dict[str, list[dict]] = {}
+        self.by_patch: dict[str, list[dict]] = {}
+        for r in self.reviews:
+            for c in r.get("commits", []):
+                self.by_sha.setdefault(c.get("sha"), []).append(r)
+                if c.get("merge"):
+                    self.by_merge.setdefault(c.get("sha"), []).append(r)
+                if c.get("patch_id"):
+                    self.by_patch.setdefault(c["patch_id"], []).append(r)
+        self._relevant: dict[str, bool] = {}
+        self._open: dict[str, list[dict]] = {}
+        self._about: dict[tuple[str, str], set[str]] = {}
+        self._files: dict[str, list[str] | None] = {}
+
+    def relevant(self, r: dict) -> bool:
+        if r["id"] not in self._relevant:
+            head = r.get("head") or ((r.get("commits") or [{}])[-1].get("sha"))
+            self._relevant[r["id"]] = bool(head) and self.landed.holds(head, _head_patch(r))
+        return self._relevant[r["id"]]
+
+    def counts(self, r: dict) -> bool:
+        return self.relevant(r) or not self.open(r)
+
+    def covering(self, commit: Commit) -> list[dict]:
+        covering = [r for r in (self.by_merge if commit.merge else self.by_sha).get(commit.sha, []) if self.counts(r)]
+        if self.by_patch and not commit.merge and not any(r.get("state") == "complete" for r in covering):
+            # Not reviewed under this exact SHA: a rebased copy of the same patch counts.
+            seen = {r["id"] for r in covering}
+            covering += [r for r in self.by_patch.get(commit.patch_id(self.repo) or "", [])
+                         if r["id"] not in seen and self.counts(r)]
+        return sorted(covering, key=lambda r: self.order[r["id"]])
+
+    def open(self, r: dict) -> list[dict]:
+        if r["id"] not in self._open:
+            self._open[r["id"]] = open_findings(self.events, r)
+        return self._open[r["id"]]
+
+    def _entry_files(self, r: dict, entry: dict) -> list[str] | None:
+        sha = entry.get("sha")
+        if sha not in self._files:
+            files = None
+            try:
+                if entry.get("merge"):
+                    parents = git(self.repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+                    files = list(r.get("merge_files") or merge_own_files(self.repo, sha, parents))
+                else:
+                    out = git(self.repo, "show", "--no-renames", "--name-only", "--format=", sha, check=False)
+                    files = [n for n in out.splitlines() if n.strip()] if out.strip() else None
+            except GateError:
+                files = None
+            self._files[sha] = files
+        return self._files[sha]
+
+    def about(self, r: dict, finding: dict) -> set[str]:
+        """The keys (SHAs and patch-ids) of the commits a finding is about."""
+        key = (r["id"], str(finding.get("id")))
+        if key not in self._about:
+            entries = r.get("commits") or []
+            path = finding_path(finding.get("where"))
+            touched = [c for c in entries if path and path in (self._entry_files(r, c) or [])] if path else []
+            self._about[key] = _keys(touched or entries)
+        return self._about[key]
+
+    def is_about(self, r: dict, finding: dict, commit: Commit) -> bool:
+        keys = self.about(r, finding)
+        return commit.sha in keys or (not commit.merge and (commit.patch_id(self.repo) or "") in keys)
+
+    def blocking(self, commit: Commit, covering: list[dict]) -> list[tuple[dict, dict]]:
+        """(receipt, finding) pairs still open about this commit and not superseded."""
+        mine = {r["id"]: [f for f in self.open(r) if self.is_about(r, f, commit)] for r in covering}
+        out = []
+        for r in covering:
+            seen = _keys(r.get("commits") or [])
+            later_clean = [r2 for r2 in covering
+                           if self.order[r2["id"]] > self.order[r["id"]] and r2.get("state") == "complete"
+                           and not mine[r2["id"]]
+                           and not ({r2.get("head"), _head_patch(r2)} - {None}) & seen]
+            if not later_clean:
+                out += [(r, f) for f in mine[r["id"]]]
+        return out
+
+
 @dataclass
 class Verdict:
     commit: Commit
@@ -299,29 +506,16 @@ class Verdict:
     needs_receipt: bool = False  # a review would clear it (no receipt, or only a partial one)
 
 
-def check_commits(repo: str | Path, commits: list[Commit], events: list[dict]) -> list[Verdict]:
+def check_commits(repo: str | Path, commits: list[Commit], events: list[dict], landed: Landed | None = None) -> list[Verdict]:
     """Coverage of each commit by review receipts: needs a complete receipt that lists its
-    SHA (or patch-id), and no covering receipt may hold an unresolved gated finding.
-    A merge is covered only by a receipt entry flagged `merge` (`hatch review --merge`, which
-    reviewed the merge's own changes) under the merge's exact SHA."""
-    reviews = [e for e in events if e.get("type") == "review"]
-    by_sha: dict[str, list[dict]] = {}
-    by_merge: dict[str, list[dict]] = {}
-    by_patch: dict[str, list[dict]] = {}
-    for r in reviews:
-        for c in r.get("commits", []):
-            by_sha.setdefault(c.get("sha"), []).append(r)
-            if c.get("merge"):
-                by_merge.setdefault(c.get("sha"), []).append(r)
-            if c.get("patch_id"):
-                by_patch.setdefault(c["patch_id"], []).append(r)
+    SHA (or patch-id), and no covering receipt may hold an unresolved gated finding about it.
+    A receipt whose head did not land in `landed` (the target's history) counts only while it
+    holds no open finding; see Landed and Receipts. A merge is covered only by a receipt entry flagged `merge` (`hatch review --merge`,
+    which reviewed the merge's own changes) under the merge's exact SHA."""
+    receipts = Receipts(repo, events, landed or _default_landed(repo, commits))
     verdicts = []
     for commit in commits:
-        covering = list((by_merge if commit.merge else by_sha).get(commit.sha, []))
-        if by_patch and not commit.merge and not any(r.get("state") == "complete" for r in covering):
-            # Not reviewed under this exact SHA: a rebased copy of the same patch counts.
-            seen = {r["id"] for r in covering}
-            covering += [r for r in by_patch.get(commit.patch_id(repo) or "", []) if r["id"] not in seen]
+        covering = receipts.covering(commit)
         reasons = []
         needs_receipt = False
         complete = [r for r in covering if r.get("state") == "complete"]
@@ -337,9 +531,8 @@ def check_commits(repo: str | Path, commits: list[Commit], events: list[dict]) -
                                + (", ..." if len(commit.files) > 5 else ""))
             else:
                 reasons.append("no review receipt")
-        for r in covering:
-            for f in open_findings(events, r):
-                reasons.append(f"unresolved {f['severity']} finding {r['id']} {f['id']}: {f.get('summary', '')[:140]}")
+        for r, f in receipts.blocking(commit, covering):
+            reasons.append(f"unresolved {f['severity']} finding {r['id']} {f['id']}: {f.get('summary', '')[:140]}")
         verdicts.append(Verdict(commit, reasons, needs_receipt=needs_receipt))
     return verdicts
 
@@ -354,7 +547,7 @@ def revs_verdicts(repo: str | Path, policy: Policy, revs: list[str]) -> list[Ver
     commits = commits_in(repo, *revs)
     gated = [(c, policy.blocking_areas(c.files)) for c in commits]
     gated = [(c, areas) for c, areas in gated if areas]
-    verdicts = check_commits(repo, [c for c, _ in gated], load_events(repo))
+    verdicts = check_commits(repo, [c for c, _ in gated], load_events(repo), Landed.for_revs(repo, revs))
     for v, (_, areas) in zip(verdicts, gated):
         v.areas = areas
     return [v for v in verdicts if v.reasons]
@@ -411,7 +604,7 @@ def promotion_revs(repo: str | Path, served: str, target: str) -> list[str]:
 def promotion_verdicts(repo: str | Path, policy: Policy, served: str, target: str) -> list[Verdict]:
     revs = promotion_revs(repo, served, target)
     commits = [c for c in commits_in(repo, *revs) if not policy.exempt_commit(c.subject, c.files)]
-    verdicts = check_commits(repo, commits, load_events(repo))
+    verdicts = check_commits(repo, commits, load_events(repo), Landed.for_revs(repo, revs))
     for v in verdicts:
         v.areas = policy.blocking_areas(v.commit.files)
     return [v for v in verdicts if v.reasons]
@@ -551,7 +744,8 @@ def needed_commits(repo: str | Path, policy: Policy, revs: list[str]) -> list[tu
     """Every commit of the range in order, each with whether it needs a review: not exempt and no completed receipt."""
     commits = commits_in(repo, *revs)
     gated = [c for c in commits if not policy.exempt_commit(c.subject, c.files)]
-    missing = {v.commit.sha for v in check_commits(repo, gated, load_events(repo)) if v.needs_receipt}
+    missing = {v.commit.sha for v in check_commits(repo, gated, load_events(repo), Landed.for_revs(repo, revs))
+               if v.needs_receipt}
     return [(c, c.sha in missing) for c in commits]
 
 
@@ -646,6 +840,11 @@ def _job_commits(repo: str | Path, job: dict) -> list[Commit]:
     return [c for sha in job["commits"] for c in commits_in(repo, f"{sha}^!")]
 
 
+def _job_needs_review(repo: str | Path, job: dict) -> bool:
+    landed = Landed.for_range(repo, job.get("base"), job["head"])
+    return any(v.needs_receipt for v in check_commits(repo, _job_commits(repo, job), load_events(repo), landed))
+
+
 def run_job(repo: str | Path, job: dict, hatch: str) -> dict:
     """One `hatch review` of the job; returns the attempt record. The launcher builds every input the reviewer
     sees (arm's-length): this passes references only, never prose."""
@@ -706,7 +905,7 @@ def autoreview_worker(repo: str | Path) -> int:
                 continue
             try:
                 # A job can outlive its need (someone reviewed the range by hand, or it sat stranded): skip it.
-                already = not any(v.needs_receipt for v in check_commits(repo, _job_commits(repo, job), load_events(repo)))
+                already = not _job_needs_review(repo, job)
             except GateError:
                 already = False
             if already:
@@ -718,7 +917,7 @@ def autoreview_worker(repo: str | Path) -> int:
                 except Exception as exc:  # noqa: BLE001 - one bad job must not strand the rest of the queue
                     attempt = {"at": _stamp(), "exit": None, "error": f"{type(exc).__name__}: {exc}", "receipt": None}
             try:
-                covered = not any(v.needs_receipt for v in check_commits(repo, _job_commits(repo, job), load_events(repo)))
+                covered = not _job_needs_review(repo, job)
             except GateError as exc:
                 covered, attempt["error"] = False, str(exc)
             with _QueueLock(repo):
@@ -825,7 +1024,8 @@ def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict], started: l
             note = queued_note(repo, started).removeprefix("review-gate: ")
             lines += [note[:1].upper() + note[1:] + ".",
                       f"Wait for them, then retry: python3 {Path(__file__).resolve()} --repo {repo} queue --wait 1800",
-                      "A commit refused for an open finding needs its disposition, not another review."]
+                      "A commit refused for an open finding needs its disposition, or a later complete review that "
+                      "reads its fix (a range reaching past the reviewed commits) with nothing open about it."]
         else:
             lines.append("No new background review was started: every unreviewed commit is already queued or running "
                          f"(python3 {Path(__file__).resolve()} --repo {repo} queue), or hatch is not on PATH.")
@@ -937,9 +1137,9 @@ def main(argv: list[str] | None = None) -> int:
                   "queued or running, or hatch is not on PATH).")
             return 0
         else:
-            base, _, head = args.rng.partition("..")
+            landed, events = Landed.for_revs(repo, [args.rng]), load_events(repo)
             for c in commits_in(repo, args.rng):
-                v = check_commits(repo, [c], load_events(repo))[0]
+                v = check_commits(repo, [c], events, landed)[0]
                 areas = policy.blocking_areas(c.files)
                 exempt = policy.exempt_commit(c.subject, c.files)
                 label = "exempt (clean merge)" if exempt and c.merge and not c.files else "exempt" if exempt \
