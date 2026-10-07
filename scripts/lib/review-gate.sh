@@ -7,9 +7,11 @@
 # SERVED_HEALTH_URL reports as served and TARGET_SHA has no completed review
 # receipt, or holds an unresolved blocking/material finding. Docs, tests and
 # release version bumps are exempt. Policy: scripts/ops/review-policy.toml; the
-# gate and the receipt format: scripts/ops/review_gate.py.
+# gate and the receipt format: scripts/ops/review_gate.py. A refusal for missing
+# receipts starts those reviews in the background and says how to wait for them,
+# so the retry is one command, not a loop of hand-run reviews.
 lh_review_gate_promotion() {
   local target="${1:?target sha}" served_url="${2:?served health url}"
   git -C "${ROOT:?}" fetch --quiet origin >/dev/null 2>&1 || true
-  python3 "$ROOT/scripts/ops/review_gate.py" --repo "$ROOT" promotion --target "$target" --served-url "$served_url"
+  python3 "$ROOT/scripts/ops/review_gate.py" --repo "$ROOT" promotion --target "$target" --served-url "$served_url" --start-reviews
 }

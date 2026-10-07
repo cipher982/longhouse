@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,46 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "scripts" / "ops" / "review_gate.py"
 INSTALLER = ROOT / "scripts" / "ops" / "install-push-gate.sh"
 POLICY = ROOT / "scripts" / "ops" / "review-policy.toml"
+
+# No test launches a real review: automatic reviews are off unless a test points them at FAKE_HATCH.
+os.environ["LONGHOUSE_AUTOREVIEW_HATCH"] = "off"
+
+# Stands in for `hatch review`: appends the receipt review-hub would write for the range (or merge) it was
+# given, in the repo's git common dir. FAKE_HATCH_PLAN (a file of states, one per line, consumed in order;
+# default complete) lets a test script a partial first run; FAKE_HATCH_SLEEP delays it; every call's argv is
+# appended to FAKE_HATCH_CALLS.
+FAKE_HATCH = r'''#!/usr/bin/env python3
+import importlib.util, json, os, subprocess, sys, time
+args = sys.argv[1:]
+assert args[0] == "review", args
+with open(os.environ["FAKE_HATCH_CALLS"], "a") as fh:
+    fh.write(json.dumps(args) + "\n")
+time.sleep(float(os.environ.get("FAKE_HATCH_SLEEP", "0")))
+repo = args[args.index("-C") + 1]
+spec = importlib.util.spec_from_file_location("review_gate", os.environ["FAKE_HATCH_GATE"])
+gate = importlib.util.module_from_spec(spec); sys.modules["review_gate"] = gate; spec.loader.exec_module(gate)
+state = "complete"
+plan = os.environ.get("FAKE_HATCH_PLAN")
+if plan and os.path.exists(plan):
+    lines = open(plan).read().split()
+    if lines:
+        state = lines[0]
+        open(plan, "w").write("\n".join(lines[1:]))
+if "--merge" in args:
+    sha = args[args.index("--merge") + 1]
+    commits = [{"sha": sha, "patch_id": None, "subject": "", "merge": True}]
+    base, head = sha + "^", sha
+else:
+    base, head = args[args.index("--base") + 1], args[args.index("--head") + 1]
+    commits = []
+    for c in gate.commits_in(repo, f"{base}..{head}"):
+        if not c.merge:
+            commits.append({"sha": c.sha, "patch_id": c.patch_id(repo), "subject": c.subject})
+gate.append_event(repo, {"type": "review", "id": f"rv-fake-{time.time_ns()}", "at": gate._stamp(), "base": base,
+                         "head": head, "commits": commits, "state": state, "state_reasons": [] if state == "complete" else ["budget"],
+                         "findings": [], "verdict": "ready", "intent": {"no_intent": "--no-intent" in args}})
+print(json.dumps({"review": "fake"}))
+'''
 
 spec = importlib.util.spec_from_file_location("review_gate", GATE)
 gate = importlib.util.module_from_spec(spec)
@@ -859,6 +900,231 @@ class PromotionRuleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("could not read the served commit", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+
+class AutoReviewTests(unittest.TestCase):
+    """Reviews start themselves after a push and on a refused promotion, deduplicated, bounded, retried once."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / "repo").mkdir()
+        self.repo = Repo(str(self.dir / "repo"))
+        self.fake = self.dir / "hatch"
+        self.fake.write_text(FAKE_HATCH)
+        self.fake.chmod(0o755)
+        self.calls = self.dir / "calls.jsonl"
+        self.calls.touch()
+        self.env = {"LONGHOUSE_AUTOREVIEW_HATCH": str(self.fake), "FAKE_HATCH_CALLS": str(self.calls),
+                    "FAKE_HATCH_GATE": str(GATE), "FAKE_HATCH_PLAN": str(self.dir / "plan")}
+        self.saved = {k: os.environ.get(k) for k in self.env}
+        os.environ.update(self.env)
+        self.addCleanup(self.restore_env)
+        self.started = []
+        real_start = gate.start_workers
+        self.addCleanup(setattr, gate, "start_workers", real_start)
+        gate.start_workers = lambda repo, count: self.started.append(count)  # in-process tests drive the worker themselves
+        self.base = self.repo.commit("base", {"README.md": "x"})
+
+    def restore_env(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def calls_made(self):
+        return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def jobs(self):
+        return gate._load_jobs(self.repo.dir)
+
+    def test_one_job_per_contiguous_run_of_unreviewed_commits_docs_and_reviewed_ones_split_it(self):
+        a = self.repo.commit("a", {"server/a.py": "1"})
+        b = self.repo.commit("b", {"server/b.py": "1"})
+        self.repo.commit("docs", {"docs/x.md": "1"})
+        d = self.repo.commit("d", {"server/d.py": "1"})
+        self.repo.receipt(f"{d}^", d)  # d is reviewed
+        e = self.repo.commit("e", {"server/e.py": "1"})
+        jobs = gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="push")
+        self.assertEqual([(j["base"], j["head"], j["commits"]) for j in jobs], [(self.base, b, [a, b]), (d, e, [e])])
+        self.assertEqual(self.started, [2])
+
+    def test_a_long_run_is_split_so_each_review_fits_its_budget(self):
+        for i in range(gate.AUTO_MAX_RUN + 3):
+            self.repo.commit(f"c{i}", {f"server/c{i}.py": "1"})
+        jobs = gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="push")
+        self.assertEqual([len(j["commits"]) for j in jobs], [gate.AUTO_MAX_RUN, 3])
+
+    def test_the_same_work_is_never_queued_twice_even_after_a_rebase(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        policy = self.repo.policy()
+        self.assertEqual(len(gate.enqueue_reviews(self.repo.dir, policy, [f"{self.base}..HEAD"], session=None, reason="push")), 1)
+        self.assertEqual(gate.enqueue_reviews(self.repo.dir, policy, [f"{self.base}..HEAD"], session=None, reason="push"), [])
+        # The push lost a race: the same patch, rebased onto a newer main, is pushed again.
+        self.repo.git("checkout", "-q", "-b", "other", self.base)
+        other = self.repo.commit("other", {"docs/o.md": "1"})
+        self.repo.git("cherry-pick", "main")
+        self.assertEqual(gate.enqueue_reviews(self.repo.dir, policy, [f"{other}..HEAD"], session=None, reason="push"), [])
+        self.assertEqual(len(self.jobs()), 1)
+
+    def test_nothing_is_queued_when_hatch_is_absent_or_switched_off(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        os.environ["LONGHOUSE_AUTOREVIEW_HATCH"] = "off"
+        self.assertEqual(gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="push"), [])
+        self.assertEqual(self.started, [])
+
+    def test_the_worker_writes_a_receipt_and_retries_a_partial_review_once(self):
+        a = self.repo.commit("a", {"server/a.py": "1"})
+        (self.dir / "plan").write_text("partial\ncomplete\n")
+        gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session="sess-1", reason="push")
+        delay = gate.AUTO_RETRY_DELAY_S
+        self.addCleanup(setattr, gate, "AUTO_RETRY_DELAY_S", delay)
+        gate.AUTO_RETRY_DELAY_S = 0
+        self.assertEqual(gate.autoreview_worker(self.repo.dir), 0)
+        [job] = self.jobs()
+        self.assertEqual((job["state"], job["attempts"]), ("done", 2))
+        self.assertEqual([h["receipt_state"] for h in job["history"]], ["partial", "complete"])
+        calls = self.calls_made()
+        self.assertEqual(calls[0][:3], ["review", "-C", str(self.repo.dir)])
+        self.assertIn("--session", calls[0])  # the pusher's session carries the intent
+        self.assertEqual(calls[0][calls[0].index("--base") + 1:calls[0].index("--head") + 2], [self.base, "--head", a])
+        self.assertFalse(gate.check_commits(self.repo.dir, gate.commits_in(self.repo.dir, f"{self.base}..HEAD"),
+                                            gate.load_events(self.repo.dir))[0].needs_receipt)
+
+    def test_a_job_that_never_gets_a_complete_receipt_fails_after_its_retry(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        (self.dir / "plan").write_text("partial\npartial\n")
+        gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="push")
+        delay = gate.AUTO_RETRY_DELAY_S
+        self.addCleanup(setattr, gate, "AUTO_RETRY_DELAY_S", delay)
+        gate.AUTO_RETRY_DELAY_S = 0
+        gate.autoreview_worker(self.repo.dir)
+        [job] = self.jobs()
+        self.assertEqual((job["state"], job["attempts"]), ("failed", gate.AUTO_MAX_ATTEMPTS))
+        self.assertTrue(all("--no-intent" in c for c in self.calls_made()))
+        # A failed job does not block a later trigger from trying again.
+        self.assertEqual(len(gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="promotion")), 1)
+
+    def test_a_worker_with_no_free_slot_exits_at_once(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="push")
+        held = [gate._take_slot(self.repo.dir) for _ in range(gate.AUTO_SLOTS)]
+        self.addCleanup(lambda: [os.close(fd) for fd in held if fd is not None])
+        self.assertTrue(all(fd is not None for fd in held))
+        self.assertEqual(gate.autoreview_worker(self.repo.dir), 0)
+        self.assertEqual(self.calls_made(), [])
+        self.assertEqual(self.jobs()[0]["state"], "queued")
+
+    def test_a_job_whose_worker_died_is_picked_up_again(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        gate.enqueue_reviews(self.repo.dir, self.repo.policy(), [f"{self.base}..HEAD"], session=None, reason="push")
+        with gate._QueueLock(self.repo.dir):
+            jobs = self.jobs()
+            jobs[0].update(state="running", pid=2 ** 22 + 12345, attempts=1)
+            gate._save_jobs(self.repo.dir, jobs)
+        gate.autoreview_worker(self.repo.dir)
+        self.assertEqual(self.jobs()[0]["state"], "done")
+
+    def test_a_refused_promotion_starts_the_missing_reviews_and_says_so(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        result = self.repo.run("promotion", "--target", "HEAD", "--served", self.base, "--start-reviews",
+                               env={**self.env, "LONGHOUSE_AUTOREVIEW_HATCH": "off"})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("No new background review was started", result.stderr)
+        self.assertIn("hatch review -C", result.stderr)  # the manual command stays when nothing started
+        started = self.repo.run("promotion", "--target", "HEAD", "--served", self.base, "--start-reviews",
+                                env={**self.env, "FAKE_HATCH_SLEEP": "1"})
+        self.assertEqual(started.returncode, 1, "starting reviews never turns a refusal into a pass")
+        self.assertIn("Started 1 background review(s)", started.stderr)
+        self.assertIn("queue --wait", started.stderr)
+        self.assertNotIn("hatch review -C", started.stderr)
+        waited = self.repo.run("queue", "--wait", "60", env=self.env)
+        self.assertEqual(waited.returncode, 0, waited.stdout + waited.stderr)
+        self.assertIn("done", waited.stdout)
+        self.assertEqual(self.repo.run("promotion", "--target", "HEAD", "--served", self.base).returncode, 0)
+
+    def test_without_start_reviews_a_promotion_refusal_queues_nothing(self):
+        self.repo.commit("a", {"server/a.py": "1"})
+        result = self.repo.run("promotion", "--target", "HEAD", "--served", self.base, env=self.env)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.jobs(), [])
+
+    def test_the_promote_scripts_ask_for_the_reviews_to_start(self):
+        self.assertIn("--start-reviews", (ROOT / "scripts" / "lib" / "review-gate.sh").read_text())
+
+
+class PushStartsReviewTests(PrePushHookTests.__bases__[0]):
+    """The installed hook, a real `git push`: it returns at once and the receipt appears afterwards."""
+
+    def setUp(self):
+        PrePushHookTests.setUp(self)
+        self.fake = self.base_dir / "hatch"
+        self.fake.write_text(FAKE_HATCH)
+        self.fake.chmod(0o755)
+        self.calls = self.base_dir / "calls.jsonl"
+        self.calls.touch()
+        self.env = {**{k: v for k, v in os.environ.items() if k not in ("CI", "GITHUB_ACTIONS", gate.OVERRIDE_ENV)},
+                    "LONGHOUSE_AUTOREVIEW_HATCH": str(self.fake), "FAKE_HATCH_CALLS": str(self.calls),
+                    "FAKE_HATCH_GATE": str(GATE), "FAKE_HATCH_SLEEP": "3", "LONGHOUSE_MANAGED_SESSION_ID": "sess-push"}
+        self.addCleanup(self.stop_workers)
+
+    clone = PrePushHookTests.clone
+    git_push = PrePushHookTests.git_push
+    remote_main = PrePushHookTests.remote_main
+
+    def stop_workers(self):
+        for job in gate._load_jobs(self.repo.dir):
+            if job.get("pid") and gate._alive(job["pid"]):
+                os.kill(job["pid"], 15)
+
+    def push(self):
+        started = time.monotonic()
+        pushed = subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=self.repo.dir, capture_output=True, text=True, env=self.env)
+        return pushed, time.monotonic() - started
+
+    def wait_for(self, predicate, timeout=30):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.2)
+        return False
+
+    def test_a_push_returns_before_the_review_ends_and_its_receipt_appears_later(self):
+        head = self.repo.commit("code", {"server/zerg/x.py": "1"})
+        pushed, elapsed = self.push()
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertEqual(self.remote_main(), head)
+        self.assertIn("started 1 background review(s)", pushed.stderr)
+        self.assertLess(elapsed, 3, "the push waited for the review")
+        covered = lambda: not gate.check_commits(self.repo.dir, gate.commits_in(self.repo.dir, f"{head}^!"),  # noqa: E731
+                                                 gate.load_events(self.repo.dir))[0].needs_receipt
+        self.assertFalse(covered())
+        self.assertTrue(self.wait_for(covered), "no receipt appeared")
+        self.assertTrue(self.wait_for(lambda: gate._load_jobs(self.repo.dir)[0]["state"] == "done"))
+        [call] = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual(call[call.index("--session") + 1], "sess-push")
+
+    def test_pushing_the_same_commits_again_does_not_stack_a_second_review(self):
+        head = self.repo.commit("code", {"server/zerg/x.py": "1"})
+        self.assertEqual(self.push()[0].returncode, 0)
+        # Another clone of the same remote pushes the same range: the job is still queued or running.
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.base)
+        again = subprocess.run([sys.executable, str(self.repo.dir / "scripts/ops/review_gate.py"), "--repo", str(self.repo.dir),
+                                "pre-push", "origin"], input=f"refs/heads/main {head} refs/heads/main {self.base}\n",
+                               capture_output=True, text=True, env=self.env)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertNotIn("started", again.stderr)
+        self.assertEqual(len(gate._load_jobs(self.repo.dir)), 1)
+
+    def test_a_docs_push_starts_nothing(self):
+        self.repo.commit("docs", {"docs/x.md": "1"})
+        pushed, _ = self.push()
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertNotIn("background review", pushed.stderr)
+        self.assertEqual(gate._load_jobs(self.repo.dir), [])
 
 
 class StatusTests(unittest.TestCase):

@@ -29,8 +29,19 @@ written by `hatch review --merge <sha>`, which reviews exactly that diff.
 
   review_gate.py push [--base origin/main]
   review_gate.py pre-push REMOTE [URL]        (the git hook; stdin is git's list of refs being pushed)
-  review_gate.py promotion --target SHA (--served SHA | --served-url URL)
+  review_gate.py promotion --target SHA (--served SHA | --served-url URL) [--start-reviews]
   review_gate.py status [--range A..B]
+  review_gate.py backfill --range A..B         (start background reviews for the range's unreviewed commits)
+  review_gate.py queue [--wait SECONDS]        (the background reviews: queued, running, done, failed)
+
+Reviews start themselves. A push to main that the pre-push hook lets through queues a background
+`hatch review` of the pushed commits that are not exempt and have no completed receipt, and returns
+at once; a refused promotion (`--start-reviews`, which the promote scripts pass) queues the commits it
+refused for lack of a receipt. The queue (`<git common dir>/review-receipts/auto/`) is deduplicated
+by SHA and patch-id, runs at most AUTO_SLOTS reviews at a time, and retries a review that ended
+without a completed receipt (a pass hit its budget, or the run failed) once, AUTO_RETRY_DELAY_S later.
+Nothing here weakens a gate: the push rule still needs a completed review before a blocking-list
+commit lands, and promotion still refuses until every receipt exists and no gated finding is open.
 
 `push` is asked by the scripts that push (make check-push-readiness, make ship, release.sh), which is
 cooperative: a bare `git push origin HEAD:main` skipped it, and on 2026-09-29 three commits to the gate
@@ -50,6 +61,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -388,12 +400,16 @@ def check_policy(repo: str | Path, policy: Policy, name: str) -> None:
                         "the landing rule would enforce nothing here; add one or pass --name")
 
 
-def promotion_verdicts(repo: str | Path, policy: Policy, served: str, target: str) -> list[Verdict]:
-    served, target = resolve(repo, served), resolve(repo, target)
-    revs = [f"{served}..{target}"]
+def promotion_revs(repo: str | Path, served: str, target: str) -> list[str]:
+    revs = [f"{resolve(repo, served)}..{resolve(repo, target)}"]
     boundary = grandfather_boundary(repo)
     if boundary:
         revs.append(f"^{boundary}")
+    return revs
+
+
+def promotion_verdicts(repo: str | Path, policy: Policy, served: str, target: str) -> list[Verdict]:
+    revs = promotion_revs(repo, served, target)
     commits = [c for c in commits_in(repo, *revs) if not policy.exempt_commit(c.subject, c.files)]
     verdicts = check_commits(repo, commits, load_events(repo))
     for v in verdicts:
@@ -416,9 +432,370 @@ def served_commit(url: str) -> str:
     return sha
 
 
+# --- automatic background reviews ------------------------------------------
+#
+# A job is one `hatch review` invocation: a contiguous run of commits (`--base first^ --head last`) or one
+# merge's own changes (`--merge`). jobs.json holds every job, guarded by an flock on queue.lock; a job is
+# queued, running (with the worker's pid), done (every commit has a completed receipt) or failed (it still
+# lacked one after AUTO_MAX_ATTEMPTS runs; a later push, backfill or promotion queues those commits again).
+
+AUTO_DIRNAME = "auto"
+AUTO_SLOTS = 2               # reviews running at once on this machine
+AUTO_MAX_ATTEMPTS = 2        # the first run and one retry
+AUTO_RETRY_DELAY_S = 300
+AUTO_RUN_TIMEOUT_S = 1900    # Hatch's own hard budget is 30 min; a review normally takes 3-5
+AUTO_MAX_RUN = 8             # commits per range review: a longer diff overruns the reviewer's budget
+AUTO_KEEP_S = 7 * 86400      # finished jobs and their run logs are pruned after this
+AUTO_LOG_MAX_BYTES = 2_000_000
+HATCH_ENV = "LONGHOUSE_AUTOREVIEW_HATCH"  # the hatch binary to use; "off" disables automatic reviews
+SESSION_ENV = ("LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_SESSION_ID", "LONGHOUSE_CHANNEL_SESSION_ID")  # as review-hub reads them
+# Set by git for the hook that runs us; a review of another checkout must not inherit them.
+GIT_HOOK_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH")
+
+
+def auto_dir(repo: str | Path) -> Path:
+    return store_dir(repo) / AUTO_DIRNAME
+
+
+def auto_log_path(repo: str | Path) -> Path:
+    return auto_dir(repo) / "autoreview.log"
+
+
+def primary_checkout(repo: str | Path) -> str:
+    """Reviews run against the clone's primary checkout: the worktree that pushed is often removed right after."""
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    return str(common.parent) if common.name == ".git" and (common.parent / ".git").exists() else str(Path(repo).resolve())
+
+
+def hatch_binary() -> str | None:
+    configured = os.environ.get(HATCH_ENV, "").strip()
+    if configured.lower() == "off":
+        return None
+    return configured or shutil.which("hatch")
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _stamp(t: float | None = None) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t if t is not None else _now()))
+
+
+def auto_log(repo: str | Path, message: str) -> None:
+    path = auto_log_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.stat().st_size > AUTO_LOG_MAX_BYTES:
+            path.replace(path.with_name(path.name + ".1"))
+    except OSError:
+        pass
+    with open(path, "a") as fh:
+        fh.write(f"{_stamp()} [{os.getpid()}] {message}\n")
+
+
+class _QueueLock:
+    def __init__(self, repo: str | Path):
+        self.dir = auto_dir(repo)
+
+    def __enter__(self) -> "_QueueLock":
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.fd = os.open(self.dir / "queue.lock", os.O_RDWR | os.O_CREAT, 0o644)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        os.close(self.fd)
+
+
+def _load_jobs(repo: str | Path) -> list[dict]:
+    try:
+        jobs = json.loads((auto_dir(repo) / "jobs.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [j for j in jobs if isinstance(j, dict) and j.get("id")] if isinstance(jobs, list) else []
+
+
+def _save_jobs(repo: str | Path, jobs: list[dict]) -> None:
+    path = auto_dir(repo) / "jobs.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(jobs, indent=1))
+    tmp.replace(path)
+
+
+def _alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _settle(repo: str | Path, jobs: list[dict]) -> list[dict]:
+    """Requeue (or fail) jobs whose worker died, and prune finished jobs past AUTO_KEEP_S."""
+    kept = []
+    for job in jobs:
+        if job.get("state") == "running" and not _alive(job.get("pid")):
+            job["state"] = "queued" if job.get("attempts", 0) < AUTO_MAX_ATTEMPTS else "failed"
+            job["note"] = "its worker died"
+            job["updated"] = _now()
+        if job.get("state") in ("done", "failed") and _now() - job.get("updated", 0) > AUTO_KEEP_S:
+            (auto_dir(repo) / "runs" / f"{job['id']}.log").unlink(missing_ok=True)
+            continue
+        kept.append(job)
+    return kept
+
+
+def needed_commits(repo: str | Path, policy: Policy, revs: list[str]) -> list[tuple[Commit, bool]]:
+    """Every commit of the range in order, each with whether it needs a review: not exempt and no completed receipt."""
+    commits = commits_in(repo, *revs)
+    gated = [c for c in commits if not policy.exempt_commit(c.subject, c.files)]
+    missing = {v.commit.sha for v in check_commits(repo, gated, load_events(repo)) if v.needs_receipt}
+    return [(c, c.sha in missing) for c in commits]
+
+
+def plan_jobs(repo: str | Path, ordered: list[tuple[Commit, bool]]) -> list[dict]:
+    """Group the commits that need a review into contiguous runs of at most AUTO_MAX_RUN; a merge is its own job."""
+    jobs, run = [], []
+
+    def flush():
+        if run:
+            parents = git(repo, "rev-list", "--parents", "-n", "1", run[0].sha).split()
+            if len(parents) > 1:  # a root commit has no base to review against
+                jobs.append({"kind": "range", "base": parents[1], "head": run[-1].sha, "commits": [c.sha for c in run],
+                             "patch_ids": [c.patch_id(repo) for c in run]})
+            run.clear()
+
+    for commit, needed in ordered:
+        if not needed:
+            flush()
+        elif commit.merge:
+            flush()
+            jobs.append({"kind": "merge", "base": None, "head": commit.sha, "commits": [commit.sha], "patch_ids": []})
+        else:
+            run.append(commit)
+            if len(run) >= AUTO_MAX_RUN:
+                flush()
+    flush()
+    return jobs
+
+
+def enqueue_reviews(repo: str | Path, policy: Policy, revs: list[str], *, session: str | None, reason: str) -> list[dict]:
+    """Queue background reviews for the range's commits that need one and no queued or running job already
+    covers (by SHA or patch-id, so a rebased re-push does not queue the same work twice); start a worker.
+    Returns the new jobs. Never raises for a review that cannot start: this runs on the push path."""
+    hatch = hatch_binary()
+    if not hatch:
+        return []
+    ordered = needed_commits(repo, policy, revs)
+    if not any(needed for _, needed in ordered):
+        return []
+    with _QueueLock(repo):
+        jobs = _settle(repo, _load_jobs(repo))
+        active = [j for j in jobs if j.get("state") in ("queued", "running")]
+        busy_shas = {s for j in active for s in j.get("commits", [])}
+        busy_patches = {p for j in active for p in j.get("patch_ids", []) if p}
+        ordered = [(c, needed and c.sha not in busy_shas and (c.merge or c.patch_id(repo) not in busy_patches))
+                   for c, needed in ordered]
+        new = plan_jobs(repo, ordered)
+        for i, job in enumerate(new):
+            job.update(id=f"ar-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{job['head'][:7]}-{os.getpid()}-{i}",
+                       state="queued", attempts=0, not_before=0, pid=None, session=session, reason=reason,
+                       created=_now(), updated=_now(), history=[])
+        jobs += new
+        _save_jobs(repo, jobs)
+    for job in new:
+        span = f"--merge {job['head'][:12]}" if job["kind"] == "merge" else f"{job['base'][:12]}..{job['head'][:12]}"
+        auto_log(repo, f"queued {job['id']} ({reason}): {span}, {len(job['commits'])} commit(s), "
+                       f"intent={'longhouse:' + session if session else 'none'}")
+    if new:
+        start_workers(repo, min(AUTO_SLOTS, len(new)))
+    return new
+
+
+def start_workers(repo: str | Path, count: int) -> None:
+    """Detached workers: no stdout/stderr tie to the caller (the pre-push hook captures ours), own session."""
+    primary = primary_checkout(repo)
+    env = {k: v for k, v in os.environ.items() if k not in GIT_HOOK_ENV}
+    log = open(auto_log_path(repo), "a")
+    try:
+        for _ in range(count):
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--repo", primary, "autoreview-worker"],
+                             cwd=primary, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                             start_new_session=True)
+    finally:
+        log.close()
+
+
+def _take_slot(repo: str | Path) -> int | None:
+    for i in range(AUTO_SLOTS):
+        fd = os.open(auto_dir(repo) / f"slot-{i}.lock", os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            os.close(fd)
+    return None
+
+
+def _job_commits(repo: str | Path, job: dict) -> list[Commit]:
+    return [c for sha in job["commits"] for c in commits_in(repo, f"{sha}^!")]
+
+
+def run_job(repo: str | Path, job: dict, hatch: str) -> dict:
+    """One `hatch review` of the job; returns the attempt record. The launcher builds every input the reviewer
+    sees (arm's-length): this passes references only, never prose."""
+    cmd = [hatch, "review", "-C", str(repo)]
+    cmd += ["--merge", job["head"]] if job["kind"] == "merge" else ["--base", job["base"], "--head", job["head"]]
+    errored_before = any(h.get("exit") not in (0, None) and not h.get("receipt") for h in job.get("history", []))
+    cmd += ["--session", job["session"]] if job.get("session") and not errored_before else ["--no-intent"]
+    runs = auto_dir(repo) / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    started = _now()
+    with open(runs / f"{job['id']}.log", "a") as out:
+        out.write(f"\n### {_stamp()} attempt {job['attempts']}: {' '.join(cmd)}\n")
+        out.flush()
+        proc = subprocess.Popen(cmd, cwd=str(repo), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        try:
+            code = proc.wait(timeout=AUTO_RUN_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.terminate()  # review-hub stops its reviewer and the reviewer's processes on SIGTERM
+            try:
+                code = proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                code = proc.wait()
+    covering = [e for e in load_events(repo) if e.get("type") == "review"
+                and e.get("at", "") >= _stamp(started - 1) and {c.get("sha") for c in e.get("commits", [])} & set(job["commits"])]
+    return {"at": _stamp(), "exit": code, "elapsed_s": round(_now() - started),
+            "receipt": covering[-1]["id"] if covering else None, "receipt_state": covering[-1].get("state") if covering else None}
+
+
+def autoreview_worker(repo: str | Path) -> int:
+    """Run queued jobs until none is left. At most AUTO_SLOTS workers hold a slot; a worker that finds both
+    taken exits at once (the workers that hold them drain the queue, new jobs included). A worker releases
+    its slot only while holding the queue lock, so a job queued after it looked is seen by the next worker."""
+    hatch = hatch_binary()
+    if not hatch:
+        return 0
+    auto_dir(repo).mkdir(parents=True, exist_ok=True)
+    slot = _take_slot(repo)
+    if slot is None:
+        return 0
+    try:
+        while True:
+            with _QueueLock(repo):
+                jobs = _settle(repo, _load_jobs(repo))
+                queued = [j for j in jobs if j.get("state") == "queued"]
+                ready = [j for j in queued if j.get("not_before", 0) <= _now()]
+                if not queued:
+                    _save_jobs(repo, jobs)
+                    os.close(slot)
+                    slot = None
+                    return 0
+                job = ready[0] if ready else None
+                if job:
+                    job.update(state="running", pid=os.getpid(), attempts=job.get("attempts", 0) + 1, updated=_now())
+                _save_jobs(repo, jobs)
+            if not job:
+                time.sleep(max(1, min(60, min(j.get("not_before", 0) for j in queued) - _now())))
+                continue
+            auto_log(repo, f"running {job['id']} attempt {job['attempts']}")
+            try:
+                attempt = run_job(repo, job, hatch)
+            except Exception as exc:  # noqa: BLE001 - one bad job must not strand the rest of the queue
+                attempt = {"at": _stamp(), "exit": None, "error": f"{type(exc).__name__}: {exc}", "receipt": None}
+            try:
+                covered = not any(v.needs_receipt for v in check_commits(repo, _job_commits(repo, job), load_events(repo)))
+            except GateError as exc:
+                covered, attempt["error"] = False, str(exc)
+            with _QueueLock(repo):
+                jobs = _load_jobs(repo)
+                current = next((j for j in jobs if j["id"] == job["id"]), job)
+                current.setdefault("history", []).append(attempt)
+                current["pid"] = None
+                current["updated"] = _now()
+                if covered:
+                    current["state"] = "done"
+                elif current.get("attempts", 0) < AUTO_MAX_ATTEMPTS:
+                    current.update(state="queued", not_before=_now() + AUTO_RETRY_DELAY_S)
+                else:
+                    current["state"] = "failed"
+                if current is job:
+                    jobs.append(job)
+                _save_jobs(repo, jobs)
+            auto_log(repo, f"{current['state']} {job['id']}: exit={attempt.get('exit')} receipt={attempt.get('receipt')} "
+                           f"({attempt.get('receipt_state') or attempt.get('error') or 'no receipt'})"
+                           + (f"; retry in {AUTO_RETRY_DELAY_S}s" if current["state"] == "queued" else ""))
+    finally:
+        if slot is not None:
+            os.close(slot)
+
+
+def describe_queue(repo: str | Path) -> tuple[list[str], list[dict]]:
+    with _QueueLock(repo):
+        jobs = _settle(repo, _load_jobs(repo))
+        _save_jobs(repo, jobs)
+    lines = []
+    for j in jobs:
+        span = f"--merge {j['head'][:12]}" if j.get("kind") == "merge" else f"{(j.get('base') or '')[:12]}..{j['head'][:12]}"
+        last = (j.get("history") or [{}])[-1]
+        tail = f" last: exit={last.get('exit')} receipt={last.get('receipt')} {last.get('receipt_state') or ''}".rstrip() if last else ""
+        lines.append(f"{j['id']} {j.get('state'):7} {span} {len(j.get('commits', []))} commit(s) attempts={j.get('attempts', 0)}"
+                     f"{' pid=' + str(j['pid']) if j.get('pid') else ''}{tail}")
+    return lines, jobs
+
+
+def queued_note(repo: str | Path, jobs: list[dict]) -> str:
+    commits = sum(len(j["commits"]) for j in jobs)
+    return (f"review-gate: started {len(jobs)} background review(s) of {commits} unreviewed commit(s) "
+            f"(at most {AUTO_SLOTS} at a time, ~5 min each); log {auto_log_path(repo)}")
+
+
+def start_reviews_quietly(repo: str | Path, policy: Policy, revs: list[str], reason: str,
+                          session: str | None = None) -> list[dict]:
+    """Queue reviews without ever turning a queue fault into a gate verdict: the gate decides on receipts alone."""
+    try:
+        return enqueue_reviews(repo, policy, revs, session=session, reason=reason)
+    except Exception as exc:  # noqa: BLE001
+        print(f"review-gate: could not start background reviews ({type(exc).__name__}: {exc}); "
+              f"run hatch review yourself (log {auto_log_path(repo)})", file=sys.stderr)
+        return []
+
+
+def pushed_review_note(repo: str | Path, policy: Policy, updates: list[tuple[str, str]]) -> None:
+    """After an allowed push to main: queue reviews of the pushed commits that need one, print one line, return."""
+    session = next((os.environ[n].strip() for n in SESSION_ENV if os.environ.get(n, "").strip()), None)
+    for local_sha, remote_sha in updates:
+        if set(remote_sha) == {"0"} or not git(repo, "rev-parse", "--verify", "--quiet", f"{remote_sha}^{{commit}}", check=False).strip():
+            continue  # an unknown remote main: the push will be refused as a non-fast-forward anyway
+        jobs = start_reviews_quietly(repo, policy, [f"{remote_sha}..{local_sha}"], "push", session)
+        if jobs:
+            print(queued_note(repo, jobs), file=sys.stderr)
+
+
+def queue_mode(repo: str, wait: int | None) -> int:
+    deadline = _now() + (wait or 0)
+    while True:
+        lines, jobs = describe_queue(repo)
+        active = [j for j in jobs if j.get("state") in ("queued", "running")]
+        if not wait or not active or _now() >= deadline:
+            break
+        time.sleep(15)
+    print("\n".join(lines) or "review-gate: no background reviews.")
+    print(f"log: {auto_log_path(repo)}  (hatch output per review: {auto_dir(repo) / 'runs'}/<id>.log)")
+    if wait is None:
+        return 0
+    if active:
+        print(f"review-gate: {len(active)} review(s) still queued or running after {wait}s", file=sys.stderr)
+        return 1
+    return 1 if any(j.get("state") == "failed" for j in jobs) else 0
+
+
 # --- reporting -------------------------------------------------------------
 
-def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict]) -> str:
+def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict], started: list[dict] | None = None) -> str:
     lines = [f"review-gate: REFUSED {kind}: {len(verdicts)} commit(s) {what}", ""]
     for v in verdicts:
         area = f" [{', '.join(v.areas)}]" if v.areas else ""
@@ -427,6 +804,17 @@ def refusal(repo: str, kind: str, what: str, verdicts: list[Verdict]) -> str:
     unreviewed = [v.commit.sha for v in verdicts if v.needs_receipt and not v.commit.merge]
     merges = [v.commit.sha for v in verdicts if v.needs_receipt and v.commit.merge]
     lines.append("")
+    if started is not None:
+        queued = {sha for j in started for sha in j["commits"]}
+        if started:
+            lines += [queued_note(repo, started).removeprefix("review-gate: ").capitalize() + ".",
+                      f"Wait for them, then retry: python3 {Path(__file__).resolve()} --repo {repo} queue --wait 1800",
+                      "A commit refused for an open finding needs its disposition, not another review."]
+        else:
+            lines.append("No new background review was started: every unreviewed commit is already queued or running "
+                         f"(python3 {Path(__file__).resolve()} --repo {repo} queue), or hatch is not on PATH.")
+        unreviewed = [sha for sha in unreviewed if sha not in queued]
+        merges = [sha for sha in merges if sha not in queued]
     if unreviewed:
         first, last = unreviewed[0], unreviewed[-1]
         lines += [
@@ -480,12 +868,24 @@ def main(argv: list[str] | None = None) -> int:
     group = promo.add_mutually_exclusive_group(required=True)
     group.add_argument("--served")
     group.add_argument("--served-url")
+    promo.add_argument("--start-reviews", action="store_true",
+                       help="on a refusal, queue background reviews of the commits that lack a receipt")
     status = sub.add_parser("status", help="print the verdict of every commit of a range (never refuses)")
     status.add_argument("--range", dest="rng", default="origin/main..HEAD")
+    backfill = sub.add_parser("backfill", help="queue background reviews of a range's commits that lack a receipt")
+    backfill.add_argument("--range", dest="rng", required=True)
+    queue = sub.add_parser("queue", help="list the background reviews (non-zero only when --wait times out or one failed)")
+    queue.add_argument("--wait", type=int, metavar="SECONDS", help="block until no review is queued or running")
+    sub.add_parser("autoreview-worker", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     repo = str(Path(args.repo).resolve())
+    if args.mode == "autoreview-worker":
+        return autoreview_worker(repo)
+    if args.mode == "queue":
+        return queue_mode(repo, args.wait)
     policy_path = args.policy or str(Path(__file__).resolve().parent / "review-policy.toml")
+    started = None
     try:
         try:
             policy = Policy.load(policy_path, args.name or repo_name(repo))
@@ -506,10 +906,19 @@ def main(argv: list[str] | None = None) -> int:
             check_policy(repo, policy, args.name or repo_name(repo))
             verdicts = pre_push_verdicts(repo, policy, updates)
             kind, what, target = "push", "touch the blocking list without a completed review", DEFAULT_BRANCH
+            if not verdicts:
+                pushed_review_note(repo, policy, updates)
         elif args.mode == "promotion":
             served = args.served or served_commit(args.served_url)
             verdicts = promotion_verdicts(repo, policy, served, args.target)
             kind, what, target = "promotion", f"in {served[:12]}..{args.target[:12]} lack a completed review or hold unresolved findings", args.target
+            if verdicts and args.start_reviews and not os.environ.get(OVERRIDE_ENV):
+                started = start_reviews_quietly(repo, policy, promotion_revs(repo, served, args.target), "promotion")
+        elif args.mode == "backfill":
+            jobs = enqueue_reviews(repo, policy, [args.rng], session=None, reason="backfill")
+            print(queued_note(repo, jobs) if jobs else "review-gate: nothing to start (every commit is exempt, reviewed, "
+                  "queued or running, or hatch is not on PATH).")
+            return 0
         else:
             base, _, head = args.rng.partition("..")
             for c in commits_in(repo, args.rng):
@@ -534,7 +943,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if override(repo, kind, target, verdicts):
         return 0
-    print(refusal(repo, kind, what, verdicts), file=sys.stderr)
+    print(refusal(repo, kind, what, verdicts, started), file=sys.stderr)
     return 1
 
 
