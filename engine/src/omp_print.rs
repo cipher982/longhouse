@@ -1622,6 +1622,9 @@ async fn monitor_omp_print(
             prompt_written_at = Instant::now();
         }
 
+        // Observe exit before reading stdout, so the read sees everything an
+        // exited process wrote before its exit is handled.
+        let exit_status = child.try_wait();
         let lines = match crate::console_adapter::read_growth(
             &sink.stdout_path,
             &mut offset,
@@ -1864,7 +1867,7 @@ async fn monitor_omp_print(
         }
 
         refresh_owned_processes(&sink.run_id);
-        match child.try_wait() {
+        match exit_status {
             Ok(Some(status)) => {
                 fail_omp_invocation(
                     child,
