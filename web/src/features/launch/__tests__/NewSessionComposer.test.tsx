@@ -562,10 +562,32 @@ describe("NewSessionComposer", () => {
     expect(screen.getByTestId("launch-submit")).toBeDisabled();
     expect(onLaunched).not.toHaveBeenCalled();
 
-    // Editing the prompt means a new launch: the pane is usable again.
+    // Editing anything the launch sends means a new launch: usable again.
     await user.type(screen.getByTestId("launch-prompt"), " again");
     expect(screen.queryByTestId("launch-first-input-error")).toBeNull();
     expect(screen.getByTestId("launch-submit")).toBeEnabled();
+  });
+
+  it("clears a failed first message when the session name or manual path changes", async () => {
+    apiMocks.listMachines.mockResolvedValue({ machines: [machine()] });
+    apiMocks.createConsoleSession.mockResolvedValue({ session_id: "s-5", thread_id: "t-5", created: true });
+    apiMocks.postSessionInput.mockRejectedValue(new Error("network"));
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
+    await user.type(screen.getByTestId("launch-prompt"), "Run the suite");
+    await user.click(screen.getByTestId("launch-submit"));
+    await screen.findByTestId("launch-first-input-error");
+
+    await user.type(screen.getByTestId("launch-display-name"), "retry");
+    expect(screen.queryByTestId("launch-first-input-error")).toBeNull();
+    expect(screen.getByTestId("launch-submit")).toBeEnabled();
+
+    await user.click(screen.getByTestId("launch-submit"));
+    await screen.findByTestId("launch-first-input-error");
+    await user.type(screen.getByTestId("launch-cwd-input"), "/sub");
+    expect(screen.queryByTestId("launch-first-input-error")).toBeNull();
   });
 
   it("starts where the last launch left off", async () => {

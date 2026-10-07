@@ -166,15 +166,13 @@ export function useLaunchForm({
     setCwd(workspaces[0].path);
   }, [cwd, workspaces]);
 
-  // After a first message failed, changing anything means a new launch: the
-  // started session stays reachable from the error's link.
-  const editPrompt = useCallback((value: string) => {
-    setPrompt(value);
+  // After a first message failed, changing anything the launch sends means a
+  // new launch: the started session stays reachable from the error's link.
+  useEffect(() => {
     setFirstInputFailure(null);
-  }, []);
+  }, [prompt, deviceId, provider, model, cwd, displayName]);
 
   const chooseMachine = useCallback((machine: MachineDirectoryEntry) => {
-    setFirstInputFailure(null);
     setDeviceId(machine.device_id);
     setProvider(defaultProvider(machine));
     setModel("");
@@ -184,14 +182,12 @@ export function useLaunchForm({
   }, []);
 
   const chooseProvider = useCallback((next: string) => {
-    setFirstInputFailure(null);
     setProvider(next);
     setModel("");
     setError(null);
   }, []);
 
   const chooseWorkspace = useCallback((path: string) => {
-    setFirstInputFailure(null);
     setCwd(path);
     setError(null);
   }, []);
@@ -252,7 +248,7 @@ export function useLaunchForm({
     cwd,
     setCwd,
     prompt,
-    setPrompt: editPrompt,
+    setPrompt,
     workspaces,
     filteredWorkspaces,
     workspaceSearch,

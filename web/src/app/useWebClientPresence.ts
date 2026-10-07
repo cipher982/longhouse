@@ -35,7 +35,7 @@ export function getOrCreateWebClientId(): string | null {
 function extractTimelineSessionId(pathname: string): string | null {
   const match = pathname.match(/^\/timeline\/([^/?#]+)/);
   // The new-session pane shares the session URL shape but shows no session.
-  if (!match || pathname.startsWith(NEW_SESSION_PATH)) {
+  if (!match || pathname.replace(/\/$/, "") === NEW_SESSION_PATH) {
     return null;
   }
   try {
