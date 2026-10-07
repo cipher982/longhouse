@@ -269,3 +269,16 @@
     width: 100%;
   }
 }
+
+/* The compact app bar's page slot: the pane names itself there, as a
+   session names itself in the same place. */
+.new-session__bar-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}

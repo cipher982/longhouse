@@ -22,7 +22,7 @@ import { PlusIcon, SearchIcon, XIcon } from "@/shared/ui/icons";
 import { HearthLamp, HearthProvider } from "@/shared/instruments/hearth/Hearth";
 import { hearthModeForLamp, hearthSnapshotFromSession } from "@/shared/instruments/hearth/signals";
 import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
-import { getSessionHeaderState } from "../sessionHeaderState";
+import { delegatedWorkLabel, pendingInteractionLabel, workingStatusLabel } from "@/shared/session/sessionStatus";
 import { getRowStatus } from "@/features/timeline/SessionRow";
 import { needsSessionAttention } from "@/shared/session/sessionRuntime";
 import { buildInboxLayout, historySortKey, isAutomationSession } from "@/features/timeline/timelineInboxModel";
@@ -161,7 +161,11 @@ function rowFromCard(
     needsUser,
     group,
     hearth: hearthSnapshotFromSession(session, hearthModeForLamp(status.lampState), nowMs),
-    detail: status.lampState === "working" || needsUser ? getSessionHeaderState(session, nowMs).text : undefined,
+    detail: needsUser
+      ? pendingInteractionLabel(session.session_state)
+      : status.lampState === "working"
+        ? (delegatedWorkLabel(session.session_state, nowMs) ?? workingStatusLabel(session.session_state))
+        : undefined,
   };
 }
 

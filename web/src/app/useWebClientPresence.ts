@@ -3,6 +3,7 @@ import { useLocation } from "react-router";
 import config from "@/shared/lib/config";
 import { postWebClientPresence } from "@/shared/api/clientPresence";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
+import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
 
 const WEB_CLIENT_ID_STORAGE_KEY = "longhouse.webClientId";
 const WEB_CLIENT_HEARTBEAT_MS = 30_000;
@@ -33,7 +34,8 @@ export function getOrCreateWebClientId(): string | null {
 
 function extractTimelineSessionId(pathname: string): string | null {
   const match = pathname.match(/^\/timeline\/([^/?#]+)/);
-  if (!match) {
+  // The new-session pane shares the session URL shape but shows no session.
+  if (!match || pathname.startsWith(NEW_SESSION_PATH)) {
     return null;
   }
   try {

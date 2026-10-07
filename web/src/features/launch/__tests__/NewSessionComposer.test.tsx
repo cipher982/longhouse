@@ -561,6 +561,11 @@ describe("NewSessionComposer", () => {
     expect(screen.getByTestId("launch-prompt")).toHaveValue("Run the suite");
     expect(screen.getByTestId("launch-submit")).toBeDisabled();
     expect(onLaunched).not.toHaveBeenCalled();
+
+    // Editing the prompt means a new launch: the pane is usable again.
+    await user.type(screen.getByTestId("launch-prompt"), " again");
+    expect(screen.queryByTestId("launch-first-input-error")).toBeNull();
+    expect(screen.getByTestId("launch-submit")).toBeEnabled();
   });
 
   it("starts where the last launch left off", async () => {

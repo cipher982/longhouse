@@ -24,8 +24,10 @@ export type RailRow = RailActiveSession & {
   /** The row's fire, from the listed session's own counters; absent for an
    * open session the list does not carry, which keeps the plain dot. */
   hearth?: HearthSnapshot;
-  /** The second line under a live or waiting row: the header's own sentence
-   * ("Using Bash for 41 minutes", "Needs answer"). */
+  /** The second line under a live or waiting row: the server's status label
+   * ("Using Bash", "Needs your answer"). Only the open session adds a
+   * duration, from its page's turn clock; a listed row has no turn start, and
+   * the activity heartbeat is a different clock that would disagree. */
   detail?: string;
 };
 
