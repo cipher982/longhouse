@@ -503,6 +503,19 @@ async def runtime_evidence(
 ):
     _require_internal_token(x_internal_token)
     snapshot = await runtime_admission().snapshot()
+    from zerg.services.catalog_handoff import catalog_handoff_pending
+
+    if catalog_handoff_pending() is not None:
+        # The shared catalog socket may still name the predecessor's catalogd.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "runtime_epoch": snapshot["runtime_epoch"],
+                "admission": snapshot,
+                "outcome": "not_ready",
+                "detail": "catalog handoff has not taken the catalog yet",
+            },
+        )
     with _timed_stage("evidence"):
         evidence = await asyncio.to_thread(_runtime_evidence)
     payload = {**evidence, "runtime_epoch": snapshot["runtime_epoch"], "admission": snapshot}

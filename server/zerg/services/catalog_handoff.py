@@ -26,7 +26,6 @@ import fcntl
 import json
 import logging
 import os
-import socket
 import tempfile
 import time
 from dataclasses import dataclass
@@ -136,9 +135,10 @@ class CatalogHandoff:
         deadline = time.monotonic() + _BIND_TIMEOUT_SECONDS
         while True:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                    break
-            except OSError:
+                _reader, writer = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), timeout=0.2)
+                writer.close()
+                break
+            except (OSError, TimeoutError):
                 if time.monotonic() >= deadline:
                     raise CatalogHandoffAborted("runtime HTTP did not bind after the handoff permit")
                 await asyncio.sleep(_BIND_POLL_SECONDS)

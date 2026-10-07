@@ -308,3 +308,16 @@ async def test_warm_lifespan_binds_only_after_the_permit_and_starts_services_aft
     assert json.loads(handoff.marker_path("catalog").read_text())["state"] == "catalog_ready"
     await context.__aexit__(None, None, None)
     assert stopped == ["services"]
+
+
+@pytest.mark.asyncio
+async def test_evidence_is_not_ready_while_the_handoff_is_pending(monkeypatch, tmp_path) -> None:
+    _candidate_env(monkeypatch)
+    runtime = RuntimeAdmission()
+    routes = _readiness_route(monkeypatch, runtime)
+    handoff = _handoff(tmp_path)
+    handoff.directory.mkdir(parents=True)
+    handoff_module.reset_catalog_handoff_for_tests(handoff)
+    response = await routes.runtime_evidence("secret")
+    assert response.status_code == 503
+    assert json.loads(response.body)["outcome"] == "not_ready"
