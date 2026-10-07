@@ -3144,16 +3144,19 @@ async def create_session_input_endpoint(
     current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInputResponse:
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
-    response = await _create_session_input_response(
-        source_session=source_session,
-        owner_id=current_user.id,
-        body=body,
-        db=db,
-    )
-    # The owner typed this (web or iOS composer). The machine route below and
-    # directed input never stamp.
-    stamp_owner_input_soon(source_session.id, owner_id=int(current_user.id), client_request_id=body.client_request_id)
-    return response
+    try:
+        return await _create_session_input_response(
+            source_session=source_session,
+            owner_id=current_user.id,
+            body=body,
+            db=db,
+        )
+    finally:
+        # The owner typed this (web or iOS composer); the machine route below
+        # and directed input never stamp. Attempted even when the handler
+        # raised after persisting: the stamp is keyed to the receipt, so an
+        # input rejected before one existed still stamps nothing.
+        stamp_owner_input_soon(source_session.id, owner_id=int(current_user.id), client_request_id=body.client_request_id)
 
 
 @agents_router.post("/{session_id}/input", response_model=SessionInputResponse)

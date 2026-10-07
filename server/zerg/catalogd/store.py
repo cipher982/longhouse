@@ -8795,10 +8795,16 @@ class CatalogStore:
                     storage_input_at = _as_aware_utc(storage_current["last_user_input_at"])
                     if last_user_input_at is not None and (storage_input_at is None or last_user_input_at > storage_input_at):
                         storage_values["last_user_input_at"] = last_user_input_at
-                    connection.execute(
-                        update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**storage_values)
-                    )
-                    commit_seq = _advance_commit_seq(connection, observed_at)
+                    # A replayed (equal or older) max-write changes nothing; don't
+                    # write or advance the commit sequence for it.
+                    changed = set(storage_values) != {"updated_at"}
+                    if changed:
+                        connection.execute(
+                            update(StorageSession.__table__)
+                            .where(StorageSession.__table__.c.session_id == session_id)
+                            .values(**storage_values)
+                        )
+                    commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
                     return {
                         "found": True,
                         "preferences": {
@@ -8812,7 +8818,7 @@ class CatalogStore:
                             "last_read_at": _encode_datetime(storage_values.get("last_read_at") or storage_read_at),
                             "last_user_input_at": _encode_datetime(storage_values.get("last_user_input_at") or storage_input_at),
                         },
-                        "updated": True,
+                        "updated": changed,
                         "commit_seq": str(commit_seq),
                     }
                 return {

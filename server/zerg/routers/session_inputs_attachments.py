@@ -446,22 +446,24 @@ async def create_session_input_with_attachments(
     db: Session | None = Depends(no_request_db),
     current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInputResponse:
-    response = await _create_session_input_with_attachments(
-        session_id=session_id,
-        request=request,
-        text=text,
-        intent=intent,
-        client_request_id=client_request_id,
-        model=model,
-        attachments=attachments,
-        user_agent=user_agent,
-        db=db,
-        current_user=current_user,
-    )
-    # The owner sent this from a composer; Recent sorts by it. Only after the
-    # route accepted it, keyed to the receipt it created.
-    stamp_owner_input_soon(session_id, owner_id=int(current_user.id), client_request_id=client_request_id.strip())
-    return response
+    try:
+        return await _create_session_input_with_attachments(
+            session_id=session_id,
+            request=request,
+            text=text,
+            intent=intent,
+            client_request_id=client_request_id,
+            model=model,
+            attachments=attachments,
+            user_agent=user_agent,
+            db=db,
+            current_user=current_user,
+        )
+    finally:
+        # The owner sent this from a composer; Recent sorts by it. Keyed to the
+        # receipt the route created, so a request rejected before one existed
+        # stamps nothing, and a raise after persisting still stamps.
+        stamp_owner_input_soon(session_id, owner_id=int(current_user.id), client_request_id=client_request_id.strip())
 
 
 async def _create_session_input_with_attachments(

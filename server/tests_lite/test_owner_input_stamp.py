@@ -15,6 +15,9 @@ from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
@@ -149,6 +152,23 @@ def test_browser_input_route_stamps_and_machine_route_does_not(monkeypatch):
     )
     assert machine is sentinel
     assert stamped == [(source_session.id, 7, "req-1")], "machine-route input must never count as the owner's"
+
+    # A handler that raises after persisting its receipt (an accepted
+    # idempotency conflict, say) still attempts the receipt-keyed stamp.
+    async def raising_response(**_kwargs):
+        raise HTTPException(status_code=409, detail={"disposition": "accepted"})
+
+    monkeypatch.setattr(session_chat, "_create_session_input_response", raising_response)
+    with pytest.raises(HTTPException):
+        asyncio.run(
+            session_chat.create_session_input_endpoint(
+                session_id=str(source_session.id),
+                body=SessionInputRequest(text="again", client_request_id="req-2"),
+                db=None,
+                current_user=SimpleNamespace(id=7),
+            )
+        )
+    assert stamped[-1] == (source_session.id, 7, "req-2")
 
 
 def test_stamp_uses_the_receipt_time_and_skips_inputs_without_a_receipt(monkeypatch):
