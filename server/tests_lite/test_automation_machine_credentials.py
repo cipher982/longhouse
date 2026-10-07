@@ -326,3 +326,26 @@ def test_a_restored_archived_actor_reaches_actorless_live_rows(live_catalog, liv
         engine.dispose()
     assert live_actor == "automation"
     assert bool(_catalog(live_catalog, session_id)["hidden_from_default_timeline"]) is True
+
+
+def test_an_archived_console_session_never_takes_the_credential(live_catalog, live_catalog_client):  # noqa: F811
+    from sqlalchemy import update
+
+    from zerg.catalogd.models import StorageSession
+    from zerg.catalogd.schema import create_catalog_engine
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    owner = live_catalog.create_user("owner@automation-creds.test")
+    token = live_catalog.create_device_token(owner_id=owner, device_id=SAURON)
+    session_id = _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON)
+    engine = create_catalog_engine(catalogd_paths()[0])
+    try:
+        with engine.begin() as connection:
+            storage = StorageSession.__table__
+            connection.execute(update(storage).where(storage.c.session_id == session_id).values(origin_kind="console"))
+    finally:
+        engine.dispose()
+
+    assert _set(live_catalog, owner_id=owner, device_id=SAURON, automation=True)["reclassified"] == []
+    _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON, session_id=session_id)
+    assert _catalog(live_catalog, session_id)["launch_actor"] is None

@@ -10433,7 +10433,11 @@ class CatalogStore:
                 if recorded is not None:
                     session_values["launch_actor"] = recorded["launch_actor"]
                     session_values["launch_surface"] = session_values["launch_surface"] or recorded.get("launch_surface")
-                elif _machine_is_automation(connection, owner_id=effective_owner_id, machine_id=machine_id):
+                elif (
+                    live_console_session is None
+                    and not (existing_session is not None and existing_session["origin_kind"] == "console")
+                    and _machine_is_automation(connection, owner_id=effective_owner_id, machine_id=machine_id)
+                ):
                     session_values["launch_actor"] = "automation"
                 if session_values["launch_actor"]:
                     # Whichever fallback supplied it, a live row with no actor of
