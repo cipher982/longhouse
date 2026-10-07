@@ -9,12 +9,13 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use crate::console_adapter::{claim_process_liveness, read_growth, stderr_tail, ClaimLiveness};
+use crate::console_sink::{ConsoleProvider, ConsoleRun};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
@@ -55,17 +56,28 @@ pub struct CursorPrintRunSummary {
 
 #[derive(Clone)]
 struct CursorPrintSink {
-    session_id: String,
-    thread_id: String,
-    turn_id: Option<String>,
-    run_id: String,
-    client_request_id: Option<String>,
+    run: ConsoleRun,
     provider_thread_id: String,
-    launch_id: String,
-    process_group_id: Option<i32>,
-    machine_name: String,
-    local_db_path: Option<PathBuf>,
-    runtime_events_outbox_dir: PathBuf,
+}
+
+static CURSOR_CONSOLE: ConsoleProvider = ConsoleProvider {
+    provider: "cursor",
+    adapter: CURSOR_PRINT_ADAPTER,
+    tag: "cursor-print",
+    lifetime: "one_shot",
+};
+
+impl std::ops::Deref for CursorPrintSink {
+    type Target = ConsoleRun;
+    fn deref(&self) -> &ConsoleRun {
+        &self.run
+    }
+}
+
+impl std::ops::DerefMut for CursorPrintSink {
+    fn deref_mut(&mut self) -> &mut ConsoleRun {
+        &mut self.run
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,17 +194,20 @@ pub async fn start_cursor_print_turn(
     let pid = child.id().context("cursor-agent --print returned no pid")?;
     let process_group_id = i32::try_from(pid).context("Cursor pid exceeds process-group range")?;
     let sink = CursorPrintSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
+        run: ConsoleRun {
+            provider: &CURSOR_CONSOLE,
+            session_id: config.session_id.clone(),
+            thread_id: config.thread_id.clone(),
+            turn_id: config.turn_id.clone(),
+            run_id: config.run_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            launch_id: launch_id.clone(),
+            process_group_id: Some(process_group_id),
+            machine_name: config.machine_name.clone(),
+            local_db_path: config.local_db_path.clone(),
+            runtime_events_outbox_dir,
+        },
         provider_thread_id: provider_thread_id.clone(),
-        launch_id: launch_id.clone(),
-        process_group_id: Some(process_group_id),
-        machine_name: config.machine_name.clone(),
-        local_db_path: config.local_db_path.clone(),
-        runtime_events_outbox_dir,
     };
     let result = json!({
         "session_id": config.session_id,
@@ -286,17 +301,20 @@ pub async fn recover_cursor_print_turns(
             continue;
         }
         let sink = CursorPrintSink {
-            session_id: claim.session_id.clone(),
-            thread_id: claim.thread_id.clone(),
-            turn_id: claim.turn_id.clone(),
-            run_id: claim.run_id.clone(),
-            client_request_id: claim.client_request_id.clone(),
+            run: ConsoleRun {
+                provider: &CURSOR_CONSOLE,
+                session_id: claim.session_id.clone(),
+                thread_id: claim.thread_id.clone(),
+                turn_id: claim.turn_id.clone(),
+                run_id: claim.run_id.clone(),
+                client_request_id: claim.client_request_id.clone(),
+                launch_id: claim.launch_id.clone().unwrap_or_default(),
+                process_group_id: claim.process_group_id,
+                machine_name: machine_name.to_string(),
+                local_db_path: local_db_path.clone(),
+                runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+            },
             provider_thread_id: provider_thread_id.clone(),
-            launch_id: claim.launch_id.clone().unwrap_or_default(),
-            process_group_id: claim.process_group_id,
-            machine_name: machine_name.to_string(),
-            local_db_path: local_db_path.clone(),
-            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
         match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
             ClaimLiveness::Live => {
@@ -597,45 +615,13 @@ fn terminal_state_from_event(event: &Value) -> Option<String> {
 
 impl CursorPrintSink {
     async fn post_binding(&self) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("cursor:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "cursor",
-            "device_id": self.machine_name,
-            "source": CURSOR_PRINT_ADAPTER,
-            "kind": "binding_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("cursor-print:{}:{}:binding", self.session_id, self.launch_id),
-            "payload": {
-                "provider_session_id": self.provider_thread_id,
-                "managed_transport": CURSOR_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+        self.post_event(&self.binding_event(json!({
+            "provider_session_id": self.provider_thread_id,
+        })));
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
-        // The phase goes to this session's status slot; the daemon records the
-        // local ledger from it and sends it. Only the records no later event
-        // can restate — binding, terminal — stay on the durable queue.
-        let observed_at = Utc::now();
-        crate::status_slot::publish_console_phase(
-            "cursor",
-            CURSOR_PRINT_ADAPTER,
-            &self.session_id,
-            &self.run_id,
-            &observed_at.to_rfc3339(),
-            phase,
-            tool_name.as_deref(),
-            json!({
-                "execution_lifetime": "one_shot",
-                "thread_id": self.thread_id,
-                "device_id": self.machine_name,
-            }),
-        );
+        self.publish_phase(phase, tool_name.as_deref(), None);
     }
 
     async fn post_stream_event(&self, seq: u64, event: Value) {
@@ -698,18 +684,10 @@ impl CursorPrintSink {
         if let Some(phase) = phase {
             self.post_phase(phase, cursor_tool_name(&event)).await;
         }
-        self.post_events(vec![json!({
-            "runtime_key": format!("cursor:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "cursor",
-            "device_id": self.machine_name,
-            "source": CURSOR_PRINT_ADAPTER,
-            "kind": "progress_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("cursor-print:{}:{}:stdout:{seq}", self.session_id, self.run_id),
-            "payload": {
+        self.post_event(&self.run_event(
+            "progress_signal",
+            &format!("stdout:{seq}"),
+            self.with_transport(json!({
                 "progress_kind": "cursor_print_stream",
                 "seq": seq,
                 "thread_id": self.thread_id,
@@ -717,27 +695,16 @@ impl CursorPrintSink {
                 "client_request_id": self.client_request_id,
                 "provider_thread_id": self.provider_thread_id,
                 "event": event,
-                "managed_transport": CURSOR_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+            })),
+        ));
     }
 
     async fn post_decode_gap(&self, seq: u64, error: &str) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("cursor:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "cursor",
-            "device_id": self.machine_name,
-            "source": CURSOR_PRINT_ADAPTER,
-            "kind": "progress_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("cursor-print:{}:{}:decode-gap:{seq}", self.session_id, self.run_id),
-            "payload": {"progress_kind": "cursor_print_decode_gap", "seq": seq, "error": error}
-        })]).await;
+        self.post_event(&self.run_event(
+            "progress_signal",
+            &format!("decode-gap:{seq}"),
+            json!({"progress_kind": "cursor_print_decode_gap", "seq": seq, "error": error}),
+        ));
     }
 
     async fn post_terminal(
@@ -768,105 +735,14 @@ impl CursorPrintSink {
             None,
         );
         self.persist_local_phase("finished", None, Utc::now());
-        let terminal_event = json!({
-            "runtime_key": format!("cursor:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "cursor",
-            "device_id": self.machine_name,
-            "source": CURSOR_PRINT_ADAPTER,
-            "kind": "terminal_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("cursor-print:{}:{}:terminal", self.session_id, self.run_id),
-            "payload": {
-                "managed_transport": CURSOR_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot",
-                "terminal_state": terminal_state,
-                "terminal_reason": terminal_state,
-                "terminal_source": CURSOR_PRINT_ADAPTER,
-                "exit_code": exit_code,
-                "stderr_tail": stderr,
-                "turn_id": self.turn_id,
-                "client_request_id": self.client_request_id,
-                "provider_thread_id": self.provider_thread_id
-            }
-        });
+        let mut payload =
+            self.terminal_payload(terminal_state, terminal_state, exit_code, stderr.as_deref());
+        payload["provider_thread_id"] = json!(self.provider_thread_id);
+        let terminal_event = self.run_event("terminal_signal", "terminal", payload);
         let terminal_error = (terminal_state == "run_failed")
             .then(|| stderr.clone())
             .flatten();
-        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
-            crate::outbox::retain_and_enqueue_terminal_event(
-                &registry,
-                &self.runtime_events_outbox_dir,
-                &self.run_id,
-                terminal_state,
-                terminal_error,
-                terminal_event.clone(),
-            )
-        });
-        match handoff {
-            Ok((_, true)) => crate::status_slot::retire_console_run(
-                "cursor",
-                CURSOR_PRINT_ADAPTER,
-                &self.session_id,
-                &self.run_id,
-            ),
-            Ok((_, false)) => eprintln!(
-                "[cursor-print] terminal record remains pending for {} run {}; keeping the status slot",
-                self.session_id,
-                self.run_id
-            ),
-            Err(error) => {
-                eprintln!(
-                    "[cursor-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
-                    self.session_id,
-                    self.run_id
-                );
-                if let Err(error) = crate::outbox::enqueue_runtime_event(
-                    &self.runtime_events_outbox_dir,
-                    &terminal_event,
-                ) {
-                    eprintln!("[cursor-print] runtime outbox write failed: {error}");
-                }
-            }
-        }
-    }
-
-    fn persist_local_phase(
-        &self,
-        phase: &str,
-        tool_name: Option<String>,
-        observed_at: DateTime<Utc>,
-    ) {
-        let Some(db_path) = self.local_db_path.as_deref() else {
-            return;
-        };
-        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
-            db_path,
-            &self.session_id,
-            "cursor",
-            phase,
-            tool_name.as_deref(),
-            CURSOR_PRINT_ADAPTER,
-            &observed_at.to_rfc3339(),
-            Some(self.run_id.as_str()),
-        ) {
-            eprintln!(
-                "[cursor-print] enqueue local phase failed for {}: {err}",
-                self.session_id
-            );
-        }
-    }
-
-    async fn post_events(&self, events: Vec<Value>) {
-        for event in events {
-            if let Err(error) =
-                crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event)
-            {
-                eprintln!("[cursor-print] runtime outbox write failed: {error}");
-            }
-        }
+        self.hand_off_terminal(terminal_state, terminal_error, terminal_event);
     }
 }
 
@@ -1187,17 +1063,20 @@ mod tests {
     fn golden_cursor_sink(home: &crate::console_sink::golden::GoldenHome) -> CursorPrintSink {
         use crate::console_sink::golden::*;
         CursorPrintSink {
-            session_id: SESSION.to_string(),
-            thread_id: THREAD.to_string(),
-            turn_id: Some(TURN.to_string()),
-            run_id: RUN.to_string(),
-            client_request_id: Some(CLIENT_REQUEST.to_string()),
+            run: ConsoleRun {
+                provider: &CURSOR_CONSOLE,
+                session_id: SESSION.to_string(),
+                thread_id: THREAD.to_string(),
+                turn_id: Some(TURN.to_string()),
+                run_id: RUN.to_string(),
+                client_request_id: Some(CLIENT_REQUEST.to_string()),
+                launch_id: LAUNCH.to_string(),
+                process_group_id: None,
+                machine_name: MACHINE.to_string(),
+                local_db_path: Some(home.local_db()),
+                runtime_events_outbox_dir: home.outbox(),
+            },
             provider_thread_id: PROVIDER_THREAD.to_string(),
-            launch_id: LAUNCH.to_string(),
-            process_group_id: None,
-            machine_name: MACHINE.to_string(),
-            local_db_path: Some(home.local_db()),
-            runtime_events_outbox_dir: home.outbox(),
         }
     }
 
@@ -1326,17 +1205,20 @@ mod tests {
         assert!(crate::process_group::group_is_alive(process_group_id));
 
         let sink = CursorPrintSink {
-            session_id: Uuid::new_v4().to_string(),
-            thread_id: Uuid::new_v4().to_string(),
-            turn_id: None,
-            run_id: Uuid::new_v4().to_string(),
-            client_request_id: None,
+            run: ConsoleRun {
+                provider: &CURSOR_CONSOLE,
+                session_id: Uuid::new_v4().to_string(),
+                thread_id: Uuid::new_v4().to_string(),
+                turn_id: None,
+                run_id: Uuid::new_v4().to_string(),
+                client_request_id: None,
+                launch_id: Uuid::new_v4().to_string(),
+                process_group_id: Some(process_group_id),
+                machine_name: "cursor-print-test".to_string(),
+                local_db_path: None,
+                runtime_events_outbox_dir: temp.path().join("runtime-events-outbox"),
+            },
             provider_thread_id: Uuid::new_v4().to_string(),
-            launch_id: Uuid::new_v4().to_string(),
-            process_group_id: Some(process_group_id),
-            machine_name: "cursor-print-test".to_string(),
-            local_db_path: None,
-            runtime_events_outbox_dir: temp.path().join("runtime-events-outbox"),
         };
         let lock = File::create(temp.path().join("lock")).unwrap();
         monitor_cursor_print(&mut child, &stdout_path, &stderr_path, sink, lock).await;
@@ -1710,17 +1592,20 @@ mod tests {
                     .claim(&run_id, &session_id, &thread_id, None, None, "cursor")
                     .unwrap();
                 let sink = CursorPrintSink {
-                    session_id: session_id.clone(),
-                    thread_id,
-                    turn_id: None,
-                    run_id: run_id.clone(),
-                    client_request_id: None,
+                    run: ConsoleRun {
+                        provider: &CURSOR_CONSOLE,
+                        session_id: session_id.clone(),
+                        thread_id,
+                        turn_id: None,
+                        run_id: run_id.clone(),
+                        client_request_id: None,
+                        launch_id: Uuid::new_v4().to_string(),
+                        process_group_id: None,
+                        machine_name: "test".to_string(),
+                        local_db_path: None,
+                        runtime_events_outbox_dir: outbox.clone(),
+                    },
                     provider_thread_id: Uuid::new_v4().to_string(),
-                    launch_id: Uuid::new_v4().to_string(),
-                    process_group_id: None,
-                    machine_name: "test".to_string(),
-                    local_db_path: None,
-                    runtime_events_outbox_dir: outbox.clone(),
                 };
 
                 sink.post_phase("thinking", None).await;
