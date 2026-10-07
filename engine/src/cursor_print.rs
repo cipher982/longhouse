@@ -106,6 +106,7 @@ pub async fn start_cursor_print_turn(
     };
     let launch_id = Uuid::new_v4().to_string();
     let state_root = cursor_managed_root()?;
+    let runtime_events_outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
     let lock = acquire_conversation_lock(&state_root, &provider_thread_id)?;
     reserve_binding(
         &state_root,
@@ -191,7 +192,7 @@ pub async fn start_cursor_print_turn(
         process_group_id: Some(process_group_id),
         machine_name: config.machine_name.clone(),
         local_db_path: config.local_db_path.clone(),
-        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        runtime_events_outbox_dir,
     };
     let result = json!({
         "session_id": config.session_id,
@@ -209,18 +210,26 @@ pub async fn start_cursor_print_turn(
         "machine_name": config.machine_name,
         "argv": argv,
     });
-    crate::turn_claims::default_registry()?.mark_spawned_invocation(
-        &config.run_id,
-        pid,
-        process_group_id,
-        crate::turn_claims::process_start_time_for_pid(Some(pid)),
-        CURSOR_PRINT_ADAPTER,
-        &launch_id,
-        Some(&provider_thread_id),
-        &stdout_path.to_string_lossy(),
-        &stderr_path.to_string_lossy(),
-        result,
-    )?;
+    let claimed = crate::turn_claims::default_registry().and_then(|registry| {
+        registry.mark_spawned_invocation(
+            &config.run_id,
+            pid,
+            process_group_id,
+            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+            CURSOR_PRINT_ADAPTER,
+            &launch_id,
+            Some(&provider_thread_id),
+            &stdout_path.to_string_lossy(),
+            &stderr_path.to_string_lossy(),
+            result,
+        )
+    });
+    if let Err(error) = claimed {
+        cleanup_process_group(Some(process_group_id)).await;
+        let _ = child.kill().await;
+        rollback_binding(&state_root, &config.session_id, &launch_id);
+        return Err(error).context("persisting Cursor Console spawn identity");
+    }
     let monitor_path = stdout_path.clone();
     let monitor_stderr = stderr_path.clone();
     tokio::spawn(async move {
