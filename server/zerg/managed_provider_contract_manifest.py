@@ -119,6 +119,8 @@ _OPERATION_EVIDENCE_LEVELS = frozenset(
         "live_token",
     }
 )
+# Public for the engine manifest generator, which renders it for the engine.
+OPERATION_EVIDENCE_LEVELS = _OPERATION_EVIDENCE_LEVELS
 _CAPABILITY_DISPOSITIONS = frozenset({"implemented", "not_implemented", "upstream_absent", "policy_disabled"})
 # Operation evidence answers three independent questions, and collapsing them is
 # what made "what is left?" unanswerable. ``disposition`` is implementation truth
