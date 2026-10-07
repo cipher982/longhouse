@@ -221,6 +221,7 @@ class CatalogDaemon:
         schema_generation: str = CATALOG_SCHEMA_GENERATION,
         checkpoint_interval_seconds: float = 30.0,
         runtime_boot_id: str | None = None,
+        wait_for_handoff: bool = False,
     ) -> None:
         self._e2e_reset_enabled = os.getenv("ENVIRONMENT", "").strip() == "test:e2e" and os.getenv("TESTING", "").strip().lower() in {
             "1",
@@ -239,6 +240,7 @@ class CatalogDaemon:
         self._schema_generation = schema_generation
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
         self._runtime_boot_id = runtime_boot_id
+        self._wait_for_handoff = wait_for_handoff
         self._executor: ThreadPoolExecutor | None = None
         self._read_executor: ThreadPoolExecutor | None = None
         self._control_read_executor: ThreadPoolExecutor | None = None
@@ -274,6 +276,14 @@ class CatalogDaemon:
             raise CatalogDaemonError("catalog socket parent is not owned by the runtime user")
         if stat.S_IMODE(socket_parent.st_mode) & 0o077:
             raise CatalogDaemonError("catalog socket parent must not be group/world accessible")
+        if self._wait_for_handoff:
+            # Warm candidate (B2): spawned before the permit, this process may
+            # touch the database only once the predecessor's catalogd let go.
+            from zerg.services.catalog_handoff import wait_for_handoff_from_env
+
+            await asyncio.to_thread(wait_for_handoff_from_env, self.lock_path)
+            _log_startup_stage("handoff_wait", stage_started)
+            stage_started = time.perf_counter()
         self._acquire_lock()
         _log_startup_stage("prepare_paths_and_lock", stage_started)
         try:
@@ -1249,6 +1259,7 @@ class CatalogDaemon:
                 "schema_version": metadata.schema_version,
                 "commit_seq": str(metadata.commit_seq),
                 "pid": os.getpid(),
+                "runtime_boot_id": self._runtime_boot_id,
                 "ready": True,
                 "writer_admission": {
                     "depth": writer["depth"],

@@ -56,7 +56,7 @@ def catalogd_paths() -> tuple[Path, Path]:
 
 
 class CatalogdSupervisor:
-    def __init__(self, *, database_path: Path, socket_path: Path) -> None:
+    def __init__(self, *, database_path: Path, socket_path: Path, handoff: bool = False) -> None:
         self.database_path = database_path
         self.socket_path = socket_path
         self.status_path = socket_path.with_name("catalogd-status.json")
@@ -70,6 +70,10 @@ class CatalogdSupervisor:
         self._stopping = False
         self._restart_count = 0
         self._last_logged_status: tuple[object, ...] | None = None
+        # Warm candidate (B2): until its own catalogd is up, the shared socket
+        # may still answer for the predecessor's. Spawn without adopting, and
+        # count only a catalogd started by this process as ready.
+        self._handoff_pending = handoff
 
     async def start(self, *, readiness_timeout_seconds: float = 15.0) -> dict[str, Any]:
         if self._task is None or self._task.done():
@@ -78,9 +82,13 @@ class CatalogdSupervisor:
         deadline = asyncio.get_running_loop().time() + readiness_timeout_seconds
         last_error: Exception | None = None
         while asyncio.get_running_loop().time() < deadline:
+            if not self._may_ping():
+                await asyncio.sleep(0.02)
+                continue
             try:
                 ping = await self.client.call("ping.v2")
-                if self._is_compatible(ping):
+                if self._accepts(ping):
+                    self._handoff_pending = False
                     self._write_status("running", ping=ping, ownership=self.ownership)
                     return ping
             except Exception as exc:
@@ -114,7 +122,7 @@ class CatalogdSupervisor:
         backoff = 0.1
         while not self._stopping:
             try:
-                ping = await self.client.call("ping.v2")
+                ping = None if self._handoff_pending else await self.client.call("ping.v2")
             except CatalogUnavailable:
                 ping = None
             if ping is not None and self._is_compatible(ping):
@@ -140,6 +148,7 @@ class CatalogdSupervisor:
                     str(self.socket_path),
                     "--runtime-boot-id",
                     RUNTIME_BOOT_ID,
+                    *(["--wait-for-handoff"] if self._handoff_pending else []),
                 )
                 self._process = process
                 self._write_status("starting", ownership="owned", pid=process.pid)
@@ -176,9 +185,14 @@ class CatalogdSupervisor:
         """Publish live owned-daemon state while retaining process supervision."""
 
         while process.returncode is None and not self._stopping:
+            if not self._may_ping():
+                try:
+                    return await asyncio.wait_for(process.wait(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
             try:
                 ping = await self.client.call("ping.v2")
-                if self._is_compatible(ping):
+                if self._accepts(ping):
                     self._write_status(
                         "running",
                         ping=ping,
@@ -211,6 +225,22 @@ class CatalogdSupervisor:
             process.kill()
             await process.wait()
         self._process = None
+
+    def _may_ping(self) -> bool:
+        """Before the permit the shared socket answers for the predecessor only."""
+        if not self._handoff_pending:
+            return True
+        from zerg.services.catalog_handoff import catalog_handoff
+        from zerg.services.catalog_handoff import permit_matches
+
+        handoff = catalog_handoff()
+        return handoff is None or permit_matches(handoff.directory, handoff.attempt_id)
+
+    def _accepts(self, ping: dict[str, Any]) -> bool:
+        """Compatible, and during a handoff started by this process."""
+        if self._handoff_pending and ping.get("runtime_boot_id") != RUNTIME_BOOT_ID:
+            return False
+        return self._is_compatible(ping)
 
     @staticmethod
     def _is_compatible(ping: dict[str, Any]) -> bool:
@@ -270,13 +300,13 @@ class CatalogdSupervisor:
 _supervisor: CatalogdSupervisor | None = None
 
 
-async def start_catalogd_supervisor() -> dict[str, Any]:
+async def start_catalogd_supervisor(*, handoff: bool = False, readiness_timeout_seconds: float | None = None) -> dict[str, Any]:
     global _supervisor
     if _supervisor is None:
         database_path, socket_path = catalogd_paths()
-        _supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
+        _supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path, handoff=handoff)
     return await _supervisor.start(
-        readiness_timeout_seconds=CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS,
+        readiness_timeout_seconds=readiness_timeout_seconds or CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS,
     )
 
 

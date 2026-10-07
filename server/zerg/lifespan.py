@@ -253,9 +253,17 @@ async def lifespan(app: FastAPI):
             app.state.deploy_window_loop_lag_task = start_deploy_window_monitor(lambda: pending_runtime.admission == "open")
         handoff = catalog_handoff()
     if handoff is not None:
-        # Warm candidate: boot and imports are done. Wait for the deployer's
-        # permit (the predecessor has drained) before binding HTTP, then take
-        # the catalog in the background once the predecessor releases it.
+        # Warm candidate: boot and imports are done. catalogd is spawned now and
+        # waits on its own for the permit and the predecessor's lock, so its
+        # interpreter boot is outside the closed-writes window too. HTTP binds
+        # only after the permit (the predecessor has drained).
+        from zerg.services.catalogd_supervisor import start_catalogd_supervisor
+
+        app.state.catalogd_start_task = asyncio.create_task(
+            start_catalogd_supervisor(handoff=True, readiness_timeout_seconds=max(1.0, handoff.remaining_seconds())),
+            name="catalogd-handoff-start",
+        )
+        _preload_catalog_dependent_modules()
         with _timed_startup_step("catalog_handoff_permit"):
             await handoff.wait_for_permit()
         app.state.catalog_handoff_task = asyncio.create_task(
@@ -273,18 +281,21 @@ async def lifespan(app: FastAPI):
 
 
 async def _complete_catalog_handoff(app: FastAPI, handoff, startup_started: float) -> None:
-    """Announce the bound port, wait for the catalog lock, then start as usual."""
+    """Announce the bound port, wait for this process's catalogd, then start as usual."""
     import os
-
-    from zerg.services.catalogd_supervisor import catalogd_paths
 
     try:
         await handoff.announce_bound(int(os.getenv("LONGHOUSE_RUNTIME_PORT", "8000")))
-        database_path, _socket_path = catalogd_paths()
-        lock_path = database_path.with_suffix(f"{database_path.suffix}.catalogd.lock")
-        with _timed_startup_step("catalog_handoff_lock"):
-            await handoff.wait_for_catalog_lock(lock_path)
-        await _start_runtime_services(app, startup_started, owns_test_catalog=False, e2e_catalog=False)
+        with _timed_startup_step("catalog_handoff_catalogd"):
+            catalogd_ping = await app.state.catalogd_start_task
+        handoff.timings["catalogd_ready"] = round((time.monotonic() - handoff._started) * 1000, 1)
+        await _start_runtime_services(
+            app,
+            startup_started,
+            owns_test_catalog=False,
+            e2e_catalog=False,
+            catalogd_ping=catalogd_ping,
+        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # the deployer reads this through readiness
@@ -293,14 +304,55 @@ async def _complete_catalog_handoff(app: FastAPI, handoff, startup_started: floa
     handoff.mark_ready()
 
 
-async def _start_runtime_services(app: FastAPI, startup_started: float, *, owns_test_catalog: bool, e2e_catalog: bool) -> None:
+# Modules the catalog-dependent startup imports. A warm candidate imports them
+# before the permit, so first-import time does not stall the loop in the window.
+_CATALOG_DEPENDENT_MODULES = (
+    "zerg.routers.internal_deployments",
+    "zerg.utils.async_runner",
+    "zerg.services.live_control_catalog",
+    "zerg.services.storage_session_titles",
+    "zerg.services.maintenance",
+    "zerg.services.single_tenant",
+    "zerg.models_config",
+    "zerg.services.searchd_supervisor",
+    "zerg.services.raw_object_workers",
+    "zerg.services.render_object_workers",
+    "zerg.services.semantic_v2_projector",
+    "zerg.services.search_v2_projector",
+    "zerg.services.embeddings_v2_projector",
+    "zerg.services.storage_telemetry_snapshot",
+)
+
+
+def _preload_catalog_dependent_modules() -> None:
+    import importlib
+
+    with _timed_startup_step("catalog_handoff_preload"):
+        for name in _CATALOG_DEPENDENT_MODULES:
+            try:
+                importlib.import_module(name)
+            except Exception:  # the real startup step reports it
+                logger.warning("Could not preload %s", name, exc_info=True)
+
+
+async def _start_runtime_services(
+    app: FastAPI,
+    startup_started: float,
+    *,
+    owns_test_catalog: bool,
+    e2e_catalog: bool,
+    catalogd_ping: dict | None = None,
+) -> None:
     try:
         logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
         if not _settings.testing:
-            with _timed_startup_step("catalogd_supervisor"):
-                from zerg.services.catalogd_supervisor import start_catalogd_supervisor
+            if catalogd_ping is not None:
+                app.state.catalogd_ping = catalogd_ping
+            else:
+                with _timed_startup_step("catalogd_supervisor"):
+                    from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
-                app.state.catalogd_ping = await start_catalogd_supervisor()
+                    app.state.catalogd_ping = await start_catalogd_supervisor()
             try:
                 from zerg.routers.internal_deployments import recover_runtime_startup
 
@@ -484,7 +536,12 @@ async def _stop_runtime_services(app: FastAPI, shutdown_started: float, *, owns_
     try:
 
         async def stop_deferred_runtime_startup() -> None:
-            for name in ("catalog_handoff_task", "deferred_non_gating_startup_task", "deploy_window_loop_lag_task"):
+            for name in (
+                "catalog_handoff_task",
+                "catalogd_start_task",
+                "deferred_non_gating_startup_task",
+                "deploy_window_loop_lag_task",
+            ):
                 task = getattr(app.state, name, None)
                 if task is not None and not task.done():
                     task.cancel()

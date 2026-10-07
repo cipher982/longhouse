@@ -107,15 +107,10 @@ class CatalogHandoff:
         return (self.cutoff - datetime.now(timezone.utc)).total_seconds()
 
     def _permit_matches(self) -> bool:
-        try:
-            raw = self.marker_path("permit").read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return False
-        try:
-            payload = json.loads(raw)
-        except ValueError:
-            return False
-        return isinstance(payload, dict) and payload.get("attempt_id") == self.attempt_id
+        return permit_matches(self.directory, self.attempt_id)
+
+    def remaining_seconds(self) -> float:
+        return self._remaining_seconds()
 
     async def wait_for_permit(self) -> None:
         """Announce that boot is done, then wait for the deployer's permit."""
@@ -145,31 +140,6 @@ class CatalogHandoff:
         self._mark("bound")
         self._write_marker("bound", {"state": "bound"})
 
-    async def wait_for_catalog_lock(self, lock_path: Path) -> None:
-        """Return once the catalog lock is free; never keep it.
-
-        catalogd takes the lock itself with LOCK_NB on its own descriptor, so
-        holding it here would make catalogd fail. The predecessor's catalogd
-        releases it as it stops; nothing else may take it in between, because
-        the predecessor container has been told to stop and this is the only
-        other process on the data root.
-        """
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+", encoding="utf-8") as handle:
-            while True:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError as exc:
-                    if exc.errno not in {errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK}:
-                        raise
-                    if self._remaining_seconds() <= 0:
-                        raise CatalogHandoffAborted("catalog lock was not released before the attempt cutoff") from exc
-                    await asyncio.sleep(_LOCK_POLL_SECONDS)
-                    continue
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                break
-        self._mark("lock_free")
-
     def mark_ready(self) -> None:
         self._mark("catalog_ready")
         self._write_marker("catalog", {"state": "catalog_ready", "timings_ms": dict(self.timings)})
@@ -183,6 +153,60 @@ class CatalogHandoff:
         except OSError:
             logger.exception("Could not record catalog handoff failure")
         logger.error("catalog handoff failed: %s", detail)
+
+
+def permit_matches(directory: Path, attempt_id: str) -> bool:
+    try:
+        raw = (directory / f"{attempt_id}.permit").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("attempt_id") == attempt_id
+
+
+def lock_is_free(lock_path: Path) -> bool:
+    """Probe the catalog lock on a private descriptor and never keep it.
+
+    catalogd takes the lock itself with LOCK_NB on its own descriptor, so
+    holding it here would make catalogd fail.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in {errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK}:
+                return False
+            raise
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return True
+
+
+def wait_for_handoff_from_env(lock_path: Path) -> None:
+    """catalogd's side of a warm start: the permit first, then the free lock.
+
+    Runs in the catalogd process, which the warm candidate spawns before the
+    permit so interpreter boot and imports happen outside the closed-writes
+    window. Nothing here touches the database; the predecessor's catalogd holds
+    the lock until it exits, and only then may this process take it.
+    """
+    directory = Path(os.environ[HANDOFF_DIR_ENV])
+    attempt_id = os.environ["LONGHOUSE_DEPLOYMENT_ATTEMPT_ID"].strip()
+    cutoff = _parse_time(os.getenv("LONGHOUSE_CLAIM_CUTOFF"))
+    deadline = time.monotonic() + _DEFAULT_PERMIT_WAIT_SECONDS
+    if cutoff is not None:
+        deadline = time.monotonic() + (cutoff - datetime.now(timezone.utc)).total_seconds()
+    while not permit_matches(directory, attempt_id):
+        if time.monotonic() >= deadline:
+            raise CatalogHandoffAborted("catalog handoff permit did not arrive before the attempt cutoff")
+        time.sleep(_PERMIT_POLL_SECONDS)
+    while not lock_is_free(lock_path):
+        if time.monotonic() >= deadline:
+            raise CatalogHandoffAborted("catalog lock was not released before the attempt cutoff")
+        time.sleep(_LOCK_POLL_SECONDS)
 
 
 _HANDOFF: CatalogHandoff | None = None

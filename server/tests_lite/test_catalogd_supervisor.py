@@ -286,3 +286,50 @@ def test_catalogd_paths_falls_back_to_short_private_runtime_dir(tmp_path, monkey
     assert selected_database == database_path
     assert len(os.fsencode(socket_path.with_name(f".{socket_path.name}.tmp.{os.getpid()}"))) < 104
     assert socket_path.parent.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.asyncio
+async def test_handoff_supervisor_never_adopts_the_predecessor_and_opens_only_after_it_exits(supervisor_paths, tmp_path, monkeypatch):
+    """B2 warm candidate: one catalog writer, the predecessor's, until it exits."""
+    import json as _json
+    from datetime import datetime
+    from datetime import timedelta
+    from datetime import timezone
+
+    from zerg.runtime_boot import RUNTIME_BOOT_ID
+    from zerg.services import catalog_handoff as handoff_module
+
+    database_path, socket_path = supervisor_paths
+    predecessor = _external_catalogd(database_path, socket_path)
+    client = CatalogClient(socket_path)
+    handoff_dir = tmp_path / "handoff"
+    handoff_dir.mkdir()
+    monkeypatch.setenv("LONGHOUSE_CATALOG_HANDOFF_DIR", str(handoff_dir))
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_ATTEMPT_ID", "a-warm")
+    monkeypatch.setenv("LONGHOUSE_CLAIM_CUTOFF", (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat())
+    handoff_module.reset_catalog_handoff_for_tests(None)
+    supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path, handoff=True)
+    try:
+        predecessor_pid = (await _eventually_new_ping(client, -1))["pid"]
+        start = asyncio.create_task(supervisor.start(readiness_timeout_seconds=30))
+        await asyncio.sleep(1.0)
+        assert not start.done(), "the predecessor's catalogd on the shared socket is not adopted"
+
+        (handoff_dir / "a-warm.permit").write_text(_json.dumps({"attempt_id": "a-warm"}))
+        await asyncio.sleep(1.0)
+        assert not start.done(), "the permit alone does not open a catalog the predecessor holds"
+        assert (await client.call("ping.v2"))["pid"] == predecessor_pid
+
+        predecessor.terminate()
+        predecessor.wait(timeout=10)
+        ping = await asyncio.wait_for(start, timeout=20)
+        assert ping["runtime_boot_id"] == RUNTIME_BOOT_ID
+        assert supervisor.ownership == "owned"
+    finally:
+        await supervisor.stop()
+        await client.close()
+        if predecessor.poll() is None:
+            predecessor.terminate()
+            predecessor.wait(timeout=10)
+        handoff_module.reset_catalog_handoff_for_tests(None)

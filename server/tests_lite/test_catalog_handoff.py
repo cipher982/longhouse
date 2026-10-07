@@ -66,25 +66,43 @@ async def test_permit_wait_ends_at_the_attempt_cutoff(tmp_path) -> None:
         await asyncio.wait_for(handoff.wait_for_permit(), timeout=1)
 
 
-@pytest.mark.asyncio
-async def test_lock_wait_returns_only_after_the_holder_releases_and_keeps_nothing(tmp_path) -> None:
-    handoff = _handoff(tmp_path)
+def test_lock_probe_never_keeps_the_catalog_lock(tmp_path) -> None:
     lock_path = tmp_path / "catalog.db.catalogd.lock"
     holder = lock_path.open("a+")
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-    waiter = asyncio.create_task(handoff.wait_for_catalog_lock(lock_path))
-    await asyncio.sleep(0.05)
-    assert not waiter.done(), "the candidate must not start catalogd while the predecessor holds the lock"
-
+    assert handoff_module.lock_is_free(lock_path) is False
     fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
     holder.close()
-    await asyncio.wait_for(waiter, timeout=1)
-
-    # catalogd takes the lock itself on its own descriptor; the wait never keeps it.
+    assert handoff_module.lock_is_free(lock_path) is True
+    # catalogd takes the lock itself on its own descriptor; the probe never keeps it.
     with lock_path.open("a+") as again:
         fcntl.flock(again.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(again.fileno(), fcntl.LOCK_UN)
+
+
+def test_catalogd_handoff_wait_needs_the_permit_and_then_the_free_lock(monkeypatch, tmp_path) -> None:
+    import threading
+
+    directory = tmp_path / "handoff"
+    directory.mkdir()
+    lock_path = tmp_path / "live.db.catalogd.lock"
+    monkeypatch.setenv("LONGHOUSE_CATALOG_HANDOFF_DIR", str(directory))
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_ATTEMPT_ID", "a-1")
+    monkeypatch.setenv("LONGHOUSE_CLAIM_CUTOFF", (datetime.now(UTC) + timedelta(seconds=5)).isoformat())
+    holder = lock_path.open("a+")
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    done = threading.Event()
+    thread = threading.Thread(target=lambda: (handoff_module.wait_for_handoff_from_env(lock_path), done.set()))
+    thread.start()
+    try:
+        assert not done.wait(0.1)
+        (directory / "a-1.permit").write_text(json.dumps({"attempt_id": "a-1"}))
+        assert not done.wait(0.1), "the permit alone must not open a catalog the predecessor still holds"
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        assert done.wait(2)
+    finally:
+        holder.close()
+        thread.join(timeout=5)
 
 
 @pytest.mark.asyncio
@@ -261,34 +279,36 @@ async def test_drained_process_releases_the_catalog_before_its_other_shutdown_st
 
 
 @pytest.mark.asyncio
-async def test_warm_lifespan_binds_only_after_the_permit_and_starts_services_after_the_lock(monkeypatch, tmp_path) -> None:
+async def test_warm_lifespan_binds_only_after_the_permit_and_starts_services_after_catalogd(monkeypatch, tmp_path) -> None:
     handoff = _handoff(tmp_path)
     handoff_module.reset_catalog_handoff_for_tests(handoff)
     monkeypatch.setattr(lifespan_module._settings, "testing", False)
     monkeypatch.setattr(lifespan_module, "get_settings", lambda: lifespan_module._settings)
     monkeypatch.setattr("zerg.services.event_loop_lag.start_deploy_window_monitor", lambda _done: None)
-    started: list[str] = []
+    monkeypatch.setattr(lifespan_module, "_preload_catalog_dependent_modules", lambda: None)
+    started: list[object] = []
     stopped: list[str] = []
+    catalogd_up = asyncio.Event()
+    supervisor_calls: list[dict] = []
 
-    async def start_services(app, startup_started, *, owns_test_catalog, e2e_catalog):
-        started.append("services")
+    async def start_catalogd(**kwargs):
+        supervisor_calls.append(kwargs)
+        await catalogd_up.wait()
+        return {"ready": True}
+
+    async def start_services(app, startup_started, *, owns_test_catalog, e2e_catalog, catalogd_ping=None):
+        started.append(catalogd_ping)
 
     async def stop_services(app, shutdown_started, *, owns_test_catalog):
         stopped.append("services")
 
-    lock_released = asyncio.Event()
-
     async def bound(_port):
         handoff._write_marker("bound", {"state": "bound"})
 
-    async def lock_free(_path):
-        await lock_released.wait()
-
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.start_catalogd_supervisor", start_catalogd)
     monkeypatch.setattr(lifespan_module, "_start_runtime_services", start_services)
     monkeypatch.setattr(lifespan_module, "_stop_runtime_services", stop_services)
     monkeypatch.setattr(handoff, "announce_bound", bound)
-    monkeypatch.setattr(handoff, "wait_for_catalog_lock", lock_free)
-    monkeypatch.setattr("zerg.services.catalogd_supervisor.catalogd_paths", lambda: (tmp_path / "live.db", tmp_path / "s"))
 
     from fastapi import FastAPI
 
@@ -296,15 +316,16 @@ async def test_warm_lifespan_binds_only_after_the_permit_and_starts_services_aft
     context = lifespan_module.lifespan(app)
     entered = asyncio.create_task(context.__aenter__())
     await asyncio.sleep(0.05)
+    assert supervisor_calls and supervisor_calls[0]["handoff"] is True, "catalogd is spawned before the permit"
     assert not entered.done(), "HTTP must not bind before the permit"
     _permit(handoff)
     await asyncio.wait_for(entered, timeout=1)
     await asyncio.sleep(0.05)
     assert started == [] and not handoff.ready.is_set()
 
-    lock_released.set()
+    catalogd_up.set()
     await asyncio.wait_for(handoff.ready.wait(), timeout=1)
-    assert started == ["services"]
+    assert started == [{"ready": True}], "startup reuses the pre-spawned catalogd instead of starting another"
     assert json.loads(handoff.marker_path("catalog").read_text())["state"] == "catalog_ready"
     await context.__aexit__(None, None, None)
     assert stopped == ["services"]

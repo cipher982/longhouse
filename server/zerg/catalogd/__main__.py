@@ -14,10 +14,15 @@ from pathlib import Path
 import zerg.bootstrap_sqlite  # noqa: F401  # pin sqlite before SQLAlchemy imports
 
 
-async def _run(database_path: Path, socket_path: Path, runtime_boot_id: str | None) -> None:
+async def _run(database_path: Path, socket_path: Path, runtime_boot_id: str | None, wait_for_handoff: bool = False) -> None:
     from zerg.catalogd.server import CatalogDaemon
 
-    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path, runtime_boot_id=runtime_boot_id)
+    daemon = CatalogDaemon(
+        database_path=database_path,
+        socket_path=socket_path,
+        runtime_boot_id=runtime_boot_id,
+        wait_for_handoff=wait_for_handoff,
+    )
     stop_requested = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -43,6 +48,7 @@ def _serve_parser() -> argparse.ArgumentParser:
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--runtime-boot-id")
+    parser.add_argument("--wait-for-handoff", action="store_true", help="warm candidate: wait for the permit and the free lock")
     return parser
 
 
@@ -108,7 +114,7 @@ def main() -> int:
 
     configure_logging(os.getenv("LOG_LEVEL", "INFO"))
     try:
-        asyncio.run(_run(args.database, args.socket, args.runtime_boot_id))
+        asyncio.run(_run(args.database, args.socket, args.runtime_boot_id, args.wait_for_handoff))
     except KeyboardInterrupt:
         return 0
     return 0
