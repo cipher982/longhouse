@@ -766,7 +766,7 @@ impl CursorPrintSink {
                 .flatten(),
         );
         self.persist_local_phase("finished", None, Utc::now());
-        self.post_events(vec![json!({
+        let terminal_event = json!({
             "runtime_key": format!("cursor:{}", self.session_id),
             "session_id": self.session_id,
             "thread_id": self.thread_id,
@@ -789,14 +789,23 @@ impl CursorPrintSink {
                 "client_request_id": self.client_request_id,
                 "provider_thread_id": self.provider_thread_id
             }
-        })])
-        .await;
-        crate::status_slot::retire_console_run(
-            "cursor",
-            CURSOR_PRINT_ADAPTER,
-            &self.session_id,
-            &self.run_id,
-        );
+        });
+        match crate::outbox::enqueue_runtime_event(
+            &self.runtime_events_outbox_dir,
+            &terminal_event,
+        ) {
+            Ok(()) => crate::status_slot::retire_console_run(
+                "cursor",
+                CURSOR_PRINT_ADAPTER,
+                &self.session_id,
+                &self.run_id,
+            ),
+            Err(error) => eprintln!(
+                "[cursor-print] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+                self.session_id,
+                self.run_id
+            ),
+        }
     }
 
     fn persist_local_phase(
@@ -1609,5 +1618,58 @@ mod tests {
             Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
         }
+    }
+    #[test]
+    fn failed_terminal_handoff_keeps_status_until_durable() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                let agent_dir = crate::config::get_agent_dir().unwrap();
+                let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+                std::fs::create_dir_all(outbox.parent().unwrap()).unwrap();
+                std::fs::write(&outbox, b"outbox path is a file").unwrap();
+                let registry = crate::turn_claims::default_registry().unwrap();
+                registry
+                    .claim(&run_id, &session_id, &thread_id, None, None, "cursor")
+                    .unwrap();
+                let sink = CursorPrintSink {
+                    session_id: session_id.clone(),
+                    thread_id,
+                    turn_id: None,
+                    run_id: run_id.clone(),
+                    client_request_id: None,
+                    provider_thread_id: Uuid::new_v4().to_string(),
+                    launch_id: Uuid::new_v4().to_string(),
+                    process_group_id: None,
+                    machine_name: "test".to_string(),
+                    local_db_path: None,
+                    runtime_events_outbox_dir: outbox.clone(),
+                };
+
+                sink.post_phase("thinking", None).await;
+                sink.post_terminal("run_completed", Some(0), None).await;
+                let status_dir = crate::status_slot::status_slot_dir(&agent_dir);
+                assert!(crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id && slot.run_id == run_id));
+                assert_eq!(registry.read(&run_id).unwrap().state, "terminal");
+                assert!(crate::outbox::collect_runtime_event_outbox(&outbox).is_empty());
+
+                std::fs::remove_file(&outbox).unwrap();
+                sink.post_terminal("run_completed", Some(0), None).await;
+                assert_eq!(crate::outbox::collect_runtime_event_outbox(&outbox).len(), 1);
+                assert!(!crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id));
+            });
+        });
     }
 }

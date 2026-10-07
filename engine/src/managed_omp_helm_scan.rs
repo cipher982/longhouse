@@ -70,6 +70,14 @@ pub(crate) fn source_ownership(path: &Path) -> anyhow::Result<crate::omp_session
     source_ownership_in(&state_dir, path)
 }
 
+fn parse_source_state(
+    path: &Path,
+    bytes: std::io::Result<Vec<u8>>,
+) -> Option<(PathBuf, OmpHelmStateFile)> {
+    let state = serde_json::from_slice(&bytes.ok()?).ok()?;
+    Some((path.to_path_buf(), state))
+}
+
 fn source_ownership_in(
     state_dir: &Path,
     path: &Path,
@@ -77,13 +85,12 @@ fn source_ownership_in(
     let stable = crate::storage_v2_shipper::stable_source_path;
     let mut owner = None;
     let mut pending = false;
-    for state_path in crate::managed_scan::state_file_paths(state_dir) {
-        let Ok(bytes) = fs::read(&state_path) else {
-            continue;
-        };
-        let Ok(state) = serde_json::from_slice::<OmpHelmStateFile>(&bytes) else {
-            continue;
-        };
+    let states = crate::dir_cache::parsed_json_dir(
+        state_dir,
+        parse_source_state,
+        |left, right| left.0.cmp(&right.0),
+    )?;
+    for (state_path, state) in states.iter() {
         let (Some(session_id), Some(run_id), Some(session_dir)) = (
             state.session_id.as_deref(),
             state.run_id.as_deref(),
@@ -129,10 +136,12 @@ fn source_ownership_in(
             pending = true;
         }
     }
-    Ok(if pending {
-        crate::omp_session::SourceOwnership::Pending
-    } else if let Some(owner) = owner {
+    Ok(if let Some(owner) = owner {
+        // An exact verified source owner outranks another launch's broad
+        // unconfirmed directory scope, which may survive a process crash.
         crate::omp_session::SourceOwnership::Managed(owner)
+    } else if pending {
+        crate::omp_session::SourceOwnership::Pending
     } else {
         crate::omp_session::SourceOwnership::Unclaimed
     })
@@ -513,6 +522,16 @@ mod tests {
                 None,
             )
             .unwrap();
+            let stale_session = uuid::Uuid::new_v4().to_string();
+            let mut stale = state.clone();
+            stale["session_id"] = serde_json::json!(stale_session);
+            stale["run_id"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+            stale["native_session_id"] = serde_json::json!("");
+            stale["status"] = serde_json::json!("degraded");
+            fs::write(
+                state_dir.join(format!("{stale_session}.json")),
+                serde_json::to_vec(&stale).unwrap(),
+            ).unwrap();
             assert_eq!(
                 source_ownership_in(&state_dir, &source).unwrap(),
                 crate::omp_session::SourceOwnership::Managed(session_id)

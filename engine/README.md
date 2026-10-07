@@ -31,11 +31,12 @@ degrades with `runtime_events_backlogged` when an observed event is at least
 alerts at that same reported-age threshold.
 
 Current status is asserted only for the exact execution owner. Ending a
-response retires its run's slot without deleting pending background work or
-history; delayed callbacks cannot remove or reclaim a successor's status.
-Unknown ownership retains the local file but never renews remote liveness.
-Runtime lifecycle records have independent admission and cooldowns from
-replaceable observations.
+response retires its run's slot only after durable terminal-event enqueue,
+without deleting pending background work or history; delayed callbacks cannot
+remove or reclaim a successor's status. Unknown ownership never renews remote
+liveness; its reconstructable observation expires after 24 hours with an
+exact-version guard, without declaring execution ended. Runtime lifecycle
+records have independent admission and cooldowns from replaceable observations.
 
 Fresh OMP Helm and Console use native creation, not resume. OMP may report its
 exact session path before writing a JSONL header: controls can be ready while

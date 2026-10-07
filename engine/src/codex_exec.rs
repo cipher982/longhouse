@@ -3223,7 +3223,7 @@ impl CodexExecRuntimeSink {
         }
         let observed_at = Utc::now();
         self.persist_local_phase("finished", None, observed_at);
-        self.post_events(vec![json!({
+        let terminal_event = json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
@@ -3252,14 +3252,22 @@ impl CodexExecRuntimeSink {
                     "pending_count": pending_count,
                 }
             }
-        })])
-        .await;
-        crate::status_slot::retire_console_run(
-            "codex",
-            CODEX_EXEC_RUNTIME_SOURCE,
-            &self.session_id,
-            &self.run_id,
-        );
+        });
+        let enqueue = crate::config::get_agent_runtime_events_outbox_dir()
+            .and_then(|outbox| crate::outbox::enqueue_runtime_event(&outbox, &terminal_event));
+        match enqueue {
+            Ok(()) => crate::status_slot::retire_console_run(
+                "codex",
+                CODEX_EXEC_RUNTIME_SOURCE,
+                &self.session_id,
+                &self.run_id,
+            ),
+            Err(error) => eprintln!(
+                "[codex-exec] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+                self.session_id,
+                self.run_id
+            ),
+        }
     }
 
     fn persist_local_provider_binding(
@@ -5852,5 +5860,90 @@ for line in sys.stdin:
         assert!(crate::outbox::collect_runtime_event_outbox(&outbox).is_empty());
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+    #[test]
+    fn terminal_handoff_failure_keeps_status_and_pending_invocation_until_durable() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let invocation_id = uuid::Uuid::new_v4().to_string();
+        let successor_run_id = uuid::Uuid::new_v4().to_string();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                let agent_dir = crate::config::get_agent_dir().unwrap();
+                let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+                std::fs::create_dir_all(outbox.parent().unwrap()).unwrap();
+                std::fs::write(&outbox, b"outbox path is a file").unwrap();
+                let registry = crate::turn_claims::default_registry().unwrap();
+                registry
+                    .claim(&run_id, &session_id, &thread_id, None, None, "codex")
+                    .unwrap();
+                let mut sink = runtime_sink(None);
+                sink.session_id = session_id.clone();
+                sink.run_id = run_id.clone();
+                sink.thread_id = Some(thread_id);
+
+                sink.post_phase("thinking", None).await;
+                sink.post_terminal(
+                    "run_completed",
+                    Some(0),
+                    None,
+                    &invocation_id,
+                    InvocationState::Parked,
+                    2,
+                )
+                .await;
+                let status_dir = crate::status_slot::status_slot_dir(&agent_dir);
+                assert!(crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id && slot.run_id == run_id));
+                let claim = registry.read(&run_id).unwrap();
+                assert_eq!(claim.state, "terminal");
+                assert_eq!(claim.invocation_state.as_deref(), Some("parked"));
+                assert_eq!(claim.pending_count, 2);
+                assert!(crate::outbox::collect_runtime_event_outbox(&outbox).is_empty());
+
+                std::fs::remove_file(&outbox).unwrap();
+                sink.post_terminal(
+                    "run_completed",
+                    Some(0),
+                    None,
+                    &invocation_id,
+                    InvocationState::Parked,
+                    2,
+                )
+                .await;
+                assert_eq!(crate::outbox::collect_runtime_event_outbox(&outbox).len(), 1);
+                assert!(!crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id));
+
+                crate::status_slot::publish_console_phase(
+                    "codex",
+                    CODEX_EXEC_RUNTIME_SOURCE,
+                    &session_id,
+                    &successor_run_id,
+                    &Utc::now().to_rfc3339(),
+                    "thinking",
+                    None,
+                    json!({}),
+                );
+                crate::status_slot::retire_console_run(
+                    "codex",
+                    CODEX_EXEC_RUNTIME_SOURCE,
+                    &session_id,
+                    &run_id,
+                );
+                assert!(crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id && slot.run_id == successor_run_id));
+            });
+        });
     }
 }

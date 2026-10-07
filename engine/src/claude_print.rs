@@ -1841,7 +1841,7 @@ impl ClaudePrintSink {
                 "pending_count": count
             });
         }
-        self.post_events(vec![json!({
+        let terminal_event = json!({
             "runtime_key": format!("claude:{}", self.session_id),
             "session_id": self.session_id,
             "thread_id": self.thread_id,
@@ -1853,8 +1853,23 @@ impl ClaudePrintSink {
             "occurred_at": Utc::now().to_rfc3339(),
             "dedupe_key": format!("claude-print:{}:{}:terminal", self.session_id, self.run_id),
             "payload": payload
-        })])
-        .await;
+        });
+        match crate::outbox::enqueue_runtime_event(
+            &self.runtime_events_outbox_dir,
+            &terminal_event,
+        ) {
+            Ok(()) => crate::status_slot::retire_console_run(
+                "claude",
+                CLAUDE_PRINT_ADAPTER,
+                &self.session_id,
+                &self.run_id,
+            ),
+            Err(error) => eprintln!(
+                "[claude-print] terminal record enqueue failed for {} run {}: {error:#}; keeping the status slot",
+                self.session_id,
+                self.run_id
+            ),
+        }
         crate::turn_claims::mark_terminal(
             &self.run_id,
             terminal_state,
@@ -1867,12 +1882,6 @@ impl ClaudePrintSink {
                 let _ = registry.record_invocation_state(&self.run_id, state, count);
             }
         }
-        crate::status_slot::retire_console_run(
-            "claude",
-            CLAUDE_PRINT_ADAPTER,
-            &self.session_id,
-            &self.run_id,
-        );
     }
 
     fn persist_local_phase(
@@ -3503,5 +3512,98 @@ for _ in sys.stdin:
         );
 
         blocker_conn.execute("ROLLBACK", []).unwrap();
+    }
+    #[test]
+    fn failed_terminal_handoff_keeps_status_until_durable_and_preserves_invocation() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let successor_run_id = Uuid::new_v4().to_string();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                let agent_dir = crate::config::get_agent_dir().unwrap();
+                let outbox = crate::config::get_agent_runtime_events_outbox_dir().unwrap();
+                std::fs::create_dir_all(outbox.parent().unwrap()).unwrap();
+                std::fs::write(&outbox, b"outbox path is a file").unwrap();
+                let registry = crate::turn_claims::default_registry().unwrap();
+                registry
+                    .claim(&run_id, &session_id, &thread_id, None, None, "claude")
+                    .unwrap();
+                let sink = ClaudePrintSink {
+                    session_id: session_id.clone(),
+                    thread_id,
+                    turn_id: None,
+                    run_id: run_id.clone(),
+                    client_request_id: None,
+                    provider_thread_id: Uuid::new_v4().to_string(),
+                    launch_id: Uuid::new_v4().to_string(),
+                    process_group_id: None,
+                    machine_name: "test".to_string(),
+                    local_db_path: None,
+                    runtime_events_outbox_dir: outbox.clone(),
+                };
+
+                sink.post_phase("thinking", None).await;
+                sink.post_terminal_with_lifecycle(
+                    "run_completed",
+                    Some(0),
+                    None,
+                    Some("parked"),
+                    Some(2),
+                    None,
+                )
+                .await;
+                let status_dir = crate::status_slot::status_slot_dir(&agent_dir);
+                assert!(crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id && slot.run_id == run_id));
+                let claim = registry.read(&run_id).unwrap();
+                assert_eq!(claim.state, "terminal");
+                assert_eq!(claim.invocation_state.as_deref(), Some("parked"));
+                assert_eq!(claim.pending_count, 2);
+                assert!(crate::outbox::collect_runtime_event_outbox(&outbox).is_empty());
+
+                std::fs::remove_file(&outbox).unwrap();
+                sink.post_terminal_with_lifecycle(
+                    "run_completed",
+                    Some(0),
+                    None,
+                    Some("parked"),
+                    Some(2),
+                    None,
+                )
+                .await;
+                assert_eq!(crate::outbox::collect_runtime_event_outbox(&outbox).len(), 1);
+                assert!(!crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id));
+
+                crate::status_slot::publish_console_phase(
+                    "claude",
+                    CLAUDE_PRINT_ADAPTER,
+                    &session_id,
+                    &successor_run_id,
+                    &Utc::now().to_rfc3339(),
+                    "thinking",
+                    None,
+                    json!({}),
+                );
+                crate::status_slot::retire_console_run(
+                    "claude",
+                    CLAUDE_PRINT_ADAPTER,
+                    &session_id,
+                    &run_id,
+                );
+                assert!(crate::status_slot::read_all(&status_dir)
+                    .iter()
+                    .any(|slot| slot.session_id == session_id && slot.run_id == successor_run_id));
+            });
+        });
     }
 }

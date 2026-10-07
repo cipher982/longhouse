@@ -33,6 +33,9 @@ use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 
 pub const STATUS_SLOT_SCHEMA: u32 = 1;
+/// Retention for an observation whose execution owner cannot be established.
+/// Expiry discards only this reconstructable status, never lifecycle evidence.
+const UNKNOWN_OBSERVATION_RETENTION: chrono::Duration = chrono::Duration::hours(24);
 
 /// The live preview carried alongside a phase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -399,6 +402,33 @@ pub fn retire_if_run(dir: &Path, session_id: &str, run_id: &str) -> std::io::Res
     }
 }
 
+pub fn discard_expired_observation(
+    dir: &Path,
+    observed: &StatusSlot,
+    now: chrono::DateTime<chrono::Utc>,
+) -> std::io::Result<bool> {
+    let Some(observed_at) = parse_observed_at(&observed.observed_at) else {
+        return Ok(false);
+    };
+    if now.signed_duration_since(observed_at) < UNKNOWN_OBSERVATION_RETENTION {
+        return Ok(false);
+    }
+    let _guard = lock_session(dir, &observed.session_id)?;
+    let path = slot_path(dir, &observed.session_id);
+    if !read_slot(&path).is_some_and(|current| {
+        current.run_id == observed.run_id
+            && current.producer_epoch == observed.producer_epoch
+            && current.seq == observed.seq
+    }) {
+        return Ok(false);
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// Writes one session's status slot.
 ///
 /// Every managed provider needs the same thing: state the current phase, carry
@@ -713,6 +743,29 @@ mod tests {
             producer_epoch: "epoch-1".into(),
             seq,
         }
+    }
+
+    #[test]
+    fn expired_unknown_observations_discard_only_the_exact_stale_version() {
+        let tmp = TempDir::new().unwrap();
+        let dir = status_slot_dir(tmp.path());
+        let now = chrono::Utc::now();
+        let mut old = slot("unknown", "thinking", 1);
+        old.observed_at = (now - chrono::Duration::hours(25)).to_rfc3339();
+        publish(&dir, &old).unwrap();
+        assert!(discard_expired_observation(&dir, &old, now).unwrap());
+        assert!(!slot_path(&dir, "unknown").exists());
+
+        publish(&dir, &old).unwrap();
+        let mut fresh = old.clone();
+        fresh.seq += 1;
+        fresh.observed_at = now.to_rfc3339();
+        publish(&dir, &fresh).unwrap();
+        assert!(!discard_expired_observation(&dir, &old, now).unwrap());
+        let retained = read_all(&dir).pop().unwrap();
+        assert_eq!(retained.seq, fresh.seq);
+        assert_eq!(retained.observed_at, fresh.observed_at);
+        assert!(!discard_expired_observation(&dir, &fresh, now).unwrap());
     }
 
     #[test]

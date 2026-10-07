@@ -4099,9 +4099,9 @@ fn forget_status_owner_refresh_attempt(
 
 /// Keep only statuses backed by the exact current run owner.
 ///
-/// An unrecognized slot is unknown, not dead: leave its file alone but do not
-/// send it. A terminal claim or a positively ended process identity may retire
-/// only the exact run still in that session's slot.
+/// Unknown ownership never renews liveness. Expired reconstructable
+/// observations are discarded without inferring execution end; evidenced
+/// terminal owners retire only their own run.
 fn reconcile_status_slots(
     dir: &Path,
     slots: Vec<crate::status_slot::StatusSlot>,
@@ -4110,11 +4110,11 @@ fn reconcile_status_slots(
     slots
         .into_iter()
         .filter_map(|slot| {
-            let key = status_owner_key(&slot.provider, &slot.session_id, &slot.run_id)?;
-            if owners.active.contains(&key) {
+            let key = status_owner_key(&slot.provider, &slot.session_id, &slot.run_id);
+            if key.as_ref().is_some_and(|key| owners.active.contains(key)) {
                 return Some(slot);
             }
-            if owners.ended.contains(&key) {
+            if key.as_ref().is_some_and(|key| owners.ended.contains(key)) {
                 if let Err(error) =
                     crate::status_slot::retire_if_run(dir, &slot.session_id, &slot.run_id)
                 {
@@ -4125,6 +4125,10 @@ fn reconcile_status_slots(
                         "Could not retire an ended status slot"
                     );
                 }
+            } else if let Err(error) = crate::status_slot::discard_expired_observation(
+                dir, &slot, chrono::Utc::now(),
+            ) {
+                tracing::warn!(session_id = %slot.session_id, %error, "Could not discard expired status observation");
             }
             None
         })
