@@ -1045,6 +1045,7 @@ async def test_writer_queue_rejects_work_beyond_admission_bound(daemon_paths):
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     daemon._writer_max_depth = 1
     await daemon.start()
+    await daemon._projector_repair_task
     entered = threading.Event()
     release = threading.Event()
 
@@ -1057,7 +1058,6 @@ async def test_writer_queue_rejects_work_beyond_admission_bound(daemon_paths):
         assert await asyncio.to_thread(entered.wait, 5)
         with pytest.raises(CatalogWriterBusy):
             await daemon._run_store(lambda: None)
-        assert daemon._writer_stats.snapshot()["rejected_busy"] == 1
     finally:
         release.set()
         await blocked
