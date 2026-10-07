@@ -3952,6 +3952,49 @@ def test_parse_ingest_project_replays_fixture_without_launching_provider(tmp_pat
     assert '"type": "unknown"' in unknown
 
 
+@pytest.mark.parametrize(
+    ("rows", "status", "checked"),
+    [
+        # The universal smoke's generic fixture is not an OMP archive at all.
+        (
+            [{"type": "user", "text": "hello"}, {"type": "assistant", "text": "world"}],
+            "pass",
+            False,
+        ),
+        # A native archive that settles with agent_end is still malformed.
+        (
+            [
+                {"type": "session", "id": "omp-native"},
+                {"type": "message", "message": {"role": "assistant", "content": "done"}},
+                {"type": "agent_end"},
+            ],
+            "fail",
+            True,
+        ),
+    ],
+)
+def test_omp_native_archive_check_applies_only_to_native_fixtures(tmp_path: Path, rows, status, checked) -> None:
+    fixture = tmp_path / "fixture.jsonl"
+    fixture.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("omp",),
+            scenarios=("parse_ingest_project",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"omp": _fake_bins(tmp_path)["omp"]},
+            fixture_path=fixture,
+        )
+    )
+
+    result = payload["results"][0]
+    assert result["status"] == status, result.get("failure_code")
+    settlement = json.loads((Path(result["evidence_root"]) / "assertions" / "omp-native-settlement.json").read_text(encoding="utf-8"))
+    assert settlement["native_archive_checked"] is checked
+    if status == "fail":
+        assert result["failure_code"] == "omp_native_archive_shape_missing"
+
+
 def test_adapter_scenario_methods_all_exist_on_the_adapter() -> None:
     """The collapsed wrappers looked their method up statically; this is the guard."""
     adapter = uah.UniversalProviderAdapter(uah.AdapterConfig(provider="codex", binary_name="codex", binary_env=None))

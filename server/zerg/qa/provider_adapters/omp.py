@@ -49,9 +49,14 @@ class OmpHarnessAdapter(UniversalProviderAdapter):
             "agent_settled_is_not_completion_contract": True,
             "source": str(fixture_path),
         }
+        # A fixture with none of OMP's native row types is a generic parse
+        # fixture (the universal smoke feeds every provider the same one), not
+        # an OMP archive; there is no native shape to hold it to.
+        native_rows = any(isinstance(row, dict) and row.get("type") in {"session", "message", "agent_end"} for row in rows)
+        native["native_archive_checked"] = native_rows
         package.write_json("assertions/omp-native-settlement.json", native)
         result["omp_native_settlement"] = native
-        if len(headers) != 1 or not assistant_messages or agent_ends:
+        if native_rows and (len(headers) != 1 or not assistant_messages or agent_ends):
             result["status"] = "fail"
             result["failure_code"] = "omp_native_archive_shape_missing"
         return result
