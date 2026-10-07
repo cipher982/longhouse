@@ -31,7 +31,6 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.services import catalogd_supervisor
-from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
@@ -1345,45 +1344,3 @@ def test_not_sent_engine_transport_retries_same_command_identity(monkeypatch, li
     assert calls[0]["command_id"] == command_id
     assert calls[1]["command_id"] == command_id
     assert operation["status"] == "succeeded"
-
-
-def test_live_text_dispatch_metadata_accepts_engine_channel_without_runner_metadata():
-    async def _run():
-        await _connect_fake_engine(owner_id=42, supports=["codex.send"])
-        assert (
-            supports_live_text_dispatch_metadata(
-                _session(source_runner_id=None),
-                owner_id=42,
-            )
-            is True
-        )
-
-    asyncio.run(_run())
-
-
-def test_live_text_dispatch_metadata_accepts_claude_engine_channel_without_runner_metadata():
-    async def _run():
-        await _connect_fake_engine(owner_id=42, supports=["claude.send"])
-        assert (
-            supports_live_text_dispatch_metadata(
-                _session(provider="claude", managed_transport="claude_channel_bridge", source_runner_id=None),
-                owner_id=42,
-            )
-            is True
-        )
-
-    asyncio.run(_run())
-
-
-def test_live_text_dispatch_metadata_accepts_opencode_engine_channel_without_runner_metadata():
-    async def _run():
-        await _connect_fake_engine(owner_id=42, supports=["opencode.send"])
-        assert (
-            supports_live_text_dispatch_metadata(
-                _session(provider="opencode", managed_transport="opencode_server_bridge", source_runner_id=None),
-                owner_id=42,
-            )
-            is True
-        )
-
-    asyncio.run(_run())

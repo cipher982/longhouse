@@ -75,16 +75,13 @@ docker/*
 # PYTHONPATH=/app, so server/apscheduler/ — a hand-written stub whose scheduler
 # reports running while running nothing — shadows the real dependency inside
 # the container. Nothing on the serve path imports zerg/qa/ (the endpoint reads
-# zerg/services/provider_capability_schema.py) or zerg/testing/ (tool stubs are
-# E2E-only, and E2E runs from source, not this image).
+# zerg/services/provider_capability_schema.py).
 server/tests
 server/tests/**
 server/tests_lite
 server/tests_lite/**
 server/zerg/qa
 server/zerg/qa/**
-server/zerg/testing
-server/zerg/testing/**
 server/apscheduler
 server/apscheduler/**
 server/*.db

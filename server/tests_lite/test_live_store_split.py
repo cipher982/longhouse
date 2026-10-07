@@ -212,8 +212,6 @@ def test_live_catalog_process_does_not_construct_retired_database_engine(monkeyp
 
 
 def test_initialize_live_database_creates_only_live_tables(tmp_path):
-    from zerg.services.live_catalog_projection import live_catalog_table_names
-
     engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
 
     initialize_live_database(engine)
@@ -239,7 +237,21 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "runner_jobs",
         "runners",
         "notification_events",
-    } | set(live_catalog_table_names())
+        "users",
+        "refresh_sessions",
+        "device_tokens",
+        "notification_client_presence",
+        "apns_device_registrations",
+        "apns_live_activity_registrations",
+        "apns_widget_push_states",
+        "live_session_catalog",
+        "live_timeline_cards",
+        "live_session_threads",
+        "live_session_thread_aliases",
+        "live_session_runs",
+        "live_session_connections",
+        "live_session_launch_attempts",
+    }
     assert "sessions" not in tables
     assert "agent_heartbeats" not in tables
     assert "events" not in tables

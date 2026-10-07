@@ -23,8 +23,6 @@ paths = [
   "LICENSE",
   "NOTICE",
   "server/tests_lite/**",
-  "server/zerg/tests/**",
-  "server/zerg/testing/**",
   "engine/tests/**",
   "e2e/**",
   "scripts/tests/**",

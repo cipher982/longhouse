@@ -747,7 +747,6 @@ def provision_live_catalog(
         monkeypatch.setenv("FERNET_SECRET", Fernet.generate_key().decode())
         monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(root / "objects-v2"))
         monkeypatch.delenv("CONTROL_PLANE_URL", raising=False)
-        monkeypatch.delenv("LONGHOUSE_TOOL_STUBS_PATH", raising=False)
 
         # The signing key is read once at import; align the module constants
         # with the environment so issuing and validating agree in this process.

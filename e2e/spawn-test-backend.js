@@ -65,7 +65,6 @@ if (await isPortOpen(BACKEND_PORT)) {
 
 const dbPath = path.join(runtime.dbDir, "e2e.db");
 const databaseUrl = `sqlite:///${dbPath}`;
-const toolStubsPath = join(__dirname, "fixtures", "tool-stubs.json");
 const workspacePath = path.join(runtime.root, "workspaces");
 const claudeConfigDir = path.join(runtime.root, "claude");
 fs.mkdirSync(workspacePath, { recursive: true });
@@ -94,7 +93,6 @@ const childEnv = safeChildEnvironment({
   LONGHOUSE_WORKSPACE_PATH: workspacePath,
   CLAUDE_CONFIG_DIR: claudeConfigDir,
   E2E_HATCH_PATH: join(__dirname, "bin", "hatch"),
-  LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,
   LONGHOUSE_SEARCH_PROJECTOR_WORKERS: "4",
   LOG_LEVEL: "WARNING",
   APP_PUBLIC_URL: "",
