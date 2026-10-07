@@ -59,7 +59,7 @@ def validate() -> list[str]:
         if not re.search(rf"^{constant} = {expected}$", python_text, re.MULTILINE):
             errors.append(f"Python projector {constant} differs from schema")
 
-    for name in ("activity", "run_lifecycle", "connection", "action"):
+    for name in ("activity", "run_lifecycle", "connection", "action", "signal"):
         values = enums.get(name)
         if not isinstance(values, list) or not values:
             errors.append(f"enum {name} must be a non-empty list")

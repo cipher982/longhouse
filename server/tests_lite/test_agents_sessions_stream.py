@@ -164,6 +164,8 @@ def test_canonical_machine_session_delta_carries_server_presentation_and_action_
     assert len(encoded) <= 2_048
     assert payload["authority"] == "runtime_host"
     assert payload["presentation"]["primary"]["key"] == "activity_unknown"
+    # The menu bar draws the served attention axis; it must not rebuild it.
+    assert payload["presentation"]["signal"] == {"state": "unknown", "valid_until": None}
     assert payload["presentation"]["access"]["key"] == "live_control"
     assert payload["control"]["actions"]["terminate"]["state"] == "available"
     assert payload["activity"]["state"] == "unknown"

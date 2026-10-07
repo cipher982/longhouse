@@ -896,6 +896,7 @@ def project_machine_session_delta(
                 "mode": state.mode,
                 "presentation": {
                     "primary": state.presentation.primary.model_dump(mode="json") if state.presentation.primary else None,
+                    "signal": state.presentation.signal.model_dump(mode="json"),
                     "access": state.presentation.access.model_dump(mode="json") if state.presentation.access else None,
                 },
                 "activity": state.activity.model_dump(

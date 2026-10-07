@@ -303,8 +303,25 @@ class SessionPresentationLabel(_FrozenModel):
     observed_at: datetime | None = None
 
 
+SignalState = Literal["attention", "working", "quiet", "unknown", "closed"]
+
+
+class SessionPresentationSignal(_FrozenModel):
+    """The one attention axis every client draws: row dot, rail, menu bar.
+
+    Decided here from the primary label, so a client never re-derives it from
+    activity, tone or keys. `valid_until` is the instant the claim's evidence
+    lapses; past it a reader shows `unknown` without waiting for a new frame.
+    Absent means the claim has no clock (a question, a closed session, idle).
+    """
+
+    state: SignalState
+    valid_until: datetime | None = None
+
+
 class SessionPresentation(_FrozenModel):
     primary: SessionPresentationLabel | None = None
+    signal: SessionPresentationSignal = Field(default_factory=lambda: SessionPresentationSignal(state="unknown"))
     access: SessionPresentationLabel | None = None
     transcript: SessionPresentationLabel | None = None
 
@@ -937,7 +954,12 @@ def assemble_session_state_facts(
         last_result_at=normalize_utc(last_console_result_at),
         last_result_outcome=_clean(last_console_result_outcome),
         last_user_input_at=normalize_utc(last_user_input_at),
-        presentation=SessionPresentation(primary=primary, access=access, transcript=transcript_label),
+        presentation=SessionPresentation(
+            primary=primary,
+            signal=_signal(primary=primary, activity=activity, delegation=delegation),
+            access=access,
+            transcript=transcript_label,
+        ),
         commit_seq=commit_seq,
     )
 
@@ -1239,6 +1261,49 @@ def _primary(
     return None
 
 
+_ATTENTION_TONES = frozenset({"blocked", "stalled"})
+_WORKING_TONES = frozenset({"running", "thinking", "active"})
+_QUIET_PRIMARY_KEYS = frozenset({"idle", "ready", "ended"})
+
+
+def _signal(
+    *,
+    primary: SessionPresentationLabel | None,
+    activity: SessionActivityFacts,
+    delegation: SessionDelegationFacts,
+) -> SessionPresentationSignal:
+    """Map the primary label onto the attention axis.
+
+    Attention is what the headline already says the user owes: a question, an
+    approval, a stall, a failed launch or run, a provider sign-in. A raw
+    provider block without a key is not attention, for the reason `_primary`
+    gives for having no `blocked` rung. Anything the headline cannot vouch
+    for -- imported history, expired or missing evidence -- is `unknown`, never
+    quiet: absence of evidence is not idleness.
+    """
+
+    if primary is None:
+        return SessionPresentationSignal(state="unknown")
+    if primary.key == "closed":
+        return SessionPresentationSignal(state="closed")
+    if primary.tone in _ATTENTION_TONES:
+        return SessionPresentationSignal(
+            state="attention",
+            valid_until=activity.valid_until if primary.key == "stalled" else None,
+        )
+    if primary.tone in _WORKING_TONES:
+        if primary.key == "delegated_work":
+            valid_until = delegation.valid_until
+        elif activity.state in {"thinking", "executing"}:
+            valid_until = activity.valid_until
+        else:
+            valid_until = None
+        return SessionPresentationSignal(state="working", valid_until=valid_until)
+    if primary.key in _QUIET_PRIMARY_KEYS:
+        return SessionPresentationSignal(state="quiet")
+    return SessionPresentationSignal(state="unknown")
+
+
 def _console_access(control: SessionControlFacts) -> SessionPresentationLabel | None:
     """Console's access question is "can Longhouse dispatch a turn here?".
 
@@ -1483,6 +1548,7 @@ __all__ = [
     "SessionPendingInteractionFacts",
     "SessionPresentation",
     "SessionPresentationLabel",
+    "SessionPresentationSignal",
     "SessionRunFacts",
     "SessionStateFacts",
     "SessionTranscriptFacts",

@@ -40,7 +40,6 @@ from zerg.dependencies.request_db import no_request_db
 from zerg.middleware.request_timeout import ARCHIVE_READ_TIMEOUT_SECONDS
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
-from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import MachinesSummaryResponse
 from zerg.schemas.machines import RecentModel
@@ -59,6 +58,7 @@ from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
+from zerg.services.machine_status import directory_entry_response
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.machines_summary import build_machines_summary
 from zerg.services.session_listing import SessionListingError
@@ -256,7 +256,7 @@ def list_browser_machines(
     except CatalogReadError as exc:
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     entries = build_machines_directory(owner_id=owner_id, enrollments=enrollments)
-    return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
+    return MachineDirectoryResponse(machines=[directory_entry_response(entry.to_response()) for entry in entries])
 
 
 @router.get("/machines/summary", response_model=MachinesSummaryResponse)

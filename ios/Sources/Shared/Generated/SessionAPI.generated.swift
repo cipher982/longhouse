@@ -383,8 +383,14 @@ struct APISessionPresentationLabel: Codable, Hashable, Sendable {
     let observedAt: String?
 }
 
+struct APISessionPresentationSignal: Codable, Hashable, Sendable {
+    let state: String
+    let validUntil: String?
+}
+
 struct APISessionPresentation: Codable, Hashable, Sendable {
     let primary: APISessionPresentationLabel?
+    let signal: APISessionPresentationSignal?
     let access: APISessionPresentationLabel?
     let transcript: APISessionPresentationLabel?
 }

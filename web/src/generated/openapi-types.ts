@@ -4956,6 +4956,8 @@ export interface components {
             };
             /** @description Canonical Console launch options and defaults for human clients. */
             launch: components["schemas"]["MachineLaunchProjection"];
+            /** @description Status from directory facts alone (no activity or sync). MachineSummary.status, which also knows what is live and whether the machine ships, supersedes it. */
+            status: components["schemas"]["MachineStatus"];
         };
         /** MachineDirectoryResponse */
         MachineDirectoryResponse: {
@@ -5488,12 +5490,39 @@ export interface components {
             /** @description Scope and freshness of the lexical index that was searched. A false `complete` means the projector has not finished, so hits and misses are not exhaustive. */
             coverage?: components["schemas"]["MachineSearchCoverage"] | null;
         };
+        /** MachineStatus */
+        MachineStatus: {
+            /**
+             * Tone
+             * @description Colour role: fault is reserved for something someone has to repair; ordinary offline is off.
+             * @enum {string}
+             */
+            tone: "live" | "attention" | "fault" | "quiet" | "idle" | "off";
+            /**
+             * Label
+             * @description Short status words, e.g. "9 live", "Codex signed out", "Offline".
+             */
+            label: string;
+            /**
+             * Hint
+             * @description One line a person can act on, or null.
+             */
+            hint?: string | null;
+            /**
+             * Quiet
+             * @description Offline and nothing started in the window: folded below the list.
+             * @default false
+             */
+            quiet: boolean;
+        };
         /** MachineSummary */
         MachineSummary: {
             machine: components["schemas"]["MachineDirectoryEntry"];
             activity: components["schemas"]["MachineActivity"];
             /** @description Null when no shipping heartbeat is on record in the last 30 days. */
             sync?: components["schemas"]["MachineSync"] | null;
+            /** @description The machine's status words and tone, from directory, activity and sync together. */
+            status: components["schemas"]["MachineStatus"];
         };
         /** MachineSync */
         MachineSync: {
@@ -7983,6 +8012,7 @@ export interface components {
         /** SessionPresentation */
         SessionPresentation: {
             primary?: components["schemas"]["SessionPresentationLabel"] | null;
+            signal?: components["schemas"]["SessionPresentationSignal"];
             access?: components["schemas"]["SessionPresentationLabel"] | null;
             transcript?: components["schemas"]["SessionPresentationLabel"] | null;
         };
@@ -7996,6 +8026,24 @@ export interface components {
             tone: string;
             /** Observed At */
             observed_at?: string | null;
+        };
+        /**
+         * SessionPresentationSignal
+         * @description The one attention axis every client draws: row dot, rail, menu bar.
+         *
+         *     Decided here from the primary label, so a client never re-derives it from
+         *     activity, tone or keys. `valid_until` is the instant the claim's evidence
+         *     lapses; past it a reader shows `unknown` without waiting for a new frame.
+         *     Absent means the claim has no clock (a question, a closed session, idle).
+         */
+        SessionPresentationSignal: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "attention" | "working" | "quiet" | "unknown" | "closed";
+            /** Valid Until */
+            valid_until?: string | null;
         };
         /**
          * SessionPreviewMessage

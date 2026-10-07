@@ -19,7 +19,6 @@ from uuid import UUID
 
 from zerg.schemas.machines import MachineActivity
 from zerg.schemas.machines import MachineActivityDay
-from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineHistorySync
 from zerg.schemas.machines import MachineProjectCount
 from zerg.schemas.machines import MachineSessionBrief
@@ -32,6 +31,8 @@ from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_activity
 from zerg.services.catalog_read_gateway import machine_heartbeats
 from zerg.services.live_catalog_timeline import read_live_catalog_sessions
+from zerg.services.machine_status import directory_entry_response
+from zerg.services.machine_status import machine_status
 from zerg.services.machines_directory import build_machines_directory
 
 LIVE_SESSIONS_SHOWN = 5
@@ -63,13 +64,15 @@ def build_machines_summary(*, owner_id: int, days: int, utc_offset_minutes: int)
 
     machines: list[MachineSummary] = []
     for entry in directory:
-        machine = MachineDirectoryEntry(**entry.to_response())
-        raw_activity = activity_by_device.get(machine.device_id)
+        machine = directory_entry_response(entry.to_response())
+        activity = _activity(activity_by_device.get(machine.device_id), calendar=calendar, owner_id=owner_id)
+        sync = _sync(sync_by_device.get(machine.device_id))
         machines.append(
             MachineSummary(
                 machine=machine,
-                activity=_activity(raw_activity, calendar=calendar, owner_id=owner_id),
-                sync=_sync(sync_by_device.get(machine.device_id)),
+                activity=activity,
+                sync=sync,
+                status=machine_status(machine, activity=activity, sync=sync),
             )
         )
     return MachinesSummaryResponse(

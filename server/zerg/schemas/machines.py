@@ -25,6 +25,15 @@ LaunchBlockedBy = Literal[
 ]
 
 
+class MachineStatus(UTCBaseModel):
+    tone: Literal["live", "attention", "fault", "quiet", "idle", "off"] = Field(
+        ..., description="Colour role: fault is reserved for something someone has to repair; ordinary offline is off."
+    )
+    label: str = Field(..., description='Short status words, e.g. "9 live", "Codex signed out", "Offline".')
+    hint: str | None = Field(default=None, description="One line a person can act on, or null.")
+    quiet: bool = Field(default=False, description="Offline and nothing started in the window: folded below the list.")
+
+
 class MachineDirectoryEntry(UTCBaseModel):
     device_id: str = Field(..., description="Canonical device id used for routing")
     machine_name: str = Field(..., description="Display label; may equal device_id")
@@ -69,6 +78,13 @@ class MachineDirectoryEntry(UTCBaseModel):
     launch: "MachineLaunchProjection" = Field(
         ...,
         description="Canonical Console launch options and defaults for human clients.",
+    )
+    status: MachineStatus = Field(
+        ...,
+        description=(
+            "Status from directory facts alone (no activity or sync). MachineSummary.status, "
+            "which also knows what is live and whether the machine ships, supersedes it."
+        ),
     )
 
 
@@ -159,6 +175,7 @@ class MachineSummary(UTCBaseModel):
     machine: MachineDirectoryEntry
     activity: MachineActivity
     sync: MachineSync | None = Field(default=None, description="Null when no shipping heartbeat is on record in the last 30 days.")
+    status: MachineStatus = Field(..., description="The machine's status words and tone, from directory, activity and sync together.")
 
 
 class MachinesSummaryResponse(UTCBaseModel):

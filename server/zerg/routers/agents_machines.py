@@ -24,7 +24,6 @@ from zerg.models.device_token import DeviceToken
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
 from zerg.schemas.machines import ArchiveBacklogResponse
-from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import MachineRenameRequest
 from zerg.schemas.machines import MachineRenameResponse
@@ -45,6 +44,7 @@ from zerg.services.catalog_read_gateway import machine_models
 from zerg.services.catalog_read_gateway import machine_workspaces
 from zerg.services.catalog_read_gateway import rename_machine
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.machine_status import directory_entry_response
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.machines_summary import build_machines_summary
 from zerg.services.observability_views import build_machine_health_list_response
@@ -86,7 +86,7 @@ def list_machines(
     except CatalogReadError as exc:
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     entries = build_machines_directory(owner_id=owner_id, enrollments=enrollments)
-    return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
+    return MachineDirectoryResponse(machines=[directory_entry_response(entry.to_response()) for entry in entries])
 
 
 @router.get("/summary", response_model=MachinesSummaryResponse)

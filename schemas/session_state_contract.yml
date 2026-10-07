@@ -27,6 +27,13 @@ enums:
     - available
     - unavailable
     - unknown
+  # presentation.signal.state: the one attention axis clients draw.
+  signal:
+    - attention
+    - working
+    - quiet
+    - unknown
+    - closed
   action_reason:
     - unsupported
     - observe_only
