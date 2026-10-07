@@ -311,17 +311,23 @@ class Landed:
     Anything else reviewed a proposal that was discarded or did not land as reviewed (see
     Receipts.counts for what such a receipt may still say)."""
 
-    def __init__(self, repo: str | Path, tips: list[str], excludes: list[str]):
+    def __init__(self, repo: str | Path, tips: list[str], excludes: list[str], targets: list[str] | None = None):
         self.repo = repo
         self.tips = list(dict.fromkeys(t for t in tips if t))
         self.excludes = [e for e in excludes if e]
+        # The history being judged (the range's own positive ends), without the remote mains a receipt's
+        # head may have landed on later: a fix only counts for a target that contains it.
+        self.targets = list(dict.fromkeys(t for t in (targets if targets is not None else tips) if t))
         self._shas: set[str] | None = None
         self._patches: set[str] | None = None
+        self._target_patches: set[str] | None = None
         self._memo: dict[tuple[str, str | None], bool] = {}
+        self._target_memo: dict[tuple[str, str | None], bool] = {}
 
     @classmethod
     def for_range(cls, repo: str | Path, base: str | None, head: str) -> "Landed":
-        return cls(repo, [resolve(repo, head), *remote_main_shas(repo)], [base] if base else [])
+        target = resolve(repo, head)
+        return cls(repo, [target, *remote_main_shas(repo)], [base] if base else [], [target])
 
     @classmethod
     def for_revs(cls, repo: str | Path, revs: list[str]) -> "Landed":
@@ -350,7 +356,7 @@ class Landed:
                 tips += git(repo, "for-each-ref", "--format=%(objectname)", rev.removeprefix("--glob="), check=False).split()
             else:
                 tips.append(resolve(repo, rev))
-        return cls(repo, [*tips, *remote_main_shas(repo)], excludes)
+        return cls(repo, [*tips, *remote_main_shas(repo)], excludes, tips)
 
     def _range_args(self) -> list[str]:
         return [*self.tips, *(["--not", *self.excludes] if self.excludes else [])]
@@ -360,15 +366,30 @@ class Landed:
             self._shas = set(git(self.repo, "rev-list", *self._range_args(), check=False).split())
         return self._shas
 
+    def _patch_ids(self, args: list[str]) -> set[str]:
+        # Same diff options as Commit.patch_id, so a patch-id matches whichever way it was computed.
+        log = git(self.repo, "log", "--no-merges", "--no-color", "--no-ext-diff", "--no-renames", "-p", *args, check=False)
+        out = git(self.repo, "patch-id", "--stable", stdin=log, check=False) if log.strip() else ""
+        return {line.split()[0] for line in out.splitlines() if line.split()}
+
     def patches(self) -> set[str]:
         """Stable patch-ids of the range's commits, computed once and only when a head is not found by SHA."""
         if self._patches is None:
-            # Same diff options as Commit.patch_id, so a patch-id matches whichever way it was computed.
-            log = git(self.repo, "log", "--no-merges", "--no-color", "--no-ext-diff", "--no-renames", "-p",
-                      *self._range_args(), check=False)
-            out = git(self.repo, "patch-id", "--stable", stdin=log, check=False) if log.strip() else ""
-            self._patches = {line.split()[0] for line in out.splitlines() if line.split()}
+            self._patches = self._patch_ids(self._range_args())
         return self._patches
+
+    def in_targets(self, sha: str | None, patch_id: str | None) -> bool:
+        """Whether a commit (by SHA, or by patch after a rebase) is in the judged targets' own history."""
+        key = (sha or "", patch_id)
+        if key not in self._target_memo:
+            found = bool(sha) and any(git_ok(self.repo, "merge-base", "--is-ancestor", sha, t) for t in self.targets)
+            if not found and patch_id and self.targets:
+                if self._target_patches is None:
+                    self._target_patches = self._patch_ids(
+                        [*self.targets, *(["--not", *self.excludes] if self.excludes else [])])
+                found = patch_id in self._target_patches
+            self._target_memo[key] = found
+        return self._target_memo[key]
 
     def holds(self, sha: str, patch_id: str | None) -> bool:
         key = (sha, patch_id)
@@ -384,7 +405,7 @@ def _default_landed(repo: str | Path, commits: list[Commit]) -> Landed:
     """For a caller that names only commits: their own history down to the first one's parents."""
     first = commits[0].sha if commits else None
     parents = git(repo, "rev-list", "--parents", "-n", "1", first).split()[1:] if first else []
-    return Landed(repo, [*(c.sha for c in commits), *remote_main_shas(repo)], parents)
+    return Landed(repo, [*(c.sha for c in commits), *remote_main_shas(repo)], parents, [c.sha for c in commits])
 
 
 def _head_patch(receipt: dict) -> str | None:
@@ -502,15 +523,24 @@ class Receipts:
         keys = self.about(r, finding)
         return commit.sha in keys or (not commit.merge and (commit.patch_id(self.repo) or "") in keys)
 
-    def reads_fix(self, old: dict, finding: dict, later: dict) -> bool:
-        """Whether `later` reviewed a fix of `old`'s finding: a commit `old` did not see that changes the
-        finding's file, or, when the finding names no file `old`'s commits changed, a head past all of them."""
+    def fixes(self, old: dict, finding: dict, later: dict) -> list[dict]:
+        """The commits by which `later` reviewed a fix of `old`'s finding: those `old` did not see that change
+        the finding's file, or, when the finding names no file `old`'s commits changed, `later`'s head when it
+        is past all of them. Empty when `later` read no fix."""
         seen = _keys(old.get("commits") or [])
         new = [c for c in later.get("commits") or [] if not _keys([c]) & seen]
         path = finding_path(finding.get("where"))
         if path and any(path in (self._entry_files(old, c) or []) for c in old.get("commits") or []):
-            return any(path in (self._entry_files(later, c) or []) for c in new)
-        return bool(new) and not ({later.get("head"), _head_patch(later)} - {None}) & seen
+            return [c for c in new if path in (self._entry_files(later, c) or [])]
+        if not new or ({later.get("head"), _head_patch(later)} - {None}) & seen:
+            return []
+        head = next((c for c in new if c.get("sha") == later.get("head")), new[-1])
+        return [head]
+
+    def reads_fix(self, old: dict, finding: dict, later: dict) -> bool:
+        """Whether `later` read a fix of the finding that the judged target contains. A review whose head
+        landed on main after the target may have read a fix the target does not have; that supersedes nothing."""
+        return any(self.landed.in_targets(c.get("sha"), c.get("patch_id")) for c in self.fixes(old, finding, later))
 
     def blocking(self, commit: Commit, covering: list[dict]) -> list[tuple[dict, dict]]:
         """(receipt, finding) pairs still open about this commit and not superseded."""

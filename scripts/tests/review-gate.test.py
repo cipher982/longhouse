@@ -889,6 +889,17 @@ class PromotionRuleTests(unittest.TestCase):
         self.assertEqual(self.promote(), [])
         self.assertNotIn(old, [r for v in self.promote() for r in v.reasons])
 
+    def test_a_fix_on_main_does_not_supersede_a_finding_for_a_target_without_the_fix(self):
+        # 2026-10-07 (review rv-20261007T200905Z-457bb43-0f3d F1): the clean review read the fix and its head
+        # landed on main, but a promotion of the older x does not contain the fix, so x stays blocked.
+        x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
+        self.repo.receipt(self.served, x, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
+        fix = self.repo.commit("fix x", {"server/zerg/x.py": "2"})
+        self.repo.receipt(self.served, fix)  # x with its fix, clean
+        self.repo.git("update-ref", "refs/remotes/origin/main", fix)
+        self.assertEqual([v.commit.sha for v in self.promote(target=x)], [x])
+        self.assertEqual(self.promote(target=fix), [])
+
     def test_a_later_clean_review_that_reads_no_change_to_the_findings_file_does_not_supersede(self):
         x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
         self.repo.receipt(self.served, x, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
