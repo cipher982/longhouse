@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
@@ -29,6 +29,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::console_adapter::{stderr_tail, ClaimLiveness, ConsoleSteerOutcome};
+use crate::console_sink::{ConsoleProvider, ConsoleRun};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::opencode_server::{HttpStatusError, OpenCodeServer};
@@ -83,17 +84,28 @@ pub struct OpenCodeRunSummary {
 
 #[derive(Clone)]
 struct OpenCodeRunSink {
-    session_id: String,
-    thread_id: String,
-    turn_id: Option<String>,
-    run_id: String,
-    client_request_id: Option<String>,
+    run: ConsoleRun,
     expected_provider_thread_id: Option<String>,
-    launch_id: String,
-    process_group_id: Option<i32>,
-    machine_name: String,
-    local_db_path: Option<PathBuf>,
-    runtime_events_outbox_dir: PathBuf,
+}
+
+static OPENCODE_CONSOLE: ConsoleProvider = ConsoleProvider {
+    provider: "opencode",
+    adapter: OPENCODE_RUN_ADAPTER,
+    tag: "opencode-run",
+    lifetime: "one_shot",
+};
+
+impl std::ops::Deref for OpenCodeRunSink {
+    type Target = ConsoleRun;
+    fn deref(&self) -> &ConsoleRun {
+        &self.run
+    }
+}
+
+impl std::ops::DerefMut for OpenCodeRunSink {
+    fn deref_mut(&mut self) -> &mut ConsoleRun {
+        &mut self.run
+    }
 }
 
 /// What a restarted engine needs to reconnect to a turn, kept (0600, in the
@@ -882,17 +894,20 @@ async fn start_reserved_turn(
         }
     };
     let sink = OpenCodeRunSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
+        run: ConsoleRun {
+            provider: &OPENCODE_CONSOLE,
+            session_id: config.session_id.clone(),
+            thread_id: config.thread_id.clone(),
+            turn_id: config.turn_id.clone(),
+            run_id: config.run_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            launch_id: launch_id.clone(),
+            process_group_id: Some(process_group_id),
+            machine_name: config.machine_name.clone(),
+            local_db_path: config.local_db_path.clone(),
+            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        },
         expected_provider_thread_id: resume_provider_thread_id.clone(),
-        launch_id: launch_id.clone(),
-        process_group_id: Some(process_group_id),
-        machine_name: config.machine_name.clone(),
-        local_db_path: config.local_db_path.clone(),
-        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     };
     let turn_config = config.clone();
     tokio::spawn(async move {
@@ -1440,17 +1455,20 @@ pub async fn recover_opencode_run_turns(
             continue;
         };
         let sink = OpenCodeRunSink {
-            session_id: claim.session_id.clone(),
-            thread_id: claim.thread_id.clone(),
-            turn_id: claim.turn_id.clone(),
-            run_id: claim.run_id.clone(),
-            client_request_id: claim.client_request_id.clone(),
+            run: ConsoleRun {
+                provider: &OPENCODE_CONSOLE,
+                session_id: claim.session_id.clone(),
+                thread_id: claim.thread_id.clone(),
+                turn_id: claim.turn_id.clone(),
+                run_id: claim.run_id.clone(),
+                client_request_id: claim.client_request_id.clone(),
+                launch_id: claim.launch_id.clone().unwrap_or_default(),
+                process_group_id: claim.process_group_id,
+                machine_name: machine_name.to_string(),
+                local_db_path: local_db_path.clone(),
+                runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+            },
             expected_provider_thread_id: claim.provider_thread_id.clone(),
-            launch_id: claim.launch_id.clone().unwrap_or_default(),
-            process_group_id: claim.process_group_id,
-            machine_name: machine_name.to_string(),
-            local_db_path: local_db_path.clone(),
-            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
         match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
             ClaimLiveness::Live => {
@@ -2337,45 +2355,28 @@ fn rollback_binding(root: &Path, session_id: &str, launch_id: &str) {
 
 impl OpenCodeRunSink {
     async fn post_binding(&self, provider_thread_id: &str) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("opencode:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "opencode",
-            "device_id": self.machine_name,
-            "source": OPENCODE_RUN_ADAPTER,
-            "kind": "binding_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("opencode-run:{}:{}:binding", self.session_id, self.launch_id),
-            "payload": {
-                "provider_session_id": provider_thread_id,
-                "managed_transport": OPENCODE_RUN_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+        self.post_event(&self.binding_event(json!({
+            "provider_session_id": provider_thread_id,
+        })));
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
+        // OpenCode reports phases on the durable queue, not a status slot.
         let observed_at = Utc::now();
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("opencode:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "opencode",
-            "device_id": self.machine_name,
-            "source": OPENCODE_RUN_ADAPTER,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("opencode-run:{}:{}:phase:{phase}", self.session_id, self.run_id),
-            "payload": {"managed_transport": OPENCODE_RUN_ADAPTER, "execution_lifetime": "one_shot"}
-        })])
-        .await;
+        self.persist_local_phase(phase, tool_name.as_deref(), observed_at);
+        let mut event = self.event(
+            OPENCODE_RUN_ADAPTER,
+            "phase_signal",
+            observed_at.to_rfc3339(),
+            format!(
+                "opencode-run:{}:{}:phase:{phase}",
+                self.session_id, self.run_id
+            ),
+            self.with_transport(json!({})),
+        );
+        event["phase"] = json!(phase);
+        event["tool_name"] = json!(tool_name);
+        self.post_event(&event);
     }
 
     async fn post_stream_event(&self, seq: u64, event: Value, provider_thread_id: Option<&str>) {
@@ -2399,18 +2400,10 @@ impl OpenCodeRunSink {
             )
             .await;
         }
-        self.post_events(vec![json!({
-            "runtime_key": format!("opencode:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "opencode",
-            "device_id": self.machine_name,
-            "source": OPENCODE_RUN_ADAPTER,
-            "kind": "progress_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("opencode-run:{}:{}:stdout:{seq}", self.session_id, self.run_id),
-            "payload": {
+        self.post_event(&self.run_event(
+            "progress_signal",
+            &format!("stdout:{seq}"),
+            self.with_transport(json!({
                 "progress_kind": "opencode_run_stream",
                 "seq": seq,
                 "thread_id": self.thread_id,
@@ -2418,11 +2411,8 @@ impl OpenCodeRunSink {
                 "client_request_id": self.client_request_id,
                 "provider_thread_id": provider_thread_id,
                 "event": event,
-                "managed_transport": OPENCODE_RUN_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+            })),
+        ));
     }
 
     async fn post_terminal(
@@ -2440,67 +2430,10 @@ impl OpenCodeRunSink {
                 .flatten(),
         );
         self.persist_local_phase("finished", None, Utc::now());
-        self.post_events(vec![json!({
-            "runtime_key": format!("opencode:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "opencode",
-            "device_id": self.machine_name,
-            "source": OPENCODE_RUN_ADAPTER,
-            "kind": "terminal_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("opencode-run:{}:{}:terminal", self.session_id, self.run_id),
-            "payload": {
-                "managed_transport": OPENCODE_RUN_ADAPTER,
-                "execution_lifetime": "one_shot",
-                "terminal_state": terminal_state,
-                "terminal_reason": terminal_state,
-                "terminal_source": OPENCODE_RUN_ADAPTER,
-                "exit_code": exit_code,
-                "stderr_tail": error,
-                "turn_id": self.turn_id,
-                "client_request_id": self.client_request_id,
-                "provider_thread_id": provider_thread_id
-            }
-        })])
-        .await;
-    }
-
-    fn persist_local_phase(
-        &self,
-        phase: &str,
-        tool_name: Option<String>,
-        observed_at: DateTime<Utc>,
-    ) {
-        let Some(db_path) = self.local_db_path.as_deref() else {
-            return;
-        };
-        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
-            db_path,
-            &self.session_id,
-            "opencode",
-            phase,
-            tool_name.as_deref(),
-            OPENCODE_RUN_ADAPTER,
-            &observed_at.to_rfc3339(),
-            Some(self.run_id.as_str()),
-        ) {
-            eprintln!(
-                "[opencode-run] enqueue local phase failed for {}: {err}",
-                self.session_id
-            );
-        }
-    }
-
-    async fn post_events(&self, events: Vec<Value>) {
-        for event in events {
-            if let Err(error) =
-                crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event)
-            {
-                eprintln!("[opencode-run] runtime outbox write failed: {error}");
-            }
-        }
+        let mut payload =
+            self.terminal_payload(terminal_state, terminal_state, exit_code, error.as_deref());
+        payload["provider_thread_id"] = json!(provider_thread_id);
+        self.post_event(&self.run_event("terminal_signal", "terminal", payload));
     }
 }
 
@@ -2511,17 +2444,20 @@ mod tests {
     fn golden_opencode_sink(home: &crate::console_sink::golden::GoldenHome) -> OpenCodeRunSink {
         use crate::console_sink::golden::*;
         OpenCodeRunSink {
-            session_id: SESSION.to_string(),
-            thread_id: THREAD.to_string(),
-            turn_id: Some(TURN.to_string()),
-            run_id: RUN.to_string(),
-            client_request_id: Some(CLIENT_REQUEST.to_string()),
+            run: ConsoleRun {
+                provider: &OPENCODE_CONSOLE,
+                session_id: SESSION.to_string(),
+                thread_id: THREAD.to_string(),
+                turn_id: Some(TURN.to_string()),
+                run_id: RUN.to_string(),
+                client_request_id: Some(CLIENT_REQUEST.to_string()),
+                launch_id: LAUNCH.to_string(),
+                process_group_id: None,
+                machine_name: MACHINE.to_string(),
+                local_db_path: Some(home.local_db()),
+                runtime_events_outbox_dir: home.outbox(),
+            },
             expected_provider_thread_id: Some(PROVIDER_THREAD.to_string()),
-            launch_id: LAUNCH.to_string(),
-            process_group_id: None,
-            machine_name: MACHINE.to_string(),
-            local_db_path: Some(home.local_db()),
-            runtime_events_outbox_dir: home.outbox(),
         }
     }
 
