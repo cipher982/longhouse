@@ -48,8 +48,7 @@ def _seed_missing(db, *, provider_session_id, session_id, observed_at):
     )
 
 
-def test_local_health_section_omits_orm_and_reports_unavailable(tmp_path):
-    # local-health must use its own guarded sqlite3 path, never the ORM.
+def test_local_health_reports_unavailable_without_an_agent_db(tmp_path):
     missing_dir = tmp_path / "no-such-home"
     result = local_health._collect_provider_binding_diagnostics(missing_dir, now=NOW)
     assert result["status"] == "unavailable"
@@ -72,6 +71,15 @@ def test_local_health_reader_cutoff_matches_sqlalchemy_storage(tmp_path):
     try:
         # Inside the 7-day window (2 days old) -> must be counted.
         _seed_missing(db, provider_session_id="ses_recent", session_id=uuid4(), observed_at=NOW - timedelta(days=2))
+        # On the cutoff date, one hour inside the window. Stored as
+        # 'YYYY-MM-DD HH:MM:SS'; a lexical compare against the ISO cutoff
+        # ('YYYY-MM-DDTHH:MM:SS+00:00') sorts ' ' before 'T' and drops it.
+        _seed_missing(
+            db,
+            provider_session_id="ses_boundary",
+            session_id=uuid4(),
+            observed_at=NOW - timedelta(days=7) + timedelta(hours=1),
+        )
         # Outside the window (30 days old) -> must be excluded.
         _seed_missing(db, provider_session_id="ses_old", session_id=uuid4(), observed_at=NOW - timedelta(days=30))
         db.commit()
@@ -80,5 +88,5 @@ def test_local_health_reader_cutoff_matches_sqlalchemy_storage(tmp_path):
 
     result = local_health._collect_provider_binding_diagnostics(base_dir, now=NOW)
     assert result["status"] == "ok"
-    assert result["missing_count"] == 1
-    assert result["affected_provider_session_ids"] == ["ses_recent"]
+    assert result["missing_count"] == 2
+    assert sorted(result["affected_provider_session_ids"]) == ["ses_boundary", "ses_recent"]
