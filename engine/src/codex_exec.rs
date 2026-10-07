@@ -2512,7 +2512,12 @@ async fn run_app_server_turn(
                     return Err(anyhow::Error::new(CodexTurnInterrupted));
                 }
                 if status != "completed" {
-                    anyhow::bail!("Codex turn ended with status {status}");
+                    match json_string(&value, &["params", "turn", "error", "message"]) {
+                        Some(message) => {
+                            anyhow::bail!("Codex turn ended with status {status}: {message}")
+                        }
+                        None => anyhow::bail!("Codex turn ended with status {status}"),
+                    }
                 }
                 if let Some(path) = thread_path {
                     sink.wake_transcript_shipper(path, &completed_turn_id, "turn_completed")

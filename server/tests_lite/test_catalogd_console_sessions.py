@@ -1142,6 +1142,84 @@ def test_console_run_terminal_settles_turn_run_and_fifo_in_one_runtime_transacti
         assert db.get(LiveSessionRun, first["run_id"]).exit_status == "exit_0"
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_error"),
+    [
+        (
+            {"terminal_state": "run_failed", "stderr_tail": "Codex turn ended with status failed: 401 Unauthorized"},
+            "run_failed: Codex turn ended with status failed: 401 Unauthorized",
+        ),
+        ({"terminal_state": "run_failed"}, "run_failed"),
+    ],
+)
+def test_console_run_failure_keeps_the_adapter_reason(tmp_path, payload, expected_error):
+    """A failed turn names why: a bare "run_failed" hid a Codex 401 on 2026-10-07."""
+
+    engine = create_catalog_engine(tmp_path / "console-failure.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    session_id, thread_id = uuid4(), uuid4()
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.commit()
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "codex",
+            "device_id": "cinder",
+            "cwd": "/tmp/longhouse",
+            "project": "longhouse",
+            "started_at": datetime.now(UTC),
+        }
+    )
+    turn = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "hello",
+            "client_request_id": "failure-1",
+            "created_at": datetime.now(UTC),
+        }
+    )["turn"]
+    store.update_console_turn(
+        data={
+            "owner_id": 1,
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "provider": "codex",
+            "device_id": "cinder",
+            "turn_id": turn["turn_id"],
+            "run_id": turn["run_id"],
+            "state": "active",
+            "expected_state": "starting",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    store.apply_session_runtime(
+        events=[
+            RuntimeEventIngest(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                thread_id=thread_id,
+                run_id=turn["run_id"],
+                provider="codex",
+                device_id="cinder",
+                source="codex_app_server",
+                kind="terminal_signal",
+                occurred_at=datetime.now(UTC) + timedelta(seconds=1),
+                dedupe_key=f"codex-exec:{session_id}:{turn['run_id']}:terminal",
+                payload=payload,
+            )
+        ]
+    )
+    with Session(engine) as db:
+        settled = db.get(LiveConsoleTurn, turn["turn_id"])
+        assert settled.state == "failed"
+        assert settled.error == expected_error
+
+
 def _seed_console_wake_target(engine, store, *, session_id, thread_id, provider_thread_id="provider-thread-1"):
     now = datetime.now(UTC)
     with Session(engine) as db:
