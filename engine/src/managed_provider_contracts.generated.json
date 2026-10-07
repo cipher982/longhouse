@@ -4904,5 +4904,27 @@
         }
       }
     }
+  ],
+  "operations": [
+    "launch_local",
+    "run_once",
+    "reattach",
+    "send_input",
+    "interrupt",
+    "steer_active_turn",
+    "answer_pause",
+    "terminate",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
+    "turn_start",
+    "fork_thread"
+  ],
+  "evidence_levels": [
+    "hermetic",
+    "live_no_token",
+    "live_token",
+    "none",
+    "source_review"
   ]
 }

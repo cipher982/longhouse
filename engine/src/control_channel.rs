@@ -114,11 +114,12 @@ const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
 static MANAGED_PROVIDER_CONTRACTS: OnceLock<Value> = OnceLock::new();
 
+/// Every launchable provider takes Console turns; the manifest check below
+/// fails if the schema ever declares one that does not.
 fn console_turn_provider_supported(provider: &str) -> bool {
-    matches!(
-        provider,
-        "codex" | "cursor" | "opencode" | "claude" | "pi" | "omp" | "antigravity"
-    )
+    crate::managed_identity_contract::ALL_MANAGED_PROVIDERS
+        .iter()
+        .any(|managed| managed.as_str() == provider)
 }
 
 fn console_provider_binary_with_env(
@@ -411,32 +412,16 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
         .get("providers")
         .and_then(Value::as_array)
         .ok_or_else(|| "providers[] missing".to_string())?;
-    let operations = [
-        "launch_local",
-        "run_once",
-        "reattach",
-        "send_input",
-        "interrupt",
-        "steer_active_turn",
-        "answer_pause",
-        "turn_start",
-        // Forking a thread is its own provider surface, not implied by the
-        // ability to resume one. The engine validates the manifest it is handed,
-        // so an operation the schema declares has to be known here too.
-        "fork_thread",
-        "terminate",
-        "tail_output",
-        "runtime_phase",
-        "transcript_binding",
-        "fork_thread",
-    ];
-    let evidence_levels = [
-        "none",
-        "source_review",
-        "hermetic",
-        "live_no_token",
-        "live_token",
-    ];
+    // Generated from the server's CONTRACT_OPERATIONS and evidence levels.
+    let vocabulary = |key: &str| -> Result<Vec<&str>, String> {
+        payload
+            .get(key)
+            .and_then(Value::as_array)
+            .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+            .ok_or_else(|| format!("{key}[] missing"))
+    };
+    let operations = vocabulary("operations")?;
+    let evidence_levels = vocabulary("evidence_levels")?;
     for provider in providers {
         let provider_name = provider
             .get("provider")
@@ -453,7 +438,7 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
                 ));
             }
         }
-        for operation in operations {
+        for &operation in &operations {
             let supported = provider
                 .get(operation)
                 .and_then(Value::as_bool)

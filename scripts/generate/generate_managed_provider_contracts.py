@@ -25,6 +25,8 @@ ENGINE_OMITTED_KEYS = frozenset({"adapter_digest", "oracle_digest"})
 
 sys.path.insert(0, str(ROOT / "server"))
 
+from zerg.managed_provider_contract_manifest import _OPERATION_EVIDENCE_LEVELS  # noqa: E402
+from zerg.managed_provider_contract_manifest import CONTRACT_OPERATIONS  # noqa: E402
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest  # noqa: E402
 from zerg.managed_provider_contract_manifest import render_contract_manifest_json  # noqa: E402
 
@@ -52,7 +54,12 @@ def _without_digests(value):
 
 
 def _render_engine_json(rendered: str) -> str:
-    return json.dumps(_without_digests(json.loads(rendered)), indent=2, ensure_ascii=False) + "\n"
+    payload = _without_digests(json.loads(rendered))
+    # The vocabulary the engine validates the manifest against, from the same
+    # Python authority that validates it server-side, instead of a Rust copy.
+    payload["operations"] = list(CONTRACT_OPERATIONS)
+    payload["evidence_levels"] = sorted(_OPERATION_EVIDENCE_LEVELS)
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
 def main() -> int:
