@@ -530,11 +530,11 @@ describe("SessionsPage", () => {
     const user = userEvent.setup();
     renderSessionsPage("/timeline");
 
-    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, false, false);
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(null, false, false);
 
     await user.click(screen.getByRole("button", { name: "Filters" }));
 
-    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, true, false);
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(null, true, false);
   });
 
   it("does not render a redundant timeline page heading above the toolbar", async () => {

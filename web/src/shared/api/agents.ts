@@ -1327,11 +1327,13 @@ export async function respondToPauseRequest(
  * Get distinct filter values for dropdowns.
  */
 export async function fetchAgentFilters(
-  daysBack: number = 90,
+  daysBack: number | null = null,
   includeHidden: boolean = false,
 ): Promise<AgentFiltersResponse> {
   const query = new URLSearchParams();
-  query.set("days_back", String(daysBack));
+  // No range: the server uses the listing's own default window, which
+  // covers a whole demo corpus.
+  if (daysBack !== null) query.set("days_back", String(daysBack));
   if (includeHidden) query.set("include_hidden", "true");
   return request<AgentFiltersResponse>(
     `${TIMELINE_API_PREFIX}/filters?${query.toString()}`,

@@ -64,7 +64,6 @@ const PAGE_SIZE = 50;
 // so "Load More" can't page past 100. Keep this in sync with that clamp and the
 // API cap so the button hides instead of dead-ending.
 const MAX_SESSION_LIMIT = 100;
-const DEFAULT_DAYS_BACK = 14;
 const TIMELINE_RECONCILIATION_MS = 120_000;
 const DEFAULT_SORT_ORDER = "relevant";
 const SESSION_WORKSPACE_PREFETCH_LIMIT = 200;
@@ -190,7 +189,7 @@ export default function SessionsPage() {
   const lastTimelineScrollAtRef = useRef(0);
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(
-    daysBack ?? DEFAULT_DAYS_BACK,
+    daysBack,
     popoverOpen,
     includeHidden
   );
