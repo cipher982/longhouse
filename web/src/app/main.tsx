@@ -4,6 +4,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router";
 import config from "@/shared/lib/config";
 import { shouldRetryQuery } from "./queryRetry";
+import { isDocsPath, loadDocsRoutes } from "./routeChunks";
 
 // Global stylesheet entrypoint
 import "./styles/app.css";
@@ -164,12 +165,21 @@ const app = (
 // Marketing routes ship as prerendered HTML (web/scripts/prerender.mjs): adopt
 // that DOM instead of rebuilding it. Everywhere else the root is empty.
 if (container.hasChildNodes()) {
-  ReactDOM.hydrateRoot(container, app, {
-    // A hydration mismatch is a prerender bug that tests/prerender catches, not
-    // a user-facing fault: keep it out of window.onerror, which beacons every
-    // uncaught error to /api/ops/beacon.
-    onRecoverableError: (error) => console.warn("[hydrate]", error),
-  });
+  const hydrate = () =>
+    ReactDOM.hydrateRoot(container, app, {
+      // A hydration mismatch is a prerender bug that tests/prerender catches, not
+      // a user-facing fault: keep it out of window.onerror, which beacons every
+      // uncaught error to /api/ops/beacon.
+      onRecoverableError: (error) => console.warn("[hydrate]", error),
+    });
+  // The docs are a lazy chunk the page's <head> already modulepreloads: have
+  // it in hand before hydrating so React adopts the static page in one pass.
+  // A failed load hydrates anyway, and the lazy route handles the failure.
+  if (isDocsPath(window.location.pathname)) {
+    void loadDocsRoutes().then(hydrate, hydrate);
+  } else {
+    hydrate();
+  }
 } else {
   ReactDOM.createRoot(container).render(app);
 }

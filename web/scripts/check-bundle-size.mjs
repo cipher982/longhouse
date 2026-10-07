@@ -35,6 +35,12 @@ const distAssetsDir = path.join(distDir, 'assets');
 // from 146.3 on 2026-09-25. Budget = 147.8 + 12 = 159.8, rounded up to 160:
 // room for a handful of new docs pages (about 2.5 KiB each) but not for
 // react-markdown (about 30) or dnd-kit (about 28) to join the entry.
+// Re-measured 2026-10-07: 156.6 KiB (CI run 37620607114), one docs page from
+// the limit. The docs then left the entry for one lazy chunk of their own
+// (features/marketing/docs/DocsRoutes.tsx: 16.8 KiB JS + 1.6 KiB CSS, linked
+// only into prerendered docs pages): 141.1 KiB, index -15.7, ui -0.2, and a
+// 0.5 KiB shared useScrollActivity chunk. Budget unchanged; new docs pages now
+// grow the docs chunk, not the entry.
 const budgets = {
   jsTotalGzip: 490 * 1024,
   entryGzip: 160 * 1024,

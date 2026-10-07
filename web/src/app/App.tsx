@@ -5,15 +5,6 @@ import LandingPage from "@/features/marketing/landing/LandingPage";
 import BlogIndexPage from "@/features/marketing/blog/BlogIndexPage";
 import ProviderIntegrationsPostPage from "@/features/marketing/blog/ProviderIntegrationsPostPage";
 import LoginPage from "@/features/auth/LoginPage";
-import DocsLayout from "@/features/marketing/docs/DocsLayout";
-import DocsOverviewPage from "@/features/marketing/docs/OverviewPage";
-import DocsQuickStartPage from "@/features/marketing/docs/QuickStartPage";
-import DocsSearchPage from "@/features/marketing/docs/SearchPage";
-import DocsRemoteControlPage from "@/features/marketing/docs/RemoteControlPage";
-import DocsCLIReferencePage from "@/features/marketing/docs/CLIReferencePage";
-import DocsMachineAPIPage from "@/features/marketing/docs/MachineAPIPage";
-import DocsIntegrationsPage from "@/features/marketing/docs/IntegrationsPage";
-import DocsConfigurationPage from "@/features/marketing/docs/ConfigurationPage";
 import ChangelogPage from "@/features/marketing/legal/ChangelogPage";
 import PrivacyPage from "@/features/marketing/legal/PrivacyPage";
 import SecurityPage from "@/features/marketing/legal/SecurityPage";
@@ -26,7 +17,7 @@ import {
 } from "./usePerformance";
 import config from "@/shared/lib/config";
 import { Spinner } from "@/shared/ui/Spinner";
-import { loadMachinesPage, loadSessionDetailPage } from "./routeChunks";
+import { loadDocsRoutes, loadMachinesPage, loadSessionDetailPage } from "./routeChunks";
 
 // Pages behind the app shell load on demand. Anonymous visitors to the
 // landing, docs and legal pages never download them, or the markdown, syntax
@@ -39,18 +30,23 @@ const MachineDetailPage = lazy(() => import("@/features/machines/MachineDetailPa
 const RunnerDetailPage = lazy(() => import("@/features/runners/RunnerDetailPage"));
 const SessionsPage = lazy(() => import("@/features/timeline/SessionsPage"));
 const SessionDetailPage = lazy(loadSessionDetailPage);
+// The docs are public and prerendered, but most visitors never open them, so
+// they are one chunk of their own rather than part of every page's entry.
+const DocsRoutes = lazy(loadDocsRoutes);
+
+function RouteLoading() {
+  return (
+    <div className="route-loading">
+      <Spinner size="md" label="Loading page" />
+    </div>
+  );
+}
 
 // Suspense sits inside Layout so the shell (nav, status footer, WebSocket)
 // stays mounted while a page chunk loads.
 function PageOutlet() {
   return (
-    <Suspense
-      fallback={
-        <div className="route-loading">
-          <Spinner size="md" label="Loading page" />
-        </div>
-      }
-    >
+    <Suspense fallback={<RouteLoading />}>
       <Outlet />
     </Suspense>
   );
@@ -128,22 +124,12 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
     // shelved server routes in `zerg/routers/session_shares.py`. Until then
     // "/share/..." falls through to the "*" redirect below.
     {
-      path: "/docs",
+      path: "/docs/*",
       element: (
         <ErrorBoundary>
-          <DocsLayout />
+          <DocsRoutes />
         </ErrorBoundary>
       ),
-      children: [
-        { index: true, element: <DocsOverviewPage /> },
-        { path: "quickstart", element: <DocsQuickStartPage /> },
-        { path: "search", element: <DocsSearchPage /> },
-        { path: "remote-control", element: <DocsRemoteControlPage /> },
-        { path: "cli", element: <DocsCLIReferencePage /> },
-        { path: "api", element: <DocsMachineAPIPage /> },
-        { path: "integrations", element: <DocsIntegrationsPage /> },
-        { path: "configuration", element: <DocsConfigurationPage /> },
-      ],
     },
     {
       path: "/changelog",
@@ -367,5 +353,9 @@ export default function App() {
     buildAppRoutes({ demoMode: config.demoMode, singleTenant: config.singleTenant }),
   );
 
-  return routes;
+  // Catches the public pages that load on demand (the docs). It is always
+  // mounted, so a link from the landing page keeps showing the landing page
+  // while the chunk loads instead of a spinner, and a prerendered page that
+  // suspends while hydrating keeps its server HTML.
+  return <Suspense fallback={<RouteLoading />}>{routes}</Suspense>;
 }

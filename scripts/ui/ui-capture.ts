@@ -113,12 +113,14 @@ export const PAGE_DEFINITIONS = {
   // app shell's API calls are answered by fixtures, not proxied to a real host.
   security: { path: "/security" },
   privacy: { path: "/privacy" },
+  // A public docs page: the docs are their own lazy chunk (app/routeChunks.ts).
+  docs: { path: "/docs/cli" },
   // The self-host password sign-in. Only the `login` scene can render it.
   login: { path: "/login" },
 } as const;
 type PageName = keyof typeof PAGE_DEFINITIONS;
 const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
-const PUBLIC_PAGES: readonly PageName[] = ["landing", "security", "privacy"];
+const PUBLIC_PAGES: readonly PageName[] = ["landing", "security", "privacy", "docs"];
 const ALL_CAPTURE_PAGES = PAGES.filter(
   (pageName) => pageName !== "session-detail" && pageName !== "login" && !PUBLIC_PAGES.includes(pageName),
 );

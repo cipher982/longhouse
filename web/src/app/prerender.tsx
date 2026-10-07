@@ -4,6 +4,7 @@ import { prerender } from "react-dom/static";
 import config from "@/shared/lib/config";
 import { PageMetaCollectorContext, type CollectedPageMeta } from "@/shared/hooks/usePageMeta";
 import { AppContent, AppProviders } from "./AppRoot";
+import { DOCS_ROUTES_MODULE, isDocsPath } from "./routeChunks";
 
 // Entry for web/scripts/prerender.mjs, loaded by Vite in Node at build time.
 //
@@ -11,6 +12,15 @@ import { AppContent, AppProviders } from "./AppRoot";
 // Host in demo mode, and the server only hands these pages out in that mode),
 // so render with the demo site's config: what the browser will hydrate.
 Object.assign(config, { appMode: "demo", demoMode: true, authEnabled: true, singleTenant: false });
+
+/**
+ * Source modules of the lazy chunks a route renders, as Vite's build manifest
+ * names them. The prerendered page links them in its <head> so the browser
+ * fetches them alongside the entry, and has their CSS before first paint.
+ */
+export function routeChunkModules(pathname: string): string[] {
+  return isDocsPath(pathname) ? [DOCS_ROUTES_MODULE] : [];
+}
 
 export interface PrerenderedRoute {
   html: string;

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { AfterHydration } from "@/features/marketing/AfterHydration";
 import { PageMetaCollectorContext, usePageMeta, type CollectedPageMeta } from "@/shared/hooks/usePageMeta";
 // @ts-expect-error plain .mjs shared with web/scripts/prerender.mjs
-import { buildPage, sitemapRoutes } from "../../../scripts/prerender-page.mjs";
+import { buildPage, chunkAssets, sitemapRoutes } from "../../../scripts/prerender-page.mjs";
 import { renderRoute } from "../prerender";
 
 const SHELL = `<!doctype html>
@@ -57,6 +57,24 @@ describe("prerender page assembly", () => {
     expect(buildPage(SHELL, route, { html: "", meta: { ...meta, uiEffects: false } })).toContain('data-ui-effects="off"');
     expect(buildPage(SHELL, route, { html: "", meta: { ...meta, uiEffects: true } })).toContain('data-ui-effects="on"');
     expect(buildPage(SHELL, route, { html: "", meta })).toContain('data-ui-effects="on"');
+  });
+
+  it("links a lazy route's chunk and CSS, but nothing the shell already loads", () => {
+    const shell = SHELL.replace("</head>", '<script type="module" src="/assets/index-1.js"></script>\n</head>');
+    const manifest = {
+      "index.html": { file: "assets/index-1.js", isEntry: true },
+      "src/docs.tsx": { file: "assets/docs-2.js", isDynamicEntry: true, imports: ["index.html", "_shared-3.js"], css: ["assets/docs-2.css"] },
+      "_shared-3.js": { file: "assets/shared-3.js" },
+    };
+    const assets = chunkAssets(manifest, ["src/docs.tsx"], shell);
+    expect(assets).toEqual({ scripts: ["/assets/docs-2.js", "/assets/shared-3.js"], styles: ["/assets/docs-2.css"] });
+
+    const page = buildPage(shell, { origin: "https://longhouse.ai", pathname: "/docs" }, { html: "", meta: { title: "t", description: "d" } }, assets);
+    expect(page).toContain('<link rel="modulepreload" crossorigin href="/assets/docs-2.js">');
+    expect(page).toContain('<link rel="stylesheet" crossorigin href="/assets/docs-2.css">');
+
+    expect(() => chunkAssets(manifest, ["src/missing.tsx"], shell)).toThrow(/not a lazily loaded chunk/);
+    expect(() => chunkAssets(manifest, ["_shared-3.js"], shell)).toThrow(/not a lazily loaded chunk/);
   });
 
   it("refuses a page that never set its own title", () => {

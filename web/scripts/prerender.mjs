@@ -16,7 +16,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createServer } from "vite";
-import { buildPage, sitemapRoutes } from "./prerender-page.mjs";
+import { buildPage, chunkAssets, sitemapRoutes } from "./prerender-page.mjs";
 
 const webRoot = path.resolve(import.meta.dirname, "..");
 const distDir = path.join(webRoot, "dist");
@@ -25,6 +25,7 @@ const outDir = path.join(distDir, "_prerender");
 async function main() {
   const shell = readFileSync(path.join(distDir, "index.html"), "utf8");
   const routes = sitemapRoutes(readFileSync(path.join(webRoot, "public/sitemap.xml"), "utf8"));
+  const manifest = JSON.parse(readFileSync(path.join(distDir, ".vite/manifest.json"), "utf8"));
 
   const vite = await createServer({
     configFile: path.join(webRoot, "vite.config.ts"),
@@ -39,10 +40,11 @@ async function main() {
     },
   });
   try {
-    const { renderRoute } = await vite.ssrLoadModule("/src/app/prerender.tsx");
+    const { renderRoute, routeChunkModules } = await vite.ssrLoadModule("/src/app/prerender.tsx");
     rmSync(outDir, { recursive: true, force: true });
     for (const route of routes) {
-      const page = buildPage(shell, route, await renderRoute(route.pathname));
+      const assets = chunkAssets(manifest, routeChunkModules(route.pathname), shell);
+      const page = buildPage(shell, route, await renderRoute(route.pathname), assets);
       const file = path.join(outDir, route.pathname.replace(/^\/+|\/+$/g, ""), "index.html");
       mkdirSync(path.dirname(file), { recursive: true });
       writeFileSync(file, page);

@@ -174,6 +174,9 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: true,
       outDir: "dist",
+      // dist/.vite/manifest.json: web/scripts/prerender.mjs reads it to link a
+      // lazy route's chunk and CSS into that route's prerendered page.
+      manifest: true,
       rolldownOptions: {
         output: {
           codeSplitting: {

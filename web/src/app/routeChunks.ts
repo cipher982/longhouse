@@ -7,6 +7,18 @@ import { useEffect } from "react";
  */
 export const loadSessionDetailPage = () => import("@/features/session/SessionDetailPage");
 export const loadMachinesPage = () => import("@/features/machines/MachinesPage");
+export const loadDocsRoutes = () => import("@/features/marketing/docs/DocsRoutes");
+
+/**
+ * The source module behind loadDocsRoutes, as Vite's build manifest names it:
+ * web/scripts/prerender.mjs links that chunk into every prerendered docs page,
+ * and fails the build if the manifest has no such entry.
+ */
+export const DOCS_ROUTES_MODULE = "src/features/marketing/docs/DocsRoutes.tsx";
+
+export function isDocsPath(pathname: string): boolean {
+  return pathname === "/docs" || pathname.startsWith("/docs/");
+}
 
 let sessionDetailRequested = false;
 

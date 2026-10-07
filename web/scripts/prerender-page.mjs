@@ -19,8 +19,33 @@ export function sitemapRoutes(sitemapXml) {
   return routes.map((url) => ({ origin: url.origin, pathname: url.pathname }));
 }
 
+/**
+ * The JS and CSS files (as /assets/... hrefs) that the lazy chunks built from
+ * `modules` need beyond what the shell already loads, from Vite's manifest.
+ */
+export function chunkAssets(manifest, modules, shell) {
+  const scripts = new Set();
+  const styles = new Set();
+  const seen = new Set();
+  const visit = (key) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    const chunk = manifest[key];
+    if (!chunk) throw new Error(`prerender: the build manifest has no chunk ${key}`);
+    if (chunk.file.endsWith(".js")) scripts.add(`/${chunk.file}`);
+    for (const css of chunk.css ?? []) styles.add(`/${css}`);
+    for (const imported of chunk.imports ?? []) visit(imported);
+  };
+  for (const module of modules) {
+    if (!manifest[module]?.isDynamicEntry) throw new Error(`prerender: ${module} is not a lazily loaded chunk in the build manifest`);
+    visit(module);
+  }
+  const inShell = (href) => shell.includes(`"${href}"`);
+  return { scripts: [...scripts].filter((href) => !inShell(href)), styles: [...styles].filter((href) => !inShell(href)) };
+}
+
 /** The built shell with one route's markup and head tags. */
-export function buildPage(shell, { origin, pathname }, { html, meta }) {
+export function buildPage(shell, { origin, pathname }, { html, meta }, assets = { scripts: [], styles: [] }) {
   if (!meta.title) throw new Error(`prerender ${pathname}: the page sets no title (usePageMeta); is the route missing from App.tsx?`);
   if (!meta.description) throw new Error(`prerender ${pathname}: the page sets no description (usePageMeta)`);
   const url = `${origin}${pathname}`;
@@ -35,7 +60,15 @@ export function buildPage(shell, { origin, pathname }, { html, meta }) {
   page = replaceOnce(page, metaTag("property", "og:url"), `<meta property="og:url" content="${escapeAttr(url)}" />`, "og:url");
   page = replaceOnce(page, metaTag("name", "twitter:title"), `<meta name="twitter:title" content="${title}" />`, "twitter:title");
   page = replaceOnce(page, metaTag("name", "twitter:description"), `<meta name="twitter:description" content="${description}" />`, "twitter:description");
-  page = replaceOnce(page, /<\/head>/, `<link rel="canonical" href="${escapeAttr(url)}" />\n  </head>`, "</head>");
+  // A lazy route's chunks, linked the way Vite links the entry's own (its
+  // runtime preload helper skips a stylesheet already in the page), so the
+  // page is styled at first paint and main.tsx finds the chunk on its way.
+  const links = [
+    ...assets.scripts.map((href) => `<link rel="modulepreload" crossorigin href="${escapeAttr(href)}">`),
+    ...assets.styles.map((href) => `<link rel="stylesheet" crossorigin href="${escapeAttr(href)}">`),
+    `<link rel="canonical" href="${escapeAttr(url)}" />`,
+  ];
+  page = replaceOnce(page, /<\/head>/, `${links.join("\n  ")}\n  </head>`, "</head>");
 
   // usePublicPageScroll adds these once the app runs; without them the page
   // cannot scroll before (or without) JavaScript. data-ui-effects is what

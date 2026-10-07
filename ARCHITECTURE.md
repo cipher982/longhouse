@@ -190,7 +190,7 @@ Features import across folders with `@/`; within a folder, relative.
 | `web/src/features/runners/` | Runner detail page (optional shell-command tooling, shown under its machine) and the connect/add-runner modal |
 | `web/src/features/auth/` | Login, profile, settings, auth and token refresh |
 | `web/src/features/marketing/` | Landing, hero demo, remote scene, blog, docs, legal, share |
-| `web/scripts/prerender.mjs` | Build step after `vite build`: renders every sitemap route (`web/src/app/prerender.tsx`) to static HTML under `_prerender` in the build output, each with its own title, description, canonical and OpenGraph tags, so crawlers and link unfurlers get content; the browser hydrates it (`web/src/app/main.tsx`). `server/zerg/frontend_pages.py` serves those pages on the public (demo) site only |
+| `web/scripts/prerender.mjs` | Build step after `vite build`: renders every sitemap route (`web/src/app/prerender.tsx`) to static HTML under `_prerender` in the build output, each with its own title, description, canonical and OpenGraph tags, so crawlers and link unfurlers get content; the browser hydrates it (`web/src/app/main.tsx`). A lazy route's chunk and CSS (the docs, `web/src/features/marketing/docs/DocsRoutes.tsx`) are linked into that route's page from Vite's build manifest and loaded before hydrating. `server/zerg/frontend_pages.py` serves those pages on the public (demo) site only |
 | `web/src/shared/api/` | HTTP client and typed endpoints (`agents.ts`, `useAgentSessions.ts`) |
 | `web/src/shared/session/` | Session facts used by several features: status (`sessionStatus.ts`), activity freshness, labels; `web/src/shared/session/model/` is the transcript model |
 | `web/src/shared/instruments/` | Status lamp, sparkline, Nixie, Hearth |
