@@ -8560,11 +8560,18 @@ class CatalogStore:
                 .values(automation=automation)
             ).rowcount
             if not tokens:
-                return {"found": False, "tokens_updated": 0, "sessions": [], "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "found": False,
+                    "tokens_updated": 0,
+                    "reclassified": [],
+                    "sessions": [],
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
             if not automation:
                 return {
                     "found": True,
                     "tokens_updated": int(tokens),
+                    "reclassified": [],
                     "sessions": [],
                     "commit_seq": str(_advance_commit_seq(connection, observed_at)),
                 }
@@ -8577,20 +8584,18 @@ class CatalogStore:
                     func.coalesce(catalog.c.origin_kind, "") == "console",
                 )
             )
-            rows = (
-                connection.execute(
-                    select(storage.c.session_id, storage.c.user_hidden_from_timeline, storage.c.user_state).where(
+            session_ids = [
+                str(value)
+                for value in connection.execute(
+                    select(storage.c.session_id).where(
                         storage.c.machine_id == device_id,
                         storage.c.owner_id == str(owner_id),
                         storage.c.launch_actor.is_(None),
                         func.coalesce(storage.c.origin_kind, "") != "console",
                         storage.c.session_id.notin_(live_declared),
                     )
-                )
-                .mappings()
-                .all()
-            )
-            session_ids = [str(row["session_id"]) for row in rows]
+                ).scalars()
+            ]
             commit_seq = _advance_commit_seq(connection, observed_at)
             for start in range(0, len(session_ids), 500):
                 chunk = session_ids[start : start + 500]
@@ -8610,16 +8615,30 @@ class CatalogStore:
                     .where(thread.c.session_id.in_(chunk), thread.c.is_primary == 1)
                     .values(hidden_from_default_timeline=1, updated_at=observed_at)
                 )
+            # Every automation row from this machine, not only this call's
+            # fills, so a rerun re-mirrors searchd after a partial failure.
+            mirror = (
+                connection.execute(
+                    select(storage.c.session_id, storage.c.user_hidden_from_timeline, storage.c.user_state).where(
+                        storage.c.machine_id == device_id,
+                        storage.c.owner_id == str(owner_id),
+                        storage.c.launch_actor == "automation",
+                    )
+                )
+                .mappings()
+                .all()
+            )
         return {
             "found": True,
             "tokens_updated": int(tokens),
+            "reclassified": session_ids,
             "sessions": [
                 {
                     "session_id": str(row["session_id"]),
                     "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
                     "user_state": str(row["user_state"] or "active"),
                 }
-                for row in rows
+                for row in mirror
             ],
             "commit_seq": str(commit_seq),
         }
@@ -9686,6 +9705,7 @@ class CatalogStore:
         sealed_at: datetime,
         conversation_resets: tuple[dict[str, Any], ...] = (),
         provider_facts: tuple[dict[str, Any], ...] = (),
+        credential_automation: bool = False,
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
         timer = _StageTimer("commit_raw_object")
@@ -10388,6 +10408,17 @@ class CatalogStore:
                 "commit_seq": commit_seq,
                 "updated_at": commit_time,
             }
+            # Launch provenance is sticky: an envelope that carries no actor
+            # never clears one the session already recorded. Only then may an
+            # automation credential fill the gap
+            # (docs/specs/automation-machine-credentials.md).
+            if not session_values["launch_actor"]:
+                durable_actor = existing_session.get("launch_actor") if existing_session is not None else None
+                if durable_actor:
+                    session_values["launch_actor"] = durable_actor
+                    session_values["launch_surface"] = session_values["launch_surface"] or existing_session.get("launch_surface")
+                elif credential_automation:
+                    session_values["launch_actor"] = "automation"
             if render_manifest is None and _session_keeps_published_render(connection, existing_session):
                 # This envelope's `render_state` is a receipt about the envelope
                 # (no render attached), not a verdict on the session. A commit

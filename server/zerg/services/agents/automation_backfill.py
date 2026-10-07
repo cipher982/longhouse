@@ -609,6 +609,7 @@ def set_automation_machine(
         "automation": automation,
         "found": result.get("found") is True,
         "tokens_updated": int(result.get("tokens_updated") or 0),
-        "sessions_reclassified": len(sessions),
+        "sessions_reclassified": len(result.get("reclassified") or []),
+        "sessions_mirrored": len(sessions) - len(failures),
         "searchd_failures": failures,
     }

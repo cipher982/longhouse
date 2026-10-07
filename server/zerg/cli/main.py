@@ -591,7 +591,8 @@ def db_mark_automation_machine(
             state = "automation" if result["automation"] else "not automation"
             typer.echo(
                 f"{device_id}: {result['tokens_updated']} credential(s) marked {state}; "
-                f"{result['sessions_reclassified']} session(s) hidden; searchd failures: {len(result['searchd_failures'])}."
+                f"{result['sessions_reclassified']} session(s) newly hidden; {result['sessions_mirrored']} mirrored to search; "
+                f"searchd failures: {len(result['searchd_failures'])}."
             )
     if not result["found"] or result["searchd_failures"]:
         raise typer.Exit(code=1)

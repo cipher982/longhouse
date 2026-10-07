@@ -19,15 +19,20 @@ os.environ.setdefault("TESTING", "1")
 from tests_lite.live_catalog_harness import LiveCatalog  # noqa: E402
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402,F401
-from zerg.routers.agents_storage_v2 import _apply_credential_provenance  # noqa: E402
+from zerg.routers.agents_storage_v2 import _credential_is_automation  # noqa: E402
 
 SAURON = "clifford-sauron"
+_GENERATIONS: dict[str, str] = {}
 HUMAN = "cinder"
 
 
-def _ship(live: LiveCatalog, client, *, token: str, device_id: str, launch_actor: str | None = None) -> str:
-    session_id = uuid4()
+def _ship(
+    live: LiveCatalog, client, *, token: str, device_id: str, launch_actor: str | None = None, session_id: str | None = None
+) -> str:
+    session_id = session_id or uuid4()
     body = live.envelope_body(session_id=session_id, device_id=device_id, texts=("server selfcheck reports unhealthy",))
+    # A later envelope for the same session continues its render generation.
+    body["render"]["generation_id"] = _GENERATIONS.setdefault(str(session_id), body["render"]["generation_id"])
     body["session"]["launch_actor"] = launch_actor
     response = client.post(
         "/agents/storage/v2/envelopes",
@@ -63,6 +68,7 @@ def test_marking_a_machine_hides_its_history_and_what_it_ships_next(live_catalog
 
     result = _set(live_catalog, owner_id=owner, device_id=SAURON, automation=True)
     assert result["found"] is True and result["tokens_updated"] == 1
+    assert result["reclassified"] == [before]
     assert [row["session_id"] for row in result["sessions"]] == [before]
 
     backfilled = _catalog(live_catalog, before)
@@ -77,8 +83,14 @@ def test_marking_a_machine_hides_its_history_and_what_it_ships_next(live_catalog
     assert shipped["launch_actor"] == "automation"
     assert bool(shipped["hidden_from_default_timeline"]) is True
 
-    # Idempotent: nothing left to reclassify.
-    assert _set(live_catalog, owner_id=owner, device_id=SAURON, automation=True)["sessions"] == []
+    # Idempotent, and a rerun re-mirrors every automation row to searchd.
+    rerun = _set(live_catalog, owner_id=owner, device_id=SAURON, automation=True)
+    assert rerun["reclassified"] == []
+    assert sorted(row["session_id"] for row in rerun["sessions"]) == sorted([before, after])
+
+    # An envelope with no actor never clears a recorded one, from any credential.
+    _ship(live_catalog, live_catalog_client, token=sauron_token, device_id=SAURON, session_id=declared)
+    assert _catalog(live_catalog, declared)["launch_actor"] == "human_shell"
 
     # Off clears the flag only; history stays hidden, new sessions ship visible.
     off = _set(live_catalog, owner_id=owner, device_id=SAURON, automation=False)
@@ -86,6 +98,10 @@ def test_marking_a_machine_hides_its_history_and_what_it_ships_next(live_catalog
     assert bool(_catalog(live_catalog, before)["hidden_from_default_timeline"]) is True
     later = _ship(live_catalog, live_catalog_client, token=sauron_token, device_id=SAURON)
     assert _catalog(live_catalog, later)["launch_actor"] is None
+    # A backfilled session that keeps shipping after the flag is off stays hidden.
+    _ship(live_catalog, live_catalog_client, token=sauron_token, device_id=SAURON, session_id=before)
+    still = _catalog(live_catalog, before)
+    assert still["launch_actor"] == "automation" and bool(still["hidden_from_default_timeline"]) is True
 
 
 def test_marking_is_scoped_to_the_owner(live_catalog, live_catalog_client):  # noqa: F811
@@ -98,19 +114,10 @@ def test_marking_is_scoped_to_the_owner(live_catalog, live_catalog_client):  # n
     assert _catalog(live_catalog, shipped)["launch_actor"] is None
 
 
-def test_credential_fills_only_absent_provenance():
-    automation = SimpleNamespace(automation=True)
-    facts = {"launch_actor": None, "hidden_from_default_timeline": False}
-    _apply_credential_provenance(facts, automation)
-    assert facts == {"launch_actor": "automation", "hidden_from_default_timeline": True}
-
-    declared = {"launch_actor": "human_shell", "hidden_from_default_timeline": False}
-    _apply_credential_provenance(declared, automation)
-    assert declared == {"launch_actor": "human_shell", "hidden_from_default_timeline": False}
-
-    human = {"launch_actor": None, "hidden_from_default_timeline": False}
-    _apply_credential_provenance(human, SimpleNamespace(automation=False))
-    assert human == {"launch_actor": None, "hidden_from_default_timeline": False}
+def test_only_a_marked_credential_reports_automation():
+    assert _credential_is_automation(SimpleNamespace(automation=True)) is True
+    assert _credential_is_automation(SimpleNamespace(automation=False)) is False
+    assert _credential_is_automation(None) is False
 
 
 def test_set_automation_machine_mirrors_reclassified_rows_to_searchd(monkeypatch):
@@ -130,6 +137,7 @@ def test_set_automation_machine_mirrors_reclassified_rows_to_searchd(monkeypatch
                 "found": True,
                 "tokens_updated": 1,
                 "commit_seq": "9",
+                "reclassified": ["s1"],
                 "sessions": [{"session_id": "s1", "user_hidden_from_timeline": False, "user_state": "active"}],
             }
         return {}
@@ -140,7 +148,8 @@ def test_set_automation_machine_mirrors_reclassified_rows_to_searchd(monkeypatch
 
     result = set_automation_machine(SAURON, automation=True)
 
-    assert result["owner_id"] == 4 and result["sessions_reclassified"] == 1 and result["searchd_failures"] == []
+    assert result["owner_id"] == 4 and result["sessions_reclassified"] == 1 and result["sessions_mirrored"] == 1
+    assert result["searchd_failures"] == []
     assert calls[1][1]["owner_id"] == 4 and calls[1][1]["device_id"] == SAURON
     assert calls[2] == (
         "search.session.reconcile_visibility.v2",
