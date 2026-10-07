@@ -417,6 +417,7 @@ def test_failed_run_yields_to_interaction_only_when_it_can_be_answered(can_respo
     assert facts.presentation.primary.key == expected_key
     assert facts.presentation.primary.label == expected_label
 
+
 def test_unanswerable_interaction_does_not_claim_a_wait():
     facts = _facts(
         runtime=_runtime(phase="idle"),
