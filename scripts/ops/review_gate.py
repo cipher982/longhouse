@@ -1139,10 +1139,14 @@ def attested_refusal(repo: str | Path, slug: str, served: str, target: str) -> s
 def newest_published(repo: str | Path, slug: str) -> str | None:
     """The newest main commit with a published runtime image: the commit the ring promoter moves dogfood to.
     Highest run number whose commit main holds (the listing's order is not reliable; ring_promoter.py agrees)."""
-    proc = subprocess.run(["gh", "api", f"repos/{slug}/actions/workflows/runtime-image.yml/runs?branch={DEFAULT_BRANCH}"
-                           "&status=success&per_page=30", "-q",
-                           '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | "\\(.run_number) \\(.head_sha)"'],
-                          capture_output=True, text=True)
+    try:
+        proc = subprocess.run(["gh", "api", f"repos/{slug}/actions/workflows/runtime-image.yml/runs?branch={DEFAULT_BRANCH}"
+                               "&status=success&per_page=30", "-q",
+                               '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | "\\(.run_number) \\(.head_sha)"'],
+                              capture_output=True, text=True)
+    except OSError as exc:  # no gh: attest the other targets
+        print(f"review-gate: attest: newest published image unknown: {exc}", file=sys.stderr)
+        return None
     if proc.returncode != 0:
         print(f"review-gate: attest: newest published image unknown: {proc.stderr.strip()[:200]}", file=sys.stderr)
         return None
@@ -1210,7 +1214,8 @@ def attest_mode(repo: str, policy: Policy, targets: list[str], served_url: str, 
             seen.add(target)
             usable = [b for b in bases if b != target and is_ancestor(repo, b, target)]
             if not usable:
-                print(f"review-gate: attest: {target[:12]} does not contain what production serves ({served[:12]}); skipped")
+                print(f"review-gate: attest: {target[:12]} contains neither ring's served commit "
+                      f"({', '.join(b[:12] for b in bases)}); skipped")
                 continue
             first = None
             for base in usable:
