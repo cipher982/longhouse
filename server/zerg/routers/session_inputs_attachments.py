@@ -446,6 +446,17 @@ async def create_session_input_with_attachments(
     db: Session | None = Depends(no_request_db),
     current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInputResponse:
+    """Send a user input with one or more image attachments.
+
+    ``auto`` everywhere; ``queue`` only on Console sessions, where it is the
+    same FIFO enqueue as ``auto`` and the turn record carries the image refs,
+    so a user can attach while a turn runs. ``steer`` would need the live
+    steer chain to accept attachments and would race the dispatch lock
+    that this route already acquires for the regular send path. Helm
+    queue-with-attachments stays rejected: its queued-input drain path does
+    not load attachments.
+    """
+
     try:
         return await _create_session_input_with_attachments(
             session_id=session_id,
@@ -479,16 +490,6 @@ async def _create_session_input_with_attachments(
     db: Session | None,
     current_user: Caller,
 ) -> SessionInputResponse:
-    """Send a user input with one or more image attachments.
-
-    ``auto`` everywhere; ``queue`` only on Console sessions, where it is the
-    same FIFO enqueue as ``auto`` and the turn record carries the image refs,
-    so a user can attach while a turn runs. ``steer`` would need the live
-    steer chain to accept attachments and would race the dispatch lock
-    that this route already acquires for the regular send path. Helm
-    queue-with-attachments stays rejected: its queued-input drain path does
-    not load attachments.
-    """
     client_label = _client_label_from_user_agent(user_agent)
     request_id = client_request_id.strip()
 
