@@ -23,28 +23,28 @@ def test_golden_replay_conserves_and_pairs_every_provider_event():
 
     assert first["passed"] is True
     assert first["stable_identity_digest"] == second["stable_identity_digest"]
-    assert first["totals"]["source_events"] == 18
-    assert first["totals"]["canonical_events"] == 18
-    assert first["totals"]["outer_calls"] == 9
-    assert first["totals"]["paired"] == 9
-    assert first["totals"]["exact"] == 7
+    assert first["totals"]["source_events"] == 26
+    assert first["totals"]["canonical_events"] == 26
+    assert first["totals"]["outer_calls"] == 13
+    assert first["totals"]["paired"] == 13
+    assert first["totals"]["exact"] == 11
     assert first["totals"]["parsed"] == 1
     assert first["totals"]["unknown"] == 1
     assert first["totals"]["inferred_children"] == 1
     assert first["totals"]["wrappers_retained"] == 0
-    assert first["totals"]["visible_rows"] == 9
+    assert first["totals"]["visible_rows"] == 13
     assert first["totals"]["lost"] == 0
     assert first["totals"]["duplicated"] == 0
     assert first["totals"]["unattributed"] == 0
     assert first["consequence_slices"] == {
         "approval": 1,
-        "external_effect": 1,
-        "failure": 1,
-        "mutation": 1,
-        "read_only": 5,
+        "external_effect": 2,
+        "failure": 2,
+        "mutation": 2,
+        "read_only": 7,
         "unknown": 1,
     }
-    assert set(first["providers"]) == {"antigravity", "claude", "codex", "cursor", "opencode"}
+    assert set(first["providers"]) == {"antigravity", "claude", "codex", "cursor", "omp", "opencode", "pi"}
     assert first["unknowns"] == [
         {
             "provider": "cursor",
