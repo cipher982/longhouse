@@ -226,13 +226,6 @@ def machine_models(
     )
 
 
-def machine_operation(*, owner_id: int, operation_id: str) -> dict[str, Any]:
-    return _call(
-        "machine.operation.read.v2",
-        {"owner_id": owner_id, "operation_id": operation_id},
-    )
-
-
 def recent_visible_web_presence(*, owner_id: int, threshold: str) -> bool:
     result = _call(
         "notification.presence.visible.read.v2",
@@ -295,7 +288,6 @@ __all__ = [
     "CatalogReadError",
     "active_owner_id",
     "enrolled_machines",
-    "machine_operation",
     "machine_heartbeats",
     "machine_models",
     "machine_workspaces",

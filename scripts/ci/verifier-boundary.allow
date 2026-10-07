@@ -14,8 +14,6 @@
 # 3.2 and 3.3a.
 
 scripts/qa/provider-control-e2e-canary.py -> server/zerg/services/antigravity_hook_inbox.py  # the canary runs subject helpers in an embedded `python -c` script; call the served API or CLI instead
-server/zerg/cli/provider_live.py -> server/zerg/qa/provider_live_canary.py  # subject CLI wraps the live canary; move the wrapper into the verifier or drop it
-server/zerg/cli/provider_live.py -> server/zerg/qa/provider_live_proof_publish.py  # subject CLI wraps the live canary; move the wrapper into the verifier or drop it
 server/zerg/qa/antigravity_hook_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/antigravity_launch_hook_inbox.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/claude_real_print_qualification.py -> server/zerg/services/provider_capability_proof.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)

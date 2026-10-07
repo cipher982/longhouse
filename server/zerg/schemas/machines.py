@@ -8,17 +8,11 @@ from typing import Literal
 
 from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import field_validator
 from pydantic import model_validator
 
 from zerg.utils.time import UTCBaseModel
 
-# A Literal here was a third hand-copy of the same set, on a public request
-# body, and it disagreed with the engine. Keep the type open and validate
-# against the contract so the wire contract cannot drift from what runs.
-ProviderLiveProofProvider = str
 ArchiveBacklogControlMode = Literal["paused", "trickle", "drain"]
-MachineControlOperationStatus = Literal["queued", "running", "succeeded", "failed", "timed_out"]
 
 ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[
@@ -224,73 +218,6 @@ class RecentModelsResponse(UTCBaseModel):
     provider: str = Field(..., description="Provider whose usage facts supplied the models.")
     days_back: int = Field(..., description="Lookback window used to select sessions.")
     models: list[RecentModel] = Field(default_factory=list)
-
-
-class ProviderLiveProofRequest(UTCBaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    provider: ProviderLiveProofProvider = Field(..., description="Provider CLI to prove on the target machine.")
-
-    @field_validator("provider")
-    @classmethod
-    def _provider_must_support_live_proof(cls, value: str) -> str:
-        from zerg.services.managed_provider_contracts import live_proof_supported_providers
-
-        supported = live_proof_supported_providers()
-        if value not in supported:
-            raise ValueError(f"provider must be one of {', '.join(supported)}")
-        return value
-
-    expected_provider_version: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=120,
-        description="Optional release/version the returned provider-live artifact must prove.",
-    )
-    publish: bool = Field(
-        default=True,
-        description="Publish the proof into the machine's stable local sidecar before returning it.",
-    )
-    timeout_secs: int | None = Field(
-        default=None,
-        ge=1,
-        le=900,
-        description="Optional provider-live process timeout. When omitted, the Machine Agent uses a no-token default.",
-    )
-    run_live_token_contract: bool = Field(
-        default=False,
-        description="Run the provider-specific live-token contract when the target Machine Agent supports it.",
-    )
-    live_token_timeout_secs: int | None = Field(
-        default=None,
-        ge=1,
-        le=600,
-        description="Optional timeout for the live-token contract portion of the proof.",
-    )
-
-
-class ProviderLiveProofAcceptedResponse(UTCBaseModel):
-    operation_id: str = Field(..., description="Durable machine-control operation id.")
-    status: MachineControlOperationStatus = Field(..., description="Current operation state.")
-    status_url: str = Field(..., description="Relative API URL for polling operation status.")
-    device_id: str = Field(..., description="Machine that accepted the proof command.")
-    provider: ProviderLiveProofProvider = Field(..., description="Provider that will be proved.")
-
-
-class MachineControlOperationResponse(UTCBaseModel):
-    operation_id: str = Field(..., description="Durable machine-control operation id.")
-    device_id: str = Field(..., description="Target machine id.")
-    command_type: str = Field(..., description="Machine Agent command type.")
-    command_id: str = Field(..., description="Machine Agent command id.")
-    provider: str | None = Field(default=None, description="Provider scoped by the operation, if any.")
-    status: MachineControlOperationStatus = Field(..., description="Current operation state.")
-    request: dict[str, Any] = Field(default_factory=dict, description="Operation request payload.")
-    result: dict[str, Any] | None = Field(default=None, description="Machine Agent result when succeeded.")
-    error: dict[str, Any] | None = Field(default=None, description="Machine Agent error when failed or timed out.")
-    created_at: datetime = Field(..., description="Operation creation time.")
-    started_at: datetime | None = Field(default=None, description="Dispatch start time.")
-    finished_at: datetime | None = Field(default=None, description="Terminal completion time.")
-    timeout_secs: int = Field(..., description="Operation lease in seconds.")
 
 
 class ArchiveBacklogResponse(UTCBaseModel):

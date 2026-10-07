@@ -2360,43 +2360,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/machines/operations/{operation_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Machine Control Operation */
-        get: operations["get_machine_control_operation_agents_machines_operations__operation_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/machines/{device_id}/provider-live-proof": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Provider Live Proof
-         * @description Run a typed provider-live proof on a connected provider-capable machine.
-         */
-        post: operations["run_provider_live_proof_agents_machines__device_id__provider_live_proof_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/providers/action-coverage": {
         parameters: {
             query?: never;
@@ -4932,82 +4895,6 @@ export interface components {
                 [key: string]: number;
             };
         };
-        /** MachineControlOperationResponse */
-        MachineControlOperationResponse: {
-            /**
-             * Operation Id
-             * @description Durable machine-control operation id.
-             */
-            operation_id: string;
-            /**
-             * Device Id
-             * @description Target machine id.
-             */
-            device_id: string;
-            /**
-             * Command Type
-             * @description Machine Agent command type.
-             */
-            command_type: string;
-            /**
-             * Command Id
-             * @description Machine Agent command id.
-             */
-            command_id: string;
-            /**
-             * Provider
-             * @description Provider scoped by the operation, if any.
-             */
-            provider?: string | null;
-            /**
-             * Status
-             * @description Current operation state.
-             * @enum {string}
-             */
-            status: "queued" | "running" | "succeeded" | "failed" | "timed_out";
-            /**
-             * Request
-             * @description Operation request payload.
-             */
-            request?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Result
-             * @description Machine Agent result when succeeded.
-             */
-            result?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Error
-             * @description Machine Agent error when failed or timed out.
-             */
-            error?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Created At
-             * Format: date-time
-             * @description Operation creation time.
-             */
-            created_at: string;
-            /**
-             * Started At
-             * @description Dispatch start time.
-             */
-            started_at?: string | null;
-            /**
-             * Finished At
-             * @description Terminal completion time.
-             */
-            finished_at?: string | null;
-            /**
-             * Timeout Secs
-             * @description Operation lease in seconds.
-             */
-            timeout_secs: number;
-        };
         /** MachineDirectoryEntry */
         MachineDirectoryEntry: {
             /**
@@ -6127,70 +6014,6 @@ export interface components {
             exact_total: boolean;
             /** Inventory Coverage Complete */
             inventory_coverage_complete: boolean;
-        };
-        /** ProviderLiveProofAcceptedResponse */
-        ProviderLiveProofAcceptedResponse: {
-            /**
-             * Operation Id
-             * @description Durable machine-control operation id.
-             */
-            operation_id: string;
-            /**
-             * Status
-             * @description Current operation state.
-             * @enum {string}
-             */
-            status: "queued" | "running" | "succeeded" | "failed" | "timed_out";
-            /**
-             * Status Url
-             * @description Relative API URL for polling operation status.
-             */
-            status_url: string;
-            /**
-             * Device Id
-             * @description Machine that accepted the proof command.
-             */
-            device_id: string;
-            /**
-             * Provider
-             * @description Provider that will be proved.
-             */
-            provider: string;
-        };
-        /** ProviderLiveProofRequest */
-        ProviderLiveProofRequest: {
-            /**
-             * Provider
-             * @description Provider CLI to prove on the target machine.
-             */
-            provider: string;
-            /**
-             * Expected Provider Version
-             * @description Optional release/version the returned provider-live artifact must prove.
-             */
-            expected_provider_version?: string | null;
-            /**
-             * Publish
-             * @description Publish the proof into the machine's stable local sidecar before returning it.
-             * @default true
-             */
-            publish: boolean;
-            /**
-             * Timeout Secs
-             * @description Optional provider-live process timeout. When omitted, the Machine Agent uses a no-token default.
-             */
-            timeout_secs?: number | null;
-            /**
-             * Run Live Token Contract
-             * @description Run the provider-specific live-token contract when the target Machine Agent supports it.
-             * @default false
-             */
-            run_live_token_contract: boolean;
-            /**
-             * Live Token Timeout Secs
-             * @description Optional timeout for the live-token contract portion of the proof.
-             */
-            live_token_timeout_secs?: number | null;
         };
         /** ProviderSignInAckResponse */
         ProviderSignInAckResponse: {
@@ -14532,72 +14355,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArchiveBacklogControlResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_machine_control_operation_agents_machines_operations__operation_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                operation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineControlOperationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_provider_live_proof_agents_machines__device_id__provider_live_proof_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                device_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProviderLiveProofRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProviderLiveProofAcceptedResponse"];
                 };
             };
             /** @description Validation Error */

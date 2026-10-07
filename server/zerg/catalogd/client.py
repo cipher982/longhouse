@@ -36,8 +36,6 @@ _SAFE_RETRY_METHODS = {
     "machine.heartbeat.apply.v2",
     "machine.presence.policy.v2",
     "machine.presence.upsert.v2",
-    "machine.operation.prepare.v2",
-    "machine.operation.read.v2",
     "machine.workspace.list.v2",
     "notification.presence.upsert.v2",
     "notification.presence.visible.read.v2",

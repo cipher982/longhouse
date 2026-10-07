@@ -76,12 +76,10 @@ packages = ["zerg"]
 # profiles). It is repo/CI-only — nothing a Longhouse user installs ever runs
 # it, and the hosted Runtime Host image builds from server/ source rather than
 # this wheel (docker/runtime.dockerfile), so excluding it here costs hosted
-# nothing. zerg/cli/provider_live.py goes with it: it imports the canary
-# modules and is not registered on the user-facing CLI.
+# nothing.
 # Enforced by scripts/qa/check-wheel.py via `make test-wheel-package`.
 exclude = [
     "zerg/qa/**",
-    "zerg/cli/provider_live.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
