@@ -40,9 +40,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run unconditional provider column
-        run: python3 scripts/qa/test-isolation.py \
-          --target provider-release-proof-universal-smoke \
-          --set "UNIVERSAL_PROVIDER=${{ matrix.provider }}"
+        # A block scalar: a plain multi-line scalar folds each backslash-newline
+        # into backslash-space, so bash passed " --target" as one argument and
+        # every run from 2026-08-10 died in argparse.
+        run: |
+          python3 scripts/qa/test-isolation.py \
+            --target provider-release-proof-universal-smoke \
+            --set "UNIVERSAL_PROVIDER=${{ matrix.provider }}"
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
