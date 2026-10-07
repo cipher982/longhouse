@@ -38,8 +38,6 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
 from zerg.provider_live_proof import collect_provider_live_proof
-from zerg.provider_live_route_e2e import collect_provider_live_route_e2e
-from zerg.provider_live_route_e2e import expected_route_providers_from_live_proof
 from zerg.provider_release_status import collect_provider_release_status
 from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.cursor_transcript import iter_local_cursor_session_summaries
@@ -114,7 +112,6 @@ from .classifier import _add_outbox_reasons
 from .classifier import _add_service_status_reasons
 from .classifier import _add_spool_pending_reason
 from .classifier import _add_transport_health_reasons
-from .classifier import _apply_provider_live_route_e2e_status
 from .classifier import _archive_draining_attention_summary
 from .classifier import _archive_draining_state_is_watching
 from .classifier import _broken_health_headline
@@ -527,10 +524,6 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     provider_clis = _collect_provider_clis()
     provider_contracts = _collect_provider_contracts()
     provider_live_proof = collect_provider_live_proof(provider_clis, base_dir=resolved_base_dir)
-    provider_live_route_e2e = collect_provider_live_route_e2e(
-        base_dir=resolved_base_dir,
-        expected_providers=expected_route_providers_from_live_proof(provider_live_proof),
-    )
     provider_release_status = collect_provider_release_status(provider_clis)
     capability_proof_records, capability_proof_summary = collect_local_capability_proofs(resolved_base_dir)
     runtime_url = machine_state.runtime_url if machine_state else None
@@ -677,14 +670,6 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
                 health_state = "degraded"
                 severity = "yellow"
                 headline = "Managed provider support needs attention"
-    health_state, severity, headline = _apply_provider_live_route_e2e_status(
-        proof=provider_live_route_e2e,
-        health_state=health_state,
-        severity=severity,
-        headline=headline,
-        reasons=reasons,
-        suggested_actions=suggested_actions,
-    )
     build_identity = _collect_build_identity(engine_status=engine_status)
     attention_context = _health_classification_context(
         service=service,
@@ -735,7 +720,6 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "provider_contracts": provider_contracts,
         "provider_release_status": provider_release_status,
         "provider_live_proof": provider_live_proof,
-        "provider_live_route_e2e": provider_live_route_e2e,
         "provider_support_state": provider_support_state,
         "provider_capability_proofs": capability_proof_summary,
         "managed_session_contracts": managed_session_contracts,

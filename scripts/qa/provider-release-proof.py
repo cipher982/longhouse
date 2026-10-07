@@ -13,9 +13,6 @@ import json
 import os
 import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -44,19 +41,9 @@ SUPPORTED_PROVIDERS = factory_provider_names(include_maintenance=True)
 LIVE_CANARY_PROVIDERS = frozenset(SUPPORTED_LIVE_PROOF_PROVIDERS)
 CODEX_API_URL_ENV = "CODEX_API_URL"
 CODEX_AGENTS_TOKEN_ENV = "CODEX_AGENTS_TOKEN"
-CLAUDE_API_URL_ENV = "CLAUDE_API_URL"
-CLAUDE_AGENTS_TOKEN_ENV = "CLAUDE_AGENTS_TOKEN"
-CLAUDE_DEVICE_ID_ENV = "CLAUDE_DEVICE_ID"
 CLAUDE_BIN_ENV = "LONGHOUSE_CLAUDE_BIN"
 OPENCODE_BIN_ENV = "LONGHOUSE_OPENCODE_BIN"
 ANTIGRAVITY_BIN_ENV = "LONGHOUSE_ANTIGRAVITY_BIN"
-DEFAULT_OPERATION_POLL_INTERVAL_S = 2.0
-RETRYABLE_STATUS_CODES = {0, 408, 429, 500, 502, 503, 504}
-CLAUDE_MACHINE_LIVE_REQUIRED_OPERATIONS = (
-    "send_input",
-    "transcript_binding",
-    "steer_active_turn",
-)
 DEFAULT_UNIVERSAL_SCENARIOS = (
     "probe_identity",
     "adapter_conformance",
@@ -509,8 +496,6 @@ def _scenario_profile(args: argparse.Namespace) -> str:
         return "managed-live-interrupt"
     if args.provider == "codex" and args.codex_run_managed_live_send:
         return "managed-live-send"
-    if args.provider == "claude" and args.claude_run_machine_live_proof:
-        return "machine-live"
     if args.provider == "claude" and args.claude_run_real_print:
         return "real-print"
     if args.provider == "opencode" and args.opencode_run_real_tool:
@@ -574,31 +559,6 @@ def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
                 bool(args.codex_agents_token),
                 failure_code="codex_runtime_host_agents_token_missing",
                 message="Set CODEX_AGENTS_TOKEN or pass --codex-agents-token.",
-            )
-        )
-    if args.provider == "claude" and args.claude_run_machine_live_proof:
-        checks.append(
-            _preflight_check(
-                "claude_api_url",
-                bool(args.claude_api_url),
-                failure_code="claude_runtime_host_api_url_missing",
-                message="Set CLAUDE_API_URL or pass --claude-api-url.",
-            )
-        )
-        checks.append(
-            _preflight_check(
-                "claude_agents_token",
-                bool(args.claude_agents_token),
-                failure_code="claude_runtime_host_agents_token_missing",
-                message="Set CLAUDE_AGENTS_TOKEN or pass --claude-agents-token.",
-            )
-        )
-        checks.append(
-            _preflight_check(
-                "claude_device_id",
-                bool(args.claude_device_id),
-                failure_code="claude_runtime_host_device_id_missing",
-                message="Set CLAUDE_DEVICE_ID or pass --claude-device-id.",
             )
         )
     failed = [check for check in checks if check.get("status") == "fail"]
@@ -1426,364 +1386,10 @@ def _merge_claude_real_print_proof(
     return merged
 
 
-def _merge_claude_machine_live_proof(
-    source: dict[str, Any], machine: dict[str, Any]
-) -> dict[str, Any]:
-    merged = dict(source)
-    canaries = dict(merged.get("canaries") or {})
-    operation_evidence = dict(merged.get("operation_evidence") or {})
-    machine_canary = (machine.get("canaries") or {}).get("claude_machine_live_proof")
-    if not isinstance(machine_canary, dict):
-        machine_canary = _fail_control_canary(
-            "claude_machine_live_proof_missing",
-            "Claude machine live proof did not emit a proof canary.",
-        )
-    canaries["claude_machine_live_proof"] = machine_canary
-    for operation, evidence in dict(machine.get("operation_evidence") or {}).items():
-        if isinstance(operation, str) and isinstance(evidence, dict):
-            operation_evidence[operation] = evidence
-    merged["canaries"] = canaries
-    merged["operation_evidence"] = operation_evidence
-    if not merged.get("provider_version") and machine.get("provider_version"):
-        merged["provider_version"] = machine.get("provider_version")
-
-    machine_verdict = str(machine.get("verdict") or "").lower()
-    source_verdict = str(source.get("verdict") or "").lower()
-    if machine_verdict == "red":
-        merged["verdict"] = "red"
-        merged["failure_code"] = str(
-            machine.get("failure_code") or "claude_machine_live_proof_failed"
-        )
-        merged["recommendation"] = "block_upgrade_recommendation"
-    elif source_verdict != "red" and machine_verdict == "green":
-        merged["verdict"] = "green"
-        merged["failure_code"] = None
-        merged["recommendation"] = "upgrade_allowed"
-    elif source_verdict != "red" and machine_verdict == "yellow":
-        merged["verdict"] = "yellow"
-        merged["failure_code"] = str(
-            machine.get("failure_code") or "claude_machine_live_proof_warn"
-        )
-        merged["recommendation"] = "investigate_before_upgrade"
-    return merged
-
-
 def _fail_control_canary(code: str, message: str, **fields: Any) -> dict[str, Any]:
     payload = {"status": "fail", "failure_code": code, "message": message}
     payload.update(fields)
     return payload
-
-
-def _detail_message(payload: dict[str, Any]) -> str:
-    detail = payload.get("detail")
-    if isinstance(detail, dict):
-        code = detail.get("code")
-        message = detail.get("message")
-        if code and message:
-            return f"{code}: {message}"
-        if message:
-            return str(message)
-        if code:
-            return str(code)
-    if isinstance(detail, str) and detail:
-        return detail
-    error = payload.get("error")
-    if isinstance(error, dict):
-        code = error.get("code")
-        message = error.get("message")
-        if code and message:
-            return f"{code}: {message}"
-        if message:
-            return str(message)
-    return json.dumps(payload, sort_keys=True)[-1000:]
-
-
-def _legacy_live_token_contract_rejected(status: int, payload: dict[str, Any]) -> bool:
-    if status != 422:
-        return False
-    detail = payload.get("detail")
-    if not isinstance(detail, list):
-        return False
-    rejected_fields = set()
-    for item in detail:
-        if not isinstance(item, dict):
-            continue
-        loc = item.get("loc")
-        if isinstance(loc, list) and len(loc) >= 2 and loc[0] == "body":
-            rejected_fields.add(str(loc[1]))
-    return bool(
-        rejected_fields & {"run_live_token_contract", "live_token_timeout_secs"}
-    )
-
-
-def _request_json(
-    *,
-    method: str,
-    url: str,
-    token: str,
-    body: dict[str, Any] | None,
-    timeout_s: float,
-) -> tuple[int, dict[str, Any]]:
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "longhouse-provider-release-proof/1",
-        "X-Agents-Token": token,
-    }
-    data = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
-            raw = response.read().decode("utf-8")
-            status = getattr(response, "status", None)
-            if status is None and hasattr(response, "getcode"):
-                status = response.getcode()
-            payload = json.loads(raw)
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"detail": raw[-2000:]}
-        if not isinstance(payload, dict):
-            payload = {"detail": raw[-2000:]}
-        return exc.code, payload
-    except (TimeoutError, urllib.error.URLError) as exc:
-        return 0, {"detail": {"code": "request_error", "message": str(exc)}}
-    except json.JSONDecodeError:
-        return 502, {
-            "detail": {"code": "invalid_json", "message": "response was not JSON"}
-        }
-    if not isinstance(payload, dict):
-        return 502, {
-            "detail": {
-                "code": "invalid_json",
-                "message": "response was not a JSON object",
-            }
-        }
-    return int(status or 200), payload
-
-
-def _poll_operation(
-    *,
-    api_url: str,
-    token: str,
-    device_id: str,
-    provider: str,
-    accepted: dict[str, Any],
-    http_timeout_s: float,
-    poll_timeout_s: float,
-) -> tuple[int, dict[str, Any]]:
-    status_url = str(accepted.get("status_url") or "").strip()
-    operation_id = str(accepted.get("operation_id") or "").strip()
-    if not status_url or not operation_id:
-        return 502, {
-            "detail": {
-                "code": "provider_live_operation_malformed",
-                "message": "provider live proof did not return an operation",
-            }
-        }
-    url = f"{api_url}{status_url}" if status_url.startswith("/") else status_url
-    deadline = time.monotonic() + max(1.0, poll_timeout_s)
-    while True:
-        status, payload = _request_json(
-            method="GET",
-            url=url,
-            token=token,
-            body=None,
-            timeout_s=http_timeout_s,
-        )
-        if status != 200:
-            if status in RETRYABLE_STATUS_CODES and time.monotonic() < deadline:
-                time.sleep(DEFAULT_OPERATION_POLL_INTERVAL_S)
-                continue
-            return status, payload
-        operation_status = str(payload.get("status") or "")
-        if operation_status == "succeeded":
-            result = payload.get("result")
-            if not isinstance(result, dict):
-                return 502, {
-                    "detail": {
-                        "code": "provider_live_operation_result_malformed",
-                        "message": "provider live proof operation succeeded without a result",
-                    }
-                }
-            return 200, {
-                "device_id": device_id,
-                "provider": provider,
-                "command_id": str(payload.get("command_id") or operation_id),
-                "result": result,
-                "operation_id": operation_id,
-            }
-        if operation_status in {"failed", "timed_out"}:
-            error = (
-                payload.get("error") if isinstance(payload.get("error"), dict) else {}
-            )
-            code = str(error.get("code") or "provider_live_operation_failed")
-            return 502, {
-                "detail": {
-                    "code": code,
-                    "message": str(
-                        error.get("message")
-                        or f"provider live proof operation {operation_status}"
-                    ),
-                },
-                "operation_id": operation_id,
-            }
-        if time.monotonic() >= deadline:
-            return 503, {
-                "detail": {
-                    "code": "provider_live_operation_poll_timeout",
-                    "message": f"provider live proof operation {operation_id} did not finish before client timeout",
-                },
-                "operation_id": operation_id,
-                "last_status": operation_status,
-            }
-        time.sleep(DEFAULT_OPERATION_POLL_INTERVAL_S)
-
-
-def _post_machine_live_proof(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
-    process_timeout_s = max(1, min(int(args.timeout_secs), 900))
-    live_token_timeout_s = max(1, min(int(args.timeout_secs), 600))
-    api_url = args.claude_api_url.rstrip("/")
-    base_body: dict[str, Any] = {
-        "provider": "claude",
-        "publish": True,
-        "timeout_secs": process_timeout_s,
-    }
-    if args.provider_version:
-        base_body["expected_provider_version"] = args.provider_version
-    body: dict[str, Any] = {
-        **base_body,
-        "run_live_token_contract": True,
-        "live_token_timeout_secs": live_token_timeout_s,
-    }
-    status, payload = _request_json(
-        method="POST",
-        url=f"{api_url}/api/agents/machines/{args.claude_device_id}/provider-live-proof",
-        token=args.claude_agents_token,
-        body=body,
-        timeout_s=process_timeout_s + 30,
-    )
-    if _legacy_live_token_contract_rejected(status, payload):
-        status, payload = _request_json(
-            method="POST",
-            url=f"{api_url}/api/agents/machines/{args.claude_device_id}/provider-live-proof",
-            token=args.claude_agents_token,
-            body=base_body,
-            timeout_s=process_timeout_s + 30,
-        )
-    if status != 202:
-        return status, payload
-    return _poll_operation(
-        api_url=api_url,
-        token=args.claude_agents_token,
-        device_id=args.claude_device_id,
-        provider="claude",
-        accepted=payload,
-        http_timeout_s=process_timeout_s + 30,
-        poll_timeout_s=process_timeout_s + 60,
-    )
-
-
-def _missing_claude_machine_live_operations(
-    artifact: dict[str, Any],
-) -> list[str]:
-    evidence = artifact.get("operation_evidence")
-    if not isinstance(evidence, dict):
-        evidence = {}
-    missing: list[str] = []
-    for operation in CLAUDE_MACHINE_LIVE_REQUIRED_OPERATIONS:
-        item = evidence.get(operation)
-        if not isinstance(item, dict):
-            missing.append(operation)
-            continue
-        if item.get("status") != "pass" or item.get("level") != "manual_live_token":
-            missing.append(operation)
-    return missing
-
-
-def _run_claude_machine_live_proof(
-    args: argparse.Namespace,
-    raw_dir: Path,
-) -> tuple[dict[str, Any], dict[str, str], int | None]:
-    artifact_path = raw_dir / "claude-machine-live-proof.json"
-    raw_artifacts = {"claude_machine_live_artifact": str(artifact_path)}
-    status, payload = _post_machine_live_proof(args)
-    _write_json(artifact_path, payload)
-    if status != 200:
-        message = _detail_message(payload)
-        artifact = {
-            "artifact_kind": "provider_live_canary",
-            "provider": "claude",
-            "provider_version": args.provider_version,
-            "verdict": "red",
-            "failure_code": "claude_machine_live_proof_failed",
-            "recommendation": "block_upgrade_recommendation",
-            "canaries": {
-                "claude_machine_live_proof": _fail_control_canary(
-                    "claude_machine_live_proof_failed",
-                    f"Runtime Host provider-live-proof returned HTTP {status}: {message}",
-                )
-            },
-            "operation_evidence": {},
-        }
-        return artifact, raw_artifacts, 1
-
-    result = payload.get("result")
-    live_artifact = result.get("artifact") if isinstance(result, dict) else None
-    if not isinstance(live_artifact, dict):
-        artifact = {
-            "artifact_kind": "provider_live_canary",
-            "provider": "claude",
-            "provider_version": args.provider_version,
-            "verdict": "red",
-            "failure_code": "claude_machine_live_artifact_missing",
-            "recommendation": "block_upgrade_recommendation",
-            "canaries": {
-                "claude_machine_live_proof": _fail_control_canary(
-                    "claude_machine_live_artifact_missing",
-                    "Runtime Host provider-live-proof response did not include a live artifact.",
-                )
-            },
-            "operation_evidence": {},
-        }
-        return artifact, raw_artifacts, 1
-
-    live_artifact = dict(live_artifact)
-    missing_operations = _missing_claude_machine_live_operations(live_artifact)
-    insufficient_message = None
-    if live_artifact.get("verdict") != "red" and missing_operations:
-        insufficient_message = (
-            "Runtime Host provider-live-proof did not return required "
-            "manual live-token evidence for: " + ", ".join(missing_operations)
-        )
-        live_artifact["verdict"] = "yellow"
-        live_artifact["failure_code"] = "claude_machine_live_insufficient_coverage"
-        live_artifact["recommendation"] = "investigate_before_upgrade"
-    canaries = dict(live_artifact.get("canaries") or {})
-    verdict = str(live_artifact.get("verdict") or "").lower()
-    canary_status = (
-        "fail" if verdict == "red" else "warn" if verdict == "yellow" else "pass"
-    )
-    canaries["claude_machine_live_proof"] = {
-        "status": canary_status,
-        "verdict": live_artifact.get("verdict"),
-        "failure_code": live_artifact.get("failure_code"),
-        "device_id": payload.get("device_id"),
-        "command_id": payload.get("command_id"),
-        "operation_id": payload.get("operation_id"),
-    }
-    if insufficient_message is not None:
-        canaries["claude_machine_live_proof"]["message"] = insufficient_message
-        canaries["claude_machine_live_proof"]["missing_operations"] = missing_operations
-    live_artifact["canaries"] = canaries
-    returncode = None
-    if isinstance(result, dict) and result.get("exit_code") is not None:
-        returncode = int(result.get("exit_code"))
-    return live_artifact, raw_artifacts, returncode
 
 
 def _run_claude_real_print_proof(
@@ -2048,12 +1654,6 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         args.codex_agents_token = args.codex_agents_token or os.getenv(
             CODEX_AGENTS_TOKEN_ENV
         )
-    if args.provider == "claude":
-        args.claude_api_url = args.claude_api_url or os.getenv(CLAUDE_API_URL_ENV)
-        args.claude_agents_token = args.claude_agents_token or os.getenv(
-            CLAUDE_AGENTS_TOKEN_ENV
-        )
-        args.claude_device_id = args.claude_device_id or os.getenv(CLAUDE_DEVICE_ID_ENV)
     preflight = _proof_preflight(args)
     if args.preflight_only:
         preflight["artifact_path"] = str(args.artifact)
@@ -2071,15 +1671,6 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         raw_artifacts.update(universal_artifacts)
         source_artifact = _merge_universal_harness(source_artifact, universal_artifact)
         returncode = returncode or universal_returncode
-    if args.provider == "claude" and args.claude_run_machine_live_proof:
-        machine_artifact, machine_artifacts, machine_returncode = (
-            _run_claude_machine_live_proof(args, raw_dir)
-        )
-        raw_artifacts.update(machine_artifacts)
-        source_artifact = _merge_claude_machine_live_proof(
-            source_artifact, machine_artifact
-        )
-        returncode = returncode or machine_returncode
     if args.provider == "claude" and args.claude_run_real_print:
         control_artifact, control_artifacts, control_returncode = (
             _run_claude_real_print_proof(args, raw_dir)
@@ -2346,11 +1937,7 @@ def _args_from_config(config_path: Path) -> argparse.Namespace:
     args.codex_agents_token = codex.get("agents_token")
 
     claude = config.get("claude") or {}
-    args.claude_run_machine_live_proof = bool(claude.get("run_machine_live_proof"))
     args.claude_run_real_print = bool(claude.get("run_real_print"))
-    args.claude_api_url = claude.get("api_url")
-    args.claude_agents_token = claude.get("agents_token")
-    args.claude_device_id = claude.get("device_id")
     args.claude_print_timeout_secs = int(claude.get("print_timeout_secs", 180))
 
     opencode = config.get("opencode") or {}
@@ -2428,11 +2015,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-real-tool-timeout-secs", type=int, default=180)
     parser.add_argument("--codex-api-url")
     parser.add_argument("--codex-agents-token")
-    parser.add_argument("--claude-run-machine-live-proof", action="store_true")
     parser.add_argument("--claude-run-real-print", action="store_true")
-    parser.add_argument("--claude-api-url")
-    parser.add_argument("--claude-agents-token")
-    parser.add_argument("--claude-device-id")
     parser.add_argument(
         "--claude-print-timeout-secs",
         type=int,

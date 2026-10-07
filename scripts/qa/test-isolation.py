@@ -103,8 +103,6 @@ LIVE = {
     "test-terminal-fidelity-web",
     "test-terminal-fidelity-gate",
     "provider-release-proof-universal-live-smoke",
-    "provider-live-route-e2e",
-    "provider-live-route-e2e-opencode-transcript",
     "hosted-shipper-mixed-bench",
     "render-canary",
     "cohort-journey",

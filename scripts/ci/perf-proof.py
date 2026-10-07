@@ -302,46 +302,7 @@ def _bench_result_payload(label: str, result: CommandResult) -> dict[str, Any]:
     return payload
 
 
-def run_provider_live_route(output_root: Path) -> dict[str, Any]:
-    token = os.environ.get("LONGHOUSE_DEVICE_TOKEN")
-    proof_dir = Path(os.environ.get("PROVIDER_LIVE_PROOF_DIR", Path.home() / ".longhouse" / "provider-live-proof"))
-    if not token:
-        return {"status": "skipped", "reason": "LONGHOUSE_DEVICE_TOKEN is not set"}
-    if not proof_dir.exists():
-        return {"status": "skipped", "reason": f"provider-live proof dir missing: {proof_dir}"}
-    artifact_path = output_root / "provider-live-route-e2e.json"
-    with tempfile.TemporaryDirectory(prefix="lh-provider-token-") as temp_dir:
-        token_file = Path(temp_dir) / "device-token"
-        token_file.write_text(token.rstrip() + "\n", encoding="utf-8")
-        token_file.chmod(0o600)
-        result = run_command(
-            [
-                sys.executable,
-                str(ROOT / "scripts" / "qa" / "provider-live-route-e2e.py"),
-                "--provider",
-                "auto",
-                "--token-file",
-                str(token_file),
-                "--artifact",
-                str(artifact_path),
-                "--require-verdict",
-                "non-red",
-            ],
-            cwd=ROOT,
-        )
-    return {
-        "status": "ok" if result.returncode == 0 else "failed",
-        "cmd": result.cmd,
-        "returncode": result.returncode,
-        "wall_ms": result.elapsed_ms,
-        "artifact": str(artifact_path),
-        "stderr_tail": result.stderr[-1200:] if result.returncode != 0 else "",
-    }
-
-
 def build_artifact(args: argparse.Namespace) -> dict[str, Any]:
-    output_path = Path(args.output).resolve()
-    output_root = output_path.parent
     engine_bin = Path(args.engine_bin).resolve()
     python_cli = (
         Path(args.python_cli).resolve() if args.python_cli else ROOT / "server" / ".venv" / "bin" / "longhouse"
@@ -365,7 +326,6 @@ def build_artifact(args: argparse.Namespace) -> dict[str, Any]:
         "startup": startup,
         "shipper_parse_compress": run_engine_bench(engine_bin, mixed=False),
         "mixed_live_archive": run_engine_bench(engine_bin, mixed=True),
-        "provider_live_route_e2e": run_provider_live_route(output_root),
     }
 
     return {
@@ -435,13 +395,6 @@ def write_summary_markdown(artifact: dict[str, Any], path: Path) -> None:
             sla=mixed_metrics.get("live_sla", "-"),
         )
     )
-    provider = benches.get("provider_live_route_e2e") or {}
-    lines.append(
-        "| Provider route E2E | {status} | {signal} |".format(
-            status=provider.get("status", "unknown"),
-            signal=_provider_signal(provider),
-        )
-    )
     lines.append("")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -453,12 +406,6 @@ def _fmt_float(value: Any, *, suffix: str = "") -> str:
         return f"{float(value):.1f}{suffix}"
     except (TypeError, ValueError):
         return "-"
-
-
-def _provider_signal(provider: dict[str, Any]) -> str:
-    if provider.get("status") == "skipped":
-        return provider.get("reason") or "skipped"
-    return f"wall {_fmt_float(provider.get('wall_ms'))} ms"
 
 
 def _shipper_signal(metrics: dict[str, Any]) -> str:

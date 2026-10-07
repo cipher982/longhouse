@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -132,7 +131,6 @@ def test_summary_markdown_contains_core_surfaces() -> None:
                 "status": "ok",
                 "metrics": {"live_latency": {"p95_ms": 3.2}, "live_sla": "PASS"},
             },
-            "provider_live_route_e2e": {"status": "skipped", "reason": "LONGHOUSE_DEVICE_TOKEN is not set"},
         },
     }
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -142,60 +140,12 @@ def test_summary_markdown_contains_core_surfaces() -> None:
     assert "Cold help invocation" in text
     assert "Shipper parse+compress" in text
     assert "Mixed live/archive" in text
-    assert "Provider route E2E" in text
-    assert "LONGHOUSE_DEVICE_TOKEN is not set" in text
 
 
 def test_shipper_signal_treats_zero_rss_as_unavailable() -> None:
     perf = _module()
     assert perf._shipper_signal({"throughput_mb_s": 480.5, "peak_rss_mb": 0.0}) == "480.5 MB/s, RSS unavailable"
     assert perf._shipper_signal({"throughput_mb_s": 480.5, "peak_rss_mb": 32.6}) == "480.5 MB/s, RSS 32.6 MB"
-
-
-def test_provider_live_route_passes_artifact_and_temp_token_file() -> None:
-    perf = _module()
-    captured: dict[str, object] = {}
-
-    def fake_run_command(cmd, *, cwd, env=None):  # noqa: ANN001, ANN202
-        captured["cmd"] = list(cmd)
-        token_file = Path(cmd[cmd.index("--token-file") + 1])
-        captured["token_file"] = token_file
-        assert token_file.read_text(encoding="utf-8") == "secret-token\n"
-        artifact = Path(cmd[cmd.index("--artifact") + 1])
-        artifact.write_text("{}\n", encoding="utf-8")
-        return perf.CommandResult(cmd=list(cmd), returncode=0, elapsed_ms=12.3, stdout="ok", stderr="")
-
-    previous_token = os.environ.get("LONGHOUSE_DEVICE_TOKEN")
-    previous_proof_dir = os.environ.get("PROVIDER_LIVE_PROOF_DIR")
-    previous_run_command = perf.run_command
-    with tempfile.TemporaryDirectory() as temp_dir:
-        proof_dir = Path(temp_dir) / "provider-live-proof"
-        proof_dir.mkdir()
-        output_root = Path(temp_dir) / "out"
-        output_root.mkdir()
-        try:
-            os.environ["LONGHOUSE_DEVICE_TOKEN"] = "secret-token"
-            os.environ["PROVIDER_LIVE_PROOF_DIR"] = str(proof_dir)
-            perf.run_command = fake_run_command
-            payload = perf.run_provider_live_route(output_root)
-        finally:
-            perf.run_command = previous_run_command
-            if previous_token is None:
-                os.environ.pop("LONGHOUSE_DEVICE_TOKEN", None)
-            else:
-                os.environ["LONGHOUSE_DEVICE_TOKEN"] = previous_token
-            if previous_proof_dir is None:
-                os.environ.pop("PROVIDER_LIVE_PROOF_DIR", None)
-            else:
-                os.environ["PROVIDER_LIVE_PROOF_DIR"] = previous_proof_dir
-
-    cmd = captured["cmd"]
-    assert payload["status"] == "ok"
-    assert "--artifact" in cmd
-    assert "--require-verdict" in cmd
-    assert cmd[cmd.index("--require-verdict") + 1] == "non-red"
-    assert Path(payload["artifact"]).name == "provider-live-route-e2e.json"
-    assert not Path(captured["token_file"]).exists()
 
 
 def test_failed_surfaces_ignores_skips_but_reports_failures() -> None:
@@ -208,7 +158,6 @@ def test_failed_surfaces_ignores_skips_but_reports_failures() -> None:
                 "python_cli_cold_help_invocation": {"status": "skipped"},
             },
             "shipper_parse_compress": {"status": "ok"},
-            "provider_live_route_e2e": {"status": "skipped"},
             "mixed_live_archive": {"status": "failed"},
         }
     }
@@ -228,7 +177,6 @@ def main() -> int:
         test_startup_summary_is_partial_when_probe_skipped,
         test_summary_markdown_contains_core_surfaces,
         test_shipper_signal_treats_zero_rss_as_unavailable,
-        test_provider_live_route_passes_artifact_and_temp_token_file,
         test_failed_surfaces_ignores_skips_but_reports_failures,
     ]
     for test in tests:

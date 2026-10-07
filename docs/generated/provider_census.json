@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 311,
+  "file_count": 308,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -664,14 +664,6 @@
       ]
     },
     {
-      "path": "scripts/qa/provider-live-route-e2e.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "opencode"
-      ]
-    },
-    {
       "path": "scripts/qa/provider-release-proof-universal-smoke.py",
       "providers": [
         "antigravity",
@@ -737,13 +729,6 @@
     },
     {
       "path": "scripts/tests/provider-live-proof-publish.test.py",
-      "providers": [
-        "claude",
-        "opencode"
-      ]
-    },
-    {
-      "path": "scripts/tests/provider-live-route-e2e.test.py",
       "providers": [
         "claude",
         "opencode"
@@ -1553,14 +1538,6 @@
       "path": "server/tests_lite/test_provider_live_proof.py",
       "providers": [
         "claude",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_live_route_e2e.py",
-      "providers": [
-        "claude",
-        "codex",
         "opencode"
       ]
     },
