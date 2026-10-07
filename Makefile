@@ -1300,9 +1300,9 @@ ui-sweep: ## Open every menu on every fixture page/scene at desktop, wide and ph
 	@$(MAKE) --no-print-directory ensure-playwright-browser
 	@bunx tsx scripts/ui/ui-gallery.ts --sweep $(if $(ONLY),--only=$(ONLY),) $(if $(JOBS),--jobs=$(JOBS),) $(if $(OUTPUT),--output=$(OUTPUT),)
 
-test-ui-sweep: ## @internal ui-sweep in the isolated test container (the CI lane); report and frames land in artifacts/ui-sweep
+test-ui-sweep: ## @internal ui-sweep in the isolated test container (the CI lane; ARGS=--viewports=mobile shards it); report and frames land in artifacts/ui-sweep
 	@$(MAKE) --no-print-directory ensure-playwright-browser
-	@bun scripts/ui/ui-gallery.ts --sweep --jobs=3 --output=artifacts/ui-sweep
+	@bun scripts/ui/ui-gallery.ts --sweep --jobs=2 --output=artifacts/ui-sweep $(ARGS)
 
 landing-screenshots: ## Regenerate the landing showcase images (Timeline/Search/Session Detail) from the current UI with curated fixtures
 	@./scripts/ui/landing-screenshots.sh
