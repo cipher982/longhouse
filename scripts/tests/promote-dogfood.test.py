@@ -204,7 +204,7 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(promotions), 1)
         self.assertIn("ring-lock: reclaimed dogfood-fixture-owner from", result.stderr)
-        self.assertEqual([e for e in self.lock_events if e != "renewed"], ["acquired", "reclaimed", "acquired", "released"])
+        self.assertEqual(self.lock_events, ["acquired", "reclaimed", "acquired", "released"])
 
     def test_an_unreviewed_range_promotes_nothing(self):
         result, promotions = self.run_promotion(gate_refuses=True)

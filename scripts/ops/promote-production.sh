@@ -89,7 +89,7 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
     echo "Refusing: could not take the production lock (above). Nothing was changed." >&2
     exit 1
   }
-  lh_ring_lock_keepalive 60 2700  # renewed while this script lives; the TTL bounds a stuck holder
+  lh_ring_lock_keepalive 60 2700  # renewed while this script lives
 fi
 
 # --- The gates. Every one runs; the receipt is printed whether or not they pass.

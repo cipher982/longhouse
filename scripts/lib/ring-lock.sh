@@ -10,7 +10,8 @@
 #
 # The holder is this script's pid ($$), so a holder that dies without its trap
 # (kill -9, a closed terminal) frees the lock at once for anyone on this machine;
-# the TTL bounds only a holder that is alive but stuck. ROOT must name a checkout.
+# every holder runs the keepalive, so the TTL bounds only a holder that stopped
+# renewing (suspended, or its keepalive died). ROOT must name a checkout.
 LH_RING_LOCK_SURFACE="${LH_RING_LOCK_SURFACE:-}"
 LH_RING_LOCK_TOKEN="${LH_RING_LOCK_TOKEN:-}"
 LH_RING_LOCK_KEEPALIVE_PID=""
