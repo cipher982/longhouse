@@ -33,12 +33,15 @@ function signalWindowPassed(signal: ServedSignal, nowMs: number): boolean {
   return !Number.isNaN(expiresAtMs) && nowMs >= expiresAtMs;
 }
 
-/** The freshness gate: has the served claim outlived its window on this clock? */
+/**
+ * The freshness gate: has the served claim outlived its window on this clock?
+ * A snapshot without the signal (a cached frame from before the field existed)
+ * carries no valid claim, so it reads as expired, matching `servedSignal`'s unknown.
+ */
 export function workClaimExpired(facts: StatusFacts, nowMs: number): boolean {
   const signal = facts.presentation.signal;
-  return Boolean(
-    signal && (signal.state === "working" || signal.state === "attention") && signalWindowPassed(signal, nowMs),
-  );
+  if (!signal) return true;
+  return (signal.state === "working" || signal.state === "attention") && signalWindowPassed(signal, nowMs);
 }
 
 /**

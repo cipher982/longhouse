@@ -16,6 +16,7 @@ import {
   pendingInteractionLabel,
   sessionIsWorking,
   sessionNeedsInteraction,
+  servedSignal,
   workClaimExpired,
 } from "../sessionStatus";
 
@@ -30,6 +31,14 @@ describe("sessionStatus", () => {
     expect(workClaimExpired(fresh, NOW)).toBe(false);
     expect(sessionIsWorking(expired, NOW)).toBe(false);
     expect(workClaimExpired(expired, NOW)).toBe(true);
+  });
+
+  it("reads a snapshot without the served signal as unknown on both gates", () => {
+    const facts = makeSessionStateFacts({ activity: "executing", activityValidUntil: iso(60_000) });
+    delete (facts.presentation as { signal?: unknown }).signal;
+    expect(servedSignal(facts, NOW)).toBe("unknown");
+    expect(workClaimExpired(facts, NOW)).toBe(true);
+    expect(sessionIsWorking(facts, NOW)).toBe(false);
   });
 
   it("keeps delegated work live on its own fresh claim after parent activity expires", () => {
