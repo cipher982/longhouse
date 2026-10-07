@@ -120,20 +120,20 @@ const CHECK_OVERLAYS = `((mode, parent) => {
   // off-screen. A wrapper that scrolls brings them in itself.
   const fills = (r) => r.left <= TOL && r.top <= TOL && r.right >= vw - TOL && r.bottom >= vh - TOL;
   const scrolls = (el) => /(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1;
-  const judged = roots.map((el) => ({ el, scrollable: false }));
+  const judged = roots.map((el) => ({ el, scrollable: false, panel: false }));
   const walk = (node, scrollable) => {
     for (const child of node.children) {
       if (!visible(child) || getComputedStyle(child).pointerEvents === "none") continue;
       const cr = child.getBoundingClientRect();
       if (fills(cr)) walk(child, scrollable || scrolls(child));
-      else if (cr.width >= 24 && cr.height >= 16) judged.push({ el: child, scrollable });
+      else if (cr.width >= 24 && cr.height >= 16) judged.push({ el: child, scrollable, panel: true });
     }
   };
   for (const root of roots) {
     if (fills(root.getBoundingClientRect())) walk(root, scrolls(root));
   }
   const failures = [];
-  for (const { el, scrollable } of judged) {
+  for (const { el, scrollable, panel } of judged) {
     const r = el.getBoundingClientRect();
     const name = label(el);
     if (!scrollable && (r.left < -TOL || r.top < -TOL || r.right > vw + TOL || r.bottom > vh + TOL)) {
@@ -178,8 +178,10 @@ const CHECK_OVERLAYS = `((mode, parent) => {
     for (const [x, y] of points) {
       const hit = document.elementFromPoint(x, y);
       // A drawer may cover its own scrim: overlays opened together may
-      // overlap each other, never the page they opened over.
-      if (hit && !roots.some((root) => root.contains(hit))) {
+      // overlap each other, never the page they opened over. A panel inside
+      // a full-screen overlay must be on top of its own backdrop too.
+      const onTop = panel ? hit && el.contains(hit) : hit && roots.some((root) => root.contains(hit));
+      if (hit && !onTop) {
         failures.push({ overlay: name, rule: "occluded", detail: "covered by " + label(hit) + " at " + Math.round(x) + "," + Math.round(y) });
         break;
       }

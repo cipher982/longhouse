@@ -380,6 +380,7 @@ export default function SessionsPage() {
         variant="primary"
         size="sm"
         onClick={() => setLaunchModalOpen(true)}
+        aria-haspopup="dialog"
         data-testid="sessions-start-session"
       >
         Start a session
@@ -485,6 +486,7 @@ export default function SessionsPage() {
               variant="ghost"
               size="sm"
               onClick={() => setLaunchModalOpen(true)}
+              aria-haspopup="dialog"
               data-testid="timeline-empty-start-session"
             >
               Machine already connected? Start a session

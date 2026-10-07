@@ -177,7 +177,7 @@ export default function MachinesPage() {
   const directoryIsEmpty = data === undefined && directory.data?.machines?.length === 0;
 
   const connectButton = (
-    <Button variant="primary" data-testid="machines-connect-button" onClick={() => setShowConnect(true)}>
+    <Button variant="primary" data-testid="machines-connect-button" aria-haspopup="dialog" onClick={() => setShowConnect(true)}>
       <PlusIcon />
       Connect a machine
     </Button>
@@ -187,7 +187,7 @@ export default function MachinesPage() {
       title="Connect your first machine"
       description="Install Longhouse on a machine and the Claude Code, Codex and other agent sessions it runs show up here and on the Timeline."
       action={
-        <Button variant="primary" size="lg" data-testid="machines-connect-first-button" onClick={() => setShowConnect(true)}>
+        <Button variant="primary" size="lg" data-testid="machines-connect-first-button" aria-haspopup="dialog" onClick={() => setShowConnect(true)}>
           Connect a machine
         </Button>
       }

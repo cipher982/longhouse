@@ -7,6 +7,7 @@
  */
 
 import { useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { useMutation } from "@tanstack/react-query";
 import {
   useDeviceTokens,
@@ -17,6 +18,7 @@ import { createDeviceConnectCode, type DeviceTokenCreated } from "@/shared/api/d
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import { SectionHeader, EmptyState, Button, Badge, PageShell, Spinner } from "@/shared/ui";
 import { useConfirm } from "@/shared/ui/confirm";
+import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { parseUTC } from "@/shared/lib/dateUtils";
 import { connectMachineCommand, connectServerCommand } from "./connectCommands";
 import "./DevicesPage.css";
@@ -54,6 +56,7 @@ const CONNECT_FAILURE_REASONS: Record<string, string> = {
 
 export default function DevicesPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
+  useEscapeKey(() => setShowCreateModal(false), showCreateModal);
   const [deviceName, setDeviceName] = useState("");
   const [newToken, setNewToken] = useState<DeviceTokenCreated | null>(null);
   const [handoffStalled, setHandoffStalled] = useState(false);
@@ -265,7 +268,12 @@ export default function DevicesPage() {
 
       <div className="devices-section">
         <div className="devices-toolbar">
-          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
+          <Button
+            variant="primary"
+            aria-haspopup="dialog"
+            data-testid="devices-create-token"
+            onClick={() => setShowCreateModal(true)}
+          >
             + Create Token
           </Button>
         </div>
@@ -329,57 +337,59 @@ export default function DevicesPage() {
         <code>{connectMachineCommand()}</code>
       </div>
 
-      {/* Create modal */}
-      {showCreateModal && (
-        <div className="devices-modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div
-            className="devices-modal-content"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Create Device Token"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="devices-modal-header">
-              <h3>Create Device Token</h3>
-              <button className="devices-modal-close" onClick={() => setShowCreateModal(false)}>
-                &times;
-              </button>
-            </div>
-            <form onSubmit={handleCreate}>
-              <div className="devices-modal-body">
-                <div className="devices-form-group">
-                  <label htmlFor="device-name">Device Name</label>
-                  <input
-                    id="device-name"
-                    type="text"
-                    value={deviceName}
-                    onChange={(e) => setDeviceName(e.target.value)}
-                    placeholder="e.g., macbook-pro, work-laptop"
-                    required
-                    maxLength={255}
-                    autoFocus
-                  />
-                  <p className="devices-form-hint">
-                    A label to identify which device is using this token.
-                  </p>
+      {/* Create modal, on <body>: inside the page the app header drew over it. */}
+      {showCreateModal &&
+        createPortal(
+          <div className="devices-modal-overlay" onClick={() => setShowCreateModal(false)}>
+            <div
+              className="devices-modal-content"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Create Device Token"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="devices-modal-header">
+                <h3>Create Device Token</h3>
+                <button className="devices-modal-close" onClick={() => setShowCreateModal(false)}>
+                  &times;
+                </button>
+              </div>
+              <form onSubmit={handleCreate}>
+                <div className="devices-modal-body">
+                  <div className="devices-form-group">
+                    <label htmlFor="device-name">Device Name</label>
+                    <input
+                      id="device-name"
+                      type="text"
+                      value={deviceName}
+                      onChange={(e) => setDeviceName(e.target.value)}
+                      placeholder="e.g., macbook-pro, work-laptop"
+                      required
+                      maxLength={255}
+                      autoFocus
+                    />
+                    <p className="devices-form-hint">
+                      A label to identify which device is using this token.
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <div className="devices-modal-footer">
-                <Button type="button" variant="ghost" onClick={() => setShowCreateModal(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  disabled={createToken.isPending}
-                >
-                  {createToken.isPending ? "Creating..." : "Create Token"}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                <div className="devices-modal-footer">
+                  <Button type="button" variant="ghost" onClick={() => setShowCreateModal(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    disabled={createToken.isPending}
+                  >
+                    {createToken.isPending ? "Creating..." : "Create Token"}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body,
+        )}
     </PageShell>
   );
 }

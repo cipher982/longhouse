@@ -160,6 +160,7 @@ const SCENES = [
   "first-run-machine",
   "login",
   "devices-revoke",
+  "devices-list",
   "machines-fleet",
   "machines-unavailable",
 ] as const;
@@ -183,6 +184,10 @@ const LOGIN_SCENE: SceneName = "login";
 // The Devices page with a machine holding two valid tokens (each `longhouse
 // auth` mints one) and a revoked one, framed on the revoke-machine confirmation.
 const DEVICES_REVOKE_SCENE: SceneName = "devices-revoke";
+// The same Devices page at rest, nothing opened, so the sweep reaches its
+// Create Token dialog.
+const DEVICES_LIST_SCENE: SceneName = "devices-list";
+const DEVICES_SCENES: readonly SceneName[] = [DEVICES_REVOKE_SCENE, DEVICES_LIST_SCENE];
 // A personal fleet (live Mac, signed-out bench box, idle box, a server with no
 // live connection, quiet machines) for PAGE=machines and PAGE=machine-detail;
 // machines-unavailable serves the same directory but fails the summary read.
@@ -391,7 +396,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === FIRST_RUN_SCENE ||
     scene === FIRST_RUN_MACHINE_SCENE ||
     scene === LOGIN_SCENE ||
-    scene === DEVICES_REVOKE_SCENE ||
+    DEVICES_SCENES.includes(scene) ||
     MACHINES_SCENES.includes(scene)
   );
 }
@@ -409,8 +414,8 @@ function validateOptions(opts: Options): void {
   if ((opts.scene === PROVIDER_CERTIFICATION_SCENE) !== (opts.page === "landing")) {
     throw new Error(`PAGE=landing and --scene=${PROVIDER_CERTIFICATION_SCENE} capture only each other.`);
   }
-  if (opts.scene === DEVICES_REVOKE_SCENE && opts.page !== "devices") {
-    throw new Error(`--scene=${DEVICES_REVOKE_SCENE} captures PAGE=devices only.`);
+  if (DEVICES_SCENES.includes(opts.scene) && opts.page !== "devices") {
+    throw new Error(`--scene=${opts.scene} captures PAGE=devices only.`);
   }
   if ((opts.scene === LOGIN_SCENE) !== (opts.page === "login")) {
     throw new Error(`PAGE=login and --scene=${LOGIN_SCENE} capture only each other.`);
@@ -976,7 +981,7 @@ export async function installSceneMocks(
       return;
     }
 
-    if (scene === DEVICES_REVOKE_SCENE && pathname === "/api/devices/tokens") {
+    if (DEVICES_SCENES.includes(scene) && pathname === "/api/devices/tokens") {
       const token = (id: string, device_id: string, created_at: string, last_used_at: string | null, revoked_at: string | null = null) => ({
         id,
         device_id,

@@ -247,7 +247,7 @@ export default function MachineDetailPage() {
             Open sessions
           </Link>
           {canLaunch && (
-            <Button variant="primary" data-testid="machine-new-session" onClick={() => setLaunchOpen(true)}>
+            <Button variant="primary" data-testid="machine-new-session" aria-haspopup="dialog" onClick={() => setLaunchOpen(true)}>
               New session
             </Button>
           )}

@@ -832,6 +832,7 @@ function SessionDetailWorkspaceRoute({
                               size="sm"
                               onClick={() => void handleResume()}
                               disabled={resumeLoading}
+                              aria-haspopup="dialog"
                               data-testid="session-resume-button"
                             >
                               {resumeLoading ? "Checking…" : "Show resume command"}

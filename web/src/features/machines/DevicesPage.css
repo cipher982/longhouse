@@ -166,7 +166,9 @@
 }
 
 .devices-modal-content {
-  background: var(--bg-secondary);
+  /* Opaque: --bg-secondary is a 45% section wash, which let the token
+     table read through the form. */
+  background: var(--color-surface-card);
   border: 1px solid var(--border-muted);
   border-radius: 12px;
   width: 100%;

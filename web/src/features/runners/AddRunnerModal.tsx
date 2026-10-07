@@ -5,6 +5,7 @@ import { buildRunnerNativeInstallCommand, describeRunnerNativeInstallMode, type 
 import { parseUTC } from "@/shared/lib/dateUtils";
 import ConnectMachine from "@/features/machines/ConnectMachine";
 import { Button, Spinner } from "@/shared/ui";
+import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 
 interface AddRunnerModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ type InstallTab = "native" | "docker";
 export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps) {
   const createTokenMutation = useCreateEnrollToken();
   const [copied, setCopied] = useState(false);
+  useEscapeKey(onClose, isOpen);
   const [activeTab, setActiveTab] = useState<InstallTab>("native");
   const [nativeMode, setNativeMode] = useState<RunnerNativeInstallMode>("desktop");
   const [runnerOpen, setRunnerOpen] = useState(false);
