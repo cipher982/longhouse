@@ -142,13 +142,6 @@ export interface SessionTranscriptPreview {
     | null;
 }
 
-export type RuntimeSignalTier = components["schemas"]["SignalTier"];
-export type RuntimeTone = components["schemas"]["Tone"];
-export type RuntimeControlPath = components["schemas"]["ControlPath"];
-export type RuntimeActivityRecency = components["schemas"]["ActivityRecency"];
-export type RuntimeLifecycle = components["schemas"]["Lifecycle"];
-export type RuntimeHostState = components["schemas"]["HostState"];
-export type RuntimeTerminalReason = components["schemas"]["TerminalReason"];
 export type AgentEventMediaRef = components["schemas"]["EventMediaRefResponse"];
 export type SessionPauseQuestionOption =
   components["schemas"]["SessionPauseQuestionOptionResponse"];
