@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 310,
+  "file_count": 312,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2608,6 +2608,22 @@
         "omp",
         "opencode",
         "pi"
+      ]
+    },
+    {
+      "path": "web/src/features/session/RunningCallRow.tsx",
+      "providers": [
+        "claude",
+        "omp"
+      ]
+    },
+    {
+      "path": "web/src/features/session/__tests__/NarratedSteps.test.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "omp",
+        "opencode"
       ]
     },
     {

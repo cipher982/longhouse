@@ -826,25 +826,18 @@ describe("SessionDetailPage", () => {
         .querySelector<HTMLElement>(".timeline-pane__rows");
       if (!transcriptList) throw new Error("Expected transcript rows");
 
-      {
-        const label = within(transcriptList).getByText("Bash");
-        const row = label.closest('[data-row-kind="tool"]');
-        expect(row).toHaveTextContent("running");
-      }
+      // A running call is the alive row: the command as its headline (no
+      // description was given), a clock, and why there is no output yet.
+      const row = transcriptList.querySelector<HTMLElement>('[data-row-kind="tool"]');
+      if (!row) throw new Error("Expected the running call row");
+      expect(row).toHaveAttribute("data-status", "pending");
+      expect(row).toHaveTextContent("git status --short");
+      expect(within(row).getByTestId("running-call-clock")).toBeInTheDocument();
 
-      const toolLabel = within(transcriptList).getByText("Bash");
-      const toolRow = toolLabel.closest("button");
-      if (!(toolRow instanceof HTMLButtonElement)) {
-        throw new Error(
-          "Expected the tool label to live inside a clickable row",
-        );
-      }
+      fireEvent.click(within(row).getByRole("button", { expanded: false }));
 
-      fireEvent.click(toolRow);
-
-      const row = within(transcriptList).getByText("Bash").closest('[data-row-kind="tool"]');
-      expect(row).not.toBeNull();
-      expect(row).toHaveTextContent("Result not recorded yet.");
+      expect(row).not.toHaveTextContent("Result not recorded yet.");
+      expect(row).toHaveTextContent(/No output|Activity uncertain/);
       expect(row).not.toHaveTextContent(
         "Tool call dropped \u2014 no result was ever recorded.",
       );

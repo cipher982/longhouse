@@ -1132,3 +1132,28 @@
   color: var(--color-text-danger, #b00020);
   cursor: pointer;
 }
+
+/* While the session is working on fresh evidence (composer tone "live", the
+   same sessionIsWorking gate as the header lamp), the dock's top leaf
+   breathes. Reduced motion holds it at a steady glow. */
+.session-chat-composer--running .session-chat-composer__leaf {
+  animation: session-chat-leaf-breathe 3.2s ease-in-out infinite;
+}
+@keyframes session-chat-leaf-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+    box-shadow: none;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 12px 1px rgba(240, 138, 36, 0.55);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-chat-composer--running .session-chat-composer__leaf {
+    animation: none;
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(240, 138, 36, 0.45);
+  }
+}

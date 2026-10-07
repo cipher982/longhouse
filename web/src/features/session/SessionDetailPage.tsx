@@ -753,6 +753,7 @@ function SessionDetailWorkspaceRoute({
           items={items}
           provider={displaySession.provider}
           outbox={outboxEntries}
+          liveness={{ facts: displaySession.session_state, host: identityHost }}
           totalEntries={totalEntries}
           loadedEntries={loadedEntryCount}
           abandonedEvents={abandonedEvents}

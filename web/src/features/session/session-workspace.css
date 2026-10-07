@@ -3913,3 +3913,366 @@
     font-size: 14px;
   }
 }
+
+/* --- Narrated steps (timeline-reading-experience.md, Change F) ---
+   A thought leads its step as readable prose: italic, brighter than tool
+   text, clamped to three lines. The tool rows that follow it trail beneath as
+   one dim mono line each — no border, no trace node of their own — so a
+   thought and its calls read as one block. The clock shows only when the
+   minute changed. */
+.tl-thought {
+  position: relative;
+  display: block;
+  max-width: var(--tl-tool-max);
+  margin-inline: auto;
+  width: 100%;
+  padding: 10px 76px 2px var(--space-2);
+  border-radius: 2px;
+}
+.tl-thought::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--trace-inset, 8px));
+  top: 21px;
+  width: var(--trace-inset, 8px);
+  height: 1px;
+  background: rgba(233, 185, 73, 0.5);
+}
+.tl-thought::after {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--trace-inset, 8px) - 2.5px);
+  top: 18.5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-surface-page);
+  box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.75);
+}
+.tl-thought.is-selected {
+  background: rgba(212, 184, 122, 0.05);
+}
+.tl-thought__time {
+  position: absolute;
+  top: 12px;
+  right: var(--space-2);
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tl-thought__head {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.tl-thought.is-openable .tl-thought__head {
+  cursor: pointer;
+}
+.tl-thought.is-openable .tl-thought__head:hover .tl-thought__prose {
+  color: var(--color-text-primary);
+}
+.tl-thought__prose {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  max-width: var(--tl-prose-max);
+  white-space: pre-line;
+  font-family: var(--font-family-base);
+  font-style: italic;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: rgba(246, 235, 214, 0.8);
+  transition: color var(--motion-duration-fast) var(--motion-easing-standard);
+}
+.tl-thought__body.tl-msg__body {
+  max-width: var(--tl-prose-max);
+  margin: 0;
+  padding: 0;
+  border-left: 0;
+  font-style: italic;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: rgba(246, 235, 214, 0.86);
+}
+.tl-thought__less {
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.tl-thought__less:hover {
+  color: var(--color-text-secondary);
+}
+
+.tl-trail .tl-action__head,
+.tl-trail .tl-context__head,
+.tl-trail .tl-noise__head {
+  height: 24px;
+  gap: 8px;
+  border-bottom: 0;
+  padding-left: var(--space-2);
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+}
+.tl-trail .tl-action__head::before,
+.tl-trail .tl-action__head::after,
+.tl-trail .tl-context__head::before,
+.tl-trail .tl-context__head::after,
+.tl-trail .tl-noise__head::before,
+.tl-trail .tl-noise__head::after {
+  display: none;
+}
+.tl-trail .tl-action__summary,
+.tl-trail .tl-context__summary,
+.tl-trail .tl-noise__summary {
+  flex: 0 1 auto;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.tl-trail .tl-action__name,
+.tl-trail .tl-context__label {
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+}
+.tl-trail .tl-action__icon {
+  font-size: 12px;
+}
+/* Right column hugs the right edge however short the label is. */
+.tl-trail .tl-action__meta,
+.tl-trail .tl-context__meta,
+.tl-trail .tl-noise__time {
+  margin-left: auto;
+}
+.tl-trail .tl-action__time,
+.tl-trail .tl-context__time,
+.tl-trail .tl-noise__time {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.tl-trail .tl-noise__chev,
+.tl-trail .tl-action__chev {
+  font-size: 12px;
+  opacity: 0.6;
+}
+.tl-trail__glyph {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-intent-warning);
+}
+.tl-trail__mechanics {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
+}
+.tl-trail__edits {
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--space-2);
+}
+.tl-trail__edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-intent-success);
+}
+.tl-trail__edit .tl-trail__glyph {
+  color: var(--color-intent-success);
+}
+.tl-trail__edit-path {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-trail__edit-stat {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+.tl-trail .tl-tool-preview {
+  margin-left: calc(var(--space-2) + 22px);
+}
+/* A step ends where the next non-trail row starts: give it air. */
+.tl-trail + :not(.tl-trail):not(.tl-thought) {
+  margin-top: var(--space-3);
+}
+@media (max-width: 640px) {
+  .tl-thought {
+    padding-right: var(--space-2);
+  }
+  .tl-thought__time {
+    position: static;
+    display: block;
+    margin-bottom: 2px;
+  }
+  .tl-thought::before,
+  .tl-thought::after {
+    display: none;
+  }
+}
+
+/* --- A running call that looks alive (RunningCallRow.tsx) ---
+   Headline is the agent's own description, the command sits beneath it in
+   mono, the clock is in the row. Motion — the dot's pulse and the budget
+   track's ember shimmer — runs only while data-run-state="live", which is the
+   served work claim inside its window. Uncertain and quiet are still. */
+.tl-run {
+  position: relative;
+  display: block;
+  max-width: var(--tl-tool-max);
+  margin: 4px auto 2px;
+  width: 100%;
+  padding: 10px 12px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-primary);
+  background: rgba(246, 235, 214, 0.025);
+}
+.tl-run[data-run-state="live"] {
+  border-color: rgba(240, 138, 36, 0.35);
+  background: linear-gradient(180deg, rgba(240, 138, 36, 0.06), rgba(240, 138, 36, 0.015));
+}
+.tl-run__head {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tl-run__dot {
+  width: 8px;
+  height: 8px;
+  margin: 7px 0 0 3px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+.tl-run[data-run-state="live"] .tl-run__dot {
+  background: var(--color-intent-warning);
+  animation: tl-run-pulse 1.6s ease-out infinite;
+}
+@keyframes tl-run-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(240, 138, 36, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(240, 138, 36, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(240, 138, 36, 0); }
+}
+.tl-run__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tl-run__headline {
+  font-size: 14.5px;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.tl-run__command {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-run__glyph {
+  color: var(--color-intent-warning);
+}
+.tl-run__clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tl-run__elapsed {
+  font-size: 15px;
+  color: var(--color-text-secondary);
+}
+.tl-run[data-run-state="live"] .tl-run__elapsed {
+  color: #ffb25a;
+}
+.tl-run__budget {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+}
+.tl-run__track {
+  position: relative;
+  height: 3px;
+  margin: 9px 0 0 24px;
+  border-radius: 3px;
+  background: var(--color-border-subtle);
+  overflow: hidden;
+}
+.tl-run__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: rgba(124, 135, 144, 0.6);
+}
+.tl-run[data-run-state="live"] .tl-run__fill {
+  background: rgba(240, 138, 36, 0.55);
+}
+.tl-run__shimmer {
+  position: absolute;
+  inset: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent 0, rgba(255, 210, 122, 0.85) 50%, transparent 100%);
+  animation: tl-run-shimmer 2.6s ease-in-out infinite;
+}
+@keyframes tl-run-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+.tl-run__note {
+  margin: 7px 0 0 24px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+.tl-run[data-run-state="uncertain"] .tl-run__note {
+  color: var(--color-text-secondary);
+}
+.tl-run.is-expanded .tl-detail {
+  margin-top: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still evidence of life, without motion: a steady glow. */
+  .tl-run[data-run-state="live"] .tl-run__dot {
+    animation: none;
+    box-shadow: 0 0 6px rgba(240, 138, 36, 0.7);
+  }
+  .tl-run__shimmer {
+    display: none;
+  }
+}

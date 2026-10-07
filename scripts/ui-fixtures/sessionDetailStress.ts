@@ -2256,3 +2256,176 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
     has_real_sessions: true,
   };
 }
+
+/**
+ * A long research turn the way OMP records one: few messages, many thoughts,
+ * each followed by the shell calls it caused (with OMP's `i` intent), one
+ * edit, one failed call and one still running. The frame the narrated-steps
+ * layout was built against (control-plane timeline-reading-experience.md,
+ * Change F; David's context-fabric session, 2026-10-07).
+ */
+export function buildSessionResearchTurnFixture(): SessionDetailFixture {
+  const fixture = buildSessionProseIdleFixture();
+  const sessionId = fixture.session.id;
+  const now = "2026-04-15T16:11:20Z";
+  fixture.session.provider = "omp";
+  fixture.session.project = "zeta";
+  fixture.session.cwd = "/Users/example/git/zeta";
+  fixture.session.summary_title = "Context fabric repo link request";
+  fixture.session.summary = "Find the repos behind Context Fabric and draft a reply.";
+  fixture.session.started_at = "2026-04-15T15:58:00Z";
+  fixture.session.last_activity_at = now;
+  fixture.session.timeline_anchor_at = now;
+  fixture.session.user_messages = 1;
+  fixture.session.assistant_messages = 2;
+  fixture.session.tool_calls = 103;
+  fixture.session.usage_latest = {
+    model: "deepseek-v4.1-flash",
+    effort: null,
+    context_tokens: 95_000,
+    output_tokens: 1_200,
+    thinking_tokens: 3_400,
+    at: now,
+    label: "deepseek v4.1 flash · 95k ctx",
+  };
+  fixture.session.session_state = makeSessionState({
+    working_set: "open",
+    activity: { state: "executing", raw_kind: "running", tool: "bash", source: "managed_local_transport", observed_at: now, valid_until: "2026-04-15T16:30:00Z" },
+    presentation: {
+      primary: { key: "executing", label: "Using bash", tone: "running", observed_at: now },
+      access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
+      transcript: null,
+    },
+  });
+
+  let nextId = 7000;
+  const events: AgentEvent[] = [];
+  const at = (hhmmss: string) => `2026-04-15T${hhmmss}Z`;
+  const think = (time: string, text: string) =>
+    events.push(makeEvent(nextId++, "system", at(time), { interaction_kind: "provider_reasoning", content_text: `Thinking:\n${text}` }));
+  const bash = (start: string, end: string | null, command: string, intent: string | null, output: string) => {
+    const callId = `research-tool-${nextId}`;
+    const input: Record<string, unknown> = { command };
+    if (intent) input.i = intent;
+    events.push(makeEvent(nextId++, "assistant", at(start), {
+      tool_name: "Bash",
+      tool_input_json: input,
+      tool_call_id: callId,
+      tool_call_state: end ? "completed" : "running",
+    }));
+    if (end) events.push(makeEvent(nextId++, "tool", at(end), { tool_name: "Bash", tool_output_text: output, tool_call_id: callId }));
+  };
+
+  events.push(makeEvent(nextId++, "user", at("15:58:00"), {
+    content_text: "Jim's asking in Teams which repos make up Context Fabric. Find the current ones and draft me a reply.",
+  }));
+  think("16:09:40", [
+    "So there's a Confluence page, \"MCP servers URLs code and tools\", that lists the deployed MCP endpoints and links each one to its repo.",
+    "",
+    "Before I tell Jim that knowledge-graph-mcp is the canonical entry point I should check it's actually on that list, and whether the registry in the monorepo agrees with the page.",
+  ].join("\n"));
+  bash("16:09:44", "16:09:45", "grep -rn \"knowledge-graph\" registry/", "Checking the MCP registry for knowledge-graph entries", "registry/mcp.yml:12: assistants-mcp-server\nregistry/mcp.yml:31: atlas-mcp");
+  bash("16:09:45", "16:09:46", "glab api projects/2840", "Reading the context-service project record", "{\"id\":2840,\"default_branch\":\"main\"}");
+  think("16:10:02", "Interesting: the MCP registry entries do NOT include knowledge-graph-mcp or context-service-mcp. Either the registry is stale or these are wired up some other way, per agent rather than through the gateway. I need to look at how the specialists declare their servers.");
+  bash("16:10:04", "16:10:04", "ls specialists/context-center", null, "cc-planning-agent\nwhat-athena-knows-agent");
+  bash("16:10:04", "16:10:05", "grep -l context-service specialists/*/agent.yml", "Finding agents that declare context-service", "specialists/what-athena-knows-agent/agent.yml");
+  bash("16:10:05", "16:10:06", "echo == cc-planning-agent ==", null, "== cc-planning-agent ==");
+  think("16:10:12", "cc-planning-agent is stale-ish: it still uses the knowledge_graph_prototype path and motel6 defaults, so it's the wrong thing to point Jim at. The readmes for context-center and assistants-mcp should say which one is current.");
+  bash(
+    "16:10:13",
+    "16:10:21",
+    "for p in 34870 2698; do glab api \"projects/$p\" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d[\"path_with_namespace\"])'; done",
+    "Reading context-center and assistants-mcp readmes",
+    "=== 34870 ===\nzeta-core/core-ai/athena-platform/specialists/context-center/what-athena-knows-agent | 2026-08-28\n**Naming:** agent.yml name: knowledge-graph is the SDK/deploy config id.\n\n=== 2698 ===\nzeta-aiml/gen-ai/ai-assistants/mcp-servers/assistants-mcp-server | 2026-10-06\n\nWall time: 7.74 seconds",
+  );
+  think("16:10:30", "Big find: what-athena-knows-agent reads \"Knowledge context from context-service-mcp (get_unified_context)\". That's the live consumer, so context-service is the real entry point and the answer for Jim starts there.");
+  events.push(makeEvent(nextId++, "assistant", at("16:10:34"), {
+    tool_name: "Edit",
+    tool_input_json: {
+      file_path: "/Users/example/git/zeta/drafts/jim-context-fabric-reply.md",
+      old_string: "",
+      new_string: "Hi Jim,\n\nContext Fabric today is six repos under the knowledge-graph subgroup.\nThe live entry point is context-service (GET /api/v2/context/unified).\n",
+    },
+    tool_call_id: "research-edit-1",
+  }));
+  events.push(makeEvent(nextId++, "tool", at("16:10:34"), { tool_name: "Edit", tool_output_text: "Created drafts/jim-context-fabric-reply.md", tool_call_id: "research-edit-1" }));
+  bash("16:10:36", "16:10:38", "glab api \"projects/2840/search?scope=blobs&search=get_unified_context\"", "Finding where get_unified_context is defined", "context_service/api/v2/context.py\ncontext_service/services/unified_context_service.py");
+  bash("16:10:38", "16:10:40", "glab api projects/2840/repository/files/context_service/services/unified_context_service.py/raw?ref=main", "Reading the unified context service", toolOutput(1, "1.9", "{\"message\":\"404 File Not Found\"}"));
+  think("16:11:02", [
+    "Default branch is main, yet the raw file 404s. The repository/files/:file_path/raw route needs the path URL-encoded (%2F); README.md worked earlier only because it has no slash.",
+    "",
+    "For nested paths I need to encode. Let me encode the path and read the service and the v2 route together.",
+  ].join("\n"));
+  bash("16:11:05", null, "enc(){ python3 -c \"import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))\" \"$1\"; }; for f in context_service/services/unified_context_service.py context_service/api/v2/context.py; do glab api \"projects/2840/repository/files/$(enc $f)/raw?ref=main\" | head -60; done", "Locating unified context implementation", "");
+
+  const items = events.map((event) => projectionEvent(event, sessionId));
+  fixture.projection = { ...fixture.projection, items, total: items.length };
+  fixture.workspace = { ...fixture.workspace, session: fixture.session, projection: fixture.projection };
+  fixture.thread = { ...fixture.thread, sessions: [fixture.session] };
+  fixture.workspace.thread = fixture.thread;
+  return fixture;
+}
+
+/**
+ * A 41-minute Bash call still running in a Claude session, with a declared
+ * 60-minute timeout. `expired` lets the work claim lapse three minutes before
+ * the capture clock, the frame where the row must go still and say it cannot
+ * confirm the call (RunningCallRow.tsx).
+ */
+export function buildSessionRunningCallFixture(expired: boolean): SessionDetailFixture {
+  const fixture = buildSessionProseIdleFixture();
+  const sessionId = fixture.session.id;
+  const observedAt = expired ? "2026-04-15T16:09:00Z" : "2026-04-15T16:11:56Z";
+  const validUntil = expired ? "2026-04-15T16:10:00Z" : "2026-04-15T16:20:00Z";
+  fixture.session.summary_title = "RL task for AI-designed languages";
+  fixture.session.last_activity_at = observedAt;
+  fixture.session.timeline_anchor_at = observedAt;
+  fixture.session.tool_calls = 427;
+  fixture.session.session_state = makeSessionState({
+    working_set: "open",
+    activity: { state: "executing", raw_kind: "running", tool: "Bash", source: "claude_hook", observed_at: observedAt, valid_until: validUntil },
+    presentation: {
+      primary: { key: "executing", label: "Using Bash", tone: "running", observed_at: observedAt },
+      access: { key: "live_control", label: "Live control", tone: "live", observed_at: observedAt },
+      transcript: null,
+    },
+  });
+
+  let nextId = 8000;
+  const events: AgentEvent[] = [];
+  const at = (hhmmss: string) => `2026-04-15T${hhmmss}Z`;
+  events.push(makeEvent(nextId++, "user", at("15:24:00"), {
+    content_text: "Run the Stage A basis search on the NAND family, then record round 4 in the essence doc.",
+  }));
+  events.push(makeEvent(nextId++, "system", at("15:28:40"), {
+    interaction_kind: "provider_reasoning",
+    content_text: "Thinking:\nv12 of the search script is ready. Six processes keeps the laptop usable; the top 20 bases are enough to compare against round 3. It will take a while, so I'll record round 4 in the essence doc while it runs.",
+  }));
+  events.push(makeEvent(nextId++, "assistant", at("15:29:10"), {
+    tool_name: "Edit",
+    tool_input_json: {
+      file_path: "/Users/example/git/formula-lab/scripts/basis_search_l0.py",
+      old_string: "",
+      new_string: Array.from({ length: 12 }, (_, index) => `# stage A step ${index}`).join("\n"),
+    },
+    tool_call_id: "running-edit-1",
+  }));
+  events.push(makeEvent(nextId++, "tool", at("15:29:22"), { tool_name: "Edit", tool_output_text: "Updated basis_search_l0.py", tool_call_id: "running-edit-1" }));
+  events.push(makeEvent(nextId++, "assistant", at("15:30:07"), {
+    tool_name: "Bash",
+    tool_input_json: {
+      command: "uptime && time uv run python scripts/basis_search_l0.py --generator nand --seed 0 --procs 6 --top 20 2>&1 | grep -v -i warn",
+      description: "Run Stage A basis search on NAND-generated family",
+      timeout: 3_600_000,
+    },
+    tool_call_id: "running-bash-1",
+    tool_call_state: "running",
+  }));
+
+  const items = events.map((event) => projectionEvent(event, sessionId));
+  fixture.projection = { ...fixture.projection, items, total: items.length };
+  fixture.workspace = { ...fixture.workspace, session: fixture.session, projection: fixture.projection };
+  fixture.thread = { ...fixture.thread, sessions: [fixture.session] };
+  fixture.workspace.thread = fixture.thread;
+  return fixture;
+}

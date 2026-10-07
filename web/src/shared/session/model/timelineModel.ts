@@ -253,10 +253,17 @@ export function getToolOutputPreview(interaction: ToolInteraction): string | nul
   return boundToolOutputPreview(text);
 }
 
-/** Return the provider's human-readable intent, when one was supplied. */
+/**
+ * Return the provider's human-readable intent, when one was supplied: OMP's
+ * `i`/`intent` on any tool, and Claude's `description` on a shell call (on
+ * other tools `description` is often the tool's own payload, so it is not
+ * read there).
+ */
 export function getToolIntentLabel(interaction: ToolInteraction): string | null {
   const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
-  for (const field of ["i", "intent"] as const) {
+  const shell = isShellTool(interaction.presentation?.tool_name ?? interaction.toolName);
+  const fields = shell ? (["i", "intent", "description"] as const) : (["i", "intent"] as const);
+  for (const field of fields) {
     for (const input of inputs) {
       const record = getToolInputRecord(input);
       const value = record?.[field];

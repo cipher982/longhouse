@@ -1,17 +1,12 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { formatTime } from "@/shared/session/model";
 import type { AgentEvent } from "@/shared/api/agents";
 
-const REASONING_COLLAPSE_LINE_LIMIT = 120;
-const REASONING_SUMMARY_MAX_CHARS = 90;
-
 /**
- * The collapsed row is a plain text line, not a markdown renderer — a raw
+ * The collapsed thought is plain text, not a markdown renderer — a raw
  * "**Updating job commits**" reads as a formatting bug, not emphasis. Strip
- * the common inline markers (links first, so their visible text survives)
- * before anything gets truncated into the one-line preview.
+ * the common inline markers (links first, so their visible text survives).
  */
 export function stripMarkdown(text: string): string {
   return text
@@ -24,73 +19,116 @@ export function stripMarkdown(text: string): string {
     .replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1$2");
 }
 
-function ellipsize(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars).trimEnd()}…`;
+/**
+ * The thought as it reads collapsed: the whole text, markdown stripped, with
+ * blank lines folded so a paragraph break costs a line break, not a blank
+ * line of the three the clamp allows. The clamp — not a character cap or a
+ * first-line cut — decides how much shows, so the finding later in a thought
+ * is still on screen when it fits (timeline-reading-experience.md, Change F).
+ */
+export function thoughtProse(text: string): string {
+  return stripMarkdown(text)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function reasoningText(event: AgentEvent): string {
+  const rawText = event.content_text || "";
+  return rawText.startsWith("Thinking:\n") ? rawText.slice("Thinking:\n".length) : rawText;
 }
 
 /**
- * The summary is the first non-empty line only, ellipsized — never a join of
- * several lines into one run-on sentence. Joining lines ("...the manual-app
- * workflow Cross-checking the release steps...") reads as one garbled
- * thought instead of "here's where the reasoning starts, expand for more".
+ * A thought leads its step: readable prose, clamped to three lines, the tools
+ * it caused trailing beneath it (TimelinePane renders those as trail rows).
+ * A click opens the full markdown; the open state is the reader's and nothing
+ * else closes it.
  */
-export function collapsedPreview(text: string): string {
-  if (!text) return "No reasoning details";
-  const lines = text.split("\n");
-  const firstNonEmptyIndex = lines.findIndex((line) => line.trim().length > 0);
-  if (firstNonEmptyIndex === -1) return "No reasoning details";
-
-  const summary = ellipsize(stripMarkdown(lines[firstNonEmptyIndex]).trim(), REASONING_SUMMARY_MAX_CHARS);
-  const hiddenLines = lines.length - (firstNonEmptyIndex + 1);
-  if (hiddenLines <= 0) return summary;
-
-  const suffix = lines.length > REASONING_COLLAPSE_LINE_LIMIT
-    ? `${hiddenLines} lines hidden`
-    : `${hiddenLines} more line${hiddenLines === 1 ? "" : "s"}`;
-  return `${summary} … ${suffix}`;
-}
-
-export function ReasoningRow({ event, isSelected }: { event: AgentEvent; isSelected: boolean }) {
+export function ReasoningRow({
+  event,
+  isSelected,
+  time = null,
+}: {
+  event: AgentEvent;
+  isSelected: boolean;
+  /** Clock label, only when the minute changed since the last thought. */
+  time?: string | null;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const rawText = event.content_text || "";
-  const text = rawText.startsWith("Thinking:\n") ? rawText.slice("Thinking:\n".length) : rawText;
+  const [clamped, setClamped] = useState(true);
+  const proseRef = useRef<HTMLSpanElement | null>(null);
+  const text = reasoningText(event);
+  const prose = thoughtProse(text);
   const bodyId = `reasoning-body-${event.id}`;
+
+  // Only a thought the clamp actually cut offers to open: a click that reveals
+  // the same three lines is a control that does nothing.
+  useLayoutEffect(() => {
+    const node = proseRef.current;
+    if (!node || expanded) return;
+    // No layout (jsdom, a hidden pane) reports zero; keep the thought openable.
+    const measure = () => {
+      if (node.clientHeight > 0) setClamped(node.scrollHeight > node.clientHeight + 1);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [expanded, prose]);
+
+  const openable = expanded || clamped;
 
   return (
     <div
       id={`event-${event.id}`}
-      className={`tl-reasoning${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
+      className={`tl-thought${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${openable ? " is-openable" : ""}`}
       data-testid="session-timeline-reasoning"
       data-row-kind="reasoning"
     >
-      <button
-        type="button"
-        className="tl-reasoning__head"
-        aria-expanded={expanded}
-        aria-controls={bodyId}
-        aria-label={expanded ? "Collapse reasoning" : "Expand reasoning"}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <span className={`tl-reasoning__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
-        <span className="tl-reasoning__label">Thinking</span>
-        <span className="tl-reasoning__summary">{expanded ? "Reasoning details" : collapsedPreview(text)}</span>
-        <span className="tl-reasoning__time">{formatTime(event.timestamp)}</span>
-      </button>
+      {time ? <span className="tl-thought__time">{time}</span> : null}
       {expanded ? (
-        <div id={bodyId} className="tl-reasoning__body tl-msg__body" data-testid="session-timeline-reasoning-body">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              a: ({ node: _node, ...props }) => (
-                <a {...props} target="_blank" rel="noreferrer noopener" />
-              ),
-            }}
+        <>
+          <div id={bodyId} className="tl-thought__body tl-msg__body" data-testid="session-timeline-reasoning-body">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ node: _node, ...props }) => (
+                  <a {...props} target="_blank" rel="noreferrer noopener" />
+                ),
+              }}
+            >
+              {text}
+            </ReactMarkdown>
+          </div>
+          <button
+            type="button"
+            className="tl-thought__less"
+            aria-expanded
+            aria-controls={bodyId}
+            aria-label="Collapse reasoning"
+            onClick={() => setExpanded(false)}
           >
-            {text}
-          </ReactMarkdown>
-        </div>
-      ) : null}
+            Show less
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="tl-thought__head"
+          aria-expanded={false}
+          aria-controls={bodyId}
+          aria-label="Expand reasoning"
+          onClick={() => {
+            if (openable) setExpanded(true);
+          }}
+        >
+          <span ref={proseRef} className="tl-thought__prose">
+            {prose || "No reasoning details"}
+          </span>
+        </button>
+      )}
     </div>
   );
 }

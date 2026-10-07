@@ -8,6 +8,13 @@ import { FunnelIcon } from "@/shared/ui/icons";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { ProviderNoticeRow } from "./ProviderNoticeRow";
 import { ReasoningRow } from "./ReasoningRow";
+import {
+  RunningCallRow,
+  TimelineLivenessProvider,
+  useRunningCallState,
+  useTimelineLiveness,
+  type TimelineLiveness,
+} from "./RunningCallRow";
 import type {
   ActivityGroup,
   TimelineAction,
@@ -119,6 +126,9 @@ interface TimelinePaneProps {
   /** Sends the transcript has not echoed yet; rendered after the last row,
    *  except settled ones carrying `at`, which stand at that time among the rows. */
   outbox?: OutboxEntry[];
+  /** Session evidence for running calls (work claim, host). Without it a
+   *  running call renders as a plain row and never animates. */
+  liveness?: TimelineLiveness | null;
 }
 
 function timelineItemTimeMs(item: TimelineItem): number {
@@ -668,6 +678,12 @@ function LiteToolDetail({ interaction, renderMedia }: { interaction: ToolInterac
   );
 }
 
+/** Why an unanswered call shows no output yet, from the session's evidence. */
+function AwaitingResultNote({ interaction }: { interaction: ToolInteraction }) {
+  const run = useRunningCallState(interaction);
+  return <>{run.enabled ? run.note : "No output recorded yet."}</>;
+}
+
 function ToolDetailView({
   interaction,
   renderMedia,
@@ -739,7 +755,7 @@ function ToolDetailView({
             {dropped
               ? "Tool call dropped — no result was ever recorded."
               : awaitingResult
-                ? "Result not recorded yet."
+                ? <AwaitingResultNote interaction={interaction} />
                 : "No output recorded."}
           </div>
         )}
@@ -763,6 +779,7 @@ function ActionCard({
   onSelect,
   onToggleExpand,
   renderMedia,
+  trail = false,
 }: {
   interaction: ToolInteraction;
   rowId: string;
@@ -771,6 +788,7 @@ function ActionCard({
   onSelect: () => void;
   onToggleExpand: () => void;
   renderMedia: boolean;
+  trail?: boolean;
 }) {
   const info = getInteractionDisplayInfo(interaction);
   const intent = getToolIntentLabel(interaction);
@@ -792,7 +810,9 @@ function ActionCard({
   // as successes even though grouping had already rejected them.
   const failed = isToolInteractionFailed(interaction);
   const failurePreview = getFailurePreview(interaction);
-  const outputPreview = failed ? null : getToolOutputPreview(interaction);
+  // A trailing call never opens its own output: the thought above is the
+  // story, the output is one click away. Failures keep their preview.
+  const outputPreview = failed || trail ? null : getToolOutputPreview(interaction);
   // Only edits get a diff stat: a non-edit input that happens to carry a path
   // must keep its normal summary.
   const editLabel = isEditInteraction(interaction) ? formatEditStat(getEditStat(interaction)) : null;
@@ -815,7 +835,7 @@ function ActionCard({
       data-row-kind="tool"
       data-tool-tier="action"
       data-status={statusTone}
-      className={`tl-action${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}`}
+      className={`tl-action${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}${trail ? " tl-trail" : ""}`}
     >
       <button
         type="button"
@@ -829,12 +849,14 @@ function ActionCard({
         aria-controls={detailId}
       >
         <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
-        <span
-          className="tl-action__name"
-          {...{ elementtiming: "longhouse-session-timeline-row" }}
-        >
-          {agentType || info.displayName}
-        </span>
+        {trail && intent ? null : (
+          <span
+            className="tl-action__name"
+            {...{ elementtiming: "longhouse-session-timeline-row" }}
+          >
+            {agentType || info.displayName}
+          </span>
+        )}
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
         <span className="tl-action__summary">
           {intent ? (
@@ -907,6 +929,7 @@ function ContextLine({
   onSelect,
   onToggleExpand,
   renderMedia,
+  trail = false,
 }: {
   interaction: ToolInteraction;
   rowId: string;
@@ -915,6 +938,7 @@ function ContextLine({
   onSelect: () => void;
   onToggleExpand: () => void;
   renderMedia: boolean;
+  trail?: boolean;
 }) {
   const info = getInteractionDisplayInfo(interaction);
   const summary = getToolSummary(interaction);
@@ -937,7 +961,7 @@ function ContextLine({
       data-row-kind="tool"
       data-tool-tier="context"
       data-status={statusTone}
-      className={`tl-context${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
+      className={`tl-context${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}`}
     >
       <button
         type="button"
@@ -983,6 +1007,7 @@ function ActivityChip({
   onToggleExpand,
   onToggleInteraction,
   renderMedia,
+  trail = false,
 }: {
   group: ActivityGroup;
   rowId: string;
@@ -994,9 +1019,19 @@ function ActivityChip({
   onToggleExpand: () => void;
   onToggleInteraction: (key: string) => void;
   renderMedia: boolean;
+  trail?: boolean;
 }) {
   const [showEarlier, setShowEarlier] = useState(false);
   const summary = formatActivitySummary(group.interactions) || "Activity";
+  // Trailing a thought, the line leads with what the agent said it was doing
+  // (OMP `i`, Claude Bash `description`) and keeps the mechanics as the dim
+  // tail. Edits are pulled onto their own lines: a file change is the work
+  // product and stays legible without a click.
+  const intent = trail ? firstIntentLabel(group.interactions) : null;
+  const edits = trail ? group.interactions.filter(isEditInteraction) : [];
+  const mechanics = trail
+    ? formatActivitySummary(group.interactions.filter((interaction) => !isEditInteraction(interaction)))
+    : "";
   const timing = getActivityGroupTiming(group);
   const { earlier, latest } = splitExplorationOverflow(group.interactions);
   const visibleInteractions = showEarlier ? group.interactions : latest;
@@ -1017,7 +1052,7 @@ function ActivityChip({
       id={rowId}
       data-testid="session-timeline-row"
       data-row-kind="activity-group"
-      className={`tl-noise${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
+      className={`tl-noise${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}`}
     >
       <button
         type="button"
@@ -1029,15 +1064,33 @@ function ActivityChip({
         aria-expanded={expanded}
         aria-controls={`${rowId}-list`}
       >
+        {trail ? <span className="tl-trail__glyph" aria-hidden="true">$</span> : null}
         <span
           className="tl-noise__summary"
           {...{ elementtiming: "longhouse-session-timeline-row" }}
         >
-          {summary}
+          {trail ? (intent ?? (mechanics || summary)) : summary}
         </span>
-        <span className="tl-noise__time">{timing.duration ?? timing.time}</span>
+        {trail && intent && mechanics ? <span className="tl-trail__mechanics">{mechanics}</span> : null}
+        <span className="tl-noise__time">{trail ? (timing.duration ?? "") : (timing.duration ?? timing.time)}</span>
         <span className={`tl-noise__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
       </button>
+      {!expanded && edits.length > 0 ? (
+        <div className="tl-trail__edits" data-testid="trail-edits">
+          {edits.map((interaction) => {
+            const stat = getEditStat(interaction);
+            return (
+              <div key={interaction.key} className="tl-trail__edit">
+                <span className="tl-trail__glyph" aria-hidden="true">✎</span>
+                <span className="tl-trail__edit-path">{stat.fileName ?? getToolSummary(interaction)}</span>
+                {stat.hasStat ? (
+                  <span className="tl-trail__edit-stat">+{stat.added} −{stat.removed}</span>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       {expanded ? (
         <div className="tl-noise__list" id={`${rowId}-list`}>
           {!showEarlier && earlier.length > 0 ? (
@@ -1171,6 +1224,17 @@ function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteracti
   );
 }
 
+/** The first call's own words for what it was doing, with a count of the rest. */
+function firstIntentLabel(interactions: ToolInteraction[]): string | null {
+  const intents = interactions
+    .filter((interaction) => !isEditInteraction(interaction))
+    .map(getToolIntentLabel)
+    .filter((intent): intent is string => Boolean(intent));
+  if (intents.length === 0) return null;
+  const others = new Set(intents.slice(1).filter((intent) => intent !== intents[0])).size;
+  return others > 0 ? `${intents[0]} +${others}` : intents[0];
+}
+
 function ToolRow(props: {
   interaction: ToolInteraction;
   rowId: string;
@@ -1179,7 +1243,18 @@ function ToolRow(props: {
   onSelect: () => void;
   onToggleExpand: () => void;
   renderMedia: boolean;
+  /** Trails a thought: one dim line, no output preview unless it failed. */
+  trail?: boolean;
 }) {
+  const { liveness } = useTimelineLiveness();
+  if (liveness && isToolInteractionRunning(props.interaction) && !isAskUserQuestion(props.interaction)) {
+    return (
+      <RunningCallRow
+        {...props}
+        detail={<ToolDetail interaction={props.interaction} renderMedia={props.renderMedia} />}
+      />
+    );
+  }
   if (isAskUserQuestion(props.interaction)) {
     return <AskUserQuestionRow interaction={props.interaction} rowId={props.rowId} />;
   }
@@ -1221,6 +1296,7 @@ export function TimelinePane({
   renderMedia = true,
   provider = null,
   outbox = EMPTY_OUTBOX,
+  liveness = null,
 }: TimelinePaneProps) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1453,6 +1529,51 @@ export function TimelinePane({
       });
     });
   }, [items, eventFilter, debouncedSearch]);
+  // Narrated steps (timeline-reading-experience.md, Change F): a thought leads,
+  // and the tool rows that follow it until the next thought or message trail
+  // under it as one dim line each. Presentation only: rows keep their own keys
+  // and DOM position, so scroll anchoring and open state are untouched. A
+  // thought shows the clock only when the minute changed.
+  const narration = useMemo(() => {
+    const trail = new Set<string>();
+    const thoughtTimes = new Map<string, string>();
+    let afterThought = false;
+    let lastMinute: string | null = null;
+    for (const item of filteredItems) {
+      if (item.kind === "reasoning") {
+        afterThought = true;
+        const minute = formatTime(item.event.timestamp);
+        if (minute !== lastMinute) {
+          thoughtTimes.set(timelineItemIdentity(item), minute);
+          lastMinute = minute;
+        }
+        continue;
+      }
+      const trails =
+        item.kind === "activity_group" ||
+        (item.kind === "tool" && !isAskUserQuestion(item.interaction));
+      if (afterThought && trails) {
+        trail.add(timelineItemIdentity(item));
+        continue;
+      }
+      afterThought = false;
+    }
+    // A running call is current until the model speaks again after it; one
+    // it has moved past is not what the work claim is about.
+    const currentRunning = new Set<string>();
+    for (let index = filteredItems.length - 1; index >= 0; index -= 1) {
+      const item = filteredItems[index];
+      if (item.kind === "reasoning" || item.kind === "message") break;
+      if (item.kind === "tool" && isToolInteractionRunning(item.interaction)) {
+        currentRunning.add(item.interaction.key);
+      }
+    }
+    return { trail, thoughtTimes, currentRunning };
+  }, [filteredItems]);
+  const livenessValue = useMemo(
+    () => ({ liveness, provider: provider ?? null, currentRunning: narration.currentRunning }),
+    [liveness, provider, narration.currentRunning],
+  );
   // A lite page holds long tool calls (input and output) as their previews, so
   // search can't see what was cut; say so beside the match count rather than
   // imply full coverage.
@@ -1593,6 +1714,7 @@ export function TimelinePane({
           key={item.event.id}
           event={item.event}
           isSelected={timelineItemContainsSelection(item, selectedKey)}
+          time={narration.thoughtTimes.get(timelineItemIdentity(item)) ?? null}
         />
       );
     }
@@ -1636,6 +1758,7 @@ export function TimelinePane({
   onSelect={() => onSelectKey(selectionKey)}
   onToggleExpand={() => toggleTool(item.interaction.key)}
   renderMedia={renderMedia}
+  trail={narration.trail.has(timelineItemIdentity(item))}
           />
           <TurnEndRow turnEnd={turnEndForInteraction(item.interaction)} />
         </Fragment>
@@ -1655,6 +1778,7 @@ export function TimelinePane({
         onToggleExpand={() => toggleGroup(item.group.key)}
         onToggleInteraction={(k) => toggleTool(k)}
         renderMedia={renderMedia}
+        trail={narration.trail.has(timelineItemIdentity(item))}
       />
     );
   };
@@ -1869,12 +1993,13 @@ export function TimelinePane({
     </div>
   );
 
-  if (!outline) return paneContent;
+  const livePane = <TimelineLivenessProvider value={livenessValue}>{paneContent}</TimelineLivenessProvider>;
+  if (!outline) return livePane;
 
   return (
     <div className="timeline-pane-shell" data-testid="session-timeline-shell">
       {outline}
-      {paneContent}
+      {livePane}
     </div>
   );
 }
