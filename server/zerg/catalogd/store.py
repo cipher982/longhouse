@@ -10428,10 +10428,15 @@ class CatalogStore:
             # automation credential fill the gap
             # (docs/specs/automation-machine-credentials.md).
             if not session_values["launch_actor"]:
-                durable_actor = existing_session.get("launch_actor") if existing_session is not None else None
-                if durable_actor:
-                    session_values["launch_actor"] = durable_actor
-                    session_values["launch_surface"] = session_values["launch_surface"] or existing_session.get("launch_surface")
+                # Recorded on either row counts: a live-only session (no archived
+                # row yet) records its actor on the live catalog alone.
+                recorded = next(
+                    (row for row in (existing_session, live_catalog_session) if row is not None and row.get("launch_actor")),
+                    None,
+                )
+                if recorded is not None:
+                    session_values["launch_actor"] = recorded["launch_actor"]
+                    session_values["launch_surface"] = session_values["launch_surface"] or recorded.get("launch_surface")
                 elif credential_automation:
                     session_values["launch_actor"] = "automation"
                     # The live rows carry the same provenance; a live row with

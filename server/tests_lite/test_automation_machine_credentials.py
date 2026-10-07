@@ -229,3 +229,50 @@ def test_live_only_history_is_backfilled_and_live_rows_take_the_credential(live_
     finally:
         engine.dispose()
     assert live_actor == "automation"
+
+
+def test_a_live_only_recorded_actor_is_sticky(live_catalog, live_catalog_client):  # noqa: F811
+    """A live row's actor (no launch surface, no archived row) is recorded provenance."""
+
+    from zerg.catalogd.schema import create_catalog_engine
+    from zerg.models.live_store import LiveSession
+    from zerg.models.live_store import LiveSessionCatalog
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    owner = live_catalog.create_user("owner@automation-creds.test")
+    token = live_catalog.create_device_token(owner_id=owner, device_id=SAURON)
+    now = datetime.now(UTC).replace(microsecond=0)
+    human, backfilled = str(uuid4()), str(uuid4())
+    engine = create_catalog_engine(catalogd_paths()[0])
+    try:
+        with engine.begin() as connection:
+            for session_id, actor in ((human, "human_shell"), (backfilled, None)):
+                connection.execute(
+                    LiveSession.__table__.insert().values(
+                        session_id=session_id, owner_id=str(owner), provider="opencode", started_at=now, last_seen_at=now, updated_at=now
+                    )
+                )
+                connection.execute(
+                    LiveSessionCatalog.__table__.insert().values(
+                        session_id=session_id,
+                        provider="opencode",
+                        environment="production",
+                        device_id=SAURON,
+                        started_at=now,
+                        user_state="active",
+                        notification_muted=0,
+                        launch_actor=actor,
+                    )
+                )
+    finally:
+        engine.dispose()
+
+    assert _set(live_catalog, owner_id=owner, device_id=SAURON, automation=True)["reclassified"] == [backfilled]
+    _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON, session_id=human)
+    assert _catalog(live_catalog, human)["launch_actor"] == "human_shell"
+
+    _set(live_catalog, owner_id=owner, device_id=SAURON, automation=False)
+    _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON, session_id=backfilled)
+    after_off = _catalog(live_catalog, backfilled)
+    assert after_off["launch_actor"] == "automation"
+    assert bool(after_off["hidden_from_default_timeline"]) is True
