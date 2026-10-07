@@ -1315,7 +1315,7 @@ export async function respondToPauseRequest(
   body: PauseRequestResponseRequest,
 ): Promise<PauseRequestResponseResponse> {
   return request<PauseRequestResponseResponse>(
-    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/pause-requests/${pauseRequestId}/response`,
+    `/sessions/${sessionId}/pause-requests/${pauseRequestId}/response`,
     {
       method: "POST",
       body: JSON.stringify(body),

@@ -15,6 +15,7 @@ import {
   fetchAgentSessionWorkspace,
   fetchSessionSharePreview,
   resolveSessionShare,
+  respondToPauseRequest,
   revokeSessionShare,
 } from "../agents";
 
@@ -146,6 +147,22 @@ describe("session share links", () => {
       3,
       "/timeline/session-shares/12",
       { method: "DELETE" },
+    );
+  });
+});
+
+describe("pause request answers", () => {
+  beforeEach(() => {
+    baseMocks.request.mockReset();
+    baseMocks.request.mockResolvedValue({});
+  });
+
+  it("posts to the session-chat route the server mounts", async () => {
+    await respondToPauseRequest("session-1", "pause-1", { response: "yes" } as never);
+
+    expect(baseMocks.request).toHaveBeenCalledWith(
+      "/sessions/session-1/pause-requests/pause-1/response",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 });
