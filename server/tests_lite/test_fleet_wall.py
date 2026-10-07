@@ -329,6 +329,9 @@ def test_wall_presence_agrees_with_the_served_timeline(live_catalog, live_catalo
     assert wall_response.status_code == 200, wall_response.text
     wall = {row["session_id"]: row for row in wall_response.json()["sessions"]}
 
+    for session_id, row in wall.items():
+        assert row["presence_state"] == heads[session_id]["presence_state"], session_id
+        assert row["has_live_presence"] is (heads[session_id]["presence_state"] is not None), session_id
     assert heads[str(imported)]["presence_state"] is None
     assert wall[str(imported)]["presence_state"] is None
     assert wall[str(imported)]["has_live_presence"] is False

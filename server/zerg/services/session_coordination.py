@@ -26,7 +26,6 @@ from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.live_catalog_timeline import project_catalog_timeline_row
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.session_runtime_display import SignalTier
 from zerg.services.session_views import WallSessionResponse
 
 
@@ -79,10 +78,10 @@ def project_storage_v2_wall(
             connections=connections,
             now=observed_at,
         )
-        # Presence comes from the same served projection as the timeline card,
-        # and only while its evidence is current: expired evidence is unknown.
-        served = project_catalog_timeline_row(row, observed_at=observed_at, commit_seq=commit_seq, surface="wall")
-        presence_state = served.presence_state if served.runtime_display.signal_tier == SignalTier.PHASE_SIGNAL else None
+        # Presence is exactly the timeline card's served value. The projector
+        # already demotes expired evidence (presence_state is then None), so
+        # the wall applies no rule of its own.
+        presence_state = project_catalog_timeline_row(row, observed_at=observed_at, commit_seq=commit_seq, surface="wall").presence_state
         last_activity_at = (card.last_activity_at if card is not None else None) or session.last_activity_at
         session_id = str(session.session_id)
 
