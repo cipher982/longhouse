@@ -638,17 +638,25 @@ def run_static_contract(args: argparse.Namespace) -> dict[str, Any]:
     return _status("pass", evidence=result.stdout.strip())
 
 
-def _fake_app_server_cargo_env(repo_root: Path) -> dict[str, str]:
-    """Build into the managed target, where test images prebuild dependencies."""
-    env = os.environ.copy()
+def _fake_app_server_cargo_env(
+    repo_root: Path,
+) -> tuple[dict[str, str] | None, subprocess.CompletedProcess[str]]:
+    """Build into the managed target, where test images prebuild dependencies.
+
+    Returns no environment when the target cannot be resolved: building
+    elsewhere would silently cold-build every dependency again.
+    """
     resolved = _run(
         ["python3", str(repo_root / "scripts/build/cargo.py"), "target-dir"],
         cwd=repo_root,
         timeout=30,
     )
-    if resolved.returncode == 0 and resolved.stdout.strip():
-        env["CARGO_TARGET_DIR"] = resolved.stdout.strip()
-    return env
+    target_dir = resolved.stdout.strip()
+    if resolved.returncode != 0 or not target_dir:
+        return None, resolved
+    env = os.environ.copy()
+    env["CARGO_TARGET_DIR"] = target_dir
+    return env, resolved
 
 
 def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
@@ -674,7 +682,13 @@ def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
         "canary_runs_against_fake_codex_app_server",
         "canary_auto_approves_server_requests",
     )
-    cargo_env = _fake_app_server_cargo_env(args.repo_root)
+    cargo_env, target_dir_result = _fake_app_server_cargo_env(args.repo_root)
+    if cargo_env is None:
+        return _fail(
+            "cargo_target_dir_unresolved",
+            "scripts/build/cargo.py target-dir did not name the managed Cargo target",
+            evidence=_command_evidence(target_dir_result),
+        )
     cargo_test = [
         cargo_bin,
         "test",
@@ -693,7 +707,13 @@ def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
         env=cargo_env,
         timeout=args.fake_app_server_build_timeout_secs,
     )
-    results = [{"test": "build", "evidence": _command_evidence(build)}]
+    results = [
+        {
+            "test": "build",
+            "cargo_target_dir": cargo_env["CARGO_TARGET_DIR"],
+            "evidence": _command_evidence(build),
+        }
+    ]
     if build.returncode != 0:
         return _fail(
             "fake_app_server_unit_build_failed",

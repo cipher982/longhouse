@@ -642,7 +642,13 @@ def _run_source_canary(
         if args.codex_api_url:
             argv.extend(["--api-url", args.codex_api_url])
         if args.codex_run_fake_app_server:
-            argv.append("--run-fake-app-server")
+            argv.extend(
+                [
+                    "--run-fake-app-server",
+                    "--fake-app-server-build-timeout-secs",
+                    str(args.codex_fake_app_server_build_timeout_secs),
+                ]
+            )
         if args.codex_run_raw_fresh_remote:
             argv.append("--run-raw-fresh-remote")
         if args.codex_run_managed_tui_attach:
@@ -726,6 +732,14 @@ def _run_source_canary(
     if args.provider == "codex" and args.codex_agents_token:
         run_env = os.environ.copy()
         run_env[CODEX_AGENTS_TOKEN_ENV] = args.codex_agents_token
+    source_timeout_secs = args.timeout_secs
+    if args.provider == "codex" and args.codex_run_fake_app_server:
+        # The canary builds the engine test binary under its own budget, then
+        # runs two tests at 120 s each; the outer budget must cover all three.
+        source_timeout_secs = max(
+            args.timeout_secs,
+            args.codex_fake_app_server_build_timeout_secs + 2 * 120 + 60,
+        )
     try:
         result = subprocess.run(
             argv,
@@ -734,7 +748,7 @@ def _run_source_canary(
             text=True,
             capture_output=True,
             check=False,
-            timeout=args.timeout_secs,
+            timeout=source_timeout_secs,
         )
     except subprocess.TimeoutExpired as exc:
         stdout_path.write_text(str(exc.stdout or ""), encoding="utf-8")
@@ -750,7 +764,7 @@ def _run_source_canary(
                 "release_proof": {
                     "status": "fail",
                     "failure_code": "provider_release_proof_timeout",
-                    "message": f"source canary timed out after {args.timeout_secs}s",
+                    "message": f"source canary timed out after {source_timeout_secs}s",
                 }
             },
             "operation_evidence": {},
@@ -1933,6 +1947,9 @@ def _args_from_config(config_path: Path) -> argparse.Namespace:
     args.codex_real_tool_timeout_secs = int(
         codex.get("real_tool_timeout_secs", 180)
     )
+    args.codex_fake_app_server_build_timeout_secs = int(
+        codex.get("fake_app_server_build_timeout_secs", 600)
+    )
     args.codex_api_url = codex.get("api_url")
     args.codex_agents_token = codex.get("agents_token")
 
@@ -2013,6 +2030,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-run-real-tool", action="store_true")
     parser.add_argument("--codex-live-interrupt-timeout-secs", type=int, default=45)
     parser.add_argument("--codex-real-tool-timeout-secs", type=int, default=180)
+    parser.add_argument("--codex-fake-app-server-build-timeout-secs", type=int, default=600)
     parser.add_argument("--codex-api-url")
     parser.add_argument("--codex-agents-token")
     parser.add_argument("--claude-run-real-print", action="store_true")

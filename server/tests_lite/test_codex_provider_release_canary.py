@@ -564,6 +564,8 @@ def test_fake_app_server_unit_reports_a_failed_build_without_running_tests(
 
     def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
+        if argv[-1] == "target-dir":
+            return subprocess.CompletedProcess(argv, 0, "/managed/cargo-target\n", "")
         if argv[-1] == "--no-run":
             return subprocess.CompletedProcess(argv, 101, "", "error[E0425]")
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -577,3 +579,26 @@ def test_fake_app_server_unit_reports_a_failed_build_without_running_tests(
     assert result["status"] == "fail"
     assert result["failure_code"] == "fake_app_server_unit_build_failed"
     assert not any(argv[-1].startswith("canary_") for argv in calls)
+
+
+def test_fake_app_server_unit_refuses_to_build_outside_the_managed_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv[-1] == "target-dir":
+            return subprocess.CompletedProcess(argv, 2, "", "refusing another checkout's target")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(canary, "_run", fake_run)
+    monkeypatch.setattr(canary, "_resolve_executable", lambda _value, name: f"/bin/{name}")
+    args = canary._coerce_args({"repo_root": tmp_path})
+
+    result = canary.run_fake_app_server_unit(args)
+
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "cargo_target_dir_unresolved"
+    assert not any(argv[0] == "/bin/cargo" for argv in calls)
