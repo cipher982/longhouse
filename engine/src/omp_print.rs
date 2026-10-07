@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
@@ -26,6 +26,7 @@ use crate::console_lifecycle::{
     ConsoleInvocation, IdleOutcome, IdleSignal, InvocationCloseReason, InvocationState,
     PendingItem, TurnBinding, TurnOrigin, WakeRequest,
 };
+use crate::console_sink::{ConsoleProvider, ConsoleRun};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 
@@ -78,22 +79,33 @@ pub struct OmpPrintRunSummary {
 
 #[derive(Clone)]
 struct OmpPrintSink {
-    session_id: String,
-    thread_id: String,
-    turn_id: Option<String>,
-    run_id: String,
-    client_request_id: Option<String>,
-    launch_id: String,
-    process_group_id: Option<i32>,
+    run: ConsoleRun,
     stdout_path: PathBuf,
     session_dir: PathBuf,
     session_file: PathBuf,
     provider_thread_id: Option<String>,
     source_start_len: u64,
     binding_emitted: bool,
-    machine_name: String,
-    local_db_path: Option<PathBuf>,
-    runtime_events_outbox_dir: PathBuf,
+}
+
+static OMP_CONSOLE: ConsoleProvider = ConsoleProvider {
+    provider: "omp",
+    adapter: OMP_PRINT_ADAPTER,
+    tag: "omp-print",
+    lifetime: "persistent",
+};
+
+impl std::ops::Deref for OmpPrintSink {
+    type Target = ConsoleRun;
+    fn deref(&self) -> &ConsoleRun {
+        &self.run
+    }
+}
+
+impl std::ops::DerefMut for OmpPrintSink {
+    fn deref_mut(&mut self) -> &mut ConsoleRun {
+        &mut self.run
+    }
 }
 
 pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintRunSummary> {
@@ -332,22 +344,25 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     refresh_owned_processes(&config.run_id);
 
     let mut sink = OmpPrintSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
-        launch_id: launch_id.clone(),
-        process_group_id: Some(process_group_id),
+        run: ConsoleRun {
+            provider: &OMP_CONSOLE,
+            session_id: config.session_id.clone(),
+            thread_id: config.thread_id.clone(),
+            turn_id: config.turn_id.clone(),
+            run_id: config.run_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            launch_id: launch_id.clone(),
+            process_group_id: Some(process_group_id),
+            machine_name: config.machine_name.clone(),
+            local_db_path,
+            runtime_events_outbox_dir,
+        },
         stdout_path: stdout_path.clone(),
         session_dir: session_dir.clone(),
         session_file: session_file.clone().unwrap_or_default(),
         provider_thread_id: expected_provider_thread_id.clone(),
         source_start_len,
         binding_emitted: false,
-        machine_name: config.machine_name.clone(),
-        local_db_path,
-        runtime_events_outbox_dir,
     };
     // Nothing is written until OMP says `ready`: see `stdout_has_ready`.
     if let Err(error) = wait_for_rpc_ready(&mut child, &stdout_path, &stderr_path).await {
@@ -771,25 +786,28 @@ fn sink_for_existing_run(
     run: &OmpExistingRun,
 ) -> Result<OmpPrintSink> {
     Ok(OmpPrintSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
-        launch_id: invocation.launch_id.clone(),
-        process_group_id: Some(run.process_group_id),
+        run: ConsoleRun {
+            provider: &OMP_CONSOLE,
+            session_id: config.session_id.clone(),
+            thread_id: config.thread_id.clone(),
+            turn_id: config.turn_id.clone(),
+            run_id: config.run_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            launch_id: invocation.launch_id.clone(),
+            process_group_id: Some(run.process_group_id),
+            machine_name: config.machine_name.clone(),
+            local_db_path: config
+                .local_db_path
+                .clone()
+                .or_else(|| crate::config::get_agent_db_path().ok()),
+            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        },
         stdout_path: run.stdout_path.clone(),
         session_dir: run.session_dir.clone(),
         session_file: run.session_file.clone(),
         provider_thread_id: Some(invocation.provider_thread_id.clone()),
         source_start_len: run.source_start_len,
         binding_emitted: true,
-        machine_name: config.machine_name.clone(),
-        local_db_path: config
-            .local_db_path
-            .clone()
-            .or_else(|| crate::config::get_agent_db_path().ok()),
-        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     })
 }
 fn sink_for_claim(
@@ -825,13 +843,23 @@ fn sink_for_claim(
             .map(|header| header.native_id)
     });
     Ok(OmpPrintSink {
-        session_id: claim.session_id.clone(),
-        thread_id: claim.thread_id.clone(),
-        turn_id: claim.turn_id.clone(),
-        run_id: claim.run_id.clone(),
-        client_request_id: claim.client_request_id.clone(),
-        launch_id: claim.launch_id.clone().unwrap_or_default(),
-        process_group_id: claim.process_group_id,
+        run: ConsoleRun {
+            provider: &OMP_CONSOLE,
+            session_id: claim.session_id.clone(),
+            thread_id: claim.thread_id.clone(),
+            turn_id: claim.turn_id.clone(),
+            run_id: claim.run_id.clone(),
+            client_request_id: claim.client_request_id.clone(),
+            launch_id: claim.launch_id.clone().unwrap_or_default(),
+            process_group_id: claim.process_group_id,
+            machine_name: result
+                .get("machine_name")
+                .and_then(Value::as_str)
+                .unwrap_or(machine_name)
+                .to_string(),
+            local_db_path: local_db_path.or_else(|| crate::config::get_agent_db_path().ok()),
+            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        },
         stdout_path,
         session_dir,
         session_file,
@@ -841,13 +869,6 @@ fn sink_for_claim(
             .and_then(Value::as_u64)
             .unwrap_or_default(),
         binding_emitted,
-        machine_name: result
-            .get("machine_name")
-            .and_then(Value::as_str)
-            .unwrap_or(machine_name)
-            .to_string(),
-        local_db_path: local_db_path.or_else(|| crate::config::get_agent_db_path().ok()),
-        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     })
 }
 
@@ -1152,22 +1173,25 @@ async fn cancel_missing_wake(config: &OmpPrintRunConfig) -> Result<OmpPrintRunSu
     let provider_thread_id = config.resume_provider_thread_id.clone().unwrap_or_default();
     let session_file = config.resume_session_file.clone().unwrap_or_default();
     let sink = OmpPrintSink {
-        session_id: config.session_id.clone(),
-        thread_id: config.thread_id.clone(),
-        turn_id: config.turn_id.clone(),
-        run_id: config.run_id.clone(),
-        client_request_id: config.client_request_id.clone(),
-        launch_id: launch_id.to_string(),
-        process_group_id: None,
+        run: ConsoleRun {
+            provider: &OMP_CONSOLE,
+            session_id: config.session_id.clone(),
+            thread_id: config.thread_id.clone(),
+            turn_id: config.turn_id.clone(),
+            run_id: config.run_id.clone(),
+            client_request_id: config.client_request_id.clone(),
+            launch_id: launch_id.to_string(),
+            process_group_id: None,
+            machine_name: config.machine_name.clone(),
+            local_db_path: config.local_db_path.clone(),
+            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+        },
         stdout_path: PathBuf::new(),
         session_dir: session_file.parent().unwrap_or(Path::new("")).to_path_buf(),
         session_file: session_file.clone(),
         provider_thread_id: Some(provider_thread_id.clone()),
         source_start_len: 0,
         binding_emitted: true,
-        machine_name: config.machine_name.clone(),
-        local_db_path: config.local_db_path.clone(),
-        runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     };
     sink.post_terminal_with_lifecycle(
         "run_cancelled",
@@ -1437,22 +1461,25 @@ pub async fn recover_omp_print_turns(
             .and_then(Value::as_u64)
             .unwrap_or(0);
         let sink = OmpPrintSink {
-            session_id: claim.session_id.clone(),
-            thread_id: claim.thread_id.clone(),
-            turn_id: claim.turn_id.clone(),
-            run_id: claim.run_id.clone(),
-            client_request_id: claim.client_request_id.clone(),
-            launch_id: claim.launch_id.clone().unwrap_or_default(),
-            process_group_id: claim.process_group_id,
+            run: ConsoleRun {
+                provider: &OMP_CONSOLE,
+                session_id: claim.session_id.clone(),
+                thread_id: claim.thread_id.clone(),
+                turn_id: claim.turn_id.clone(),
+                run_id: claim.run_id.clone(),
+                client_request_id: claim.client_request_id.clone(),
+                launch_id: claim.launch_id.clone().unwrap_or_default(),
+                process_group_id: claim.process_group_id,
+                machine_name: machine_name.to_string(),
+                local_db_path: local_db_path.clone(),
+                runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
+            },
             stdout_path: stdout_path.clone(),
             session_dir,
             session_file,
             provider_thread_id,
             source_start_len,
             binding_emitted: false,
-            machine_name: machine_name.to_string(),
-            local_db_path: local_db_path.clone(),
-            runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
         match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
             ClaimLiveness::Live => {
@@ -3077,9 +3104,7 @@ fn replay_projection(path: &Path, limit: u64, expected: Option<&str>) -> OmpStre
 impl OmpPrintSink {
     fn for_binding(&self, binding: &TurnBinding) -> Self {
         let mut sink = self.clone();
-        sink.run_id = binding.run_id.clone();
-        sink.turn_id = binding.turn_id.clone();
-        sink.client_request_id = binding.client_request_id.clone();
+        sink.run = self.run.for_binding(binding);
         sink
     }
     async fn ensure_transcript_binding(&mut self) -> Result<bool> {
@@ -3199,60 +3224,23 @@ impl OmpPrintSink {
     }
 
     async fn post_binding(&self, provider_thread_id: &str) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("omp:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "omp",
-            "device_id": self.machine_name,
-            "source": OMP_PRINT_ADAPTER,
-            "kind": "binding_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("omp-print:{}:{}:binding", self.session_id, self.launch_id),
-            "payload": {
-                "provider_session_id": provider_thread_id,
-                "source_path": self.session_file.to_string_lossy(),
-                "managed_transport": OMP_PRINT_ADAPTER,
-                "execution_lifetime": "persistent"
-            }
-        })])
-        .await;
+        self.post_event(&self.binding_event(json!({
+            "provider_session_id": provider_thread_id,
+            "source_path": self.session_file.to_string_lossy(),
+        })));
     }
     async fn post_phase(&self, phase: &str, tool_name: Option<String>, activity_seq: u64) {
-        // One slot per session: the daemon records the local ledger from it and
-        // sends it. Only records no later event can restate — binding,
-        // terminal — stay on the durable queue.
-        let observed_at = Utc::now();
-        crate::status_slot::publish_console_phase(
-            "omp",
-            OMP_PRINT_ADAPTER,
-            &self.session_id,
-            &self.run_id,
-            &observed_at.to_rfc3339(),
+        self.publish_phase(
             phase,
             tool_name.as_deref(),
-            json!({
-                "execution_lifetime": "persistent",
-                "thread_id": self.thread_id,
-                "device_id": self.machine_name,
-                "activity_seq": activity_seq,
-            }),
+            Some(("activity_seq", json!(activity_seq))),
         );
     }
     async fn post_stream_event(&self, seq: u64, event: &Value, projection: &OmpStreamProjection) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("omp:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "omp",
-            "device_id": self.machine_name,
-            "source": OMP_PRINT_ADAPTER,
-            "kind": "progress_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("omp-print:{}:{}:stdout:{seq}", self.session_id, self.run_id),
-            "payload": {
+        self.post_event(&self.run_event(
+            "progress_signal",
+            &format!("stdout:{seq}"),
+            self.with_transport(json!({
                 "progress_kind": "omp_print_stream",
                 "seq": seq,
                 "thread_id": self.thread_id,
@@ -3262,79 +3250,27 @@ impl OmpPrintSink {
                 "assistant_message_index": projection.assistant_message_index,
                 "event": crate::console_rpc::runtime_stream_event(event),
                 "live_text": projection.live_text(),
-                "managed_transport": OMP_PRINT_ADAPTER,
-                "execution_lifetime": "persistent",
-            },
-        })])
-        .await;
+            })),
+        ));
     }
     async fn post_decode_gap(&self, seq: u64, error: &str) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("omp:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "omp",
-            "device_id": self.machine_name,
-            "source": OMP_PRINT_ADAPTER,
-            "kind": "progress_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("omp-print:{}:{}:decode-gap:{seq}", self.session_id, self.run_id),
-            "payload": {
+        self.post_event(&self.run_event(
+            "progress_signal",
+            &format!("decode-gap:{seq}"),
+            self.with_transport(json!({
                 "progress_kind": "omp_print_decode_gap",
                 "seq": seq,
                 "error": error,
-                "managed_transport": OMP_PRINT_ADAPTER,
-                "execution_lifetime": "persistent"
-            }
-        })])
-        .await;
+            })),
+        ));
     }
 
     async fn post_delegation_snapshot(&self, snapshot: Value) {
-        let observed_at = snapshot
-            .get("observed_at")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| Utc::now().to_rfc3339());
-        self.post_events(vec![json!({
-            "runtime_key": format!("omp:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "omp",
-            "device_id": self.machine_name,
-            "source": OMP_RUNTIME_SOURCE,
-            "kind": "delegation_signal",
-            "occurred_at": observed_at,
-            "dedupe_key": format!(
-                "omp-console:{}:{}:delegation:{}",
-                self.launch_id, self.run_id, snapshot["observed_at"]
-            ),
-            "payload": {"delegation": snapshot}
-        })])
-        .await;
+        self.post_event(&self.delegation_event(OMP_RUNTIME_SOURCE, "omp-console", snapshot));
     }
 
     async fn post_wake_signal(&self, wake: &WakeRequest) {
-        self.post_events(vec![json!({
-            "runtime_key": format!("omp:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "provider": "omp",
-            "device_id": self.machine_name,
-            "source": OMP_RUNTIME_SOURCE,
-            "kind": "wake_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("wake:{}", wake.wake_id),
-            "payload": {
-                "invocation_id": wake.invocation_id,
-                "wake_id": wake.wake_id,
-                "provider_thread_id": wake.provider_thread_id,
-                "trigger": wake.trigger
-            }
-        })])
-        .await;
+        self.post_event(&self.wake_event(OMP_RUNTIME_SOURCE, wake));
     }
 
     async fn post_terminal_with_lifecycle(
@@ -3346,104 +3282,20 @@ impl OmpPrintSink {
         pending_count: Option<usize>,
     ) {
         self.persist_local_phase("finished", None, Utc::now());
-        let terminal_reason = terminal_reason_code(terminal_state, reason.as_deref());
-        let mut payload = json!({
-            "managed_transport": OMP_PRINT_ADAPTER,
-            "execution_lifetime": "persistent",
-            "terminal_state": terminal_state,
-            "terminal_reason": terminal_reason,
-            "terminal_source": OMP_PRINT_ADAPTER,
-            "exit_code": exit_code,
-            "stderr_tail": reason,
-            "provider_thread_id": self.provider_thread_id,
-            "source_path": self.session_file.to_string_lossy(),
-            "turn_id": self.turn_id,
-            "client_request_id": self.client_request_id
-        });
-        if let (Some(state), Some(count)) = (invocation_state, pending_count) {
-            payload["invocation"] = json!({
-                "id": self.launch_id,
-                "state": state,
-                "pending_count": count
-            });
-        }
-        let terminal_event = json!({
-            "runtime_key": format!("omp:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "omp",
-            "device_id": self.machine_name,
-            "source": OMP_PRINT_ADAPTER,
-            "kind": "terminal_signal",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id),
-            "payload": payload
-        });
+        let mut payload = self.terminal_payload(
+            terminal_state,
+            terminal_reason_code(terminal_state, reason.as_deref()),
+            exit_code,
+            reason.as_deref(),
+        );
+        payload["provider_thread_id"] = json!(self.provider_thread_id);
+        payload["source_path"] = json!(self.session_file.to_string_lossy());
+        let payload = self.with_invocation(payload, invocation_state, pending_count);
+        let terminal_event = self.run_event("terminal_signal", "terminal", payload);
         let terminal_error = (terminal_state == "run_failed")
             .then_some(reason.clone())
             .flatten();
-        let handoff = crate::turn_claims::default_registry().and_then(|registry| {
-            crate::outbox::retain_and_enqueue_terminal_event(
-                &registry,
-                &self.runtime_events_outbox_dir,
-                &self.run_id,
-                terminal_state,
-                terminal_error,
-                terminal_event.clone(),
-            )
-        });
-        match handoff {
-            Ok((_, true)) => crate::status_slot::retire_console_run(
-                "omp",
-                OMP_PRINT_ADAPTER,
-                &self.session_id,
-                &self.run_id,
-            ),
-            Ok((_, false)) => eprintln!(
-                "[omp-print] terminal record remains pending for {} run {}; keeping the status slot",
-                self.session_id,
-                self.run_id
-            ),
-            Err(error) => {
-                eprintln!(
-                    "[omp-print] terminal claim write failed for {} run {}: {error:#}; keeping the status slot",
-                    self.session_id,
-                    self.run_id
-                );
-                if let Err(error) = crate::outbox::enqueue_runtime_event(
-                    &self.runtime_events_outbox_dir,
-                    &terminal_event,
-                ) {
-                    eprintln!("[omp-print] runtime outbox write failed: {error}");
-                }
-            }
-        }
-    }
-    fn persist_local_phase(
-        &self,
-        phase: &str,
-        tool_name: Option<String>,
-        observed_at: DateTime<Utc>,
-    ) {
-        let Some(db_path) = self.local_db_path.as_deref() else {
-            return;
-        };
-        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
-            db_path,
-            &self.session_id,
-            "omp",
-            phase,
-            tool_name.as_deref(),
-            OMP_PRINT_ADAPTER,
-            &observed_at.to_rfc3339(),
-            Some(self.run_id.as_str()),
-        ) {
-            eprintln!(
-                "[omp-print] enqueue local phase failed for {}: {err}",
-                self.session_id
-            );
-        }
+        self.hand_off_terminal(terminal_state, terminal_error, terminal_event);
     }
     async fn wake_transcript_shipper(&self) {
         let Ok(socket_path) = crate::config::get_agent_transcript_wake_socket_path() else {
@@ -3460,11 +3312,6 @@ impl OmpPrintSink {
             stream.write_all(&bytes)
         })
         .await;
-    }
-    async fn post_events(&self, events: Vec<Value>) {
-        for event in events {
-            let _ = crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event);
-        }
     }
 }
 
@@ -3720,22 +3567,25 @@ mod tests {
     fn golden_omp_sink(home: &crate::console_sink::golden::GoldenHome) -> OmpPrintSink {
         use crate::console_sink::golden::*;
         OmpPrintSink {
-            session_id: SESSION.to_string(),
-            thread_id: THREAD.to_string(),
-            turn_id: Some(TURN.to_string()),
-            run_id: RUN.to_string(),
-            client_request_id: Some(CLIENT_REQUEST.to_string()),
-            launch_id: LAUNCH.to_string(),
-            process_group_id: None,
+            run: ConsoleRun {
+                provider: &OMP_CONSOLE,
+                session_id: SESSION.to_string(),
+                thread_id: THREAD.to_string(),
+                turn_id: Some(TURN.to_string()),
+                run_id: RUN.to_string(),
+                client_request_id: Some(CLIENT_REQUEST.to_string()),
+                launch_id: LAUNCH.to_string(),
+                process_group_id: None,
+                machine_name: MACHINE.to_string(),
+                local_db_path: Some(home.local_db()),
+                runtime_events_outbox_dir: home.outbox(),
+            },
             stdout_path: home.temp.path().join("stdout.jsonl"),
             session_dir: home.temp.path().join("sessions"),
             session_file: home.temp.path().join("sessions/native.jsonl"),
             provider_thread_id: Some(PROVIDER_THREAD.to_string()),
             source_start_len: 0,
             binding_emitted: false,
-            machine_name: MACHINE.to_string(),
-            local_db_path: Some(home.local_db()),
-            runtime_events_outbox_dir: home.outbox(),
         }
     }
 
@@ -6008,22 +5858,25 @@ for line in sys.stdin:
         let mut claim = registry.read(&run_id).unwrap();
         claim.claimed_at = claimed_at;
         let sink = OmpPrintSink {
-            session_id,
-            thread_id,
-            turn_id: None,
-            run_id: run_id.clone(),
-            client_request_id: None,
-            launch_id: "launch".into(),
-            process_group_id: Some(process_group_id),
+            run: ConsoleRun {
+                provider: &OMP_CONSOLE,
+                session_id,
+                thread_id,
+                turn_id: None,
+                run_id: run_id.clone(),
+                client_request_id: None,
+                launch_id: "launch".into(),
+                process_group_id: Some(process_group_id),
+                machine_name: "omp-test".into(),
+                local_db_path: Some(temp.path().join("agent.db")),
+                runtime_events_outbox_dir: temp.path().join("runtime-events"),
+            },
             stdout_path,
             session_dir: temp.path().to_path_buf(),
             session_file: temp.path().join("session.jsonl"),
             provider_thread_id: None,
             source_start_len: 0,
             binding_emitted: true,
-            machine_name: "omp-test".into(),
-            local_db_path: Some(temp.path().join("agent.db")),
-            runtime_events_outbox_dir: temp.path().join("runtime-events"),
         };
         std::fs::create_dir_all(&sink.runtime_events_outbox_dir).unwrap();
 
