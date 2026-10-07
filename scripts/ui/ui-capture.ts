@@ -1594,6 +1594,11 @@ async function captureBundle(
   // Let the fires ignite, reach height, and take a few streamed tool batches.
   if (HEARTH_MOTION_SCENES.includes(scene)) {
     await page.waitForTimeout(Number(process.env.HEARTH_WAIT_MS ?? 5000));
+    // These scenes exist to show the live fires: a browser that gave the
+    // Hearth no WebGL2 float targets would capture the static glyphs instead.
+    if (process.env.HEARTH_NO_WEBGL !== "1" && (await page.locator('[data-hearth="gl"]').count()) === 0) {
+      throw new Error(`${scene}: no Hearth row is drawn with WebGL (all static glyphs); the browser gave it no WebGL2 float render targets`);
+    }
   }
 
   // The second frame of the notices scene: every expandable notice open but
