@@ -2148,9 +2148,17 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
         },
         activity: { state: "unknown", raw_kind: null, tool: null, observed_at: now, valid_until: null },
         delegation: { state: "none", count: 0, kinds: {}, source: "codex", observed_at: now, valid_until: null, items: [], recent_items: [] },
+        pending_interaction: {
+          id: "rail-stale-question",
+          kind: "question",
+          opened_at: now,
+          resolved_at: null,
+          provider_request_id: "rail-stale-question",
+          can_respond: false,
+        },
         last_result_at: now,
         presentation: {
-          primary: { key: "ended", label: "Run failed", tone: "blocked", observed_at: now },
+          primary: { key: "needs_answer", label: "Needs answer", tone: "blocked", observed_at: now },
           access: null,
           transcript: null,
         },
