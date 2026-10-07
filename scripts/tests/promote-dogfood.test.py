@@ -26,6 +26,7 @@ class PromotionAuthorizationTests(unittest.TestCase):
         gate_refuses: bool = False,
         final_attempt: int = 1,
         receipt_attempts: tuple[int, ...] = (1,),
+        held_by_pid: int | None = None,
     ):
         with tempfile.TemporaryDirectory(prefix="longhouse-promotion-test-") as directory:
             root = Path(directory)
@@ -34,8 +35,15 @@ class PromotionAuthorizationTests(unittest.TestCase):
             binaries = root / "bin"
             for path in (ops, library, binaries):
                 path.mkdir(parents=True)
-            for name in ("promote-dogfood.sh", "release-artifacts.py"):
+            for name in ("promote-dogfood.sh", "release-artifacts.py", "ring_lock.py"):
                 shutil.copyfile(ROOT / "scripts" / "ops" / name, ops / name)
+            shutil.copyfile(ROOT / "scripts" / "lib" / "ring-lock.sh", library / "ring-lock.sh")
+            locks = root / "locks"
+            if held_by_pid is not None:
+                held = subprocess.run([sys.executable, str(ops / "ring_lock.py"), "acquire", "dogfood-fixture-owner",
+                                       "--sha", "f" * 40, "--ttl", "600", "--pid", str(held_by_pid), "--op", "another agent"],
+                                      env={**os.environ, "LONGHOUSE_RING_LOCK_DIR": str(locks)}, capture_output=True, text=True)
+                assert held.returncode == 0, held.stderr
             receipt = {
                 "schema": "longhouse.runtime-verification.v1",
                 "source_sha": receipt_sha,
@@ -54,7 +62,8 @@ class PromotionAuthorizationTests(unittest.TestCase):
             (library / "hosted-instance.sh").write_text(
                 'lh_hosted_prepare_control_plane_auth() { :; }\n'
                 'lh_hosted_resolve_instance() { LH_INSTANCE_ID=fixture; }\n'
-                'lh_hosted_reprovision() { printf "%s\\n" "$2" >> "$FIXTURE_ROOT/promotions"; }\n'
+                'lh_hosted_reprovision() { printf "%s\\n" "$2" >> "$FIXTURE_ROOT/promotions";'
+                ' ls "$LONGHOUSE_RING_LOCK_DIR" | grep "\\\\.json$" >> "$FIXTURE_ROOT/locks_during" || true; }\n'
             )
             # The review gate has its own tests (review-gate.test.py); here it only has to be
             # asked, with the target and the served-health URL, before anything changes.
@@ -135,6 +144,7 @@ else:
                 "FIXTURE_GATE_REFUSES": "1" if gate_refuses else "0",
                 "SUBDOMAIN": "fixture-owner",
                 "GH_TOKEN": "fixture-not-a-credential",
+                "LONGHOUSE_RING_LOCK_DIR": str(locks),
             }
             result = subprocess.run(
                 ["bash", str(ops / "promote-dogfood.sh"), SHA],
@@ -148,6 +158,11 @@ else:
             downloads = root / "downloads"
             self.gate_calls = gate_calls.read_text().splitlines() if gate_calls.exists() else []
             self.downloaded_artifacts = downloads.read_text().splitlines() if downloads.exists() else []
+            during = root / "locks_during"
+            self.locks_during = during.read_text().split() if during.exists() else []
+            self.locks_left = sorted(p.name for p in locks.glob("*.json")) if locks.exists() else []
+            events = locks / "events.jsonl"
+            self.lock_events = [json.loads(line)["event"] for line in events.read_text().splitlines()] if events.exists() else []
             return result, promotions.read_text().splitlines() if promotions.exists() else []
 
     def test_manual_canary_receipt_survives_newer_successful_noop(self):
@@ -166,6 +181,30 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("review-gate:", result.stdout)
         self.assertIn("review-gate: promotion OK.", result.stderr)
+
+    def test_the_ring_lock_is_held_while_it_promotes_and_released_after(self):
+        result, promotions = self.run_promotion()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(self.locks_during, ["dogfood-fixture-owner.json"])
+        self.assertEqual(self.locks_left, [])
+
+    def test_a_promotion_in_flight_refuses_a_second_before_the_gates_run(self):
+        result, promotions = self.run_promotion(held_by_pid=os.getpid())
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual((promotions, self.gate_calls), ([], []))
+        self.assertIn("ring-lock: REFUSED: dogfood-fixture-owner held by", result.stderr)
+        self.assertIn("another promotion of fixture-owner is in flight", result.stderr)
+        self.assertEqual(self.locks_left, ["dogfood-fixture-owner.json"])
+
+    def test_a_lock_whose_holder_died_is_reclaimed_and_the_reclaim_logged(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        result, promotions = self.run_promotion(held_by_pid=dead.pid)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertIn("ring-lock: reclaimed dogfood-fixture-owner from", result.stderr)
+        self.assertEqual(self.lock_events, ["acquired", "reclaimed", "acquired", "released"])
 
     def test_an_unreviewed_range_promotes_nothing(self):
         result, promotions = self.run_promotion(gate_refuses=True)

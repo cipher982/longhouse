@@ -62,19 +62,24 @@ class PromoteProductionTests(unittest.TestCase):
             ops, library = root / "scripts" / "ops", root / "scripts" / "lib"
             ops.mkdir(parents=True)
             library.mkdir(parents=True)
-            for name in ("promote-production.sh", "promotion_gates.py"):
+            for name in ("promote-production.sh", "promotion_gates.py", "ring_lock.py"):
                 shutil.copyfile(ROOT / "scripts" / "ops" / name, ops / name)
             (ops / "promote-production.sh").chmod(0o755)
             (library / "hosted-instance.sh").write_text(LIBRARY_STUB)
             (library / "review-gate.sh").write_text(REVIEW_GATE_STUB)
+            shutil.copyfile(ROOT / "scripts" / "lib" / "ring-lock.sh", library / "ring-lock.sh")
+            locks = Path(env["LONGHOUSE_RING_LOCK_DIR"]) if env and "LONGHOUSE_RING_LOCK_DIR" in env else root / "locks"
             with w.Wire(world, root) as wire:
                 result = subprocess.run(
                     ["bash", str(ops / "promote-production.sh"), *args],
-                    env={**wire.env(), **(env or {})},
+                    env={**wire.env(), "LONGHOUSE_RING_LOCK_DIR": str(locks), **(env or {})},
                     text=True,
                     capture_output=True,
                     timeout=60,
                 )
+            self.locks_left = sorted(p.name for p in locks.glob("*.json")) if locks.exists() else []
+            self.lock_events = [json.loads(line)["event"] for line in (locks / "events.jsonl").read_text().splitlines()] \
+                if (locks / "events.jsonl").exists() else []
             promotions_path, ssh_path = root / "promotions", root / "ssh_invocations"
             promotions = [line.split("\t") for line in promotions_path.read_text().splitlines()] if promotions_path.exists() else []
             ssh_calls = ssh_path.read_text().splitlines() if ssh_path.exists() else []
@@ -100,6 +105,31 @@ class PromoteProductionTests(unittest.TestCase):
         target, served_url = self.gate_calls[0].split()
         self.assertEqual(target, w.SHA)
         self.assertTrue(served_url.endswith("/demo/api/health"), served_url)
+
+    def test_a_promotion_holds_the_production_lock_and_releases_it(self) -> None:
+        result, promotions, _ssh, _saved = self.run_promotion(w.green_world(), w.SHA)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(self.lock_events, ["acquired", "released"])
+        self.assertEqual(self.locks_left, [])
+
+    def test_a_promotion_in_flight_refuses_a_second_one_before_anything_is_read(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="longhouse-ring-lock-") as locks:
+            held = subprocess.run([sys.executable, str(ROOT / "scripts" / "ops" / "ring_lock.py"), "acquire", "production",
+                                   "--sha", "f" * 40, "--ttl", "600", "--pid", str(os.getpid()), "--op", "another agent"],
+                                  env={**os.environ, "LONGHOUSE_RING_LOCK_DIR": locks}, capture_output=True, text=True)
+            self.assertEqual(held.returncode, 0, held.stderr)
+            result, promotions, ssh_calls, _saved = self.run_promotion(w.green_world(), w.SHA, env={"LONGHOUSE_RING_LOCK_DIR": locks})
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual((promotions, ssh_calls, self.gate_calls), ([], [], []))
+            self.assertIn("ring-lock: REFUSED: production held by", result.stderr)
+            self.assertIn("another agent", result.stderr)
+            self.assertEqual(self.locks_left, ["production.json"])  # still the other holder's
+
+    def test_check_takes_no_lock(self) -> None:
+        result, _p, _s, _saved = self.run_promotion(w.green_world(), "--check", w.SHA)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.lock_events, [])
 
     def test_an_unreviewed_range_moves_nothing_and_still_keeps_the_receipt(self) -> None:
         for args in ((w.SHA,), ("--check", w.SHA)):

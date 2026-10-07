@@ -10,7 +10,13 @@ DEPLOY_WORKFLOW="Deploy and Verify"
 SHA="${1:-}"
 receipt_zip=""
 receipt_path=""
-trap '[[ -z "$receipt_zip" ]] || rm -f "$receipt_zip"; [[ -z "$receipt_path" ]] || rm -f "$receipt_path"' EXIT
+. "$ROOT/scripts/lib/ring-lock.sh"
+cleanup() {
+  [[ -z "$receipt_zip" ]] || rm -f "$receipt_zip"
+  [[ -z "$receipt_path" ]] || rm -f "$receipt_path"
+  lh_ring_lock_release
+}
+trap cleanup EXIT
 
 for tool in gh jq python3 curl unzip; do
   command -v "$tool" >/dev/null 2>&1 || { echo "promote-dogfood needs '$tool' on PATH." >&2; exit 1; }
@@ -31,6 +37,17 @@ case "${SUBDOMAIN,,}" in
 esac
 SHA="$(git -C "$ROOT" rev-parse --verify --quiet "${SHA}^{commit}")" || {
   echo "Refusing ${1}: not a commit in this checkout (fetch first)." >&2
+  exit 1
+}
+
+# One writer per ring: held from before the gates read what dogfood serves until the
+# script exits. TTL 20 min: a promotion takes 1-2 min end to end (31 dogfood
+# deployments 2026-10-03..07 ran 28-55 s in the control plane), and the script's own
+# worst case is the 900 s deployment wait plus the 180 s identity check plus a couple
+# of minutes of gates, so a live promotion never outlives its lock. A holder that
+# dies frees it at once (ring_lock.py checks its pid).
+lh_ring_lock_acquire "dogfood-${SUBDOMAIN,,}" "$SHA" 1200 "promote-dogfood $SHA" || {
+  echo "Refusing: another promotion of $SUBDOMAIN is in flight (above). Nothing was changed." >&2
   exit 1
 }
 
