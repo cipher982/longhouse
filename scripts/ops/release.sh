@@ -65,7 +65,7 @@ if [[ -z "${LONGHOUSE_RELEASE_CHECKOUT:-}" ]]; then
   # minute while this script lives; the 10 min TTL only bounds a stopped keepalive (a
   # hung or suspended run), and a release that dies frees it at once.
   lh_ring_lock_acquire release "$REMOTE_HEAD" 600 "make release $VERSION" || {
-    echo "Refusing: another release is in flight (above)." >&2
+    echo "Refusing: could not take the release lock (above)." >&2
     exit 1
   }
   lh_ring_lock_keepalive 60 600

@@ -3,7 +3,7 @@
 # scripts that write a ring take before they read anything they decide on, and
 # release in their EXIT trap.
 #
-#   lh_ring_lock_acquire SURFACE SHA TTL_SECONDS [OP]  refuses (non-zero, holder on stderr) while held
+#   lh_ring_lock_acquire SURFACE SHA TTL_SECONDS [OP]  1 while held (holder on stderr), 2 when it cannot decide
 #   lh_ring_lock_renew TTL_SECONDS [SHA]               non-zero when this run no longer holds it
 #   lh_ring_lock_keepalive INTERVAL TTL_SECONDS        renew in the background while this script lives
 #   lh_ring_lock_release                               safe to call twice, and when nothing was taken
@@ -21,7 +21,7 @@ _lh_ring_lock() {
 
 lh_ring_lock_acquire() {
   local surface="${1:?surface}" sha="${2:?sha}" ttl="${3:?ttl seconds}" op="${4:-$1}" token
-  token="$(_lh_ring_lock acquire "$surface" --sha "$sha" --ttl "$ttl" --pid "$$" --op "$op")" || return 1
+  token="$(_lh_ring_lock acquire "$surface" --sha "$sha" --ttl "$ttl" --pid "$$" --op "$op")" || return $?
   LH_RING_LOCK_SURFACE="$surface"
   LH_RING_LOCK_TOKEN="$token"
 }
@@ -29,7 +29,11 @@ lh_ring_lock_acquire() {
 lh_ring_lock_renew() {
   local ttl="${1:?ttl seconds}" sha="${2:-}"
   [[ -n "$LH_RING_LOCK_TOKEN" ]] || return 0
-  _lh_ring_lock renew "$LH_RING_LOCK_SURFACE" --token "$LH_RING_LOCK_TOKEN" --ttl "$ttl" ${sha:+--sha "$sha"}
+  if [[ -n "$sha" ]]; then
+    _lh_ring_lock renew "$LH_RING_LOCK_SURFACE" --token "$LH_RING_LOCK_TOKEN" --ttl "$ttl" --sha "$sha"
+  else
+    _lh_ring_lock renew "$LH_RING_LOCK_SURFACE" --token "$LH_RING_LOCK_TOKEN" --ttl "$ttl"
+  fi
 }
 
 lh_ring_lock_keepalive() {

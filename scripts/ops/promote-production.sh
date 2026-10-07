@@ -82,12 +82,14 @@ lh_hosted_prepare_control_plane_auth
 # nothing and takes no lock. TTL 45 min: measured promotions take 1-2 min (pointer-only
 # waves finish in the control plane in 0-1 s; the demo pin and verify is the long part),
 # and the script's own worst case is the 1800 s wave wait plus the 300 s demo verify
-# plus a few minutes of gates. A holder that dies frees it at once.
+# plus a few minutes of gates; the keepalive below renews it every minute, so the TTL
+# only bounds a holder that stopped renewing. A holder that dies frees it at once.
 if [[ "$CHECK_ONLY" != "1" ]]; then
   lh_ring_lock_acquire production "${SHA:-dogfood-served}" 2700 "promote-production ${SHA:-<dogfood-served>}" || {
-    echo "Refusing: another production promotion is in flight (above). Nothing was changed." >&2
+    echo "Refusing: could not take the production lock (above). Nothing was changed." >&2
     exit 1
   }
+  lh_ring_lock_keepalive 60 2700  # renewed while this script lives; the TTL bounds a stuck holder
 fi
 
 # --- The gates. Every one runs; the receipt is printed whether or not they pass.

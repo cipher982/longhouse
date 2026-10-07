@@ -41,15 +41,17 @@ SHA="$(git -C "$ROOT" rev-parse --verify --quiet "${SHA}^{commit}")" || {
 }
 
 # One writer per ring: held from before the gates read what dogfood serves until the
-# script exits. TTL 20 min: a promotion takes 1-2 min end to end (31 dogfood
-# deployments 2026-10-03..07 ran 28-55 s in the control plane), and the script's own
-# worst case is the 900 s deployment wait plus the 180 s identity check plus a couple
-# of minutes of gates, so a live promotion never outlives its lock. A holder that
-# dies frees it at once (ring_lock.py checks its pid).
+# script exits, renewed every minute while it lives. TTL 20 min: a promotion takes
+# 1-2 min end to end (31 dogfood deployments 2026-10-03..07 ran 28-55 s in the
+# control plane) and the script's own worst case is the 900 s deployment wait plus
+# the 180 s identity check plus a couple of minutes of gates; with the keepalive the
+# TTL only bounds a holder that stopped renewing. A holder that dies frees it at once
+# (ring_lock.py checks its pid).
 lh_ring_lock_acquire "dogfood-${SUBDOMAIN,,}" "$SHA" 1200 "promote-dogfood $SHA" || {
-  echo "Refusing: another promotion of $SUBDOMAIN is in flight (above). Nothing was changed." >&2
+  echo "Refusing: could not take the $SUBDOMAIN promotion lock (above). Nothing was changed." >&2
   exit 1
 }
+lh_ring_lock_keepalive 60 1200
 
 # Every code commit between what dogfood serves now and SHA needs a completed review.
 . "$ROOT/scripts/lib/review-gate.sh"

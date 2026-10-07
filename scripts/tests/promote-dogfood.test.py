@@ -194,7 +194,7 @@ else:
         self.assertEqual(result.returncode, 1)
         self.assertEqual((promotions, self.gate_calls), ([], []))
         self.assertIn("ring-lock: REFUSED: dogfood-fixture-owner held by", result.stderr)
-        self.assertIn("another promotion of fixture-owner is in flight", result.stderr)
+        self.assertIn("could not take the fixture-owner promotion lock", result.stderr)
         self.assertEqual(self.locks_left, ["dogfood-fixture-owner.json"])
 
     def test_a_lock_whose_holder_died_is_reclaimed_and_the_reclaim_logged(self):
@@ -204,7 +204,7 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(promotions), 1)
         self.assertIn("ring-lock: reclaimed dogfood-fixture-owner from", result.stderr)
-        self.assertEqual(self.lock_events, ["acquired", "reclaimed", "acquired", "released"])
+        self.assertEqual([e for e in self.lock_events if e != "renewed"], ["acquired", "reclaimed", "acquired", "released"])
 
     def test_an_unreviewed_range_promotes_nothing(self):
         result, promotions = self.run_promotion(gate_refuses=True)
