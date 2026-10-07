@@ -2687,11 +2687,13 @@ class CatalogDaemon:
             "notification_muted",
             "user_hidden_from_timeline",
             "last_read_at",
+            "last_user_input_at",
             "observed_at",
         }
-        if set(request.params) != expected:
+        # last_user_input_at is optional so older callers keep their exact shape.
+        if not expected - {"last_user_input_at"} <= set(request.params) <= expected:
             return self._error(request, "invalid_request", "session.preferences.update.v2 has invalid parameters")
-        params = dict(request.params)
+        params = {"last_user_input_at": None, **request.params}
         if not _is_canonical_uuid(params["session_id"]):
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
         if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
@@ -2707,12 +2709,17 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "notification_muted must be a boolean or null")
         if params["user_hidden_from_timeline"] is not None and type(params["user_hidden_from_timeline"]) is not bool:
             return self._error(request, "invalid_request", "user_hidden_from_timeline must be a boolean or null")
-        if all(params[field] is None for field in ("user_state", "notification_muted", "user_hidden_from_timeline", "last_read_at")):
+        if all(
+            params[field] is None
+            for field in ("user_state", "notification_muted", "user_hidden_from_timeline", "last_read_at", "last_user_input_at")
+        ):
             return self._error(request, "invalid_request", "at least one preference must be provided")
         try:
             params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
             if params["last_read_at"] is not None:
                 params["last_read_at"] = _parse_datetime(params["last_read_at"], "last_read_at")
+            if params["last_user_input_at"] is not None:
+                params["last_user_input_at"] = _parse_datetime(params["last_user_input_at"], "last_user_input_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None

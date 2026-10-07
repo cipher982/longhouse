@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
+_stamp_tasks: set[asyncio.Task[None]] = set()
 
 
 @dataclass(frozen=True)
@@ -14,6 +19,7 @@ class SessionPreferences:
     notification_muted: bool = False
     user_hidden_from_timeline: bool = False
     last_read_at: datetime | None = None
+    last_user_input_at: datetime | None = None
     read_through_rejected: bool = False
 
 
@@ -71,6 +77,7 @@ async def update_session_preferences(
     notification_muted: bool | None = None,
     user_hidden_from_timeline: bool | None = None,
     last_read_at: datetime | None = None,
+    last_user_input_at: datetime | None = None,
 ) -> SessionPreferences | None:
     """Update session preferences through catalogd without opening SQLite here.
 
@@ -93,6 +100,7 @@ async def update_session_preferences(
             "notification_muted": notification_muted,
             "user_hidden_from_timeline": user_hidden_from_timeline,
             "last_read_at": last_read_at.isoformat() if last_read_at is not None else None,
+            "last_user_input_at": last_user_input_at.isoformat() if last_user_input_at is not None else None,
             "observed_at": datetime.now(timezone.utc).isoformat(),
         },
         timeout_seconds=1.0,
@@ -109,7 +117,30 @@ async def update_session_preferences(
         notification_muted=preferences.get("notification_muted") is True,
         user_hidden_from_timeline=preferences.get("user_hidden_from_timeline") is True,
         last_read_at=_parse_optional_datetime(preferences.get("last_read_at")),
+        last_user_input_at=_parse_optional_datetime(preferences.get("last_user_input_at")),
     )
+
+
+async def stamp_owner_input(session_id: UUID | str, *, owner_id: int, at: datetime) -> None:
+    """Record that the owner sent input; Recent sorts by it.
+
+    Only owner-facing composer routes call this. Machine, directed-input,
+    wake and notice paths never do (docs/specs/recent-by-last-user-input.md).
+    Ordering is cosmetic, so a failure logs and never fails the send.
+    """
+
+    try:
+        await update_session_preferences(session_id, owner_id=owner_id, last_user_input_at=at)
+    except Exception:
+        logger.warning("Failed to stamp owner input on session %s", session_id, exc_info=True)
+
+
+def stamp_owner_input_soon(session_id: UUID | str, *, owner_id: int) -> None:
+    """Schedule :func:`stamp_owner_input` without delaying the send path."""
+
+    task = asyncio.create_task(stamp_owner_input(session_id, owner_id=owner_id, at=datetime.now(timezone.utc)))
+    _stamp_tasks.add(task)
+    task.add_done_callback(_stamp_tasks.discard)
 
 
 def _parse_optional_datetime(value) -> datetime | None:

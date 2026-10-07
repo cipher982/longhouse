@@ -428,6 +428,7 @@ struct APISessionStateFacts: Codable, Hashable, Sendable {
     let unread: Bool?
     let lastResultAt: String?
     let lastResultOutcome: String?
+    let lastUserInputAt: String?
     let presentation: APISessionPresentation
     let commitSeq: Int?
 }

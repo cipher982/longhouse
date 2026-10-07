@@ -340,6 +340,9 @@ class LiveSessionCatalog(LiveBase):
     last_console_result_at = Column(DateTime(timezone=True), nullable=True)
     last_console_result_outcome = Column(String(20), nullable=True)
     last_read_at = Column(DateTime(timezone=True), nullable=True)
+    # When the owner last sent input from a composer
+    # (docs/specs/recent-by-last-user-input.md). Max-write.
+    last_user_input_at = Column(DateTime(timezone=True), nullable=True)
     primary_thread_id = Column(String(36), nullable=True, index=True)
     notification_muted = Column(Boolean, nullable=False, server_default=text("0"))
     origin_kind = Column(String(64), nullable=True, index=True)

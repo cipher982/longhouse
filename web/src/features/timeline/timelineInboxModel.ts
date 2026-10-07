@@ -52,8 +52,15 @@ function isCardClosed(card: TimelineSessionCard): boolean {
   return isSessionClosed(session);
 }
 
+/**
+ * History (Recent) order: the later of the owner's last composer input and the
+ * start time (close time once closed). Rows move only when the owner acts, so
+ * a session they keep talking to stays near the top without agent activity
+ * reshuffling the list (control-plane docs/specs/recent-by-last-user-input.md).
+ */
 export function historySortKey(card: TimelineSessionCard): number {
-  return isCardClosed(card) ? closedAtMs(card) : startedAtMs(card);
+  const base = isCardClosed(card) ? closedAtMs(card) : startedAtMs(card);
+  return Math.max(base, parseMs(card.head?.session_state?.last_user_input_at));
 }
 
 function explicitAutomationClassification(

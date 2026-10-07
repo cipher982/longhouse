@@ -66,7 +66,8 @@ struct TimelineInboxLayout: Equatable {
 /// a session's heads continuously — including idle Helm sessions — so ordering
 /// on it made rows swap places every few seconds ("popcorn"). Mirrors the web's
 /// `startedAtMs`/`historySortKey`: open work lays out by launch, history by the
-/// last time the session actually did something. Equal keys keep input order.
+/// later of its close time and the owner's last composer input, so only the
+/// owner's own actions move a history row. Equal keys keep input order.
 func timelineDisplayOrder(_ sessions: [SessionSummary]) -> [SessionSummary] {
     sessions
         .enumerated()
@@ -77,8 +78,12 @@ func timelineDisplayOrder(_ sessions: [SessionSummary]) -> [SessionSummary] {
 
 private func timelineDisplayTime(for session: SessionSummary) -> Date {
     let raw = session.isClosed ? (session.lastActivityAt ?? session.startedAt) : session.startedAt
-    guard let raw, let date = LonghouseDateParser.parse(raw) else { return .distantPast }
-    return date
+    let base = raw.flatMap(LonghouseDateParser.parse) ?? .distantPast
+    // Open work keeps launch order: live sessions take input constantly.
+    guard !session.isOpen,
+          let input = session.stateFacts.lastUserInputAt.flatMap(LonghouseDateParser.parse)
+    else { return base }
+    return max(base, input)
 }
 
 /// Obligation-ranked presentation over canonical server facts. This does not

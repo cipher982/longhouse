@@ -8733,6 +8733,7 @@ class CatalogStore:
         user_hidden_from_timeline: bool | None,
         observed_at: datetime,
         last_read_at: datetime | None = None,
+        last_user_input_at: datetime | None = None,
     ) -> dict[str, Any]:
         """Update bounded user-owned session state in one catalog transaction.
 
@@ -8759,6 +8760,7 @@ class CatalogStore:
                         table.c.user_hidden_from_timeline,
                         table.c.user_hidden_at,
                         table.c.last_read_at,
+                        table.c.last_user_input_at,
                     ).where(table.c.session_id == session_id)
                 )
                 .mappings()
@@ -8772,6 +8774,7 @@ class CatalogStore:
                             StorageSession.__table__.c.notification_muted,
                             StorageSession.__table__.c.user_hidden_from_timeline,
                             StorageSession.__table__.c.last_read_at,
+                            StorageSession.__table__.c.last_user_input_at,
                         ).where(StorageSession.__table__.c.session_id == session_id)
                     )
                     .mappings()
@@ -8789,6 +8792,9 @@ class CatalogStore:
                     storage_read_at = _as_aware_utc(storage_current["last_read_at"])
                     if last_read_at is not None and (storage_read_at is None or last_read_at > storage_read_at):
                         storage_values["last_read_at"] = last_read_at
+                    storage_input_at = _as_aware_utc(storage_current["last_user_input_at"])
+                    if last_user_input_at is not None and (storage_input_at is None or last_user_input_at > storage_input_at):
+                        storage_values["last_user_input_at"] = last_user_input_at
                     connection.execute(
                         update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**storage_values)
                     )
@@ -8804,6 +8810,7 @@ class CatalogStore:
                                 else bool(storage_current["user_hidden_from_timeline"])
                             ),
                             "last_read_at": _encode_datetime(storage_values.get("last_read_at") or storage_read_at),
+                            "last_user_input_at": _encode_datetime(storage_values.get("last_user_input_at") or storage_input_at),
                         },
                         "updated": True,
                         "commit_seq": str(commit_seq),
@@ -8827,6 +8834,10 @@ class CatalogStore:
             # backwards, and an already-read session is a true no-op.
             if last_read_at is not None and (current_read_at is None or last_read_at > current_read_at):
                 values["last_read_at"] = last_read_at
+            # Same max-write for the owner's last composer input.
+            current_input_at = _as_aware_utc(current["last_user_input_at"])
+            if last_user_input_at is not None and (current_input_at is None or last_user_input_at > current_input_at):
+                values["last_user_input_at"] = last_user_input_at
             if values:
                 values["updated_at"] = observed_at
                 connection.execute(update(table).where(table.c.session_id == session_id).values(**values))
@@ -8846,6 +8857,16 @@ class CatalogStore:
                 )
                 .values(**storage_values, updated_at=observed_at)
             ).rowcount
+            if last_user_input_at is not None:
+                # Max-write, not reconcile: never move the archived stamp backwards.
+                storage_changed += connection.execute(
+                    update(storage_table)
+                    .where(
+                        storage_table.c.session_id == session_id,
+                        or_(storage_table.c.last_user_input_at.is_(None), storage_table.c.last_user_input_at < last_user_input_at),
+                    )
+                    .values(last_user_input_at=last_user_input_at, updated_at=observed_at)
+                ).rowcount
             card_table = LiveTimelineCard.__table__
             card_values = {key: storage_values[key] for key in ("user_hidden_from_timeline", "user_hidden_at")}
             card_changed = connection.execute(
@@ -8868,6 +8889,7 @@ class CatalogStore:
                         user_hidden_from_timeline if user_hidden_from_timeline is not None else bool(current["user_hidden_from_timeline"])
                     ),
                     "last_read_at": _encode_datetime(values.get("last_read_at") or current_read_at),
+                    "last_user_input_at": _encode_datetime(values.get("last_user_input_at") or current_input_at),
                 },
                 "updated": changed,
                 "commit_seq": str(commit_seq),
@@ -15306,6 +15328,7 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "last_console_result_at": row["last_console_result_at"],
         "last_console_result_outcome": row["last_console_result_outcome"],
         "last_read_at": row["last_read_at"],
+        "last_user_input_at": row["last_user_input_at"],
         "primary_thread_id": None,
         "notification_muted": bool(row["notification_muted"]),
         "origin_kind": row["origin_kind"],
@@ -15938,6 +15961,7 @@ _CATALOG_FIELDS = frozenset(
         "last_console_result_at",
         "last_console_result_outcome",
         "last_read_at",
+        "last_user_input_at",
         "primary_thread_id",
         "notification_muted",
         "origin_kind",

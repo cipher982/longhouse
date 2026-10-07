@@ -95,6 +95,7 @@ from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CURSOR_POLL
+from zerg.services.session_preferences import stamp_owner_input_soon
 from zerg.services.session_views import SessionPauseRequestProjectionResponse
 
 logger = logging.getLogger(__name__)
@@ -3143,12 +3144,16 @@ async def create_session_input_endpoint(
     current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInputResponse:
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
-    return await _create_session_input_response(
+    response = await _create_session_input_response(
         source_session=source_session,
         owner_id=current_user.id,
         body=body,
         db=db,
     )
+    # The owner typed this (web or iOS composer). The machine route below and
+    # directed input never stamp.
+    stamp_owner_input_soon(source_session.id, owner_id=int(current_user.id))
+    return response
 
 
 @agents_router.post("/{session_id}/input", response_model=SessionInputResponse)

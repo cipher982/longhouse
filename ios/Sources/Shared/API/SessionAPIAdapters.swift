@@ -156,7 +156,8 @@ private extension APISessionStateFacts {
             access: presentation.access?.sessionStateLabel,
             transcript: presentation.transcript?.sessionStateLabel,
             commitSeq: commitSeq,
-            delegation: delegation?.sessionDelegationFacts
+            delegation: delegation?.sessionDelegationFacts,
+            lastUserInputAt: lastUserInputAt
         )
     }
 }

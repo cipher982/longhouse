@@ -2009,6 +2009,7 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
       provider: "claude",
       summary_title: "Bracket v3 for the mouse camera",
       device_id: "cinder",
+      ended_at: "2026-04-14T21:30:00Z",
       session_state: makeSessionState({
         working_set: "history",
         disposition: { state: "closed", closed_at: "2026-04-14T21:30:00Z", close_reason: "user_closed" },
@@ -2109,6 +2110,16 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
           transcript: null,
         },
       }),
+    },
+    {
+      // Started days before the others, but the owner sent it input most
+      // recently, so it leads Recent (recent-by-last-user-input spec).
+      id: "rail-rl-task",
+      provider: "claude",
+      summary_title: "RL task for AI-designed languages",
+      device_id: "cinder",
+      started_at: "2026-04-12T09:00:00Z",
+      session_state: { ...idleState("2026-04-15T15:50:00Z"), last_user_input_at: "2026-04-15T15:55:00Z" },
     },
   ];
   // Rows the rail must leave on the Timeline (automation runs), and a prompt

@@ -9027,6 +9027,8 @@ export interface components {
             last_result_at?: string | null;
             /** Last Result Outcome */
             last_result_outcome?: string | null;
+            /** Last User Input At */
+            last_user_input_at?: string | null;
             presentation: components["schemas"]["SessionPresentation"];
             /** Commit Seq */
             commit_seq?: number | null;

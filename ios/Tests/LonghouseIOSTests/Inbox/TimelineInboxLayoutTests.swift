@@ -119,6 +119,42 @@ struct TimelineInboxLayoutTests {
     }
 
     @Test
+    func recentFloatsTheSessionTheOwnerLastSentInputTo() {
+        // Recent sorts by the later of the owner's last composer input and
+        // the start/close time; open work keeps launch order.
+        func facts(workingSet: String, input: String?) -> SessionStateFacts {
+            var facts = makeSessionStateFacts(activity: "quiescent", workingSet: workingSet)
+            facts.lastUserInputAt = input
+            return facts
+        }
+        let console = session(
+            id: "console",
+            facts: facts(workingSet: "history", input: "2026-08-01T11:30:00Z"),
+            startedAt: "2026-07-25T10:00:00Z"
+        )
+        let newer = session(
+            id: "newer",
+            facts: facts(workingSet: "history", input: nil),
+            startedAt: "2026-08-01T11:00:00Z"
+        )
+        let openOld = session(
+            id: "open-old",
+            facts: facts(workingSet: "open", input: "2026-08-01T11:45:00Z"),
+            startedAt: "2026-08-01T09:00:00Z"
+        )
+        let openNew = session(
+            id: "open-new",
+            facts: facts(workingSet: "open", input: nil),
+            startedAt: "2026-08-01T10:00:00Z"
+        )
+
+        let layout = buildTimelineInboxLayout([newer, console, openOld, openNew])
+
+        #expect(layout.recent.map(\.id) == ["console", "newer"])
+        #expect(layout.open.map(\.id) == ["open-new", "open-old"])
+    }
+
+    @Test
     func residentCapKeepsEveryOpenRowAndCutsHistoryInstead() {
         // The quiet-but-open Helm row carries the oldest anchor, so a naive
         // prefix(limit) drops exactly the session the server tiered into view.

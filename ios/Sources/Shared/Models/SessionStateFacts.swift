@@ -301,6 +301,9 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     /// same observation. Missing means this server/cached payload predates the
     /// family; it is not an empty registry.
     var delegation: SessionDelegationFacts? = nil
+    /// When the owner last sent input from a composer. Recent sorts by it
+    /// (recent-by-last-user-input spec). Nil is unknown, never inferred.
+    var lastUserInputAt: String? = nil
 
     static let unknown = SessionStateFacts(
         contractVersion: 1,

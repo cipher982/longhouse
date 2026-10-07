@@ -364,6 +364,32 @@ describe("buildInboxLayout", () => {
     ]);
   });
 
+  it("floats a session the owner last sent input to above newer starts", () => {
+    const withInput = (card: TimelineSessionCard, at: string): TimelineSessionCard => ({
+      ...card,
+      head: { ...card.head, session_state: { ...card.head.session_state, last_user_input_at: at } },
+    });
+    const cards = [
+      withInput(makeCard({ id: "console", repo: "zerg", startedAt: "2026-05-15T10:00:00Z" }), "2026-05-18T11:00:00Z"),
+      makeCard({ id: "new", repo: "zerg", startedAt: "2026-05-18T10:00:00Z" }),
+      // Input older than the start never pulls a row down.
+      withInput(makeCard({ id: "mid", repo: "zerg", startedAt: "2026-05-18T05:00:00Z" }), "2026-05-17T00:00:00Z"),
+      withInput(
+        makeCard({ id: "closed", repo: "zerg", startedAt: "2026-05-10T10:00:00Z", closed: true, endedAt: "2026-05-11T10:00:00Z" }),
+        "2026-05-18T07:00:00Z",
+      ),
+    ];
+
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.history.flatMap((group) => group.sessions.map((s) => s.thread_id))).toEqual([
+      "console",
+      "new",
+      "closed",
+      "mid",
+    ]);
+  });
+
   it("sorts closed sessions by close time descending, not start time", () => {
     const cards = [
       makeCard({

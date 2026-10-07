@@ -286,6 +286,7 @@ def project_served_session_state_facts(
         last_console_result_at=_optional_wire_datetime(catalog.get("last_console_result_at"), "catalog.last_console_result_at"),
         last_console_result_outcome=_text(catalog.get("last_console_result_outcome")),
         last_read_at=_optional_wire_datetime(catalog.get("last_read_at"), "catalog.last_read_at"),
+        last_user_input_at=_optional_wire_datetime(catalog.get("last_user_input_at"), "catalog.last_user_input_at"),
     )
 
 

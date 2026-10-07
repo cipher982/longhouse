@@ -332,6 +332,9 @@ class SessionStateFacts(_FrozenModel):
     unread: bool = False
     last_result_at: datetime | None = None
     last_result_outcome: str | None = None
+    # When the owner last sent input from a composer; Recent sorts by it
+    # (docs/specs/recent-by-last-user-input.md). Unknown is null, never inferred.
+    last_user_input_at: datetime | None = None
     presentation: SessionPresentation
     commit_seq: int | None = None
 
@@ -864,6 +867,7 @@ def build_archive_session_state_facts(
         last_console_result_at=getattr(session, "last_console_result_at", None),
         last_console_result_outcome=getattr(session, "last_console_result_outcome", None),
         last_read_at=getattr(session, "last_read_at", None),
+        last_user_input_at=getattr(session, "last_user_input_at", None),
     )
 
 
@@ -883,6 +887,7 @@ def assemble_session_state_facts(
     last_console_result_at: datetime | None = None,
     last_console_result_outcome: str | None = None,
     last_read_at: datetime | None = None,
+    last_user_input_at: datetime | None = None,
 ) -> SessionStateFacts:
     """Assemble orthogonal axes and apply the single presentation policy."""
 
@@ -931,6 +936,7 @@ def assemble_session_state_facts(
         unread=_unread(last_console_result_at=last_console_result_at, last_read_at=last_read_at),
         last_result_at=normalize_utc(last_console_result_at),
         last_result_outcome=_clean(last_console_result_outcome),
+        last_user_input_at=normalize_utc(last_user_input_at),
         presentation=SessionPresentation(primary=primary, access=access, transcript=transcript_label),
         commit_seq=commit_seq,
     )
@@ -1458,6 +1464,7 @@ def build_session_state_facts(
         last_console_result_at=getattr(session, "last_console_result_at", None),
         last_console_result_outcome=getattr(session, "last_console_result_outcome", None),
         last_read_at=getattr(session, "last_read_at", None),
+        last_user_input_at=getattr(session, "last_user_input_at", None),
     )
 
 

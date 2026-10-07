@@ -75,6 +75,7 @@ from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
+from zerg.services.session_preferences import stamp_owner_input_soon
 
 logger = logging.getLogger(__name__)
 
@@ -543,6 +544,8 @@ async def create_session_input_with_attachments(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=_rejected_detail("client_request_id must not be blank", code="invalid_client_request_id"),
         )
+    # The owner sent this from a composer; Recent sorts by it.
+    stamp_owner_input_soon(source_session.id, owner_id=int(current_user.id))
 
     if getattr(source_session, "command_family", None) == "console_turn":
         return await _enqueue_console_input_with_attachments(
