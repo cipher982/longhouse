@@ -1,4 +1,5 @@
 import type { AgentSession } from "@/shared/api/agents";
+import { sessionHasFailedRun } from "@/shared/session/sessionRuntime";
 import {
   ACTIVITY_UNCERTAIN_LABEL,
   delegatedWorkLabel,
@@ -80,6 +81,10 @@ export function getSessionHeaderState(
 
   if (sessionNeedsInteraction(facts, nowMs)) {
     return { tone: "attention", text: pendingInteractionLabel(facts) };
+  }
+
+  if (sessionHasFailedRun(session)) {
+    return { tone: "cool", text: facts.presentation.primary?.label ?? "Run failed" };
   }
 
   if (sessionIsWorking(facts, nowMs)) {

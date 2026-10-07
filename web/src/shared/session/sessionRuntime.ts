@@ -91,7 +91,7 @@ export function resolveTimelineSignal(
 export function timelineSignalLabel(signal: TimelineSignal): string {
   switch (signal) {
     case "attention":
-      return "Waiting on you";
+      return "Attention";
     case "working":
       return "Working";
     case "quiet":

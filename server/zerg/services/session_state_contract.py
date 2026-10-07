@@ -32,7 +32,7 @@ from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 4
-PRESENTATION_POLICY_VERSION = 5
+PRESENTATION_POLICY_VERSION = 6
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -1168,20 +1168,6 @@ def _primary(
             tone="blocked",
             observed_at=run.ended_at,
         )
-    # Keep a terminal failure visible when its stale interaction cannot be
-    # answered; an answerable question still owns the primary presentation.
-    if (
-        run is not None
-        and run.lifecycle == "ended"
-        and run.end_reason in FAILED_RUN_END_REASONS
-        and not (interaction is not None and interaction.can_respond)
-    ):
-        return SessionPresentationLabel(
-            key="ended",
-            label="Run failed",
-            tone="blocked",
-            observed_at=run.ended_at,
-        )
     if interaction is not None and interaction.can_respond:
         if interaction.kind == "question":
             return SessionPresentationLabel(
@@ -1218,6 +1204,22 @@ def _primary(
             label=_delegation_label(delegation),
             tone="active",
             observed_at=delegation.observed_at,
+        )
+    # A run records one attempt. Fresh activity and live delegated work above
+    # remain the session's primary until their own evidence expires.
+    # Keep a terminal failure visible when its stale interaction cannot be
+    # answered; an answerable question still owns the primary presentation.
+    if (
+        run is not None
+        and run.lifecycle == "ended"
+        and run.end_reason in FAILED_RUN_END_REASONS
+        and not (interaction is not None and interaction.can_respond)
+    ):
+        return SessionPresentationLabel(
+            key="ended",
+            label="Run failed",
+            tone="blocked",
+            observed_at=run.ended_at,
         )
     if activity.state == "quiescent":
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)

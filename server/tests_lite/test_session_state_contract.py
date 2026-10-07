@@ -31,6 +31,7 @@ from zerg.services.session_state_contract import build_archive_session_state_fac
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_state_contract import project_transcript_facts
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
+from zerg.services.session_state_contract import SessionDelegationFacts
 from zerg.services.session_views import build_compat_runtime_display_response
 
 NOW = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
@@ -425,6 +426,42 @@ def test_failed_run_yields_to_interaction_only_when_it_can_be_answered(can_respo
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == expected_key
     assert facts.presentation.primary.label == expected_label
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_key", "expected_label"),
+    [("thinking", "thinking", "Thinking"), ("running", "executing", "Using Shell")],
+)
+def test_current_activity_outlives_failed_run(phase, expected_key, expected_label):
+    facts = _facts(
+        runtime=_runtime(phase=phase, confidence="live", terminal_state="run_failed", tool="Bash"),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+    )
+
+    assert facts.run is not None and facts.run.lifecycle == "ended"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == expected_key
+    assert facts.presentation.primary.label == expected_label
+
+
+def test_live_delegation_outlives_failed_parent_run():
+    delegation = SessionDelegationFacts(
+        state="pending",
+        count=1,
+        kinds={"subagent": 1},
+        observed_at=NOW - timedelta(seconds=5),
+        valid_until=NOW + timedelta(minutes=5),
+    )
+    facts = _facts(
+        runtime=_runtime(phase="idle", confidence="live", terminal_state="run_failed"),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+        delegation=delegation,
+    )
+
+    assert facts.run is not None and facts.run.lifecycle == "ended"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "delegated_work"
+    assert facts.presentation.primary.label == "Background · 1 agent"
 
 
 def test_unanswerable_interaction_does_not_claim_a_wait():

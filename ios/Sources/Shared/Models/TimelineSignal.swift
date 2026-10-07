@@ -4,7 +4,7 @@ import SwiftUI
 /// The single attention axis for a timeline row, shared by the app card and the
 /// home-screen widget (and mirrored on web in lib/sessionRuntime.ts). Three
 /// semantic stops the user can read pre-attentively, plus a closed/quiet rest:
-///   - attention: the session is WAITING ON YOU - steady ember, never pulses.
+///   - attention: a flagged status, including answerable interactions or blocked/stalled activity.
 ///   - working:   the session is actively running - flame, breathing (live only).
 ///   - quiet:     idle/stale - grey, static.
 ///   - closed:    ended - dimmed grey, static.
@@ -53,8 +53,7 @@ enum TimelineSignal {
         }
     }
 
-    /// Motion is reserved for genuine live work. "Waiting on you" is a stable
-    /// state, so attention is steady, not pulsing - avoids alarm fatigue.
+    /// Attention is a steady warning, distinct from live work that pulses.
     var pulses: Bool { self == .working }
 
     /// The signal one activity state carries on its own, before the row-level

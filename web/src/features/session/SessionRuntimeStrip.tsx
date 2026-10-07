@@ -5,7 +5,7 @@ import { getToolInputRecord } from "@/shared/session/model";
 import type { SessionActivityFeed } from "./sessionActivityFeed";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import { activityEvidenceIsLive, delegationEvidenceIsLive } from "@/shared/session/activityEvidence";
-import { needsSessionAttention, resolveSessionRuntimeState } from "@/shared/session/sessionRuntime";
+import { needsSessionAttention, resolveSessionRuntimeState, sessionHasFailedRun } from "@/shared/session/sessionRuntime";
 import {
   getRuntimeDisplayCopy,
   getRuntimeMetaLabel,
@@ -261,6 +261,7 @@ export function buildSessionLedgerState(
     facts.activity.state === "thinking" || facts.activity.state === "executing";
   const openSession = !closedSession && facts.working_set === "open";
   const pending = openSession && needsSessionAttention(session);
+  const failedRun = openSession && sessionHasFailedRun(session);
   const inInitialConnectionGrace = initialConnectionGrace && openSession;
   const evidenceLive = activityEvidenceIsLive(facts.activity, nowMs);
   // The viewer's socket is not provider evidence: a connected stream only means
@@ -286,18 +287,22 @@ export function buildSessionLedgerState(
     ? "quiet"
     : pending
       ? "attention"
-      : viewerNeedsDisclosure
-        ? "unknown"
-        : evidenceLive && sessionNeedsInteraction(facts, nowMs)
-          ? "attention"
-          : providerWorking
-            ? "working"
-            : "quiet";
+      : failedRun
+        ? "quiet"
+        : viewerNeedsDisclosure
+          ? "unknown"
+          : evidenceLive && sessionNeedsInteraction(facts, nowMs)
+            ? "attention"
+            : providerWorking
+              ? "working"
+              : "quiet";
   const headline = pending
     ? pendingInteractionLabel(facts)
-    : tone === "unknown"
-      ? ACTIVITY_UNCERTAIN_LABEL
-      : withObservationAge(display.headline, facts.presentation.primary, nowMs);
+    : failedRun
+      ? display.headline
+      : tone === "unknown"
+        ? ACTIVITY_UNCERTAIN_LABEL
+        : withObservationAge(display.headline, facts.presentation.primary, nowMs);
   const preview = session.transcript_preview;
   const input = getToolInputRecord(preview?.tool_input_json);
   const inputDetail =

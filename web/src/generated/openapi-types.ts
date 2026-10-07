@@ -8849,7 +8849,7 @@ export interface components {
             state_contract_version: number;
             /**
              * Presentation Policy Version
-             * @default 5
+             * @default 6
              */
             presentation_policy_version: number;
             /**

@@ -227,6 +227,32 @@ describe("SessionRuntimeStrip connection presentation", () => {
     expect(state.tone).toBe("quiet");
     expect(state.detail).not.toBe("A response is required before another message.");
   });
+
+  it("keeps terminal failure visible instead of uncertain expired activity", () => {
+    const failed = session("failed-run", {
+      activity: "quiescent",
+      activityValidUntil: "2026-09-09T18:59:00.000Z",
+      pendingInteraction: true,
+    });
+    failed.session_state.pending_interaction!.can_respond = false;
+    failed.session_state.run = { lifecycle: "ended", end_reason: "run_failed" };
+    failed.session_state.presentation.primary = {
+      key: "ended",
+      label: "Run failed",
+      tone: "blocked",
+      observed_at: null,
+    };
+
+    const state = buildSessionLedgerState(
+      failed,
+      interaction,
+      Date.parse("2026-09-09T19:00:00.000Z"),
+      false,
+    );
+
+    expect(state.tone).toBe("quiet");
+    expect(state.headline).toBe("Run failed");
+  });
   it("removes the running clock when activity expires and freezes a confirmed turn duration", () => {
     const started = Date.parse("2026-09-09T19:00:00.000Z");
     const current = session("activity-clock", {

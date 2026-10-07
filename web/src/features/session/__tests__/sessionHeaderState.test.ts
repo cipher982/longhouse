@@ -79,6 +79,22 @@ describe("getSessionHeaderState", () => {
     expect(state).toEqual({ tone: "cool", text: "Idle" });
   });
 
+  it.each([
+    { primaryKey: "ended", primaryLabel: "Run failed" },
+    { primaryKey: "launch_failed", primaryLabel: "Launch failed" },
+  ])("keeps terminal failure copy without marking it as a response wait: $primaryKey", ({ primaryKey, primaryLabel }) => {
+    const state = getSessionHeaderState(
+      session({
+        pendingInteraction: { id: "1", can_respond: false },
+        primaryTone: "blocked",
+        primaryKey,
+        primaryLabel,
+      }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "cool", text: primaryLabel });
+  });
+
 
   it("reads a blocked/stalled presentation tone as attention even when activity.state is quiescent", () => {
     const state = getSessionHeaderState(

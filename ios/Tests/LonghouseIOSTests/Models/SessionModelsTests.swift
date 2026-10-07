@@ -492,6 +492,30 @@ struct SessionModelsTests {
         #expect(pauseRequest.questions.first?.options.first?.value == "sqlite")
     }
 
+    @MainActor
+    @Test
+    func runtimeDockExpandsOnlyForAnswerableInteractions() throws {
+        for canRespond in [false, true] {
+            let response = canRespond ? "true" : "false"
+            let interaction = #""activity": {"state": "quiescent"}, "pending_interaction": {"id": "pause-dock", "kind": "question", "can_respond": \#(response)}"#
+            var json = apiSessionJSON()
+                .replacingOccurrences(of: #""activity": {"state": "quiescent"}"#, with: interaction)
+            if canRespond {
+                json = json.replacingOccurrences(
+                    of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
+                    with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
+                )
+            }
+            let detail = try JSONDecoder.snakeCase
+                .decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8))
+                .sessionDetail
+            let dock = SessionRuntimeDock(detail: detail, activity: ActivityPulseStore())
+
+            #expect(dock.shouldExpand == canRespond)
+        }
+    }
+
+
     @Test
     func sessionDetailShowsAttentionFallbackWhenAServedQuestionHasNoPauseRequest() throws {
         let json = apiSessionJSON()

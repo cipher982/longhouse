@@ -597,10 +597,9 @@ struct SessionRuntimeDock: View {
         !detail.isClosed && detail.stateFacts.workingSet == "open"
     }
 
-    private var shouldExpand: Bool {
+    var shouldExpand: Bool {
         ledger(asOf: providerEvidenceNow) == .uncertain
-            || detail.activePauseRequest != nil
-            || detail.stateFacts.pendingInteractionKind != nil
+            || detail.stateFacts.hasAnswerablePendingInteraction
             || detail.controlBlock.isFault
             || detail.isTranscriptSyncing
     }
