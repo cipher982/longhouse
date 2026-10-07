@@ -216,11 +216,15 @@ describe("SessionRuntimeStrip connection presentation", () => {
     });
     unanswerable.session_state.pending_interaction!.can_respond = false;
     unanswerable.session_state.presentation.primary = {
-      key: "needs_answer",
-      label: "Needs answer",
-      tone: "blocked",
+      key: "idle",
+      label: "Idle",
+      tone: "idle",
       observed_at: null,
     };
+    unanswerable.session_state.presentation.signal = mirrorServedSignal(
+      unanswerable.session_state.presentation.primary,
+      { activity: unanswerable.session_state.activity },
+    );
 
     const state = buildSessionLedgerState(unanswerable, interaction, 0, false);
 

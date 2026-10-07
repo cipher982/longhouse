@@ -79,12 +79,14 @@ export function getSessionHeaderState(
   // header saying "Using Bash for 50 minutes".
   const staleClaim = workClaimExpired(facts, nowMs);
 
-  if (sessionNeedsInteraction(facts, nowMs)) {
-    return { tone: "attention", text: pendingInteractionLabel(facts) };
-  }
-
+  // A failed run is a terminal outcome, not a response wait, even though the
+  // server's attention signal also covers failures.
   if (sessionHasFailedRun(session)) {
     return { tone: "cool", text: facts.presentation.primary?.label ?? "Run failed" };
+  }
+
+  if (sessionNeedsInteraction(facts, nowMs)) {
+    return { tone: "attention", text: pendingInteractionLabel(facts) };
   }
 
   if (sessionIsWorking(facts, nowMs)) {

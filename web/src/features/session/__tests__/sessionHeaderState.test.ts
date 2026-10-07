@@ -70,9 +70,9 @@ describe("getSessionHeaderState", () => {
     const state = getSessionHeaderState(
       session({
         pendingInteraction: { id: "1", can_respond: false },
-        primaryTone: "blocked",
-        primaryKey: "needs_answer",
-        primaryLabel: "Needs answer",
+        primaryTone: "idle",
+        primaryKey: "idle",
+        primaryLabel: "Idle",
       }),
       Date.now(),
     );
