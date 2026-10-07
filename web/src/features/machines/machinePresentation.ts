@@ -1,86 +1,15 @@
 /**
- * One vocabulary for a machine's state on the Machines page, the machine page
- * and the nav. iOS mirrors this table (ios/Sources/LonghouseApp/Machines/MachineStatus.swift);
+ * Presentation helpers for the Machines page and the machine page. The status
+ * words and tone themselves are served (`MachineSummary.status`, decided in
+ * server/zerg/services/machine_status.py) so every client shows the same line;
  * the contract is control-plane/docs/specs/machines-surface.md.
- *
- * Three independent axes feed it and none is inferred from another: the live
- * control connection (`machine.online`, `launch`), what the Timeline shows as
- * live on that machine (`activity.live_count`), and whether the Machine Agent
- * is shipping (`sync`). Ordinary offline is gray, never red: red is reserved for
- * a fault someone has to repair.
  */
-import type { MachineActivity, MachineDirectoryEntry, MachineSync } from "@/shared/api/index";
+import type { MachineActivity, MachineDirectoryEntry, MachineSummary, MachineSync } from "@/shared/api/index";
 import { getProviderLabel } from "@/shared/lib/providers";
 import { parseUTC } from "@/shared/lib/dateUtils";
 
-export type MachineTone = "live" | "attention" | "fault" | "quiet" | "idle" | "off";
-
-export type MachineStatus = {
-  tone: MachineTone;
-  /** Short coloured status, e.g. "9 live", "Codex signed out", "Offline". */
-  label: string;
-  /** One line a person can act on, or null. */
-  hint: string | null;
-  /** Machines nobody has heard from, folded below the list. */
-  quiet: boolean;
-};
-
-type StatusInput = {
-  machine: MachineDirectoryEntry;
-  activity?: Pick<MachineActivity, "live_count" | "sessions_started"> | null;
-  sync?: Pick<MachineSync, "status" | "stale"> | null;
-};
-
-const REPAIR_REASONS: Record<string, true> = { auth_failed: true, runtime_unreachable: true };
-
-function signInNeeds(machine: MachineDirectoryEntry): { label: string; hint: string } | null {
-  const unavailable = machine.launch.unavailable_providers ?? [];
-  const signedOut = unavailable.filter((item) => item.reason === "not_authenticated");
-  // A missing CLI only matters when it leaves nothing to start sessions with;
-  // otherwise it is an agent this person simply does not use.
-  const missing = machine.launch.providers.length === 0 ? unavailable.filter((item) => item.reason === "cli_missing") : [];
-  const actionable = signedOut.length > 0 ? signedOut : missing;
-  if (actionable.length === 0) return null;
-  const verb = signedOut.length > 0 ? "signed out" : "not installed";
-  if (actionable.length === 1) {
-    const item = actionable[0];
-    const name = getProviderLabel(item.provider);
-    return {
-      label: `${name} ${verb}`,
-      hint: item.remediation ?? (signedOut.length > 0 ? `Sign in to ${name} on ${machine.machine_name}` : `Install ${name} on ${machine.machine_name}`),
-    };
-  }
-  const names = actionable.map((item) => getProviderLabel(item.provider)).sort();
-  return {
-    label: `${actionable.length} agents ${verb}`,
-    hint: `${signedOut.length > 0 ? "Sign in to" : "Install"} ${names.join(" and ")} on ${machine.machine_name}`,
-  };
-}
-
-export function machineStatus({ machine, activity, sync }: StatusInput): MachineStatus {
-  const live = activity?.live_count ?? 0;
-  const started = activity?.sessions_started ?? 0;
-  const blocked = machine.launch.blocked_by ?? null;
-  const syncFresh = Boolean(sync && !sync.stale);
-  const quietBase = { hint: null, quiet: false };
-
-  if ((blocked && REPAIR_REASONS[blocked]) || (syncFresh && sync?.status === "broken")) {
-    return { tone: "fault", label: "Needs repair", hint: "Run longhouse local-health on this machine to inspect the fault", quiet: false };
-  }
-  if (machine.online) {
-    const needs = signInNeeds(machine);
-    if (live > 0) return { tone: "live", label: `${live} live`, hint: needs?.hint ?? null, quiet: false };
-    if (needs) return { tone: "attention", label: needs.label, hint: needs.hint, quiet: false };
-    if (blocked === "engine_too_old") {
-      return { tone: "attention", label: "Update required", hint: "Update Longhouse on this machine", quiet: false };
-    }
-    if (blocked === "no_launch_support") return { tone: "attention", label: "Can't start sessions", ...quietBase };
-    return { tone: "idle", label: "Online, idle", ...quietBase };
-  }
-  if (live > 0) return { tone: "live", label: `${live} live`, ...quietBase };
-  if (syncFresh) return { tone: "quiet", label: "Sync only", ...quietBase };
-  return { tone: "off", label: "Offline", hint: null, quiet: started === 0 };
-}
+export type MachineStatus = MachineSummary["status"];
+export type MachineTone = MachineStatus["tone"];
 
 const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 

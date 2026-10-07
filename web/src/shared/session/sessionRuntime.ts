@@ -5,7 +5,7 @@ import type {
   SessionStateFacts,
 } from "@/shared/api/agents";
 import { isWirePresenceState, type WirePresenceState } from "@/generated/presence-states";
-import { workClaimExpired, sessionIsWorking } from "./sessionStatus";
+import { servedSignal, type SessionSignal } from "./sessionStatus";
 export type KnownPresenceState = WirePresenceState;
 export type RuntimeTone = "inactive" | "quiet" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
 
@@ -36,7 +36,15 @@ export function isSessionClosed(
   return session?.session_state.disposition.state === "closed";
 }
 
-/** True only for an active session whose served headline is a pending interaction. */
+function isUserActive(session: Pick<AgentSession, "user_state">): boolean {
+  return session.user_state == null || session.user_state === "active";
+}
+
+/**
+ * True only for an active session whose served headline is a pending
+ * interaction: an explicit question or approval ("Needs you"). Narrower than
+ * the attention dot, which also lights for a stall or a failed launch.
+ */
 export function needsSessionAttention(
   session: Pick<AgentSession, "session_state" | "user_state">,
 ): boolean {
@@ -44,44 +52,33 @@ export function needsSessionAttention(
   const hasCurrentInteraction =
     session.session_state.pending_interaction != null &&
     (primaryKey === "needs_answer" || primaryKey === "needs_approval");
-  return !isSessionClosed(session)
-    && (session.user_state == null || session.user_state === "active")
-    && hasCurrentInteraction;
+  return !isSessionClosed(session) && isUserActive(session) && hasCurrentInteraction;
 }
 
 /**
- * The single attention axis for a timeline row, mirroring iOS TimelineSignal.
- * Three semantic stops the user reads pre-attentively, plus closed:
+ * The single attention axis for a timeline row, served by the Runtime Host
+ * (`presentation.signal`) and drawn the same way on iOS and the menu bar:
  *   - attention: WAITING ON YOU — steady amber, never pulses.
  *   - working:   actively running — teal, pulses (live only).
- *   - quiet:     idle/stale — grey, static.
+ *   - quiet:     idle — grey, static.
+ *   - unknown:   no current evidence — grey, static.
  *   - closed:    ended — dimmed, static.
- * Drives `data-signal` on the row; CSS owns the colors. Keep in lockstep with
- * `timelineSignal` in ios/.../InboxView.swift.
+ * Drives `data-signal` on the row; CSS owns the colors. The client adds only
+ * what the server cannot know: its own clock, a muted session, and a global
+ * connectivity banner that owns severity.
  */
-export type TimelineSignal = "attention" | "working" | "quiet" | "unknown" | "closed";
+export type TimelineSignal = SessionSignal;
 
 export function resolveTimelineSignal(
   session: Pick<AgentSession, "session_state" | "user_state">,
   options: { connectivityHealthy?: boolean; nowMs?: number } = {},
 ): TimelineSignal {
-  if (isSessionClosed(session)) return "closed";
-  // A global connectivity banner owns severity; suppress per-row attention.
+  const signal = servedSignal(session.session_state, options.nowMs ?? Date.now());
+  if (signal === "closed") return "closed";
   if (options.connectivityHealthy === false) return "quiet";
-
-  const facts = session.session_state;
-  const nowMs = options.nowMs ?? Date.now();
-  if (workClaimExpired(facts, nowMs)) return "unknown";
-  if (needsSessionAttention(session)) return "attention";
-  if (sessionIsWorking(facts, nowMs)) return "working";
-  if (facts.activity.state === "blocked" || facts.activity.state === "stalled") return "attention";
-  // A managed Helm session's idle/needs_user activity observation can expire
-  // while its control lease or attached terminal stays fresh; the server
-  // already presents that as plain "Idle" rather than "Last observed idle"
-  // (session_state_contract._primary, the Helm idle-persistence override), so
-  // the dot must not contradict the label with "Activity unknown".
-  if (facts.activity.state === "unknown" && facts.presentation.primary?.key !== "idle") return "unknown";
-  return "quiet";
+  // A parked or muted session does not shout; nor does it claim to be idle.
+  if (signal === "attention" && !isUserActive(session)) return "unknown";
+  return signal;
 }
 
 /** Spoken equivalent of the signal, so the dot's meaning reaches a11y. */

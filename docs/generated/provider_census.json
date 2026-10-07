@@ -2558,7 +2558,6 @@
     {
       "path": "web/src/features/machines/__tests__/machinePresentation.test.ts",
       "providers": [
-        "antigravity",
         "claude",
         "codex",
         "omp",

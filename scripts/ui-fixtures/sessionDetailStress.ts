@@ -1,3 +1,4 @@
+import { withServedSignal } from "./timelineCardStress";
 export const SESSION_DETAIL_STRESS_SESSION_ID = "session-detail-stress";
 export const SESSION_DETAIL_STRESS_NOW = "2026-04-15T16:12:00Z";
 
@@ -140,7 +141,7 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
   const now = SESSION_DETAIL_STRESS_NOW;
   const available = { state: "available" };
   const notApplicable = { state: "unavailable", reason: "not_applicable" };
-  return {
+  return withServedSignal({
     state_contract_version: 2,
     presentation_policy_version: 2,
     mode: "helm",
@@ -251,7 +252,7 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
       transcript: null,
     },
     ...overrides,
-  };
+  });
 }
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {

@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { makeSessionStateFacts } from "@/shared/test/sessionState";
+import { makeSessionStateFacts, mirrorServedSignal } from "@/shared/test/sessionState";
+import type { SessionStateFacts } from "@/shared/api/agents";
+
+/** Re-serve the signal after a test hand-edits the axes, as the server would. */
+function reserve(facts: SessionStateFacts): SessionStateFacts {
+  facts.presentation.signal = mirrorServedSignal(facts.presentation.primary, {
+    activity: facts.activity,
+    delegation: facts.delegation,
+  });
+  return facts;
+}
 import {
   delegatedWorkLabel,
   executingToolName,
@@ -38,6 +48,7 @@ describe("sessionStatus", () => {
       kinds: { subagent: 1 },
       valid_until: iso(60_000),
     } as never;
+    reserve(facts);
     expect(sessionIsWorking(facts, NOW)).toBe(true);
     expect(delegatedWorkLabel(facts, NOW)).not.toBeNull();
     expect(workClaimExpired(facts, NOW)).toBe(false);
@@ -56,27 +67,16 @@ describe("sessionStatus", () => {
       kinds: { subagent: 1 },
       valid_until: iso(0),
     } as never;
+    reserve(facts);
     expect(sessionIsWorking(facts, NOW)).toBe(false);
     expect(delegatedWorkLabel(facts, NOW)).toBeNull();
     expect(workClaimExpired(facts, NOW)).toBe(true);
   });
 
-  it("does not let delegation mask expired parent work or a keyed interaction", () => {
-    const expiredParent = makeSessionStateFacts({ activity: "executing", activityValidUntil: iso(-1) });
-    expiredParent.presentation.primary = {
-      key: "delegated_work",
-      label: "Waiting on 1 background agent",
-      tone: "active",
-    };
-    expiredParent.delegation = {
-      state: "pending",
-      count: 1,
-      kinds: { subagent: 1 },
-      valid_until: iso(60_000),
-    } as never;
-    expect(sessionIsWorking(expiredParent, NOW)).toBe(false);
-    expect(workClaimExpired(expiredParent, NOW)).toBe(true);
-
+  it("does not let an expired parent claim retire a keyed interaction", () => {
+    // The server only serves delegated work once the parent loop is quiescent,
+    // so the old client fence against "delegated over expired parent" has no
+    // input left to guard; what remains is that a question never expires.
     const interaction = makeSessionStateFacts({
       activity: "executing",
       activityValidUntil: iso(-1),
@@ -99,6 +99,7 @@ describe("sessionStatus", () => {
       kinds: { subagent: 1 },
       valid_until: iso(60_000),
     } as never;
+    reserve(facts);
     expect(sessionIsWorking(facts, NOW)).toBe(true);
     expect(delegatedWorkLabel(facts, NOW)).not.toBeNull();
   });

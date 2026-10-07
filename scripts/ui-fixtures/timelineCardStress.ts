@@ -252,8 +252,8 @@ function canonicalState(session: Omit<AgentSession, "session_state" | "runtime_d
         ? { key: "thinking", label: "Thinking", tone: "thinking", observed_at: session.presence_updated_at }
         : activity === "quiescent"
           ? { key: "idle", label: "Idle", tone: "idle", observed_at: session.presence_updated_at }
-          : activity === "blocked" || activity === "stalled"
-            ? { key: activity, label: activity === "blocked" ? "Blocked" : "Stalled", tone: activity, observed_at: session.presence_updated_at }
+          : activity === "stalled"
+            ? { key: "stalled", label: "Stalled", tone: "stalled", observed_at: session.presence_updated_at }
             : { key: "activity_unknown", label: "Activity unknown", tone: "quiet", observed_at: null };
   const accessKey = session.capabilities.live_control_available
     ? "live_control"
@@ -336,6 +336,41 @@ function compatRuntimeDisplay(state: SessionStateFacts): Record<string, unknown>
   };
 }
 
+
+/**
+ * Mirror of the server's `session_state_contract._signal`. Fixtures stand in for
+ * a real host, so every session state they serve carries the attention axis
+ * the host would, recomputed from the headline after any hand edit.
+ */
+export function withServedSignal<T>(state: T): T {
+  const facts = state as unknown as {
+    presentation?: { primary?: { key: string; tone: string } | null } & Record<string, unknown>;
+    activity?: { state?: string | null; valid_until?: string | null } | null;
+    delegation?: { valid_until?: string | null } | null;
+  };
+  if (!facts?.presentation) return state;
+  const primary = facts.presentation.primary;
+  const activityState = facts.activity?.state;
+  let signal: { state: string; valid_until: string | null };
+  if (!primary) signal = { state: "unknown", valid_until: null };
+  else if (primary.key === "closed") signal = { state: "closed", valid_until: null };
+  else if (primary.tone === "blocked" || primary.tone === "stalled") {
+    signal = { state: "attention", valid_until: primary.key === "stalled" ? (facts.activity?.valid_until ?? null) : null };
+  } else if (primary.tone === "running" || primary.tone === "thinking" || primary.tone === "active") {
+    signal = {
+      state: "working",
+      valid_until: primary.key === "delegated_work"
+        ? (facts.delegation?.valid_until ?? null)
+        : activityState === "thinking" || activityState === "executing"
+          ? (facts.activity?.valid_until ?? null)
+          : null,
+    };
+  } else if (primary.key === "idle" || primary.key === "ready" || primary.key === "ended") {
+    signal = { state: "quiet", valid_until: null };
+  } else signal = { state: "unknown", valid_until: null };
+  return { ...facts, presentation: { ...facts.presentation, signal } } as unknown as T;
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-04-15T16:12:00Z";
   const session = {
@@ -393,7 +428,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     capabilities: makeCapabilities(),
     ...overrides,
   } as Omit<AgentSession, "session_state" | "runtime_display" | "timeline_card">;
-  const state = overrides.session_state ?? canonicalState(session);
+  const state = withServedSignal(overrides.session_state ?? canonicalState(session));
   const runtimeDisplay = overrides.runtime_display ?? compatRuntimeDisplay(state);
   return {
     ...session,

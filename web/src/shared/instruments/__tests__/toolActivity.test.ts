@@ -134,6 +134,7 @@ describe("turn-elapsed agreement across header, composer, and rail", () => {
         },
         presentation: {
           primary: { key: "executing", tone: "running", label: "Using hub" },
+          signal: { state: "working", valid_until: null },
         },
         last_result_at: null,
       } as never,

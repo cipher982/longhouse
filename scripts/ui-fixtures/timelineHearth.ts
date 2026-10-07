@@ -8,7 +8,7 @@
  * Clock: the capture freezes Date.now at 2026-04-15T16:12:00Z.
  */
 
-import { makeTimelineCard } from "./timelineCardStress";
+import { makeTimelineCard, withServedSignal } from "./timelineCardStress";
 
 type Card = ReturnType<typeof makeTimelineCard>;
 
@@ -32,7 +32,10 @@ function live(tool: string | null) {
 }
 
 function withState(card: Card, patch: Record<string, unknown>): Card {
-  return { ...card, head: { ...card.head, session_state: { ...card.head.session_state, ...patch } } } as Card;
+  return {
+    ...card,
+    head: { ...card.head, session_state: withServedSignal({ ...card.head.session_state, ...patch }) },
+  } as Card;
 }
 
 /** Counts that grow with each stream batch, so the fires see deltas. */

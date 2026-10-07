@@ -13,7 +13,6 @@ import {
   connectionLine,
   isImporting,
   machineAgents,
-  machineStatus,
   relativeTime,
   unmatchedRunners,
 } from "./machinePresentation";
@@ -81,7 +80,7 @@ function Latest({ summary }: { summary: MachineSummary }) {
 
 function MachineRow({ summary }: { summary: MachineSummary }) {
   const { machine, activity, sync } = summary;
-  const status = machineStatus(summary);
+  const status = summary.status;
   const href = `/machines/${encodeURIComponent(machine.device_id)}`;
   const extraLive = activity.live_count - Math.min(LIVE_SHOWN, activity.live_sessions.length);
   const importing = isImporting(sync);
@@ -166,8 +165,8 @@ export default function MachinesPage() {
   useReadinessFlag({ ready: pageReady || directoryReady, screenshotReady: pageReady });
 
   const summaries = data?.machines ?? [];
-  const active = summaries.filter((summary) => !machineStatus(summary).quiet);
-  const quiet = summaries.filter((summary) => machineStatus(summary).quiet);
+  const active = summaries.filter((summary) => !summary.status.quiet);
+  const quiet = summaries.filter((summary) => summary.status.quiet);
   const live = summaries.reduce((sum, summary) => sum + summary.activity.live_count, 0);
   const liveMachines = summaries.filter((summary) => summary.activity.live_count > 0).length;
   const started = summaries.reduce((sum, summary) => sum + summary.activity.sessions_started, 0);

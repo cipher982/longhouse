@@ -8,7 +8,7 @@ import {
   timelineSignalLabel,
 } from "../sessionRuntime";
 import { getRuntimeDisplayCopy } from "../sessionRuntimeDisplay";
-import { makeSessionStateFacts } from "@/shared/test/sessionState";
+import { makeSessionStateFacts, mirrorServedSignal } from "@/shared/test/sessionState";
 
 function makeRuntimeDisplay(
   overrides: Partial<TimelineRuntimeSession["runtime_display"]> = {},
@@ -184,7 +184,7 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.needsAttention).toBe(false);
   });
-  it("suppresses a stale interaction when a failed launch owns the headline", () => {
+  it("lights the dot for a failed launch without calling it a question", () => {
     const session_state = makeSessionStateFacts({
       pendingInteraction: true,
       activity: "quiescent",
@@ -197,10 +197,13 @@ describe("resolveSessionRuntimeState", () => {
       tone: "blocked",
       observed_at: null,
     };
+    session_state.presentation.signal = mirrorServedSignal(session_state.presentation.primary);
     const session = makeSession({ session_state, user_state: "active" });
 
+    // A stale interaction under a failed launch is not "Needs you" ...
     expect(resolveSessionRuntimeState(session).needsAttention).toBe(false);
-    expect(resolveTimelineSignal(session)).toBe("quiet");
+    // ... but the served dot says the user owes something.
+    expect(resolveTimelineSignal(session)).toBe("attention");
   });
 });
 
@@ -243,9 +246,9 @@ describe("resolveTimelineSignal", () => {
     expect(sig({ tone: "running", activity_recency: "stale" })).toBe("unknown");
   });
 
-  it("blocked/stalled map to attention", () => {
+  it("a stall is attention; a raw provider block without a key is not", () => {
     expect(sig({ tone: "stalled" })).toBe("attention");
-    expect(sig({ tone: "blocked" })).toBe("attention");
+    expect(sig({ tone: "blocked" })).toBe("unknown");
   });
 
   it("idle is quiet", () => {
@@ -267,6 +270,7 @@ describe("resolveTimelineSignal", () => {
     // independently re-deriving "unknown" from the raw activity state.
     const session_state = makeSessionStateFacts({ activity: "unknown" });
     session_state.presentation.primary = { key: "idle", label: "Idle", tone: "idle", observed_at: null };
+    session_state.presentation.signal = mirrorServedSignal(session_state.presentation.primary);
     expect(resolveTimelineSignal({ session_state, user_state: "active" })).toBe("quiet");
   });
 

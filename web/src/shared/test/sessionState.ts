@@ -22,6 +22,41 @@ type SessionStateOptions = {
   launchErrorMessage?: string | null;
 };
 
+type ServedSignal = NonNullable<SessionStateFacts["presentation"]["signal"]>;
+type SignalPrimary = { key: string; tone: string } | null | undefined;
+
+/**
+ * Mirror of the server's `session_state_contract._signal`, for fixtures that
+ * hand-build a presentation. Fixtures must carry the field the server serves;
+ * this keeps them from drifting from the server's mapping.
+ */
+export function mirrorServedSignal(
+  primary: SignalPrimary,
+  evidence: {
+    activity?: { state?: string | null; valid_until?: string | null } | null;
+    delegation?: { valid_until?: string | null } | null;
+  } = {},
+): ServedSignal {
+  if (!primary) return { state: "unknown", valid_until: null };
+  if (primary.key === "closed") return { state: "closed", valid_until: null };
+  if (primary.tone === "blocked" || primary.tone === "stalled") {
+    return { state: "attention", valid_until: primary.key === "stalled" ? (evidence.activity?.valid_until ?? null) : null };
+  }
+  if (primary.tone === "running" || primary.tone === "thinking" || primary.tone === "active") {
+    const activityState = evidence.activity?.state;
+    const validUntil = primary.key === "delegated_work"
+      ? (evidence.delegation?.valid_until ?? null)
+      : activityState === "thinking" || activityState === "executing"
+        ? (evidence.activity?.valid_until ?? null)
+        : null;
+    return { state: "working", valid_until: validUntil };
+  }
+  if (primary.key === "idle" || primary.key === "ready" || primary.key === "ended") {
+    return { state: "quiet", valid_until: null };
+  }
+  return { state: "unknown", valid_until: null };
+}
+
 export function makeSessionStateFacts(options: SessionStateOptions = {}): SessionStateFacts {
   const activity = options.activity ?? "unknown";
   const access = options.access === undefined ? "search_only" : options.access;
@@ -39,9 +74,14 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
         ? { key: "executing", label: "Using Shell", tone: "running", observed_at: options.observedAt }
         : activity === "quiescent"
           ? { key: "idle", label: "Idle", tone: "idle", observed_at: options.observedAt }
-          : activity === "blocked" || activity === "stalled"
-            ? { key: activity, label: activity === "blocked" ? "Blocked" : "Stalled", tone: activity }
+          : activity === "stalled"
+            ? { key: "stalled", label: "Stalled", tone: "stalled" }
+            // The server has no `blocked` rung: a raw provider block is not a headline.
             : { key: "activity_unknown", label: "Activity unknown", tone: "quiet" };
+
+  const signal = mirrorServedSignal(primary, {
+    activity: { state: activity, valid_until: options.activityValidUntil ?? null },
+  });
   const accessLabels = {
     live_control: { label: "Live control", tone: "connected" },
     reattach: { label: "Reattach", tone: "reattach" },
@@ -126,6 +166,7 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
     host: { state: options.hostState ?? "unknown" },
     presentation: {
       primary,
+      signal,
       access: access ? { key: access, ...accessLabels[access] } : null,
       transcript: null,
     },

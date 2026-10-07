@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSession } from "@/shared/api/agents";
-import { makeSessionStateFacts } from "@/shared/test/sessionState";
+import { makeSessionStateFacts, mirrorServedSignal } from "@/shared/test/sessionState";
 
 import {
   advanceProviderEvidenceTransition,
@@ -219,6 +219,10 @@ describe("SessionRuntimeStrip connection presentation", () => {
     current.session_state.activity.valid_until = new Date(
       started + 10_000,
     ).toISOString();
+    current.session_state.presentation.signal = mirrorServedSignal(
+      current.session_state.presentation.primary,
+      { activity: current.session_state.activity },
+    );
     expect(
       buildSessionLedgerState(current, interaction, started + 5_000, true)
         .elapsedSeconds,
@@ -232,6 +236,7 @@ describe("SessionRuntimeStrip connection presentation", () => {
     // served as Idle, never as a leftover "running" tone.
     current.session_state.activity.state = "quiescent";
     current.session_state.presentation.primary = { key: "idle", label: "Idle", tone: "idle" };
+    current.session_state.presentation.signal = mirrorServedSignal(current.session_state.presentation.primary);
     expect(
       buildSessionLedgerState(current, interaction, started + 12_000, true)
         .elapsedSeconds,

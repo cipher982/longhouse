@@ -48,6 +48,11 @@ const ready = (providers: string[], defaultProvider: string) => ({
 
 const offline = { blocked_by: "control_down", providers: [], default_provider: null, unavailable_providers: [] };
 
+// What server/zerg/services/machine_status.py serves for each machine. The
+// directory's own status knows nothing about activity, so it never says idle.
+const status = (tone: string, label: string, hint: string | null = null, quiet = false) => ({ tone, label, hint, quiet });
+const OFFLINE_STATUS = status("off", "Offline");
+
 function machine(overrides: Record<string, unknown>) {
   return {
     supports: [],
@@ -101,6 +106,7 @@ export function buildMachinesFleetFixture() {
     supports: ["claude.turn_start", "codex.turn_start", "omp.turn_start", "cursor.turn_start", "opencode.turn_start", "pi.turn_start"],
     provider_readiness: { claude: { state: "ready" }, codex: { state: "ready" }, omp: { state: "unknown" }, cursor: { state: "unknown" } },
     launch: ready(["antigravity", "claude", "codex", "cursor", "omp", "opencode", "pi"], "codex"),
+    status: status("live", "Ready"),
   });
   const bench = machine({
     device_id: "cube-bench",
@@ -117,6 +123,7 @@ export function buildMachinesFleetFixture() {
       blocked_by: null,
       unavailable_providers: [{ provider: "codex", reason: "not_authenticated", remediation: null }],
     },
+    status: status("attention", "Codex signed out", "Sign in to Codex on cube-bench"),
   });
   const cube = machine({
     device_id: "cube",
@@ -127,6 +134,7 @@ export function buildMachinesFleetFixture() {
     connected_since: at(18 * 60 + 46),
     engine_build: "97a6670a",
     launch: ready(["claude"], "claude"),
+    status: status("live", "Ready"),
   });
   const clifford = machine({
     device_id: "clifford-sauron",
@@ -135,6 +143,7 @@ export function buildMachinesFleetFixture() {
     control_channel_status: "disconnected",
     last_seen_at: at(66 * 24 * 60),
     launch: offline,
+    status: OFFLINE_STATUS,
   });
   const quietMachine = (name: string, daysAgo: number) =>
     machine({
@@ -144,6 +153,7 @@ export function buildMachinesFleetFixture() {
       control_channel_status: "disconnected",
       last_seen_at: at(daysAgo * 24 * 60),
       launch: offline,
+      status: OFFLINE_STATUS,
     });
 
   const machines = [
@@ -168,6 +178,7 @@ export function buildMachinesFleetFixture() {
         ],
       },
       sync: sync(),
+      status: status("live", "9 live"),
     },
     {
       machine: bench,
@@ -178,8 +189,9 @@ export function buildMachinesFleetFixture() {
         top_projects: [{ project: "longhouse", sessions: 4 }],
       },
       sync: sync({ engine_version: "0.1.50", upload_p95_ms: null, last_upload_at: at(9 * 24 * 60), history: { state: "current", source_count: 9, remaining_bytes: 0, remaining_records: 0, acknowledged_records: 412 } }),
+      status: status("attention", "Codex signed out", "Sign in to Codex on cube-bench"),
     },
-    { machine: cube, activity: empty(), sync: sync({ engine_version: "0.1.30", upload_p95_ms: null, last_upload_at: null, history: { state: "current", source_count: 4, remaining_bytes: 0, remaining_records: 0, acknowledged_records: 120 } }) },
+    { machine: cube, activity: empty(), sync: sync({ engine_version: "0.1.30", upload_p95_ms: null, last_upload_at: null, history: { state: "current", source_count: 4, remaining_bytes: 0, remaining_records: 0, acknowledged_records: 120 } }), status: status("idle", "Online, idle") },
     {
       machine: clifford,
       activity: {
@@ -189,11 +201,12 @@ export function buildMachinesFleetFixture() {
         top_projects: [{ project: "agent-sessions", sessions: 8 }],
       },
       sync: null,
+      status: OFFLINE_STATUS,
     },
-    { machine: quietMachine("cube-canary", 82), activity: empty(), sync: null },
-    { machine: quietMachine("drose-web-pepper", 8), activity: empty(), sync: null },
-    { machine: quietMachine("github-cohort-journey", 61), activity: empty(), sync: null },
-    { machine: quietMachine("sauron-clifford", 8), activity: empty(), sync: null },
+    { machine: quietMachine("cube-canary", 82), activity: empty(), sync: null, status: status("off", "Offline", null, true) },
+    { machine: quietMachine("drose-web-pepper", 8), activity: empty(), sync: null, status: status("off", "Offline", null, true) },
+    { machine: quietMachine("github-cohort-journey", 61), activity: empty(), sync: null, status: status("off", "Offline", null, true) },
+    { machine: quietMachine("sauron-clifford", 8), activity: empty(), sync: null, status: status("off", "Offline", null, true) },
   ];
 
   return {
@@ -236,6 +249,7 @@ export function buildFirstRunMachinesSummary(directory: { machines: Array<Record
         engine_version: "0.1.62",
         history: { state: "importing", source_count: 412, remaining_bytes: 2_310_000_000, remaining_records: 58_000, acknowledged_records: 12_400 },
       }),
+      status: status("idle", "Online, idle"),
     })),
   };
 }

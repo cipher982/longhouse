@@ -204,6 +204,7 @@ export function buildFirstRunMachineFixture() {
             default_provider: "claude",
             unavailable_providers: [],
           },
+          status: { tone: "live", label: "Ready", hint: null, quiet: false },
         },
       ],
     },

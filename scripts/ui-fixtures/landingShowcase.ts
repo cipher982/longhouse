@@ -8,7 +8,7 @@
  * machines, one of them a Helm session you can steer, and a history that
  * search can reach back into.
  */
-import { buildTimelineCardStressFixture, makeTimelineCard } from "./timelineCardStress";
+import { buildTimelineCardStressFixture, makeTimelineCard, withServedSignal } from "./timelineCardStress";
 import {
   SESSION_DETAIL_STRESS_NOW,
   SESSION_DETAIL_STRESS_SESSION_ID,
@@ -311,7 +311,7 @@ export function buildLandingSessionFixture(): ReturnType<typeof buildSessionDeta
       display_label: "Live on macbook",
       display_detail: "Managed local Claude Code control path",
     },
-    session_state: {
+    session_state: withServedSignal({
       ...(fixture.session.session_state as Record<string, unknown>),
       activity: {
         state: "executing",
@@ -327,7 +327,7 @@ export function buildLandingSessionFixture(): ReturnType<typeof buildSessionDeta
         access: { key: "live_control", label: "Live control", tone: "live", observed_at: at(0.4) },
         transcript: null,
       },
-    },
+    }),
   } as typeof fixture.session;
 
   const items = events.map((event) => projectionEvent(event, id));

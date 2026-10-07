@@ -12,90 +12,54 @@
  * live-status lab all read status through these functions.
  */
 import type { SessionStateFacts } from "@/shared/api/agents";
-import {
-  activityClaimIsStale,
-  delegationEvidenceIsLive,
-  type ActivityEvidence,
-} from "./activityEvidence";
+import type { ActivityEvidence } from "./activityEvidence";
 
 /** What an expired work claim reads as. Never idle, never ended: unknown. */
 export const ACTIVITY_UNCERTAIN_LABEL = "Activity uncertain";
 
-type StatusFacts = Pick<
-  SessionStateFacts,
-  "activity" | "presentation" | "disposition" | "pending_interaction" | "delegation"
->;
+/** The served attention axis (`presentation.signal.state`). */
+export type SessionSignal = "attention" | "working" | "quiet" | "unknown" | "closed";
 
-function delegatedWorkIsLive(facts: Pick<SessionStateFacts, "delegation">, nowMs: number): boolean {
-  const delegation = facts.delegation;
+type StatusFacts = Pick<SessionStateFacts, "presentation">;
+
+type ServedSignal = NonNullable<SessionStateFacts["presentation"]["signal"]>;
+
+function signalWindowPassed(signal: ServedSignal, nowMs: number): boolean {
+  // No window is not an expired window: a question or an idle session carries
+  // no clock, and inventing one would hide it.
+  if (!signal.valid_until) return false;
+  const expiresAtMs = Date.parse(signal.valid_until);
+  // Exclusive, as the server and catalogd treat `valid_until`.
+  return !Number.isNaN(expiresAtMs) && nowMs >= expiresAtMs;
+}
+
+/** The freshness gate: has the served claim outlived its window on this clock? */
+export function workClaimExpired(facts: StatusFacts, nowMs: number): boolean {
+  const signal = facts.presentation.signal;
   return Boolean(
-    delegation &&
-      delegation.state === "pending" &&
-      delegation.count > 0 &&
-      delegationEvidenceIsLive(delegation, nowMs),
+    signal && (signal.state === "working" || signal.state === "attention") && signalWindowPassed(signal, nowMs),
   );
-}
-
-function isKeyedInteraction(facts: Pick<SessionStateFacts, "presentation" | "pending_interaction">): boolean {
-  const key = facts.presentation.primary?.key;
-  return facts.pending_interaction != null || key === "needs_answer" || key === "needs_approval";
-}
-
-/** The freshness gate: has the served work claim outlived its window? */
-export function workClaimExpired(
-  facts: StatusFacts,
-  nowMs: number,
-): boolean {
-  // A question/approval is its own served claim. It must not disappear just
-  // because the activity head that preceded it aged out.
-  if (isKeyedInteraction(facts)) return false;
-
-  // Do not let a fresh delegation hide an expired thinking/executing claim.
-  // The server only mints delegated_work once the parent loop is quiescent,
-  // but keeping this fence here protects mixed/older snapshots too.
-  if (
-    (facts.activity.state === "thinking" || facts.activity.state === "executing") &&
-    activityClaimIsStale(facts.activity, nowMs)
-  ) {
-    return true;
-  }
-
-  if (facts.presentation.primary?.key === "delegated_work") {
-    // A delegated headline is valid on the delegation axis, not the parent's
-    // per-tool activity window. Missing delegation evidence cannot keep a
-    // cached delegated-work claim alive.
-    return !delegatedWorkIsLive(facts, nowMs);
-  }
-  return activityClaimIsStale(facts.activity, nowMs);
 }
 
 /**
- * Is the session working, on evidence that is still valid?
- *
- * The served tone is read as well as `activity.state`: a delegated-work or
- * starting session is live (`active`) while its own loop is quiescent.
+ * The server's attention axis, with the one thing the client decides itself:
+ * a claim whose `valid_until` has passed reads as unknown until a new frame
+ * lands. A snapshot without the field is unknown, never quiet.
  */
-export function sessionIsWorking(facts: StatusFacts, nowMs: number): boolean {
-  if (facts.disposition.state === "closed") return false;
-  if (isKeyedInteraction(facts)) return false;
-  if (workClaimExpired(facts, nowMs)) return false;
-  const tone = facts.presentation.primary?.tone ?? null;
-  return (
-    tone === "running" ||
-    tone === "thinking" ||
-    tone === "active" ||
-    facts.activity.state === "thinking" ||
-    facts.activity.state === "executing"
-  );
+export function servedSignal(facts: StatusFacts, nowMs: number): SessionSignal {
+  const signal = facts.presentation.signal;
+  if (!signal) return "unknown";
+  return signalWindowPassed(signal, nowMs) ? "unknown" : signal.state;
 }
 
-/** Is the session waiting on the user (a question, an approval, a stall)? */
+/** Is the session working, on evidence that is still valid? */
+export function sessionIsWorking(facts: StatusFacts, nowMs: number): boolean {
+  return servedSignal(facts, nowMs) === "working";
+}
+
+/** Is the session waiting on the user (a question, an approval, a stall, a failed launch)? */
 export function sessionNeedsInteraction(facts: StatusFacts, nowMs: number): boolean {
-  if (facts.disposition.state === "closed") return false;
-  if (isKeyedInteraction(facts)) return true;
-  if (workClaimExpired(facts, nowMs)) return false;
-  const tone = facts.presentation.primary?.tone ?? null;
-  return tone === "blocked" || tone === "stalled";
+  return servedSignal(facts, nowMs) === "attention";
 }
 
 /**

@@ -20,7 +20,16 @@ vi.mock("@/shared/api/index", async (importOriginal) => ({
 
 const DAYS = Array.from({ length: 14 }, (_, index) => ({ date: `2026-09-${String(20 + index).padStart(2, "0")}`, total: 0, by_provider: {} }));
 
-function summary(deviceId: string, overrides: { machine?: object; activity?: object; sync?: MachineSummary["sync"] } = {}): MachineSummary {
+// Statuses are served (server/zerg/services/machine_status.py); fixtures carry
+// what the server would send for each case rather than re-deriving it.
+const ONLINE_IDLE: MachineSummary["status"] = { tone: "idle", label: "Online, idle", hint: null, quiet: false };
+const OFFLINE: MachineSummary["status"] = { tone: "off", label: "Offline", hint: null, quiet: false };
+
+function summary(
+  deviceId: string,
+  overrides: { machine?: { online?: boolean } & object; activity?: object; sync?: MachineSummary["sync"]; status?: MachineSummary["status"] } = {},
+): MachineSummary {
+  const online = overrides.machine?.online ?? true;
   return {
     machine: {
       device_id: deviceId,
@@ -28,8 +37,10 @@ function summary(deviceId: string, overrides: { machine?: object; activity?: obj
       online: true,
       control_channel_status: "connected",
       launch: { providers: [{ provider: "claude" }], default_provider: "claude", blocked_by: null, unavailable_providers: [] },
+      status: online ? { tone: "live", label: "Ready", hint: null, quiet: false } : OFFLINE,
       ...overrides.machine,
     },
+    status: overrides.status ?? (online ? ONLINE_IDLE : OFFLINE),
     activity: {
       sessions_started: 0,
       daily: DAYS,
@@ -166,9 +177,10 @@ describe("MachinesPage", () => {
               { session_id: "a", title: "Broken signup page deep dive", project: "zerg", provider: "omp", last_activity_at: null, activity_state: "thinking" },
             ],
           },
+          status: { tone: "live", label: "9 live", hint: null, quiet: false },
         }),
         summary("clifford-sauron", { machine: offline, activity: { sessions_started: 8 } }),
-        summary("cube-canary", { machine: offline }),
+        summary("cube-canary", { machine: offline, status: { ...OFFLINE, quiet: true } }),
       ]),
     );
     renderPage();
@@ -196,6 +208,7 @@ describe("MachinesPage", () => {
               unavailable_providers: [{ provider: "codex", reason: "not_authenticated", remediation: null }],
             },
           },
+          status: { tone: "attention", label: "Codex signed out", hint: "Sign in to Codex on cube-bench", quiet: false },
         }),
       ]),
     );
@@ -277,6 +290,7 @@ describe("MachinesPage", () => {
   it("marks retained detail facts as last known and keeps the scoped repair instruction", async () => {
     api.listMachineSummaries.mockResolvedValue(response([summary("cinder", {
       sync: { status: "broken", stale: false, history: { state: "unavailable" } } as MachineSummary["sync"],
+      status: { tone: "fault", label: "Needs repair", hint: "Run longhouse local-health on this machine to inspect the fault", quiet: false },
     })]));
     const { client } = renderPage(true);
     await screen.findByTestId("machine-name");

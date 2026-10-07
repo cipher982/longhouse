@@ -13,7 +13,6 @@ import {
   connectionLine,
   durationSince,
   historyLine,
-  machineStatus,
   providerTotals,
   relativeTime,
   runnerForMachine,
@@ -217,9 +216,8 @@ export default function MachineDetailPage() {
 
   const activity = summary?.activity;
   const sync = summary?.sync;
-  const status = summary
-    ? machineStatus(summary)
-    : { tone: machine.online ? "idle" : "off", label: machine.online ? "Online" : "Offline", hint: null };
+  // Before the summary arrives, the directory entry's own served status.
+  const status = summary?.status ?? machine.status;
   const runner = runnerForMachine(runners ?? [], machine);
   const timelineHref = `/timeline?device_id=${encodeURIComponent(machine.device_id)}`;
   const totals = providerTotals(activity);

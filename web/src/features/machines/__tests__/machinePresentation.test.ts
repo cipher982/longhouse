@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MachineDirectoryEntry, MachineSync } from "@/shared/api/index";
-import { historyLine, isImporting, machineAgents, machineStatus, runnerForMachine, unmatchedRunners } from "../machinePresentation";
+import { historyLine, isImporting, machineAgents, runnerForMachine, unmatchedRunners } from "../machinePresentation";
 
 function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirectoryEntry {
   return {
@@ -14,86 +14,6 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
 }
 
 const offline = { online: false, control_channel_status: "disconnected" as const, launch: { providers: [], blocked_by: "control_down" as const } };
-
-describe("machineStatus", () => {
-  it("reads live sessions first, and still carries a sign-in hint", () => {
-    const status = machineStatus({
-      machine: machine({
-        launch: {
-          providers: [{ provider: "claude" }],
-          blocked_by: null,
-          unavailable_providers: [{ provider: "codex", reason: "not_authenticated", remediation: null }],
-        },
-      }),
-      activity: { live_count: 9, sessions_started: 254 },
-    });
-    expect(status).toMatchObject({ tone: "live", label: "9 live", hint: "Sign in to Codex on cinder" });
-  });
-
-  it("asks for sign-in when a provider is signed out", () => {
-    const status = machineStatus({
-      machine: machine({
-        launch: {
-          providers: [{ provider: "claude" }],
-          blocked_by: null,
-          unavailable_providers: [{ provider: "codex", reason: "not_authenticated", remediation: "Run codex login" }],
-        },
-      }),
-      activity: { live_count: 0, sessions_started: 0 },
-    });
-    expect(status).toMatchObject({ tone: "attention", label: "Codex signed out", hint: "Run codex login" });
-  });
-
-  it("does not nag about a CLI the machine never had while other agents can run", () => {
-    const status = machineStatus({
-      machine: machine({
-        launch: {
-          providers: [{ provider: "claude" }],
-          blocked_by: null,
-          unavailable_providers: [{ provider: "antigravity", reason: "cli_missing", remediation: null }],
-        },
-      }),
-    });
-    expect(status).toMatchObject({ tone: "idle", label: "Online, idle", hint: null });
-  });
-
-  it("names a missing CLI when nothing else can start a session", () => {
-    const status = machineStatus({
-      machine: machine({
-        launch: {
-          providers: [],
-          blocked_by: "providers_not_ready",
-          unavailable_providers: [{ provider: "claude", reason: "cli_missing", remediation: null }],
-        },
-      }),
-    });
-    expect(status).toMatchObject({ tone: "attention", label: "Claude not installed" });
-  });
-
-  it("reserves red for faults that need repair", () => {
-    expect(machineStatus({ machine: machine({ launch: { providers: [], blocked_by: "auth_failed" } }) }).tone).toBe("fault");
-    expect(machineStatus({ machine: machine(), sync: { status: "broken", stale: false } }).tone).toBe("fault");
-    // An old broken report on a machine that has since gone quiet is not a current fault.
-    expect(machineStatus({ machine: machine(offline), sync: { status: "broken", stale: true } }).tone).toBe("off");
-  });
-
-  it("keeps an ordinary offline machine gray and folds it away only when nothing happened", () => {
-    expect(machineStatus({ machine: machine(offline), activity: { live_count: 0, sessions_started: 0 } })).toMatchObject({
-      tone: "off",
-      label: "Offline",
-      quiet: true,
-    });
-    expect(machineStatus({ machine: machine(offline), activity: { live_count: 0, sessions_started: 8 } }).quiet).toBe(false);
-  });
-
-  it("calls a disconnected machine that still ships 'Sync only'", () => {
-    expect(machineStatus({ machine: machine(offline), sync: { status: "healthy", stale: false } })).toMatchObject({
-      tone: "quiet",
-      label: "Sync only",
-      quiet: false,
-    });
-  });
-});
 
 describe("machineAgents", () => {
   it("orders launchable agents by use and appends signed-out ones dimmed", () => {

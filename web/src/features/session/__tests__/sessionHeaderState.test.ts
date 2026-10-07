@@ -5,6 +5,7 @@ import {
   getSessionHeaderState,
 } from "../sessionHeaderState";
 import type { AgentSession } from "@/shared/api/agents";
+import { mirrorServedSignal } from "@/shared/test/sessionState";
 
 function session(overrides: {
   disposition?: string;
@@ -19,26 +20,32 @@ function session(overrides: {
   primaryKey?: string | null;
   lastResultAt?: string | null;
 }): Pick<AgentSession, "session_state"> {
+  const activity = {
+    state: overrides.activityState ?? "quiescent",
+    tool: overrides.tool ?? null,
+    observed_at: overrides.observedAt ?? null,
+    valid_until: overrides.validUntil ?? null,
+  };
+  const primary =
+    overrides.primaryTone != null
+      ? {
+          key: overrides.primaryKey ?? "idle",
+          tone: overrides.primaryTone,
+          label: overrides.primaryLabel ?? "",
+        }
+      : null;
   return {
     session_state: {
       disposition: { state: overrides.disposition ?? "open" },
       pending_interaction: overrides.pendingInteraction ?? null,
-      activity: {
-        state: overrides.activityState ?? "quiescent",
-        tool: overrides.tool ?? null,
-        observed_at: overrides.observedAt ?? null,
-        valid_until: overrides.validUntil ?? null,
-      },
+      activity,
       delegation: overrides.delegation,
       presentation: {
-        primary:
-          overrides.primaryTone != null
-            ? {
-                key: overrides.primaryKey ?? "idle",
-                tone: overrides.primaryTone,
-                label: overrides.primaryLabel ?? "",
-              }
-            : null,
+        primary,
+        signal: mirrorServedSignal(primary, {
+          activity,
+          delegation: overrides.delegation as { valid_until?: string | null } | null | undefined,
+        }),
       },
       last_result_at: overrides.lastResultAt ?? null,
     } as never,
@@ -241,6 +248,7 @@ describe("getSessionHeaderState", () => {
         observedAt: "2026-04-15T16:00:00Z",
         validUntil: "2026-04-15T16:10:00Z",
         primaryTone: "stalled",
+        primaryKey: "stalled",
         primaryLabel: "No progress for 31m",
       }),
       now,
