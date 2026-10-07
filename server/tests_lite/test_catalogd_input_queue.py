@@ -989,3 +989,73 @@ def test_queued_console_receipt_stays_fresh_behind_a_reporting_long_turn(tmp_pat
         assert all(receipt["turn"]["is_fresh"] is False for receipt in recent["receipts"])
     finally:
         engine.dispose()
+
+
+def test_unsettled_turn_of_an_ended_run_stays_stale_beside_a_reporting_run(tmp_path):
+    engine = create_catalog_engine(tmp_path / "orphan-turn.db")
+    initialize_catalog_schema(engine)
+    session_id, old_receipt_id = _seed_queue(engine, client_request_id="console-orphan")
+    long_ago = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=40)
+    try:
+        with Session(engine) as db:
+            catalog = db.get(LiveSessionCatalog, str(session_id))
+            assert catalog is not None
+            thread_id = catalog.primary_thread_id
+            # The Console run was retired without its turn ever settling, and a
+            # different run on the same thread is reporting now.
+            old_run = db.query(LiveSessionRun).filter_by(thread_id=thread_id).one()
+            old_run.ended_at = long_ago
+            db.query(LiveSessionConnection).filter_by(run_id=old_run.id).one().last_health_at = long_ago
+            other_run_id = str(uuid4())
+            db.add(
+                LiveSessionRun(
+                    id=other_run_id,
+                    thread_id=thread_id,
+                    provider="codex",
+                    host_id="cinder",
+                    launch_origin="longhouse_spawned",
+                    started_at=long_ago,
+                )
+            )
+            runtime = db.query(LiveRuntimeState).filter_by(session_id=session_id).one()
+            runtime.run_id = other_run_id
+            runtime.last_asserted_at = datetime.now(UTC) - timedelta(seconds=5)
+            db.get(LiveSessionInputReceipt, old_receipt_id).status = "delivered"
+            queued_receipt = upsert_live_input_receipt(
+                db,
+                owner_id=7,
+                session_id=session_id,
+                provider="codex",
+                text="queued behind the orphan",
+                intent="auto",
+                status="queued",
+                client_request_id="console-queued",
+                now=long_ago,
+            )
+            for receipt_id, run_id, state in (
+                (old_receipt_id, old_run.id, "active"),
+                (str(queued_receipt.id), None, "queued"),
+            ):
+                db.add(
+                    LiveConsoleTurn(
+                        id=str(uuid4()),
+                        session_id=str(session_id),
+                        thread_id=thread_id,
+                        receipt_id=receipt_id,
+                        run_id=run_id,
+                        state=state,
+                        provider="codex",
+                        device_id="cinder",
+                        cwd="/workspace/longhouse",
+                        created_at=long_ago,
+                        updated_at=long_ago,
+                    )
+                )
+            db.commit()
+
+        recent = CatalogStore(engine).list_recent_input_receipts(session_id=str(session_id))
+        by_request = {receipt["client_request_id"]: receipt["turn"] for receipt in recent["receipts"]}
+        assert by_request["console-orphan"]["is_fresh"] is False
+        assert by_request["console-queued"]["is_fresh"] is False
+    finally:
+        engine.dispose()

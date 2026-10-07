@@ -814,6 +814,7 @@ def _live_console_turn_dto(
     model: str | None = None,
     resume_session_file: str | None = None,
     error_code: str | None = None,
+    reporting_turn_ids: Collection[str] = (),
 ) -> dict[str, Any]:
     config = _decode_json_object(provider_config)
     config.pop("model", None)
@@ -848,8 +849,9 @@ def _live_console_turn_dto(
         "created_at": _encode_datetime(turn.created_at),
         "updated_at": _encode_datetime(turn.updated_at),
         # An idempotent replay returns this row unchanged; the caller must not
-        # present an old nonterminal turn as current work.
-        "is_fresh": _console_turn_state_is_fresh(turn),
+        # present an old nonterminal turn as current work. Replays pass the
+        # reporting evidence so they agree with the receipt reads.
+        "is_fresh": _console_turn_state_is_fresh(turn, reporting_turn_ids=reporting_turn_ids),
     }
 
 
@@ -1616,58 +1618,72 @@ def _console_turn_state_is_fresh(
     turn: Any,
     *,
     observed_at: datetime | None = None,
-    reporting_thread_ids: Collection[str] = (),
+    reporting_turn_ids: Collection[str] = (),
 ) -> bool:
     """Keep terminal evidence authoritative; age out nonterminal observations.
 
     A turn's `updated_at` is when it entered its state, not when anything last
     vouched for it, so a nonterminal turn older than the horizon is still
-    current while its thread's executing run is reporting
-    (`reporting_thread_ids`, from `_console_threads_with_reporting_run`).
+    current while its run is reporting (`reporting_turn_ids`, from
+    `_console_turns_with_reporting_run`).
     """
     if getattr(turn, "terminal_at", None) is not None:
         return True
-    updated_at = getattr(turn, "updated_at", None)
-    if isinstance(updated_at, datetime):
-        normalized_updated_at = updated_at.replace(tzinfo=UTC) if updated_at.tzinfo is None else updated_at.astimezone(UTC)
-        current_at = observed_at or datetime.now(UTC)
-        if normalized_updated_at > current_at - _CONSOLE_TURN_FRESHNESS:
-            return True
-    return str(getattr(turn, "thread_id", "")) in reporting_thread_ids
+    updated_at = _as_aware_utc(getattr(turn, "updated_at", None))
+    if updated_at is not None and updated_at > (observed_at or datetime.now(UTC)) - _CONSOLE_TURN_FRESHNESS:
+        return True
+    return str(getattr(turn, "id", "")) in reporting_turn_ids
 
 
-def _console_threads_with_reporting_run(orm: Session, turns: Iterable[Any], *, observed_at: datetime) -> frozenset[str]:
-    """Threads of `turns` whose executing Console run is still reporting.
+def _console_turns_with_reporting_run(orm: Session, turns: Iterable[Any], *, observed_at: datetime) -> frozenset[str]:
+    """Ids of past-horizon nonterminal `turns` whose run is still reporting.
 
     A turn stays `active` through a long tool call, and the turns queued behind
     it stay `queued`, while the Machine Agent restates the run's status every
-    few seconds (status assertions). Without this, a ten-minute Bash call read
-    as "Console activity is stale" once the turn was fifteen minutes old. The
-    run counts as reporting under the same rule that keeps it the thread's
-    execution owner (`_open_run_holds_live_ownership`).
+    few seconds (status assertions). Without this, a long Bash call read as
+    "Console activity is stale" once the turn was fifteen minutes old. A
+    dispatched turn counts only its own run; a queued turn (no run yet) counts
+    the run its thread is executing. The run is reporting under the rule that
+    keeps it the thread's execution owner (`_open_run_holds_live_ownership`).
     """
     horizon = observed_at - _CONSOLE_TURN_FRESHNESS
-    stale_thread_ids = {
-        str(turn.thread_id)
+    stale = [
+        turn
         for turn in turns
         if getattr(turn, "terminal_at", None) is None
         and str(getattr(turn, "state", "")) in ("queued", "starting", "active", "draining")
-        and not (isinstance(turn.updated_at, datetime) and (_as_aware_utc(turn.updated_at) or turn.updated_at) > horizon)
-    }
-    if not stale_thread_ids:
+        and not ((updated_at := _as_aware_utc(getattr(turn, "updated_at", None))) is not None and updated_at > horizon)
+    ]
+    if not stale:
         return frozenset()
-    runs = (
-        orm.query(LiveSessionRun)
-        .join(LiveConsoleTurn, LiveConsoleTurn.run_id == LiveSessionRun.id)
-        .filter(
-            LiveConsoleTurn.thread_id.in_(sorted(stale_thread_ids)),
-            LiveConsoleTurn.state.in_(("starting", "active", "draining")),
-            LiveConsoleTurn.terminal_at.is_(None),
-            LiveSessionRun.ended_at.is_(None),
+    own_run_ids = {str(turn.run_id) for turn in stale if turn.run_id is not None}
+    waiting_thread_ids = {str(turn.thread_id) for turn in stale if turn.run_id is None}
+    candidates = []
+    if own_run_ids:
+        candidates.extend(
+            orm.query(LiveSessionRun).filter(LiveSessionRun.id.in_(sorted(own_run_ids)), LiveSessionRun.ended_at.is_(None)).all()
         )
-        .all()
+    if waiting_thread_ids:
+        candidates.extend(
+            orm.query(LiveSessionRun)
+            .join(LiveConsoleTurn, LiveConsoleTurn.run_id == LiveSessionRun.id)
+            .filter(
+                LiveConsoleTurn.thread_id.in_(sorted(waiting_thread_ids)),
+                LiveConsoleTurn.state.in_(("starting", "active", "draining")),
+                LiveConsoleTurn.terminal_at.is_(None),
+                LiveSessionRun.ended_at.is_(None),
+            )
+            .all()
+        )
+    reporting = {
+        str(run.id): str(run.thread_id) for run in candidates if _open_run_holds_live_ownership(orm, run=run, observed_at=observed_at)
+    }
+    reporting_threads = set(reporting.values())
+    return frozenset(
+        str(turn.id)
+        for turn in stale
+        if (str(turn.run_id) in reporting if turn.run_id is not None else str(turn.thread_id) in reporting_threads)
     )
-    return frozenset(str(run.thread_id) for run in runs if _open_run_holds_live_ownership(orm, run=run, observed_at=observed_at))
 
 
 def _input_receipt_dto(
@@ -1676,7 +1692,7 @@ def _input_receipt_dto(
     turn: Any | None = None,
     attachments: list[dict[str, Any]] | None = None,
     origin: str | None = None,
-    reporting_thread_ids: Collection[str] = (),
+    reporting_turn_ids: Collection[str] = (),
 ) -> dict[str, Any]:
     turn_identity = None
     origin = str(origin or getattr(turn, "origin", None) or getattr(receipt, "origin", None) or "user")
@@ -1686,7 +1702,7 @@ def _input_receipt_dto(
             "run_id": str(turn.run_id) if turn.run_id is not None else None,
             "state": str(turn.state),
             "origin": origin,
-            "is_fresh": _console_turn_state_is_fresh(turn, reporting_thread_ids=reporting_thread_ids),
+            "is_fresh": _console_turn_state_is_fresh(turn, reporting_turn_ids=reporting_turn_ids),
         }
     return {
         "id": receipt.id,
@@ -5326,6 +5342,7 @@ class CatalogStore:
                         client_request_id=receipt.client_request_id,
                         provider_config=child_thread.provider_config_json,
                         model=turn.model,
+                        reporting_turn_ids=_console_turns_with_reporting_run(orm, [turn], observed_at=datetime.now(UTC)),
                     )
                     orm.rollback()
                     return {
@@ -5552,6 +5569,7 @@ class CatalogStore:
                         client_request_id=existing_receipt.client_request_id,
                         provider_config=thread.provider_config_json,
                         model=turn.model,
+                        reporting_turn_ids=_console_turns_with_reporting_run(orm, [turn], observed_at=datetime.now(UTC)),
                         resume_session_file=_live_thread_source_path(
                             orm,
                             thread_id=thread.id,
@@ -5583,6 +5601,9 @@ class CatalogStore:
                         existing_thread = orm.get(LiveSessionThread, existing_report_turn.thread_id)
                         existing_dto = _live_console_turn_dto(
                             existing_report_turn,
+                            reporting_turn_ids=_console_turns_with_reporting_run(
+                                orm, [existing_report_turn], observed_at=datetime.now(UTC)
+                            ),
                             message=existing_receipt.text if existing_receipt is not None else None,
                             client_request_id=existing_receipt.client_request_id if existing_receipt is not None else None,
                             provider_config=existing_thread.provider_config_json if existing_thread is not None else None,
@@ -7006,7 +7027,7 @@ class CatalogStore:
                     if receipt is not None
                     else None
                 )
-                reporting_thread_ids = _console_threads_with_reporting_run(
+                reporting_turn_ids = _console_turns_with_reporting_run(
                     orm, [turn] if turn is not None else [], observed_at=datetime.now(UTC)
                 )
                 attachments_by_receipt = _input_attachment_summaries_by_receipt(
@@ -7023,7 +7044,7 @@ class CatalogStore:
                         receipt,
                         turn=turn,
                         attachments=attachments_by_receipt.get(str(receipt.id), []),
-                        reporting_thread_ids=reporting_thread_ids,
+                        reporting_turn_ids=reporting_turn_ids,
                     )
                     if receipt is not None
                     else None
@@ -7176,7 +7197,7 @@ class CatalogStore:
                 if receipts:
                     turns = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id.in_([receipt.id for receipt in receipts])).all()
                     turns_by_receipt = {str(turn.receipt_id): turn for turn in turns}
-                reporting_thread_ids = _console_threads_with_reporting_run(orm, turns_by_receipt.values(), observed_at=datetime.now(UTC))
+                reporting_turn_ids = _console_turns_with_reporting_run(orm, turns_by_receipt.values(), observed_at=datetime.now(UTC))
                 attachments_by_receipt = _input_attachment_summaries_by_receipt(
                     orm,
                     session_id=session_id,
@@ -7191,7 +7212,7 @@ class CatalogStore:
                         receipt,
                         turn=turns_by_receipt.get(str(receipt.id)),
                         attachments=attachments_by_receipt.get(str(receipt.id), []),
-                        reporting_thread_ids=reporting_thread_ids,
+                        reporting_turn_ids=reporting_turn_ids,
                     )
                     for receipt in receipts
                 ],
