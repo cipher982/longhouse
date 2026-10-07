@@ -535,8 +535,9 @@ struct SessionView: View {
         let placedReceiptInputs = UnrecordedInputs.placedInputs(
             receipts: viewModel.detail?.inputReceipts ?? [],
             userEvents: userEvents,
-            excluding: Set(localInputs.map(\.clientRequestId))
-        ).filter { input in firstLoadedDate.map { input.createdAt >= $0 } ?? true }
+            excluding: Set(localInputs.map(\.clientRequestId)),
+            loadedFrom: firstLoadedDate
+        )
         return localInputs + systemReceiptInputs + placedReceiptInputs
     }
 

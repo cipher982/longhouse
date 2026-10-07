@@ -200,6 +200,18 @@ struct SessionInputReconciliationTests {
             userEvents: [],
             excluding: []
         )
+        // While an older page is unloaded, the send before it waits for it.
+        let withheld = UnrecordedInputs.placedInputs(
+            receipts: [
+                served("ios-steer", text: "TLDR please", at: "2026-10-07T04:35:20Z", intent: "steer", turnState: nil),
+                served("ios-old", text: "before the page", at: "2026-10-07T03:00:00Z"),
+            ],
+            userEvents: [],
+            excluding: [],
+            loadedFrom: LonghouseDateParser.parse("2026-10-07T04:00:00Z")
+        )
+        #expect(withheld.map(\.clientRequestId) == ["ios-steer"])
+
         let rows = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: placed)
         // With every row loaded, a send older than the first row leads.
         #expect(rows.map(\.body) == ["before the page", "first", "TLDR please", "second"])

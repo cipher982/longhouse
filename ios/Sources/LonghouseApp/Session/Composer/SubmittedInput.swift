@@ -201,11 +201,14 @@ enum UnrecordedInputs {
 
     /// Served user receipts the transcript does not show, as rows placed at
     /// their send time. `excluding` is this client's own optimistic rows,
-    /// which still render themselves.
+    /// which still render themselves. `loadedFrom` is the first loaded row's
+    /// time while older rows remain unloaded: a receipt older than it waits
+    /// for that page instead of claiming the top.
     nonisolated static func placedInputs(
         receipts: [SessionInputReceipt],
         userEvents: [SessionEvent],
-        excluding ownClientRequestIds: Set<String>
+        excluding ownClientRequestIds: Set<String>,
+        loadedFrom: Date? = nil
     ) -> [SubmittedInput] {
         let shown = shownByTranscript(receipts: receipts, userEvents: userEvents)
         return receipts.compactMap { receipt in
@@ -215,7 +218,8 @@ enum UnrecordedInputs {
                   !shown.contains(id),
                   !ownClientRequestIds.contains(id),
                   let text = receipt.text, !text.isEmpty,
-                  let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse)
+                  let createdAt = receipt.createdAt.flatMap(LonghouseDateParser.parse),
+                  loadedFrom.map({ createdAt >= $0 }) ?? true
             else { return nil }
             let lost = failedBeforeRecorded(receipt)
             var input = SubmittedInput(

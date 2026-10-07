@@ -1804,7 +1804,7 @@ export function TimelinePane({
             description="Longhouse couldn't read this session's messages. Reload the page to try again."
             details={errorDetails(error)}
           />
-        ) : filteredItems.length === 0 && visibleOutbox.length === 0 ? (
+        ) : filteredItems.length === 0 && visibleOutbox.length === 0 && placedOutbox.length === 0 ? (
           <EmptyState
             title="No events"
             description={

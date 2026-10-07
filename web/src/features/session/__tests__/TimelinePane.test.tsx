@@ -1460,4 +1460,33 @@ describe("TimelinePane outbox", () => {
     expect(screen.getAllByTestId("session-outbox-row")[0]).toHaveTextContent("an old send");
     vi.unstubAllGlobals();
   });
+
+  it("keeps a placed receipt under the messages filter, even with no message rows", () => {
+    render(
+      <TimelinePane
+        items={[]}
+        totalEntries={0}
+        loadedEntries={0}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+        outbox={[
+          { key: "tail", text: "still sending", state: "sending" },
+          { key: "steer", text: "a steer", state: "sent", at: "2026-03-19T16:05:00Z" },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Toggle filters" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Messages/ }));
+
+    expect(screen.queryByText("No events")).not.toBeInTheDocument();
+    const rows = screen.getAllByTestId("session-outbox-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("a steer");
+  });
 });
