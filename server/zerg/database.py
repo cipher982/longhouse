@@ -1457,47 +1457,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("session_input_delivery_attempts verification skipped", exc_info=True)
 
-    # insights table migrations
-    # `origin` has Python default= but no server_default (legacy rows must
-    # stay NULL so the title/tags backfill can promote system rows to
-    # 'system' while leaving manual rows untouched). _auto_add_missing_columns
-    # correctly skips this; we add it imperatively here.
-    # `archived_at` is fully nullable and is handled by _auto_add_missing_columns.
-    try:
-        with engine.connect() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(insights)"))}
-            if columns:
-                if "origin" not in columns:
-                    conn.execute(text("ALTER TABLE insights ADD COLUMN origin VARCHAR(20)"))
-                    columns.add("origin")
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_origin ON insights(origin)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_archived_at ON insights(archived_at)"))
-                if "title" in columns:
-                    conn.execute(
-                        text(
-                            """
-                            UPDATE insights
-                            SET origin = 'system'
-                            WHERE origin IS NULL
-                              AND title IN ('Stale ingest detected', 'Ingest recovered')
-                            """
-                        )
-                    )
-                if "tags" in columns:
-                    conn.execute(
-                        text(
-                            """
-                            UPDATE insights
-                            SET origin = 'system'
-                            WHERE origin IS NULL
-                              AND COALESCE(tags, '') LIKE '%stale-agent%'
-                            """
-                        )
-                    )
-                conn.commit()
-    except Exception:
-        logger.debug("insights table migration skipped (table may not exist yet)", exc_info=True)
-
     # session_branches table migrations
     try:
         with engine.connect() as conn:
