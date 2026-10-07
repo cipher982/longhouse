@@ -388,3 +388,33 @@ async def test_a_stream_opened_on_a_draining_process_ends_with_the_lifecycle(mon
 
     await RuntimeWriteAdmissionMiddleware(serving_app)(scope, receive, send)
     assert served == ["/api/agents/sessions/stream"]
+
+
+@pytest.mark.asyncio
+async def test_drain_post_answers_drained_once_writers_finish_instead_of_draining(monkeypatch) -> None:
+    from zerg.routers import internal_deployments
+
+    runtime = RuntimeAdmission()
+    monkeypatch.setattr(internal_deployments, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(internal_deployments, "get_settings", lambda: SimpleNamespace(internal_api_secret="secret"))
+    monkeypatch.setattr(internal_deployments, "_signal_runtime_lifecycle", AsyncMock())
+    depths = [1, 1, 1, 0]
+
+    async def catalog_probe(_operation: str) -> dict[str, object]:
+        depth = depths.pop(0) if depths else 0
+        return {"available": True, "state": "closed", "depth": depth, "accepting": False, "active_label": None}
+
+    monkeypatch.setattr(internal_deployments, "_catalog_admission_probe", catalog_probe)
+    body = internal_deployments.DeploymentFenceRequest(
+        request_id="drain-request",
+        deployment_id="deployment-1",
+        target_id="target-1",
+        generation="7",
+        deadline_utc=(datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
+        grace_seconds=0,
+    )
+    response = await internal_deployments.drain_runtime("attempt-1", body, "secret")
+    payload = json.loads(response.body)
+    assert response.status_code == 200
+    assert payload["state"] == "drained"
+    assert payload["request_id"] == "drain-request" and payload["attempt_id"] == "attempt-1"

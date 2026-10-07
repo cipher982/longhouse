@@ -365,7 +365,21 @@ async def drain_runtime(
     )
     if result.get("state") == "drained":
         await _signal_runtime_lifecycle(result, drain_complete=True)
+    elif result.get("state") == "draining":
+        # Writers in flight usually finish within milliseconds. Answer when they
+        # have, instead of making the deployer sleep and poll again across the
+        # edge: each poll is a full round trip inside the closed-writes window.
+        # Bounded short, so a stuck writer still gets a prompt "draining".
+        deadline = time.monotonic() + _DRAIN_ANSWER_WAIT_SECONDS
+        while result.get("state") == "draining" and time.monotonic() < deadline:
+            await asyncio.sleep(_DRAIN_ANSWER_POLL_SECONDS)
+            result = await _drain_status(attempt_id, request_id=body.request_id, runtime_epoch=None)
+        return _fence_response(result)
     return _fence_response(result)
+
+
+_DRAIN_ANSWER_WAIT_SECONDS = 0.3
+_DRAIN_ANSWER_POLL_SECONDS = 0.02
 
 
 @router.get("/{attempt_id}/drain")
@@ -376,36 +390,34 @@ async def get_runtime_drain(
     x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
 ):
     _require_internal_token(x_internal_token)
+    return _fence_response(await _drain_status(attempt_id, request_id=request_id, runtime_epoch=runtime_epoch))
+
+
+async def _drain_status(attempt_id: str, *, request_id: str, runtime_epoch: str | None) -> dict[str, Any]:
     runtime = runtime_admission()
     fence = runtime.fence
     snapshot = await runtime.snapshot()
     if isinstance(runtime_epoch, str) and runtime_epoch and runtime_epoch != runtime.runtime_epoch:
-        return _fence_response(
-            {
-                **snapshot,
-                "state": "unknown",
-                "code": "runtime_epoch_mismatch",
-                "message": "request belongs to a different runtime process epoch",
-            }
-        )
+        return {
+            **snapshot,
+            "state": "unknown",
+            "code": "runtime_epoch_mismatch",
+            "message": "request belongs to a different runtime process epoch",
+        }
     if fence is None or fence.attempt_id != attempt_id or fence.request_id != request_id:
-        return _fence_response(
-            {**snapshot, "state": "unknown", "code": "drain_fence_unknown", "message": "runtime has no matching drain fence"}
-        )
+        return {**snapshot, "state": "unknown", "code": "drain_fence_unknown", "message": "runtime has no matching drain fence"}
     if runtime.state not in {"draining", "drained"}:
-        return _fence_response(
-            {
-                **snapshot,
-                "state": runtime.state,
-                "attempt_id": fence.attempt_id,
-                "request_id": fence.request_id,
-                "deployment_id": fence.deployment_id,
-                "target_id": fence.target_id,
-                "generation": fence.generation,
-                "deadline_utc": fence.deadline_utc,
-                "grace_seconds": fence.grace_seconds,
-            }
-        )
+        return {
+            **snapshot,
+            "state": runtime.state,
+            "attempt_id": fence.attempt_id,
+            "request_id": fence.request_id,
+            "deployment_id": fence.deployment_id,
+            "target_id": fence.target_id,
+            "generation": fence.generation,
+            "deadline_utc": fence.deadline_utc,
+            "grace_seconds": fence.grace_seconds,
+        }
     catalog = await _catalog_admission_probe("close")
     snapshot = await runtime.snapshot(catalog_admission=catalog)
     catalog_quiescent = (
@@ -430,7 +442,7 @@ async def get_runtime_drain(
     }
     if state == "drained":
         await _signal_runtime_lifecycle(result, drain_complete=True)
-    return _fence_response(result)
+    return result
 
 
 @router.post("/{attempt_id}/reopen")
