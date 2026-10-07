@@ -16,7 +16,7 @@
  * what `make ui-sweep` and CI run.
  *
  * Usage:
- *   bunx tsx scripts/ui/ui-gallery.ts [--jobs=4] [--only=session] [--output=DIR] [--sweep]
+ *   bunx tsx scripts/ui/ui-gallery.ts [--jobs=4] [--only=session] [--viewports=desktop,wide,mobile] [--output=DIR] [--sweep]
  */
 
 import { execSync, spawn, type ChildProcess } from "child_process";
@@ -322,7 +322,12 @@ async function main() {
   mkdirSync(outDir, { recursive: true });
 
   const jobs = JOBS.filter((job) => !only || jobKey(job).includes(only));
-  const viewportKeys = Object.keys(VIEWPORTS) as ViewportKey[];
+  // --viewports=desktop,mobile shards the run (CI runs one viewport per job).
+  const viewportArg = arg("viewports");
+  const viewportKeys = (viewportArg ? viewportArg.split(",") : Object.keys(VIEWPORTS)) as ViewportKey[];
+  for (const key of viewportKeys) {
+    if (!(key in VIEWPORTS)) throw new Error(`--viewports takes ${Object.keys(VIEWPORTS).join(", ")}; got ${key}`);
+  }
   const tasks = jobs.flatMap((job) => viewportKeys.map((viewport) => ({ job, viewport })));
   console.log(`UI gallery: ${tasks.length} captures (${jobs.length} scenes x ${viewportKeys.length} viewports), ${jobsLimit} at a time`);
   console.log(`Output: ${outDir}`);

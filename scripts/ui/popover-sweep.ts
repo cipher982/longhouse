@@ -383,9 +383,18 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
       }
       const childResult = await openAndCheck(childSelector, childName, null, `${index}-${child}`);
       if (childResult === null && page.url() !== url) break;
-      await close(childSelector);
-      await close(selector);
+      // Close only the child, so its menu stays open for the next one:
+      // Escape would close the menu (or modal) too and force a reopen,
+      // which a loaded CI runner could not always render in time.
+      await page.evaluate(`${CLOSE_DETAILS}(${JSON.stringify(childSelector)})`);
+      const childTrigger = page.locator(childSelector);
+      if ((await childTrigger.count()) > 0 && (await childTrigger.getAttribute("aria-expanded")) === "true") {
+        await childTrigger.click({ timeout: 2_000 }).catch(() => undefined);
+      }
+      if (childResult && childResult.checked > 0) await page.keyboard.press("Escape");
+      await page.waitForTimeout(100);
     }
+    if (result.children.length > 0) await close(selector);
     if (page.url() !== url) break;
   }
   return report;
