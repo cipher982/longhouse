@@ -166,6 +166,8 @@ final class SessionViewModel: ObservableObject {
     private var lastFullTailReadAt: Date?
     private var loadedProjectionItemCount = 0
     private var totalProjectionItemCount = 0
+    /// Older transcript rows exist that this view has not loaded.
+    var hasOlderHistory: Bool { loadedProjectionItemCount < totalProjectionItemCount }
     private var tailSnapshotEventId: String?
     private var tailNextCursor: String?
     private var prefetchedOlderTail: SessionMobileTailResponse?

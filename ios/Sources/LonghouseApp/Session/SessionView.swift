@@ -528,11 +528,15 @@ struct SessionView: View {
             if case .user(let event) = item { return event }
             return nil
         }
+        // One older than the loaded rows waits for that page, while one exists.
+        let firstLoadedDate = viewModel.hasOlderHistory
+            ? viewModel.items.first.flatMap { LonghouseDateParser.parse($0.sortTimestamp) }
+            : nil
         let placedReceiptInputs = UnrecordedInputs.placedInputs(
             receipts: viewModel.detail?.inputReceipts ?? [],
             userEvents: userEvents,
             excluding: Set(localInputs.map(\.clientRequestId))
-        )
+        ).filter { input in firstLoadedDate.map { input.createdAt >= $0 } ?? true }
         return localInputs + systemReceiptInputs + placedReceiptInputs
     }
 

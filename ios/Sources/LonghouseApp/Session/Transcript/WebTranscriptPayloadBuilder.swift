@@ -103,13 +103,10 @@ extension WebTranscriptView {
             return timelineItems.map(payloadItem)
         }
 
-        // A served receipt the transcript lacks stands at its send time. One
-        // older than the loaded rows waits for that page to load.
-        let firstLoadedDate = timelineItems.first.flatMap { LonghouseDateParser.parse($0.sortTimestamp) }
+        // A served receipt the transcript lacks stands at its send time
+        // (SessionView withholds one older than an unloaded page).
         var placedInputs = visibleSubmittedInputs
-            .filter { input in
-                input.placedAtSendTime && firstLoadedDate.map { input.createdAt >= $0 } != false
-            }
+            .filter(\.placedAtSendTime)
             .sorted { $0.createdAt < $1.createdAt }
         var rows: [WebTranscriptPayloadItem] = []
         var remainingSubmittedInputs = visibleSubmittedInputs.filter { !$0.placedAtSendTime }

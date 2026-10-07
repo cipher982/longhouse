@@ -201,8 +201,9 @@ struct SessionInputReconciliationTests {
             excluding: []
         )
         let rows = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: placed)
-        #expect(rows.map(\.body) == ["first", "TLDR please", "second"])
-        #expect(rows[1].status == "sent placed")
+        // With every row loaded, a send older than the first row leads.
+        #expect(rows.map(\.body) == ["before the page", "first", "TLDR please", "second"])
+        #expect(rows[2].status == "sent placed")
     }
 
     @Test

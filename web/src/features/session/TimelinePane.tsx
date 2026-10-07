@@ -1548,7 +1548,13 @@ export function TimelinePane({
   const firstDurableMs = durableItems.length
     ? timelineItemTimeMs(durableItems[0])
     : Number.NaN;
-  const placedOutbox = visibleOutbox
+  // They are user messages, so the messages filter keeps them too; a text
+  // search reads transcript rows only.
+  const placedSource =
+    (eventFilter === "all" || eventFilter === "messages") && !debouncedSearch.trim()
+      ? outbox
+      : EMPTY_OUTBOX;
+  const placedOutbox = placedSource
     .filter((entry) => {
       const at = outboxTimeMs(entry);
       if (!Number.isFinite(at)) return false;
