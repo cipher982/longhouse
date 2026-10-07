@@ -1725,7 +1725,39 @@ fn settle_codex_restart_claim(
     claim: &crate::turn_claims::TurnClaim,
     detail: &str,
 ) -> Result<bool> {
-    let event = codex_exec_recovery_terminal_event(claim, machine_name, "run_cancelled", detail);
+    let claim = registry.read(&claim.run_id)?;
+    if claim.invocation_state.as_deref() == Some("closed") {
+        return Ok(false);
+    }
+    if matches!(claim.state.as_str(), "terminal" | "failed") {
+        // Response completion and invocation closure are independent facts.
+        // Its original exact response stays immutable; the claim supplies the
+        // reconstruction base for retrying this distinct closing event.
+        let terminal_state = claim
+            .result
+            .as_ref()
+            .and_then(|result| result.get("terminal_state"))
+            .and_then(Value::as_str)
+            .unwrap_or("run_cancelled");
+        let mut event =
+            codex_exec_recovery_terminal_event(&claim, machine_name, terminal_state, detail);
+        event["dedupe_key"] = Value::String(format!(
+            "codex-exec:{}:{}:invocation-closed",
+            claim.session_id, claim.run_id
+        ));
+        match crate::outbox::enqueue_runtime_event_for_handoff(outbox_dir, &event) {
+            Ok(true) => {
+                registry.record_invocation_state(&claim.run_id, "closed", claim.pending_count)?;
+                return Ok(true);
+            }
+            Ok(false) => return Ok(false),
+            Err(error) => {
+                tracing::warn!(%error, run_id = %claim.run_id, "Codex invocation close remains retryable");
+                return Ok(false);
+            }
+        }
+    }
+    let event = codex_exec_recovery_terminal_event(&claim, machine_name, "run_cancelled", detail);
     match crate::outbox::retain_and_enqueue_terminal_event(
         registry,
         outbox_dir,
@@ -5972,5 +6004,90 @@ for line in sys.stdin:
                     .any(|slot| slot.session_id == session_id && slot.run_id == successor_run_id));
             });
         });
+    }
+    #[test]
+    fn completed_parked_response_closes_on_restart_without_replacing_its_outcome() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let outbox = temp.path().join("outbox");
+        let run_id = uuid::Uuid::new_v4().to_string();
+        seed_codex_claim(&registry, &run_id, Some(u32::MAX), Some("old-birth".into()));
+        registry
+            .record_invocation_state(&run_id, "parked", 2)
+            .unwrap();
+        let original = json!({
+            "runtime_key": "codex:11111111-1111-4111-8111-111111111111",
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "run_id": run_id,
+            "thread_id": "44444444-4444-4444-8444-444444444444",
+            "provider": "codex",
+            "device_id": "cinder",
+            "source": CODEX_EXEC_RUNTIME_SOURCE,
+            "kind": "terminal_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("codex-exec:response:{run_id}:terminal"),
+            "payload": {
+                "terminal_state": "run_completed",
+                "invocation": {"id": "invocation", "state": "parked", "pending_count": 2}
+            }
+        });
+        assert!(
+            crate::outbox::retain_and_enqueue_terminal_event(
+                &registry,
+                &outbox,
+                &run_id,
+                "run_completed",
+                None,
+                original.clone(),
+            )
+            .unwrap()
+            .1
+        );
+        let completed = registry.read(&run_id).unwrap();
+        let blocked = temp.path().join("blocked-outbox");
+        fs::write(&blocked, b"not a directory").unwrap();
+        assert!(!settle_codex_restart_claim(
+            &registry,
+            &blocked,
+            "cinder",
+            &completed,
+            "Machine Agent restarted",
+        )
+        .unwrap());
+        assert_eq!(
+            registry.read(&run_id).unwrap().invocation_state.as_deref(),
+            Some("parked")
+        );
+        fs::remove_file(&blocked).unwrap();
+        assert!(settle_codex_restart_claim(
+            &registry,
+            &blocked,
+            "cinder",
+            &completed,
+            "Machine Agent restarted",
+        )
+        .unwrap());
+        let reloaded = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"))
+            .read(&run_id)
+            .unwrap();
+        assert_eq!(
+            reloaded.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        assert_eq!(reloaded.terminal_event.as_ref(), Some(&original));
+        assert_eq!(reloaded.invocation_state.as_deref(), Some("closed"));
+        assert_eq!(reloaded.pending_count, 2);
+        let event_path = fs::read_dir(&blocked)
+            .unwrap()
+            .flatten()
+            .find(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+            .unwrap()
+            .path();
+        let closing: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(closing["payload"]["invocation"]["state"], "closed");
+        assert_eq!(closing["payload"]["terminal_state"], "run_completed");
+        assert_ne!(closing["dedupe_key"], original["dedupe_key"]);
+        assert!(codex_recovery_claims(&registry).unwrap().is_empty());
     }
 }

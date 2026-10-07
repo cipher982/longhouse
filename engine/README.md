@@ -35,13 +35,15 @@ exact terminal event is persisted atomically with its run claim before outbox
 handoff; failed handoffs replay that retained event after restart. Its status
 retires only after confirmed durable handoff, without deleting pending work or
 history; delayed callbacks cannot remove or reclaim a successor's status.
+Codex restart closure has a distinct event identity and never rewrites an
+already-completed response's outcome; failed closing handoffs remain retryable.
 Unknown ownership never renews remote liveness; its reconstructable observation
 expires after 24 hours with an exact-version guard, without declaring execution
 ended. Runtime lifecycle records have independent admission and cooldowns from
 replaceable observations.
 Helm and Console ownership are revalidated together on the existing managed
-scan cadence, using one process inventory. Unknown lookups retry on the next
-scan rather than being cached as permanent failure.
+scan cadence. New exact owners resolve on the one-second status cadence through
+bounded, batched PID probes; stale or failed evidence remains unknown.
 
 Fresh OMP Helm and Console use native creation, not resume. OMP may report its
 exact session path before writing a JSONL header: controls can be ready while

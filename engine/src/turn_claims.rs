@@ -567,8 +567,8 @@ impl TurnClaimRegistry {
     /// Atomically record this run's terminal fact and its exact runtime event.
     /// A previously retained event is immutable; retries always hand off that
     /// original payload, including its original timestamp and dedupe key.
-    /// Returns the exact pending event to enqueue, or `None` after handoff or
-    /// when a conflicting terminal fact already owns this run.
+    /// Returns the exact pending event to enqueue, or `None` after its handoff.
+    /// A thin terminal fact cannot veto the first exact event.
     pub fn mark_terminal_with_event(
         &self,
         run_id: &str,
@@ -593,27 +593,22 @@ impl TurnClaimRegistry {
         );
 
         let (_lock, mut claim) = self.read_for_update(run_id)?;
-        if claim.terminal_event_handed_off {
-            return Ok(None);
+        if let Some(retained) = claim.terminal_event.as_ref() {
+            anyhow::ensure!(
+                retained
+                    .pointer("/payload/terminal_state")
+                    .and_then(Value::as_str)
+                    == Some(terminal_state),
+                "conflicting exact terminal event for run {run_id}"
+            );
+            return Ok(if claim.terminal_event_handed_off {
+                None
+            } else {
+                claim.terminal_event
+            });
         }
-        if claim.terminal_event.is_some() {
-            return Ok(claim.terminal_event);
-        }
-
-        let already_terminal = claim.state == "terminal" || claim.state == "failed";
-        if already_terminal {
-            let recorded_state = claim
-                .result
-                .as_ref()
-                .and_then(|result| result.get("terminal_state"))
-                .and_then(Value::as_str);
-            if recorded_state.is_some_and(|recorded| recorded != terminal_state) {
-                return Ok(None);
-            }
-        } else {
-            claim.state = "terminal".to_string();
-            claim.error = error;
-        }
+        claim.state = "terminal".to_string();
+        claim.error = error;
         claim.updated_at = Utc::now().to_rfc3339();
         if let Some(result) = claim.result.as_mut().and_then(Value::as_object_mut) {
             result.insert(
@@ -1195,6 +1190,41 @@ mod tests {
         let claim = registry.read(&run_id).unwrap();
         assert_eq!(claim.state, "failed");
         assert_eq!(claim.error.as_deref(), Some("provider disappeared"));
+    }
+
+    #[test]
+    fn first_exact_terminal_event_is_not_vetoed_by_an_earlier_thin_fact() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(71);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&run_id, &id(72), &id(73), None, None, "claude")
+            .unwrap();
+        registry
+            .mark_terminal(&run_id, "run_cancelled", None)
+            .unwrap();
+        registry
+            .mark_terminal_with_event(
+                &run_id,
+                "run_completed",
+                None,
+                serde_json::json!({
+                    "kind": "terminal_signal",
+                    "run_id": run_id,
+                    "dedupe_key": "first-exact-terminal",
+                    "payload": {"terminal_state": "run_completed"}
+                }),
+            )
+            .unwrap();
+        let reloaded = TurnClaimRegistry::new(temp.path().to_path_buf())
+            .read(&run_id)
+            .unwrap();
+        assert_eq!(reloaded.result.unwrap()["terminal_state"], "run_completed");
+        assert_eq!(
+            reloaded.terminal_event.unwrap()["payload"]["terminal_state"],
+            "run_completed"
+        );
+        assert!(!reloaded.terminal_event_handed_off);
     }
 
     #[test]
