@@ -1523,6 +1523,7 @@ export function SessionChat({
           ? await postSessionInputMultipart(session.id, {
               text: message,
               attachments,
+              intent: intent === "auto" ? "auto" : "queue",
               client_request_id: clientRequestId,
               ...(model ? { model } : {}),
             })
@@ -1928,7 +1929,11 @@ export function SessionChat({
     session.session_state.delegation?.state === "pending" &&
     (session.session_state.delegation.count ?? 0) > 0;
   const interruptActionLabel = parkedBackgroundWork ? "Stop background work" : "Stop";
-  const attachmentInputEnabled = attachImagesEnabled && !isSendLocked;
+  // Images ride a new turn. Console queues it behind a running turn (a steer
+  // cannot carry images); elsewhere a send with images waits for the turn.
+  const isConsoleSession = session.session_state.mode === "console";
+  const attachmentInputEnabled =
+    attachImagesEnabled && (!isSendLocked || isConsoleSession);
   // A parked Console invocation has no active turn, but its provider-owned
   // work is still live and the served interrupt action closes that invocation.
   const showInlineInterrupt =
@@ -1944,8 +1949,10 @@ export function SessionChat({
         : "auto";
   // Primary send is blocked when there's no available action.
   const isSendBlocked = isSendLocked && !canSteerNow && !canQueueNow;
+  const attachmentIntent: "auto" | "queue" | null =
+    primaryIntent === "auto" ? "auto" : isConsoleSession ? "queue" : null;
   const attachmentSendBlocked =
-    composerAttachments.attachments.length > 0 && primaryIntent !== "auto";
+    composerAttachments.attachments.length > 0 && attachmentIntent === null;
   // Attachment-only sends are valid when the route accepts them.
   const hasComposerContent =
     Boolean(draft.trim()) || composerAttachments.attachments.length > 0;
@@ -1959,7 +1966,7 @@ export function SessionChat({
       const hasAttachments = pendingAttachments.length > 0;
       if (!message && !hasAttachments) return;
       if (isSubmitting || isComposerDisabled || isSendBlocked) return;
-      if (hasAttachments && primaryIntent !== "auto") {
+      if (hasAttachments && attachmentIntent === null) {
         setError(
           "Image attachments can only be sent when the session is ready for a new turn.",
         );
@@ -1977,7 +1984,7 @@ export function SessionChat({
       const replacementClientRequestId = editingPendingId;
       const result = await handleManagedLocalSend(
         message,
-        primaryIntent,
+        hasAttachments && attachmentIntent ? attachmentIntent : primaryIntent,
         attachmentArgs,
         {
           replacementClientRequestId: replacementClientRequestId ?? undefined,
@@ -1992,6 +1999,7 @@ export function SessionChat({
       }
     },
     [
+      attachmentIntent,
       composerAttachments,
       draft,
       editingPendingId,

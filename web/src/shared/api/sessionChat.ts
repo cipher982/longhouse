@@ -96,12 +96,13 @@ export async function postSessionInputMultipart(
     attachments: MultipartAttachment[];
     client_request_id: string;
     model?: string | null;
+    /** `queue` only behind a running Console turn; the server refuses it elsewhere. */
+    intent?: "auto" | "queue";
   },
 ): Promise<SessionInputResponse> {
-  // Multipart route is auto-intent only in v1; the server enforces this.
   const form = new FormData();
   form.append("text", body.text);
-  form.append("intent", "auto");
+  form.append("intent", body.intent ?? "auto");
   form.append("client_request_id", body.client_request_id);
   if (body.model?.trim()) form.append("model", body.model);
   body.attachments.forEach((a) => form.append("attachments", a.blob, a.filename));

@@ -623,6 +623,80 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
 
 
 @pytest.mark.asyncio
+async def test_console_multipart_queues_images_behind_a_running_turn(monkeypatch, tmp_path):
+    """Attaching while a Console turn runs queues the next turn (2026-10-07).
+
+    On Console, ``queue`` and ``auto`` are the same FIFO enqueue, and the turn
+    record carries the image refs, so the composer no longer has to wait for
+    the running turn to finish before an image can be added.
+    """
+    import zerg.routers.session_inputs_attachments as route
+    import zerg.services.console_turns as console_turns
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="claude",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="console_turn",
+        catalog_facts={},
+    )
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+
+    async def load_receipt(**kwargs):
+        return None
+
+    async def store_blob(**kwargs):
+        return StoredAttachment(
+            id=uuid4(),
+            session_input_id=kwargs["input_receipt_id"],
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "blob.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def enqueue(**kwargs):
+        calls["enqueue"] = kwargs
+        return SimpleNamespace(
+            turn_id=uuid4(),
+            run_id=uuid4(),
+            state="queued",
+            receipt_id=kwargs["receipt_id"],
+            created=True,
+            error=None,
+            error_code=None,
+        )
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue)
+
+    response = await route.create_session_input_with_attachments(
+        session_id=str(session_id),
+        request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+        text="look at this",
+        intent="queue",
+        model=None,
+        client_request_id="console-attach-queued",
+        attachments=[UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))],
+        user_agent="Longhouse-iOS",
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+
+    assert response.turn is not None
+    assert calls["enqueue"]["message"] == "look at this"
+    assert len(calls["enqueue"]["attachments"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_console_multipart_keeps_group_when_catalog_reply_is_ambiguous(monkeypatch, tmp_path):
     import zerg.routers.session_inputs_attachments as route
     import zerg.services.console_turns as console_turns
@@ -1607,28 +1681,34 @@ def test_multipart_rejects_unsupported_helm_provider(live_catalog, live_catalog_
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_multipart_rejects_queue_intent(monkeypatch, tmp_path):
-    _set_blob_root(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
+@pytest.mark.asyncio
+async def test_multipart_rejects_queue_intent_outside_console(monkeypatch, tmp_path):
+    """Helm's queued-input drain does not load attachments, so queue stays refused there."""
+    import zerg.routers.session_inputs_attachments as route
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "queue?", "intent": "queue", "client_request_id": "attach-queue-reject"},
-            files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+    _set_blob_root(monkeypatch, tmp_path)
+    helm_session = SimpleNamespace(id=uuid4(), provider="codex", command_family="managed_local", catalog_facts={})
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: helm_session)
+
+    with pytest.raises(HTTPException) as caught:
+        await route.create_session_input_with_attachments(
+            session_id=str(helm_session.id),
+            request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+            text="queue?",
+            intent="queue",
+            model=None,
+            client_request_id="attach-queue-reject",
+            attachments=[UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))],
+            user_agent="Longhouse-iOS",
+            db=None,
+            current_user=SimpleNamespace(id=7),
         )
-        assert resp.status_code == 400, resp.text
-        detail = resp.json()["detail"]
-        assert detail["error_code"] == "invalid_intent"
-        assert detail["disposition"] == "rejected"
-        assert "intent" in detail["message"].lower()
-    finally:
-        api_app_ref.dependency_overrides = {}
+    assert caught.value.status_code == 400
+    detail = caught.value.detail
+    assert detail["error_code"] == "invalid_intent"
+    assert detail["disposition"] == "rejected"
+    assert "intent" in detail["message"].lower()
+    assert list((tmp_path / "blobs").rglob("*.bin")) == []
 
 
 def test_multipart_rejects_unsupported_mime(monkeypatch, tmp_path):

@@ -16,8 +16,20 @@ enum SessionComposerControlState {
         return "auto"
     }
 
+    /// Images ride a new turn. Console queues that turn behind a running one,
+    /// so attaching stays open mid-turn there; elsewhere only a steer or a
+    /// Helm queue is in reach, and neither carries attachments.
     static func attachmentInputEnabled(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {
-        detail.attachImagesEnabled && primaryIntent(for: detail, asOf: now) == "auto"
+        detail.attachImagesEnabled
+            && (primaryIntent(for: detail, asOf: now) == "auto" || detail.stateFacts.mode == "console")
+    }
+
+    /// The intent a send with images uses: `auto` between turns, `queue`
+    /// behind a running Console turn (a steer cannot carry images), or nil
+    /// when this session cannot take images right now.
+    static func attachmentIntent(for detail: SessionDetail, requested: String) -> String? {
+        if requested == "auto" { return "auto" }
+        return detail.stateFacts.mode == "console" ? "queue" : nil
     }
 
     static func showsSecondaryQueueAction(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {
