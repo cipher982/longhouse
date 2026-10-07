@@ -682,6 +682,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     resume: isEndedCodexHelm ? available : unavailable,
                     branch: isEndedCodexHelm ? available : unavailable,
                     pendingInteractionKind: isAttentionDelegation ? "question" : nil,
+                    pendingInteractionCanRespond: isAttentionDelegation ? true : nil,
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(
                         key: isEndedCodexHelm ? "ended" : (isAttentionDelegation ? "needs_answer" : (isTimelineDelegation ? "delegated_work" : (isHelmChannelReconcile ? "thinking" : "idle"))),

@@ -1090,11 +1090,12 @@ def test_a_failed_run_with_a_sentence_for_a_reason_still_reads_as_failed():
     assert facts.presentation.primary.label == "Run failed"
 
 
-def test_provider_auth_failure_is_actionable_without_closing_the_session():
+@pytest.mark.parametrize(("phase", "confidence"), [(None, "stale"), ("thinking", "live")])
+def test_provider_auth_failure_is_actionable_without_closing_the_session(phase, confidence):
     facts = _facts(
         runtime=_runtime(
-            phase=None,
-            confidence="stale",
+            phase=phase,
+            confidence=confidence,
             terminal_state="run_failed",
             terminal_reason="provider_auth_required",
         ),
@@ -1104,7 +1105,7 @@ def test_provider_auth_failure_is_actionable_without_closing_the_session():
             "kind": "structured_question",
             "status": "pending",
             "occurred_at": NOW - timedelta(seconds=4),
-            "can_respond": True,
+            "can_respond": False,
         },
     )
 
@@ -1115,7 +1116,7 @@ def test_provider_auth_failure_is_actionable_without_closing_the_session():
     assert facts.presentation.primary.tone == "blocked"
 
     assert facts.pending_interaction is not None
-    assert facts.pending_interaction.can_respond is True
+    assert facts.pending_interaction.can_respond is False
     assert facts.has_answerable_pending_interaction is False
     display = build_compat_runtime_display_response(
         session_state=facts,
@@ -1123,6 +1124,45 @@ def test_provider_auth_failure_is_actionable_without_closing_the_session():
         now=NOW,
     )
     assert display.needs_attention is False
+
+
+def test_answerable_interaction_owns_primary_over_provider_auth_failure():
+    facts = _facts(
+        runtime=_runtime(
+            phase=None,
+            confidence="stale",
+            terminal_state="run_failed",
+            terminal_reason="provider_auth_required",
+        ),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+        pause_request={
+            "id": "pause-auth-question",
+            "kind": "structured_question",
+            "status": "pending",
+            "occurred_at": NOW - timedelta(seconds=4),
+            "can_respond": True,
+        },
+    )
+
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "needs_answer"
+    assert facts.has_answerable_pending_interaction is True
+
+
+def test_provider_auth_failure_outranks_a_recent_activity_observation():
+    facts = _facts(
+        runtime=_runtime(
+            phase="thinking",
+            confidence="live",
+            terminal_state="run_failed",
+            terminal_reason="provider_auth_required",
+        ),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+    )
+
+    assert facts.activity.state == "thinking"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "provider_auth_required"
 
 
 def test_explicit_user_close_dominates_all_other_axes():

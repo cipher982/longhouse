@@ -32,7 +32,7 @@ from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 4
-PRESENTATION_POLICY_VERSION = 6
+PRESENTATION_POLICY_VERSION = 7
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -40,11 +40,11 @@ PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "starting",
     "needs_answer",
     "needs_approval",
+    "provider_auth_required",
     "thinking",
     "executing",
     "delegated_work",
     "stalled",
-    "provider_auth_required",
     "idle",
     "ended",
     "ready",
@@ -1161,13 +1161,6 @@ def _primary(
         return SessionPresentationLabel(key="launch_failed", label="Launch failed", tone="blocked")
     if run is not None and run.lifecycle == "starting":
         return SessionPresentationLabel(key="starting", label="Starting", tone="active", observed_at=run.started_at)
-    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
-        return SessionPresentationLabel(
-            key="provider_auth_required",
-            label="Provider authentication required",
-            tone="blocked",
-            observed_at=run.ended_at,
-        )
     if interaction is not None and interaction.can_respond:
         if interaction.kind == "question":
             return SessionPresentationLabel(
@@ -1181,6 +1174,13 @@ def _primary(
             label="Needs approval",
             tone="blocked",
             observed_at=interaction.opened_at,
+        )
+    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
+        return SessionPresentationLabel(
+            key="provider_auth_required",
+            label="Provider authentication required",
+            tone="blocked",
+            observed_at=run.ended_at,
         )
     if activity.state == "thinking":
         return SessionPresentationLabel(key="thinking", label="Thinking", tone="thinking", observed_at=activity.observed_at)
@@ -1209,12 +1209,7 @@ def _primary(
     # remain the session's primary until their own evidence expires.
     # Keep a terminal failure visible when its stale interaction cannot be
     # answered; an answerable question still owns the primary presentation.
-    if (
-        run is not None
-        and run.lifecycle == "ended"
-        and run.end_reason in FAILED_RUN_END_REASONS
-        and not (interaction is not None and interaction.can_respond)
-    ):
+    if run is not None and run.lifecycle == "ended" and run.end_reason in FAILED_RUN_END_REASONS:
         return SessionPresentationLabel(
             key="ended",
             label="Run failed",

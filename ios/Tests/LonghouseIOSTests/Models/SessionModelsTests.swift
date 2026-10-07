@@ -388,6 +388,18 @@ struct SessionModelsTests {
         #expect(thinking.spokenStatusLabel(asOf: now) == "Thinking")
 
         let later = LonghouseDateParser.parse("2026-08-23T22:10:00Z")!
+
+        for (key, label) in [
+            ("ended", "Run failed"),
+            ("launch_failed", "Launch failed"),
+        ] {
+            let failed = makeSessionStateFacts(
+                activity: "unknown",
+                activityValidUntil: "2026-08-23T12:01:00Z",
+                primaryOverride: SessionStateLabel(key: key, label: label, tone: "blocked", observedAt: nil)
+            )
+            #expect(summary(failed).spokenStatusLabel(asOf: later) == label)
+        }
         #expect(fresh.spokenStatusLabel(asOf: later) == "Activity uncertain")
         // Quiet states carry no work claim to expire.
         let idle = summary(makeSessionStateFacts(activity: "quiescent", activityValidUntil: "2026-08-23T12:10:00Z"))
