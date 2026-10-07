@@ -159,8 +159,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var toolCount: Int { toolCalls ?? 0 }
 
     var providerLabel: String {
-        guard let provider, !provider.isEmpty else { return "Session" }
-        return provider.prefix(1).uppercased() + provider.dropFirst()
+        ProviderBrands.displayName(provider)
     }
 
     /// The session's project, or `nil` when Longhouse never resolved one.

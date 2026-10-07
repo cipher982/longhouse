@@ -364,7 +364,7 @@ struct SessionPauseRequestCard: View {
     }
 
     private var providerLabel: String {
-        pauseRequest.provider.prefix(1).uppercased() + String(pauseRequest.provider.dropFirst())
+        ProviderBrands.displayName(pauseRequest.provider, fallback: "Provider")
     }
 
     private var detailText: String {

@@ -297,9 +297,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var launchSetupStatusLabel: String {
-        let providerName = provider.trimmingCharacters(in: .whitespacesAndNewlines)
-        let providerLabel = providerName.isEmpty ? "session" : providerName.prefix(1).uppercased() + providerName.dropFirst()
-        let fallback = providerLabel == "session" ? "Setting up session" : "Setting up \(providerLabel)"
+        let fallback = "Setting up \(ProviderBrands.displayName(provider, fallback: "session"))"
         guard canDraftBeforeSendReady else { return fallback }
         if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" {
             return fallback

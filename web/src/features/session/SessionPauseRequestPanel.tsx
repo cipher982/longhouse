@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/shared/ui";
+import { getProviderLabel } from "@/shared/lib/providers";
 import { CheckCircleIcon, MessageSquareIcon, XIcon } from "@/shared/ui/icons";
 import type {
   PauseRequestResponseRequest,
@@ -116,8 +117,7 @@ export function SessionPauseRequestPanel({
         : fallbackMessage.trim().length > 0);
 
   const providerLabel = pauseRequest.provider
-    ? pauseRequest.provider.slice(0, 1).toUpperCase() +
-      pauseRequest.provider.slice(1)
+    ? getProviderLabel(pauseRequest.provider)
     : "Provider";
   const detail =
     pauseRequest.summary?.trim() ||

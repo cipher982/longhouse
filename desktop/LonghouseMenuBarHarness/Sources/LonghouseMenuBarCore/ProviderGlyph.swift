@@ -27,7 +27,7 @@ struct ProviderGlyph: View {
 
     private var assetPDF: (file: String, subdirectory: String)? {
         switch key {
-        case "codex":
+        case "codex", "openai":
             return ("codex", "ProviderAssets.xcassets/ProviderCodex.imageset")
         case "claude":
             return ("claude", "ProviderAssets.xcassets/ProviderClaude.imageset")
@@ -129,6 +129,9 @@ struct ProviderGlyph: View {
         } else if key == "pi" {
             PiMark()
                 .aspectRatio(1, contentMode: .fit)
+        } else if key == "zai" {
+            ZAIMark()
+                .aspectRatio(1, contentMode: .fit)
         } else {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: size * 0.58, weight: .semibold))
@@ -192,6 +195,34 @@ private struct PiMark: View {
                   Color(red: 0x4D / 255, green: 0x9A / 255, blue: 0xBF / 255))
             block([(517.36, 400), (634.72, 400), (634.72, 634.72), (517.36, 634.72)],
                   Color(red: 0xF1 / 255, green: 0xBE / 255, blue: 0x58 / 255))
+        }
+    }
+}
+
+/// Z.ai's mark: a Z with a spark, in a 24-unit box (same geometry as iOS).
+private struct ZAIMark: View {
+    var body: some View {
+        Canvas { context, size in
+            let s = min(size.width, size.height) / 24
+            let ink = Color(red: 0.690196, green: 0.431373, blue: 0.541176)
+            func polygon(_ points: [(CGFloat, CGFloat)]) -> Path {
+                var path = Path()
+                path.addLines(points.map { CGPoint(x: $0.0 * s, y: $0.1 * s) })
+                path.closeSubpath()
+                return path
+            }
+            context.fill(
+                polygon([(4, 5), (20, 5), (20, 8.1), (9, 16), (20, 16), (20, 19), (4, 19), (4, 15.9), (15, 8), (4, 8)]),
+                with: .color(ink)
+            )
+            let (cx, cy): (CGFloat, CGFloat) = (18.2, 4.2)
+            context.fill(
+                polygon([
+                    (cx, cy - 2.2), (cx + 0.65, cy - 0.65), (cx + 2.2, cy), (cx + 0.65, cy + 0.65),
+                    (cx, cy + 2.2), (cx - 0.65, cy + 0.65), (cx - 2.2, cy), (cx - 0.65, cy - 0.65),
+                ]),
+                with: .color(ink)
+            )
         }
     }
 }
