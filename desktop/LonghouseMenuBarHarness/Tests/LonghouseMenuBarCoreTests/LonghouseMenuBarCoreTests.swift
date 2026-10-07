@@ -3497,6 +3497,20 @@ struct LonghouseMenuBarCoreTests {
             session("executing", "working", validUntil: "2026-10-07T11:59:00Z").menuBarAttentionKind(asOf: now)
                 == .unknown("activity unknown")
         )
+        // A host or cache without the served signal is missing evidence:
+        // unknown, never idle, whatever the working headline says.
+        let unsignalled = ManagedSessionSnapshot(
+            sessionId: "executing", provider: "claude", workspaceLabel: "zerg",
+            branch: "main", state: "attached", phase: nil,
+            lastActivityAt: nil, bridgeStatus: nil, bridgePid: nil,
+            bridgeHeartbeatAt: nil, reasonCodes: [], authority: "runtime_host",
+            presentation: SessionPresentationSnapshot(
+                primary: SessionPresentationLabelSnapshot(key: "executing", label: "Using Bash", tone: "active"),
+                signal: nil,
+                access: nil
+            )
+        )
+        #expect(unsignalled.menuBarAttentionKind(asOf: now) == .unknown("executing"))
         #expect(session("idle", "quiet").menuBarAttentionKind(asOf: now) == .idle)
     }
 

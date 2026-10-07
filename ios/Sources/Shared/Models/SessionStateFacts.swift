@@ -44,8 +44,11 @@ extension SessionStateFacts {
     }
 
     /// Has the served claim outlived its window on this device's clock?
-    /// Exclusive, as the server and catalogd treat `valid_until`.
+    /// Exclusive, as the server and catalogd treat `valid_until`. A payload
+    /// without the signal (an older host or cache) carries no valid claim, so
+    /// it reads as expired: uncertain, never quiet, matching `servedSignal`.
     func workClaimExpired(asOf now: Date = Date()) -> Bool {
+        guard signal != nil else { return true }
         guard let deadline = workClaimValidUntil.flatMap(LonghouseDateParser.parse) else { return false }
         return now >= deadline
     }

@@ -122,14 +122,17 @@ struct ActivityEvidenceExpiryTests {
     }
 
     @Test
-    func aPayloadWithoutTheServedSignalHasNoWorkClaim() {
-        // An older host or cache: no served signal means no clock and no work,
-        // whatever the headline says. The app does not rebuild the axis.
+    func aPayloadWithoutTheServedSignalReadsUncertain() {
+        // An older host or cache: no served signal means no valid claim,
+        // whatever the headline says. Missing evidence is uncertain, never
+        // quiet, and the app does not rebuild the axis.
         var facts = makeSessionStateFacts(activity: "executing", activityValidUntil: "2026-08-23T12:30:00Z")
         facts.signal = nil
         let now = at("2026-08-23T12:05:00Z")
         #expect(facts.workClaimValidUntil == nil)
-        #expect(facts.ledgerEvidence(asOf: now) == .quiet)
+        #expect(facts.workClaimExpired(asOf: now))
+        #expect(facts.servedSignal(asOf: now) == .unknown)
+        #expect(facts.ledgerEvidence(asOf: now) == .uncertain)
     }
 
     @Test
