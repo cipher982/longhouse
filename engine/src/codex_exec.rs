@@ -1707,7 +1707,7 @@ async fn recover_live_codex_exec_claims(
         }
         let detail =
             "Codex Console closed during Machine Agent restart; app-server stdio cannot be reattached";
-        if settle_codex_restart_claim(registry, outbox_dir, machine_name, &claim, detail)? {
+        if settle_codex_restart_claim(registry, outbox_dir, machine_name, &claim, detail) {
             recovered += 1;
         }
     }
@@ -1724,7 +1724,7 @@ fn settle_codex_restart_claim(
     machine_name: &str,
     claim: &crate::turn_claims::TurnClaim,
     detail: &str,
-) -> Result<bool> {
+) -> bool {
     let result = (|| -> Result<bool> {
         let claim = registry.read(&claim.run_id)?;
         if claim.invocation_state.as_deref() == Some("closed") {
@@ -1791,10 +1791,10 @@ fn settle_codex_restart_claim(
         }
     })();
     match result {
-        Ok(settled) => Ok(settled),
+        Ok(settled) => settled,
         Err(error) => {
             tracing::warn!(%error, run_id = %claim.run_id, "Codex restart claim remains retryable");
-            Ok(false)
+            false
         }
     }
 }
@@ -1840,8 +1840,7 @@ fn reconcile_codex_exec_claims(
             CodexExecProcessIdentity::Gone(reason) => {
                 let detail =
                     format!("Codex Console worker stopped during Machine Agent restart ({reason})");
-                if settle_codex_restart_claim(registry, outbox_dir, machine_name, &claim, &detail)?
-                {
+                if settle_codex_restart_claim(registry, outbox_dir, machine_name, &claim, &detail) {
                     recovered += 1;
                 }
             }
@@ -6093,8 +6092,7 @@ for line in sys.stdin:
             "cinder",
             &completed,
             "Machine Agent restarted",
-        )
-        .unwrap());
+        ));
         assert_eq!(
             registry.read(&run_id).unwrap().invocation_state.as_deref(),
             Some("parked")
@@ -6106,8 +6104,7 @@ for line in sys.stdin:
             "cinder",
             &completed,
             "Machine Agent restarted",
-        )
-        .unwrap());
+        ));
         let reloaded = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"))
             .read(&run_id)
             .unwrap();
