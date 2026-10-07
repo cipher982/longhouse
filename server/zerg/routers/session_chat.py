@@ -3152,7 +3152,7 @@ async def create_session_input_endpoint(
     )
     # The owner typed this (web or iOS composer). The machine route below and
     # directed input never stamp.
-    stamp_owner_input_soon(source_session.id, owner_id=int(current_user.id))
+    stamp_owner_input_soon(source_session.id, owner_id=int(current_user.id), client_request_id=body.client_request_id)
     return response
 
 

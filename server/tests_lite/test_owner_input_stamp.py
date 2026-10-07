@@ -117,7 +117,11 @@ def test_browser_input_route_stamps_and_machine_route_does_not(monkeypatch):
 
     monkeypatch.setattr(session_chat, "_load_session_for_continuation", lambda *_a, **_k: source_session)
     monkeypatch.setattr(session_chat, "_create_session_input_response", fake_response)
-    monkeypatch.setattr(session_chat, "stamp_owner_input_soon", lambda session_id, *, owner_id: stamped.append((session_id, owner_id)))
+    monkeypatch.setattr(
+        session_chat,
+        "stamp_owner_input_soon",
+        lambda session_id, *, owner_id, client_request_id: stamped.append((session_id, owner_id, client_request_id)),
+    )
     monkeypatch.setattr(session_chat, "_authorize_live_send", lambda **_k: None)
     monkeypatch.setattr(session_chat, "_resolve_agents_owner_id", lambda *_a: 7)
     body = SessionInputRequest(text="updates?", client_request_id="req-1")
@@ -131,7 +135,7 @@ def test_browser_input_route_stamps_and_machine_route_does_not(monkeypatch):
         )
     )
     assert browser is sentinel
-    assert stamped == [(source_session.id, 7)]
+    assert stamped == [(source_session.id, 7, "req-1")]
 
     machine = asyncio.run(
         session_chat.create_session_input_agents_endpoint(
@@ -144,4 +148,32 @@ def test_browser_input_route_stamps_and_machine_route_does_not(monkeypatch):
         )
     )
     assert machine is sentinel
-    assert stamped == [(source_session.id, 7)], "machine-route input must never count as the owner's"
+    assert stamped == [(source_session.id, 7, "req-1")], "machine-route input must never count as the owner's"
+
+
+def test_stamp_uses_the_receipt_time_and_skips_inputs_without_a_receipt(monkeypatch):
+    """A rejected send has no receipt and stamps nothing; a replay finds the
+    original receipt and re-stamps its original time, never "now"."""
+
+    from zerg.services import live_session_inputs
+    from zerg.services import session_preferences
+
+    created_at = datetime(2026, 10, 7, 9, 17, tzinfo=UTC)
+    receipts = {"accepted": SimpleNamespace(created_at=created_at)}
+    writes: list[datetime] = []
+
+    async def fake_load(*, owner_id, session_id, client_request_id):
+        return receipts.get(client_request_id)
+
+    async def fake_update(session_id, *, owner_id, last_user_input_at):
+        writes.append(last_user_input_at)
+
+    monkeypatch.setattr(live_session_inputs, "load_live_input_receipt_by_client_request", fake_load)
+    monkeypatch.setattr(session_preferences, "update_session_preferences", fake_update)
+    session_id = str(uuid4())
+
+    asyncio.run(session_preferences.stamp_owner_input(session_id, owner_id=7, client_request_id="rejected"))
+    assert writes == []
+    asyncio.run(session_preferences.stamp_owner_input(session_id, owner_id=7, client_request_id="accepted"))
+    asyncio.run(session_preferences.stamp_owner_input(session_id, owner_id=7, client_request_id="accepted"))
+    assert writes == [created_at, created_at]

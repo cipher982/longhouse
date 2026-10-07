@@ -121,24 +121,37 @@ async def update_session_preferences(
     )
 
 
-async def stamp_owner_input(session_id: UUID | str, *, owner_id: int, at: datetime) -> None:
+async def stamp_owner_input(session_id: UUID | str, *, owner_id: int, client_request_id: str) -> None:
     """Record that the owner sent input; Recent sorts by it.
 
-    Only owner-facing composer routes call this. Machine, directed-input,
-    wake and notice paths never do (docs/specs/recent-by-last-user-input.md).
-    Ordering is cosmetic, so a failure logs and never fails the send.
+    Only owner-facing composer routes call this, after the route returned.
+    Machine, directed-input, wake and notice paths never do
+    (docs/specs/recent-by-last-user-input.md). The stamp is the input
+    receipt's own creation time: a request rejected before a receipt existed
+    stamps nothing, and an idempotent replay re-stamps the original time,
+    which the max-write ignores. Ordering is cosmetic, so a failure logs and
+    never fails the send.
     """
 
+    from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
+
     try:
-        await update_session_preferences(session_id, owner_id=owner_id, last_user_input_at=at)
+        receipt = await load_live_input_receipt_by_client_request(
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id=client_request_id,
+        )
+        if receipt is None or receipt.created_at is None:
+            return
+        await update_session_preferences(session_id, owner_id=owner_id, last_user_input_at=receipt.created_at)
     except Exception:
         logger.warning("Failed to stamp owner input on session %s", session_id, exc_info=True)
 
 
-def stamp_owner_input_soon(session_id: UUID | str, *, owner_id: int) -> None:
+def stamp_owner_input_soon(session_id: UUID | str, *, owner_id: int, client_request_id: str) -> None:
     """Schedule :func:`stamp_owner_input` without delaying the send path."""
 
-    task = asyncio.create_task(stamp_owner_input(session_id, owner_id=owner_id, at=datetime.now(timezone.utc)))
+    task = asyncio.create_task(stamp_owner_input(session_id, owner_id=owner_id, client_request_id=client_request_id))
     _stamp_tasks.add(task)
     task.add_done_callback(_stamp_tasks.discard)
 

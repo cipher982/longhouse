@@ -446,6 +446,37 @@ async def create_session_input_with_attachments(
     db: Session | None = Depends(no_request_db),
     current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInputResponse:
+    response = await _create_session_input_with_attachments(
+        session_id=session_id,
+        request=request,
+        text=text,
+        intent=intent,
+        client_request_id=client_request_id,
+        model=model,
+        attachments=attachments,
+        user_agent=user_agent,
+        db=db,
+        current_user=current_user,
+    )
+    # The owner sent this from a composer; Recent sorts by it. Only after the
+    # route accepted it, keyed to the receipt it created.
+    stamp_owner_input_soon(session_id, owner_id=int(current_user.id), client_request_id=client_request_id.strip())
+    return response
+
+
+async def _create_session_input_with_attachments(
+    *,
+    session_id: str,
+    request: Request,
+    text: str,
+    intent: str,
+    client_request_id: str,
+    model: str | None,
+    attachments: List[UploadFile],
+    user_agent: str | None,
+    db: Session | None,
+    current_user: Caller,
+) -> SessionInputResponse:
     """Send a user input with one or more image attachments.
 
     ``auto`` everywhere; ``queue`` only on Console sessions, where it is the
@@ -544,8 +575,6 @@ async def create_session_input_with_attachments(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=_rejected_detail("client_request_id must not be blank", code="invalid_client_request_id"),
         )
-    # The owner sent this from a composer; Recent sorts by it.
-    stamp_owner_input_soon(source_session.id, owner_id=int(current_user.id))
 
     if getattr(source_session, "command_family", None) == "console_turn":
         return await _enqueue_console_input_with_attachments(
