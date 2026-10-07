@@ -1110,6 +1110,11 @@ async fn monitor_claude_print(
             close_invocation(&mut child, &invocation, &mut conversation_lock).await;
             return;
         }
+        // Observe exit before reading stdout: a child that has exited has
+        // written all its output, so this read sees its final lines (an auth
+        // failure, the last `result`) before the exit is handled. Checking
+        // after the read dropped whatever it wrote in between.
+        let exit_status = child.try_wait();
         let lines = match read_growth(&stdout_path, &mut offset, &mut pending_bytes) {
             Ok(lines) => lines,
             Err(error) => {
@@ -1308,7 +1313,7 @@ async fn monitor_claude_print(
             return;
         }
 
-        match child.try_wait() {
+        match exit_status {
             Ok(Some(status)) => {
                 let active = invocation.take_active_turn();
                 if let Some(binding) = active {
