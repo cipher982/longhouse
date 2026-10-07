@@ -69,6 +69,11 @@ pub fn recovered_invocation_cleanup(claim: &crate::turn_claims::TurnClaim) -> In
 pub trait ConsoleInput: Send + Sync {
     fn send_input<'a>(&'a self, text: &'a str, images: &'a [PathBuf]) -> InputFuture<'a>;
     fn close_input(&self) -> InputFuture<'_>;
+    /// The provider echoes each input it consumes (Claude
+    /// `--replay-user-messages`), so a turn can wait for that echo.
+    fn echoes_consumed_input(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -201,6 +206,11 @@ struct State {
     buffered_events: Vec<BufferedEvent>,
     deferred_idle: Option<IdleSignal>,
     input_pending: bool,
+    /// A user input was written to a provider that echoes each input it
+    /// consumes (Claude `--replay-user-messages`), and the echo has not come
+    /// back yet. Until it does, an idle signal ends work the provider started
+    /// on its own (a resume-time orphan notice, a wake), not this user turn.
+    awaiting_input_ack: bool,
     closing: bool,
 }
 
@@ -243,6 +253,7 @@ impl ConsoleInvocation {
                 buffered_events: Vec::new(),
                 deferred_idle: None,
                 input_pending: false,
+                awaiting_input_ack: false,
                 closing: false,
             }),
             stopped: AtomicBool::new(false),
@@ -307,6 +318,11 @@ impl ConsoleInvocation {
         text: &str,
         images: &[PathBuf],
     ) -> Result<()> {
+        let echoes = self
+            .input
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .echoes_consumed_input();
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if state.phase != InvocationState::Parked || state.pending.is_empty() || state.closing {
@@ -322,6 +338,7 @@ impl ConsoleInvocation {
             state.buffered_events.clear();
             state.deferred_idle = None;
             state.input_pending = false;
+            state.awaiting_input_ack = echoes;
             discard_retained_wakes(&self.provider, &self.provider_thread_id);
         }
         self.write_input(text, images).await
@@ -363,6 +380,9 @@ impl ConsoleInvocation {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
+        if input.echoes_consumed_input() {
+            self.expect_input_ack();
+        }
         input.send_input(text, images).await
     }
 
@@ -525,10 +545,34 @@ impl ConsoleInvocation {
             return None;
         }
         state.input_pending = false;
+        if state.awaiting_input_ack {
+            // The deferred idle closed the response the user input was bound
+            // to; the provider has not consumed the input yet, so the user
+            // turn keeps running until the idle signal that follows it.
+            state.deferred_idle = None;
+            return None;
+        }
         state
             .deferred_idle
             .take()
             .map(|signal| complete_idle(&mut state, signal))
+    }
+
+    /// Call before writing a user input to a provider that echoes consumed
+    /// inputs; the active turn then ends only at an idle signal after the echo.
+    pub fn expect_input_ack(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .awaiting_input_ack = true;
+    }
+
+    /// The provider echoed the user input: it has consumed it.
+    pub fn input_acknowledged(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .awaiting_input_ack = false;
     }
 
     pub fn route_stream_event(&self, sequence: u64, value: Value) -> Option<(TurnBinding, Value)> {
@@ -659,6 +703,12 @@ impl ConsoleInvocation {
             state.deferred_idle = Some(signal);
             return None;
         }
+        if state.awaiting_input_ack && state.current_turn.is_some() {
+            // The provider went idle before consuming the user's input: this
+            // signal ends work it started itself. Ending the user turn here
+            // would close the invocation with the input still queued.
+            return None;
+        }
         if state.queued_turn.is_some() && state.current_turn.is_some() {
             let binding = state.current_turn.take().unwrap();
             state.latest_turn = binding.clone();
@@ -721,6 +771,7 @@ impl ConsoleInvocation {
         state.buffered_events.clear();
         state.deferred_idle = None;
         state.input_pending = false;
+        state.awaiting_input_ack = false;
         state.recent_items.clear();
         let outcome = InvocationCloseOutcome {
             invocation_id: self.launch_id.clone(),
@@ -748,6 +799,7 @@ impl ConsoleInvocation {
         state.buffered_events.clear();
         state.deferred_idle = None;
         state.input_pending = false;
+        state.awaiting_input_ack = false;
         state.current_turn.take()
     }
     pub fn take_queued_turn(&self) -> Option<TurnBinding> {
@@ -812,6 +864,7 @@ fn complete_idle(state: &mut State, signal: IdleSignal) -> IdleOutcome {
     state.latest_turn = binding.clone();
     state.pending_wake_id = None;
     state.input_pending = false;
+    state.awaiting_input_ack = false;
     state.deferred_idle = None;
     let invocation_state = if state.pending.is_empty() {
         InvocationState::Closed
@@ -1270,6 +1323,82 @@ mod tests {
         assert!(changed);
         assert!(close);
         assert_eq!(invocation.state(), InvocationState::Closed);
+    }
+
+    struct EchoingInput;
+
+    impl ConsoleInput for EchoingInput {
+        fn send_input<'a>(&'a self, _text: &'a str, _images: &'a [PathBuf]) -> InputFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close_input(&self) -> InputFuture<'_> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn echoes_consumed_input(&self) -> bool {
+            true
+        }
+    }
+
+    fn completed() -> IdleSignal {
+        IdleSignal {
+            terminal_state: "run_completed".to_string(),
+            exit_code: Some(0),
+            stderr: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_user_turn_ignores_idle_signals_until_the_provider_consumes_its_input() {
+        let invocation = invocation();
+        invocation.expect_input_ack();
+        // Claude ran its own resume-time notice before reading our input.
+        assert!(invocation.idle(completed()).is_none());
+        assert_eq!(invocation.state(), InvocationState::Responding);
+        invocation.input_acknowledged();
+        let outcome = invocation.idle(completed()).unwrap();
+        assert!(outcome.has_active_turn);
+        assert_eq!(outcome.binding.run_id, "run-1");
+        assert_eq!(outcome.invocation_state, InvocationState::Closed);
+    }
+
+    #[tokio::test]
+    async fn a_user_input_written_into_a_parked_echoing_provider_waits_for_its_echo() {
+        let invocation = invocation();
+        invocation.replace_input(Arc::new(EchoingInput));
+        invocation.replace_pending(
+            vec![PendingItem {
+                id: "task-1".to_string(),
+                kind: "monitor".to_string(),
+                status: "running".to_string(),
+                description: None,
+            }],
+            vec![],
+        );
+        assert_eq!(
+            invocation.idle(completed()).unwrap().invocation_state,
+            InvocationState::Parked
+        );
+        invocation
+            .send_user_input(
+                TurnBinding {
+                    run_id: "run-2".to_string(),
+                    turn_id: None,
+                    client_request_id: None,
+                    origin: TurnOrigin::User,
+                },
+                "next",
+                &[],
+            )
+            .await
+            .unwrap();
+        invocation.replace_pending(vec![], vec![]);
+        assert!(invocation.idle(completed()).is_none());
+        invocation.input_acknowledged();
+        let outcome = invocation.idle(completed()).unwrap();
+        assert_eq!(outcome.binding.run_id, "run-2");
+        assert_eq!(outcome.invocation_state, InvocationState::Closed);
     }
 
     #[tokio::test]

@@ -201,6 +201,10 @@ impl ConsoleInput for ClaudeInput {
             Ok(())
         })
     }
+
+    fn echoes_consumed_input(&self) -> bool {
+        true
+    }
 }
 
 pub async fn start_claude_print_turn(
@@ -389,6 +393,7 @@ pub async fn start_claude_print_turn(
         return Err(error);
     }
     sink.post_phase("thinking", None).await;
+    invocation.expect_input_ack();
     if let Err(error) = input.write_message(&config.prompt).await {
         invocation.take_active_turn();
         let _ = registry.record_invocation_state(&config.run_id, "closed", 0);
@@ -1176,6 +1181,9 @@ async fn monitor_claude_print(
                     }
                 }
             }
+            if is_replayed_user_input(&event) {
+                invocation.input_acknowledged();
+            }
             if let Some(trigger) = task_trigger(&event) {
                 last_trigger = trigger;
             }
@@ -1498,6 +1506,7 @@ async fn respawn_claude(
         .await;
         return Err(error);
     }
+    invocation.expect_input_ack();
     if let Err(error) = input.write_message(&retry.config.prompt).await {
         input.close_input().await.ok();
         crate::process_group::shutdown_owned_child(
@@ -1984,6 +1993,16 @@ fn is_response_start(event: &Value) -> bool {
         ),
         (Some("system"), Some("init")) | (Some("assistant"), _)
     )
+}
+
+/// `--replay-user-messages` echoes every user message Claude consumes. Our
+/// stdin inputs echo with no `origin`; Claude's own injected messages (task
+/// notifications, monitor events) echo with an `origin`, and a resume-time
+/// orphan notice may run without any echo at all.
+fn is_replayed_user_input(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some("user")
+        && event.get("isReplay").and_then(Value::as_bool) == Some(true)
+        && event.get("origin").is_none_or(Value::is_null)
 }
 
 fn is_task_completion_event(event: &Value) -> bool {
@@ -2617,7 +2636,13 @@ if not raw:
 request = json.loads(raw)
 message = request["message"]
 prompt = next((part.get("text", "") for part in message.get("content", []) if part.get("type") == "text"), "")
-emit({"type": "user", "message": message})
+if prompt.startswith("scenario=orphan"):
+    # Claude's resume-time orphan check: it runs its own notice, which ends
+    # in a result with no model turn, before it consumes the queued input.
+    emit({"type": "system", "subtype": "task_notification", "task_id": "orphan-1", "status": "stopped", "summary": "Background shell command didn't finish before the previous session ended"})
+    emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 0, "result": ""})
+    time.sleep(0.6)
+emit({"type": "user", "message": message, "isReplay": True})
 if count <= int((root / "failures").read_text()):
     emit({"type": "assistant", "error": "authentication_failed", "is_api_error_message": True, "message": {"content": [{"type": "text", "text": "Not logged in - Please run /login"}]}})
     emit({"type": "result", "subtype": "success", "is_error": True})
@@ -2638,7 +2663,7 @@ if prompt.startswith("scenario=background") or prompt.startswith("scenario=park"
         emit({"type": "system", "subtype": "background_tasks_changed", "tasks": [task]})
         for next_raw in sys.stdin:
             next_request = json.loads(next_raw)
-            emit({"type": "user", "message": next_request["message"]})
+            emit({"type": "user", "message": next_request["message"], "isReplay": True})
             assistant("user message handled")
             emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
             emit({"type": "result", "subtype": "success", "is_error": False})
@@ -2656,7 +2681,7 @@ if prompt.startswith("scenario=background") or prompt.startswith("scenario=park"
         emit({"type": "result", "subtype": "success", "is_error": False})
         for next_raw in sys.stdin:
             next_request = json.loads(next_raw)
-            emit({"type": "user", "message": next_request["message"]})
+            emit({"type": "user", "message": next_request["message"], "isReplay": True})
             assistant("user message handled")
             emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
             emit({"type": "result", "subtype": "success", "is_error": False})
@@ -2666,7 +2691,7 @@ else:
     emit({"type": "result", "subtype": "success", "is_error": False})
 for next_raw in sys.stdin:
     next_request = json.loads(next_raw)
-    emit({"type": "user", "message": next_request["message"]})
+    emit({"type": "user", "message": next_request["message"], "isReplay": True})
     assistant("user message handled")
     emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
     emit({"type": "result", "subtype": "success", "is_error": False})
@@ -3431,6 +3456,62 @@ for _ in sys.stdin:
         ] {
             assert_eq!(run_claude_scenario(scenario).await, ScenarioOutcome::Passed);
         }
+    }
+
+    /// 2026-10-07, session ca6e9d23: on `--resume` Claude ran its own orphan
+    /// notice and emitted a `result` before consuming the user's queued input.
+    /// That result must not end the user turn or close the invocation.
+    #[tokio::test]
+    async fn a_provider_result_before_the_user_input_is_consumed_does_not_end_the_turn() {
+        let home = FakeHome::new();
+        let fake = FakeClaude::new(0);
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let prompt = "scenario=orphan keep pushing forward with tests";
+        let run = start_fake_turn(
+            &home,
+            &fake,
+            &session_id,
+            &thread_id,
+            prompt,
+            None,
+            "user",
+            None,
+            None,
+        )
+        .await;
+        let claim = wait_for_terminal(&run.run_id).await;
+        assert_eq!(
+            claim.result.as_ref().unwrap()["terminal_state"],
+            "run_completed"
+        );
+        assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
+        let events = home.events();
+        let mut run_events = events
+            .iter()
+            .filter(|event| event["run_id"] == run.run_id && event["kind"] == "progress_signal")
+            .collect::<Vec<_>>();
+        run_events.sort_by_key(|event| event["payload"]["seq"].as_u64());
+        let run_events = run_events
+            .into_iter()
+            .map(|event| &event["payload"]["event"])
+            .collect::<Vec<_>>();
+        let replay = run_events
+            .iter()
+            .position(|event| {
+                event["type"] == "user" && event["message"]["content"][0]["text"] == prompt
+            })
+            .expect("the user input reached Claude");
+        let answer = run_events
+            .iter()
+            .position(|event| {
+                event["type"] == "assistant"
+                    && event["message"]["content"][0]["text"] == "fake answer"
+            })
+            .expect("Claude answered the user input inside the user turn");
+        assert!(replay < answer);
+        assert_eq!(fake.pids().len(), 1);
+        assert_fake_groups_gone(&fake).await;
     }
 
     /// Run one Console turn through the production adapter against `fake`,
