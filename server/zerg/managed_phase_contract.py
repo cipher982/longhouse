@@ -81,19 +81,6 @@ def display_label_for_phase(raw_phase: str | None, tool_name: str | None) -> str
     return definition.display_for_tool(tool_name)
 
 
-def attention_for_display_phase(display_phase: str | None) -> str | None:
-    normalized_display = (display_phase or "").strip().lower()
-    if not normalized_display:
-        return None
-    for definition in managed_phase_definitions():
-        if normalized_display == definition.normalized_display_label:
-            return definition.attention
-        prefix = definition.display_prefix
-        if prefix and normalized_display.startswith(prefix):
-            return definition.attention
-    return None
-
-
 def raw_phases() -> tuple[str, ...]:
     return tuple(item.normalized_raw_phase for item in managed_phase_definitions())
 

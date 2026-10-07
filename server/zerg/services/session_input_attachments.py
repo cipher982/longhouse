@@ -308,41 +308,8 @@ def store_attachment_blob(
     return _to_stored(row)
 
 
-def list_attachments_for_input(db: Session, session_input_id: int) -> list[StoredAttachment]:
-    rows = (
-        db.query(SessionInputAttachment)
-        .filter(SessionInputAttachment.session_input_id == session_input_id)
-        .order_by(SessionInputAttachment.created_at.asc(), SessionInputAttachment.id.asc())
-        .all()
-    )
-    return [_to_stored(r) for r in rows]
-
-
-def get_attachment(db: Session, attachment_id: UUID) -> SessionInputAttachment | None:
-    return db.query(SessionInputAttachment).filter(SessionInputAttachment.id == attachment_id).first()
-
-
 def absolute_blob_path(row: SessionInputAttachment) -> Path:
     return attachment_blob_root() / row.blob_path
-
-
-def read_path_for_attachment(db: Session, row: SessionInputAttachment) -> Path:
-    """Return the best available blob path for an attachment row.
-
-    The attachment-specific blob is a delivery cache for the engine fetch path.
-    Durable history lives in the shared media store, so old rows can still be
-    fetched after the duplicate attachment blob has been reaped.
-    """
-
-    path = absolute_blob_path(row)
-    if path.is_file():
-        return path
-    media = db.query(MediaObject).filter(MediaObject.sha256 == row.sha256).first()
-    if media is not None:
-        media_path = absolute_media_path(media)
-        if media_path.is_file():
-            return media_path
-    return path
 
 
 def _shared_media_present(db: Session, row: SessionInputAttachment) -> bool:

@@ -29,25 +29,20 @@ from pydantic import model_validator
 from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.input_attachments_support import attachments_supported
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
-from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
 from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
-from zerg.services.session_kernel_projection import SessionControlProjection
-from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_launch_lifecycle import ExecutionLifetime
 from zerg.services.session_launch_lifecycle import LaunchLifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
-from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime_display import ActivityRecency
 from zerg.services.session_runtime_display import ControlPath
 from zerg.services.session_runtime_display import HostState
@@ -86,10 +81,6 @@ def _json_obj(raw: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def build_attach_command(session: AgentSession) -> str | None:
-    return build_managed_local_attach_command(session=session)
 
 
 def build_session_capabilities_response(
@@ -211,43 +202,6 @@ def _provider_label(session: AgentSession | None) -> str | None:
     if not provider:
         return None
     return provider_display_name(provider)
-
-
-def derive_session_liveness_facts(
-    *,
-    runtime_overlay: SessionRuntimeView | None,
-    capability_flags,
-    last_activity_at: datetime | None,
-    binding_overlay=None,
-    binding_host_state: str | None = None,
-    binding_terminal_reason: str | None = None,
-    control_overlay=None,
-    now: datetime | None = None,
-):
-    """Internal-only liveness-facts dataclass used to gate timeline_card and capabilities.
-
-    Liveness facts are not part of the public response contract; clients consume
-    ``runtime_display`` and ``timeline_card`` instead.
-    """
-    has_liveness_evidence = (
-        runtime_overlay is not None
-        or control_overlay is not None
-        or binding_overlay is not None
-        or binding_host_state is not None
-        or binding_terminal_reason is not None
-    )
-    if not has_liveness_evidence:
-        return None
-    return build_session_liveness_facts(
-        runtime_view=runtime_overlay,
-        capabilities=capability_flags,
-        last_activity_at=last_activity_at,
-        binding_overlay=binding_overlay,
-        binding_host_state=binding_host_state,
-        binding_terminal_reason=binding_terminal_reason,
-        control_overlay=control_overlay,
-        now=now,
-    )
 
 
 def build_session_timeline_card_response(*, session_state: SessionStateFacts) -> TimelineCardPresentationResponse:
@@ -548,29 +502,6 @@ def project_compat_capabilities_from_state(
             "can_interrupt_active_turn": actions.interrupt.state == "available",
             "attach_images": capabilities.attach_images and send_available,
         }
-    )
-
-
-def build_session_control_response(
-    session: AgentSession | None,
-    *,
-    db,
-    capability_flags=None,
-    control_projection: SessionControlProjection | None = None,
-) -> SessionControlResponse | None:
-    if session is None:
-        return None
-    if capability_flags is None:
-        raise RuntimeError("capability_flags is required; the kernel adapter must build them")
-    control_projection = control_projection or project_session_control_fields(db, session, capabilities=capability_flags)
-    source_runner_name = control_projection.source_runner_name
-    attach_command = build_attach_command(session) if capability_flags.host_reattach_available else None
-    if control_projection.source_runner_id is None and source_runner_name is None and attach_command is None:
-        return None
-    return SessionControlResponse(
-        source_runner_id=control_projection.source_runner_id,
-        source_runner_name=source_runner_name,
-        attach_command=attach_command,
     )
 
 
@@ -2156,34 +2087,6 @@ def build_session_transcript_preview_response(
         is_stale=is_stale,
         stale_reason=stale_reason,
     )
-
-
-def _latest_launch_attempt(db, session_id) -> SessionLaunchAttempt | None:
-    return (
-        db.query(SessionLaunchAttempt)
-        .filter(SessionLaunchAttempt.session_id == session_id)
-        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
-        .first()
-    )
-
-
-def latest_launch_attempts(db, session_ids) -> dict:
-    if not session_ids:
-        return {}
-    rows = (
-        db.query(SessionLaunchAttempt)
-        .filter(SessionLaunchAttempt.session_id.in_(session_ids))
-        .order_by(
-            SessionLaunchAttempt.session_id,
-            SessionLaunchAttempt.created_at.desc(),
-            SessionLaunchAttempt.id.desc(),
-        )
-        .all()
-    )
-    result = {}
-    for attempt in rows:
-        result.setdefault(attempt.session_id, attempt)
-    return result
 
 
 def latest_live_launch_readiness(session_ids, *, now: datetime | None = None) -> dict[UUID, LiveLaunchReadinessView]:

@@ -5832,14 +5832,6 @@ def _validate_control_command_result(value: object) -> dict:
     }
 
 
-def socket_path_is_live(path: Path) -> bool:
-    try:
-        mode = path.stat().st_mode
-    except OSError:
-        return False
-    return stat.S_ISSOCK(mode)
-
-
 def _is_hash(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 

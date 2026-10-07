@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +12,6 @@ from uuid import UUID
 import typer
 
 from zerg.cli.plaintext_guard import enforce_plaintext_rule
-from zerg.services.local_health import collect_launch_readiness
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
@@ -59,49 +57,6 @@ def load_api_credentials(
     return resolved_url, resolved_token
 
 
-def ensure_managed_launch_preflight(
-    *,
-    url: str,
-    machine_name: str,
-    config_dir: Path | None,
-    config_dir_is_provider_home: bool = True,
-    exit_code: int = 1,
-) -> None:
-    """Fail fast when the local machine contract disagrees with managed launch."""
-
-    state_root = resolve_longhouse_home_from_provider_home(config_dir) if config_dir_is_provider_home and config_dir else config_dir
-    readiness = collect_launch_readiness(
-        state_root,
-        runtime_url_override=url,
-        machine_name_override=machine_name,
-    )
-    reasons = {str(item) for item in list(readiness.get("reasons") or [])}
-    actionable = {
-        "config_url_runner_url_mismatch",
-        "machine_name_runner_name_mismatch",
-        "service_runner_name_mismatch",
-    }
-    if not reasons.intersection(actionable):
-        return
-
-    runner = dict(readiness.get("runner") or {})
-    runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item).strip()) or "-"
-    runner_name = str(runner.get("runner_name") or "").strip() or "-"
-    stored_url = str(readiness.get("stored_url") or "").strip() or "-"
-
-    typer.secho("Managed launch config is inconsistent on this machine.", fg=typer.colors.RED)
-    typer.echo(f"  launch target: {readiness.get('control_plane_url') or url}")
-    if stored_url != str(readiness.get("control_plane_url") or url):
-        typer.echo(f"  stored target: {stored_url}")
-    typer.echo(f"  remote command Runner target: {runner_urls}")
-    typer.echo(f"  launch machine: {readiness.get('machine_name') or machine_name}")
-    typer.echo(f"  remote command Runner name: {runner_name}")
-    typer.echo("  Fix: longhouse machine configure --url <control-plane-url> --machine-name <runner-name>")
-    typer.echo("  Note: this Runner is separate from the Machine Agent that ships transcripts.")
-    typer.echo("  Scratch local work: LONGHOUSE_HOME=~/.longhouse-dev ...")
-    raise typer.Exit(code=exit_code)
-
-
 def parse_uuid_or_exit(
     raw: str | None,
     *,
@@ -135,24 +90,3 @@ def git_output(cwd: Path, *args: str) -> str | None:
 
 def interactive_stdio() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
-
-
-def build_session_url(url: str, session_id: str) -> str:
-    return f"{url.rstrip('/')}/timeline/{session_id}"
-
-
-def build_short_session_url(url: str, session_id: str) -> str:
-    """Short, human-pasteable link that the server redirects to /timeline/<id>.
-
-    Uses the first 8 chars of the session UUID (unique in practice for a single
-    instance). Resolved by the `GET /s/{prefix}` route in main.py.
-    """
-    prefix = str(session_id).split("-", 1)[0][:8] or str(session_id)
-    return f"{url.rstrip('/')}/s/{prefix}"
-
-
-def open_session_url(session_url: str) -> bool:
-    try:
-        return bool(webbrowser.open(session_url))
-    except Exception:
-        return False

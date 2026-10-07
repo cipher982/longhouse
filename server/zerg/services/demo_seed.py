@@ -104,32 +104,6 @@ def get_existing_demo_provider_session_ids(db: Session) -> set[str]:
     return {row[0] for row in rows if row[0]}
 
 
-def delete_demo_sessions(db: Session) -> int:
-    """Delete all demo sessions and return number of rows removed.
-
-    Find sessions via their primary ``session_thread_aliases`` row whose
-    ``alias_value`` starts with the demo prefix. Cascading FKs handle the
-    kernel rows + events + source lines.
-    """
-    session_ids = (
-        db.query(SessionThread.session_id)
-        .join(
-            SessionThreadAlias,
-            SessionThreadAlias.thread_id == SessionThread.id,
-        )
-        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
-        .filter(SessionThreadAlias.alias_value.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"))
-        .distinct()
-        .all()
-    )
-    ids = [sid for (sid,) in session_ids if sid is not None]
-    if not ids:
-        return 0
-    deleted = db.query(AgentSession).filter(AgentSession.id.in_(ids)).delete(synchronize_session=False)
-    db.commit()
-    return int(deleted or 0)
-
-
 def _demo_sessions_by_provider_id(db: Session) -> dict[str, AgentSession]:
     rows = (
         db.query(AgentSession, SessionThreadAlias.alias_value)

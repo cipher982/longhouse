@@ -489,23 +489,6 @@ def build_fallback_runtime_view(
     )
 
 
-def should_include_runtime_view(
-    *,
-    session: AgentSession,
-    runtime_view: SessionRuntimeView | None,
-) -> bool:
-    if runtime_view is None:
-        return False
-    has_explicit_terminal = bool((getattr(session, "terminal_state", None) or "").strip())
-    if not has_explicit_terminal:
-        return True
-    return (
-        runtime_view.presence_updated_at is not None
-        or runtime_view.last_live_at is not None
-        or runtime_view.runtime_source not in {None, "fallback"}
-    )
-
-
 def resolve_runtime_overlay(
     session: AgentSession,
     *,

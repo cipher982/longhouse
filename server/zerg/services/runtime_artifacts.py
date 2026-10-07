@@ -508,16 +508,6 @@ def _resolve_source_override(
     return ""
 
 
-def resolve_runtime_source_override(
-    component: RuntimeComponent,
-    *,
-    source_override: str | os.PathLike[str] | None = None,
-) -> str:
-    """Return the configured source override for a runtime component, if any."""
-
-    return _resolve_source_override(component, source_override)
-
-
 def ensure_runtime_artifact(
     component: RuntimeComponent,
     *,

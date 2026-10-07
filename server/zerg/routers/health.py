@@ -11,7 +11,6 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 
 from zerg.config import get_settings
 
@@ -54,21 +53,6 @@ def _serializer_metrics_check(serializer_getter_name: str) -> tuple[bool, dict]:
         return False, {"status": "warn", "error": str(e)}
 
 
-def _archive_degraded_metrics(metrics: dict) -> dict:
-    """Project cold archive writer pressure as degraded, not hot-path down."""
-
-    return {
-        **metrics,
-        "status": "warn",
-        "archive_degraded": True,
-    }
-
-
-def _writer_stall_is_archive_degraded(metrics: dict) -> bool:
-    label = str(metrics.get("active_label") or "").strip()
-    return label in _ARCHIVE_DEGRADABLE_WRITER_LABELS
-
-
 def _write_serializer_stall_check() -> tuple[bool, dict]:
     return _serializer_metrics_check("get_write_serializer")
 
@@ -84,70 +68,6 @@ def _archive_wal_pressure_payload(wal_bytes: int | None) -> dict[str, object]:
     if payload.get("shed"):
         payload["archive_degraded"] = True
     return payload
-
-
-def _session_projection_lag_check(session_factory=None) -> dict:
-    """Return lag for sessions whose archive ingest skipped derived projections."""
-    if session_factory is None:
-        from zerg.database import get_session_factory
-
-        session_factory = get_session_factory()
-
-    db = session_factory()
-    try:
-        row = db.execute(
-            text(
-                """
-                SELECT COUNT(*) AS pending_sessions,
-                       MIN(last_activity_at) AS oldest_last_activity_at,
-                       MAX(last_activity_at) AS newest_last_activity_at
-                FROM sessions
-                WHERE COALESCE(needs_projection, 0) = 1
-                """
-            )
-        ).fetchone()
-    finally:
-        db.close()
-
-    pending_sessions = int(row[0] or 0) if row is not None else 0
-    return {
-        "status": "pass" if pending_sessions == 0 else "warn",
-        "pending_sessions": pending_sessions,
-        "oldest_last_activity_at": row[1] if row is not None else None,
-        "newest_last_activity_at": row[2] if row is not None else None,
-    }
-
-
-def _session_enrichment_lag_check(session_factory=None) -> dict:
-    """Return lag for sessions ingested durably but still waiting on enrichment."""
-    if session_factory is None:
-        from zerg.database import get_session_factory
-
-        session_factory = get_session_factory()
-
-    db = session_factory()
-    try:
-        row = db.execute(
-            text(
-                """
-                SELECT COUNT(*) AS pending_sessions,
-                       MIN(last_activity_at) AS oldest_last_activity_at,
-                       MAX(last_activity_at) AS newest_last_activity_at
-                FROM sessions
-                WHERE COALESCE(needs_embedding, 1) = 1
-                """
-            )
-        ).fetchone()
-    finally:
-        db.close()
-
-    pending_sessions = int(row[0] or 0) if row is not None else 0
-    return {
-        "status": "pass" if pending_sessions == 0 else "warn",
-        "pending_sessions": pending_sessions,
-        "oldest_last_activity_at": row[1] if row is not None else None,
-        "newest_last_activity_at": row[2] if row is not None else None,
-    }
 
 
 def _request_is_trusted(request: Request) -> bool:

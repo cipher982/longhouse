@@ -231,30 +231,6 @@ def get_engine_executable() -> str:
     raise RuntimeError("longhouse-engine not found. Install it from https://longhouse.ai/install or run `make install-engine`.")
 
 
-def get_zerg_executable() -> str:
-    """Get the path to the Longhouse CLI executable (legacy — for non-engine CLI use).
-
-    Prefers the installed ``longhouse`` command, then falls back to
-    legacy ``zerg`` if present, and finally uses ``uv run`` in dev.
-    """
-    longhouse_path = shutil.which("longhouse")
-    if longhouse_path:
-        return longhouse_path
-
-    zerg_path = shutil.which("zerg")
-    if zerg_path:
-        return zerg_path
-
-    uv_path = shutil.which("uv")
-    if uv_path:
-        project_root = _find_project_root()
-        if project_root:
-            return f"{uv_path} run --project {project_root} longhouse"
-        return f"{uv_path} run longhouse"
-
-    return "longhouse"
-
-
 def _get_launchd_plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
 

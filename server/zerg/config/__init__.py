@@ -389,15 +389,6 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _origin_hosts(origins: list[str]) -> set[str]:
-    hosts: set[str] = set()
-    for origin in origins:
-        parsed = urlparse(origin)
-        if parsed.hostname:
-            hosts.add(parsed.hostname)
-    return hosts
-
-
 def get_public_origins(settings: Settings) -> list[str]:
     """Return the single canonical browser origin for credentialed cookies.
 

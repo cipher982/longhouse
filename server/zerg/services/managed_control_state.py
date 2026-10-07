@@ -82,12 +82,6 @@ def _connection_capabilities_for_provider(provider: str, control_plane: str) -> 
     return contract.connection_capabilities
 
 
-def _apply_connection_capabilities(conn: SessionConnection, capabilities: dict[str, int]) -> None:
-    for key, value in capabilities.items():
-        if getattr(conn, key) != value:
-            setattr(conn, key, value)
-
-
 def _mirror_connection_state(
     db: Session,
     *,
@@ -468,51 +462,6 @@ def mark_missing_live_control_leases(
     return touched
 
 
-def live_transport_control_overlay(
-    session: AgentSession,
-    *,
-    source: str,
-    seen_at: datetime,
-    device_id: str | None = None,
-    machine_id: str | None = None,
-    ttl_ms: int = DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS,
-) -> ManagedControlOverlay:
-    """Represent an already-verified live control transport as control facts."""
-
-    normalized_seen_at = normalize_utc(seen_at) or _utc_now()
-    normalized_ttl_ms = int(ttl_ms or DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
-    return ManagedControlOverlay(
-        session_id=session.id,
-        provider=_normalized(getattr(session, "provider", None)).lower() or "unknown",
-        device_id=_normalized(device_id or getattr(session, "device_id", None)) or None,
-        machine_id=_normalized(machine_id) or None,
-        transport=None,
-        lease_state="attached",
-        control_state="online",
-        reason=None,
-        source=source,
-        sequence=None,
-        last_control_seen_at=normalized_seen_at,
-        lease_observed_at=normalized_seen_at,
-        lease_ttl_ms=normalized_ttl_ms,
-        control_expires_at=normalized_seen_at + timedelta(milliseconds=normalized_ttl_ms),
-    )
-
-
-def engine_channel_control_overlay(
-    session: AgentSession,
-    *,
-    seen_at: datetime,
-) -> ManagedControlOverlay:
-    """Represent the live Machine Agent control WebSocket as control facts."""
-
-    return live_transport_control_overlay(
-        session,
-        source=CONTROL_SOURCE_ENGINE_CHANNEL,
-        seen_at=seen_at,
-    )
-
-
 def upsert_managed_control_leases(
     db: Session,
     leases: list[Any],
@@ -564,58 +513,6 @@ def upsert_managed_control_leases(
         )
         for row in rows:
             row.last_health_at = seen_at
-    return touched
-
-
-def refresh_managed_control_lease_health(
-    db: Session,
-    leases: list[Any],
-    *,
-    device_id: str,
-    received_at: datetime,
-) -> set[UUID]:
-    """Refresh health timestamps for an unchanged managed lease snapshot."""
-
-    seen_session_ids = {getattr(lease, "session_id", None) for lease in leases}
-    seen_session_ids.discard(None)
-    provider_by_session_id: dict[Any, str] = {}
-    live_session_ids: set[Any] = set()
-    for lease in leases:
-        session_id = getattr(lease, "session_id", None)
-        if session_id is None:
-            continue
-        provider_by_session_id[session_id] = _normalized(getattr(lease, "provider", None)).lower() or "unknown"
-        control_state, _reason = _lease_control_state(
-            lease_state=_normalized(getattr(lease, "state", None)).lower() or "unknown",
-            bridge_status=_normalized(getattr(lease, "bridge_status", None)) or None,
-            thread_subscription_status=_normalized(getattr(lease, "thread_subscription_status", None)) or None,
-        )
-        if _kernel_connection_state(control_state) in {"attached", "degraded"}:
-            live_session_ids.add(session_id)
-    normalized_device_id = _normalized(device_id)
-    if not seen_session_ids or not normalized_device_id:
-        return set()
-    seen_at = normalize_utc(received_at) or _utc_now()
-    touched: set[UUID] = set()
-    rows = (
-        db.query(SessionConnection, SessionThread.session_id)
-        .join(SessionRun, SessionConnection.run_id == SessionRun.id)
-        .join(SessionThread, SessionRun.thread_id == SessionThread.id)
-        .filter(
-            SessionThread.session_id.in_(seen_session_ids),
-            SessionConnection.device_id == normalized_device_id,
-        )
-        .all()
-    )
-    for conn, session_id in rows:
-        conn.last_health_at = seen_at
-        if session_id in live_session_ids:
-            capabilities = _connection_capabilities_for_provider(
-                provider_by_session_id.get(session_id, "unknown"),
-                _normalized(conn.control_plane),
-            )
-            _apply_connection_capabilities(conn, capabilities)
-        touched.add(session_id)
     return touched
 
 

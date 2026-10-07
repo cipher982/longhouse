@@ -43,7 +43,6 @@ from zerg.metrics import session_input_attachment_blob_fetches_total
 from zerg.metrics import session_input_attachment_bytes
 from zerg.metrics import session_input_attachments_total
 from zerg.models.device_token import DeviceToken
-from zerg.routers.session_chat import QueuedInputSummary
 from zerg.routers.session_chat import SessionInputResponse
 from zerg.routers.session_chat import _augment_receipt_error
 from zerg.routers.session_chat import _console_turn_failure
@@ -152,19 +151,6 @@ def _validate_attachment_bytes(mime_type: str | None, data: bytes) -> None:
                 f"attachment bytes do not match declared type: {mime_type}",
             ),
         )
-
-
-def _queued_summary_from_row(row) -> QueuedInputSummary:
-    return QueuedInputSummary(
-        id=int(row.id),
-        text=row.body,
-        intent=row.intent,
-        status=row.status,
-        disposition="accepted",
-        delivery_status=row.status,
-        last_error=row.last_error,
-        created_at=row.created_at,
-    )
 
 
 def _client_label_from_user_agent(user_agent: str | None) -> str:

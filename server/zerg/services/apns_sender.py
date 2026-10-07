@@ -18,9 +18,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPauseRequest
 from zerg.models.agents import SessionThread
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
@@ -29,13 +27,10 @@ from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
-from zerg.services.notification_policy import recent_visible_web_client_exists
 from zerg.services.notification_policy import user_time_sensitive_blocked
 from zerg.services.session_kernel_projection import project_session_control_fields
-from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import facts_from_row
-from zerg.services.write_serializer import execute_post_write
 
 logger = logging.getLogger(__name__)
 
@@ -583,108 +578,6 @@ def prepare_session_attention_push(
     )
 
 
-def prepare_session_needs_answer_push(
-    db: Session,
-    *,
-    owner_id: int | None,
-    session_id,
-    pause_request: SessionPauseRequest | None,
-    previous_state: str | None,
-    occurred_at: datetime,
-    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
-) -> SessionAttentionPush | None:
-    if owner_id is None or session_id is None or pause_request is None:
-        return None
-    if str(getattr(pause_request, "kind", "") or "").strip() != PAUSE_KIND_STRUCTURED_QUESTION:
-        return None
-
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if session is None:
-        return None
-
-    pause_request_id = str(pause_request.id)
-    stamp_state = f"needs_answer:{pause_request_id}"
-    previous_stamp_state = str(session.last_attention_push_state or "").strip() or None
-    previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
-    if previous_stamp_state == stamp_state:
-        return None
-
-    collapse_id = _attention_collapse_id(str(session.id))
-    if not _tier1_policy_allows_delivery(
-        db,
-        owner_id=owner_id,
-        session=session,
-        event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
-        state_key=stamp_state,
-        collapse_key=collapse_id,
-        occurred_at=occurred_at,
-    ):
-        return None
-
-    if targets is _TARGETS_SENTINEL:
-        targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="needs-answer push")
-    if not targets:
-        _record_no_ios_targets(
-            db,
-            owner_id=owner_id,
-            session_id=str(session.id),
-            event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
-            state_key=stamp_state,
-            collapse_key=collapse_id,
-            occurred_at=occurred_at,
-        )
-        return None
-
-    replaces_previous_attention = previous_state != "needs_answer" or previous_stamp_state != stamp_state
-    if previous_state in RESOLVABLE_ATTENTION_PUSH_STATES and replaces_previous_attention:
-        _mark_attention_events_resolved(
-            db,
-            owner_id=owner_id,
-            session_id=str(session.id),
-            occurred_at=occurred_at,
-        )
-    session.last_attention_push_at = occurred_at
-    session.last_attention_push_state = stamp_state
-    notification_event = _create_notification_event(
-        db,
-        owner_id=owner_id,
-        session_id=str(session.id),
-        event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
-        state_key=stamp_state,
-        collapse_key=collapse_id,
-        occurred_at=occurred_at,
-    )
-
-    provider = _clean_label(getattr(session, "provider", None))
-    project = _clean_label(getattr(session, "project", None))
-    title = _session_title(session, db=db)
-    summary = str(getattr(session, "summary", "") or "").strip() or title
-    pause_title = _clean_label(getattr(pause_request, "title", None))
-    pause_title = pause_title or _clean_label(getattr(pause_request, "summary", None))
-
-    return SessionAttentionPush(
-        session_id=str(session.id),
-        state="needs_answer",
-        occurred_at=occurred_at,
-        title=title,
-        summary=summary,
-        project=project,
-        provider=provider,
-        tool_name=_clean_label(getattr(pause_request, "tool_name", None)),
-        alert_title="Needs answer",
-        alert_body=_needs_answer_alert_body(project=project, pause_title=pause_title, title=title),
-        collapse_id=collapse_id,
-        targets=targets,
-        event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
-        notification_event_id=str(notification_event.id),
-        pause_request_id=pause_request_id,
-        previous_stamp_state=previous_stamp_state,
-        previous_stamp_at=previous_stamp_at,
-        stamp_state=stamp_state,
-        time_sensitive=user_time_sensitive_blocked(_load_owner_user(db, owner_id)),
-    )
-
-
 def prepare_session_blocked_reminder_push(
     db: Session,
     *,
@@ -778,10 +671,6 @@ def prepare_session_blocked_reminder_push(
         stamp_state=stamp_state,
         time_sensitive=user_time_sensitive_blocked(_load_owner_user(db, owner_id)),
     )
-
-
-def _recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
-    return recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at)
 
 
 def prepare_session_attention_resolution_push(
@@ -1017,109 +906,6 @@ def prepare_session_live_activity_pushes(
     return tuple(notifications)
 
 
-async def send_presence_pushes(
-    *,
-    attention_push: SessionAttentionPush | None,
-    attention_resolution_push: SessionAttentionResolutionPush | None,
-    widget_push: WidgetTimelinePush | None,
-    live_activity_pushes: tuple[LiveActivityPush, ...],
-    db: Session | None,
-    ws,
-    dispatch_label_prefix: str,
-) -> None:
-    """Send pre-prepared APNs pushes and roll back debounce stamps on reject.
-
-    Caller is responsible for preparing the pushes atomically with the
-    underlying state write (same WriteSerializer closure). This helper only
-    performs the network send + rollback. ``db`` is a fallback for unconfigured
-    or test serializers and may be ``None`` after production request-session
-    release.
-    """
-
-    if attention_push is not None:
-        push_sent = False
-        try:
-            push_sent = await send_session_attention_push(attention_push)
-        except Exception:
-            logger.exception("Failed to send APNs attention push for session %s", attention_push.session_id)
-
-        def _record_attention_result(write_db: Session) -> bool:
-            return record_notification_delivery_result(
-                write_db,
-                event_id=attention_push.notification_event_id,
-                channel=NOTIFICATION_CHANNEL_APNS_IOS,
-                accepted=push_sent,
-                occurred_at=attention_push.occurred_at,
-            )
-
-        await execute_post_write(ws, _record_attention_result, db, label=f"{dispatch_label_prefix}-attention-record")
-        if not push_sent:
-
-            def _clear_attention(write_db: Session):
-                rollback_session_attention_push_stamp(write_db, notification=attention_push)
-
-            await execute_post_write(ws, _clear_attention, db, label=f"{dispatch_label_prefix}-attention-clear")
-
-    if attention_resolution_push is not None:
-        resolution_accepted = False
-        try:
-            resolution_accepted = await send_session_attention_resolution_push(attention_resolution_push)
-        except Exception:
-            logger.exception("Failed to send APNs resolution push for session %s", attention_resolution_push.session_id)
-        if not resolution_accepted:
-
-            def _clear_resolution(write_db: Session) -> bool:
-                return clear_session_attention_resolution_stamp(
-                    write_db,
-                    session_id=attention_resolution_push.session_id,
-                    state=attention_resolution_push.previous_state,
-                    attention_push_at=attention_resolution_push.attention_push_at,
-                )
-
-            await execute_post_write(ws, _clear_resolution, db, label=f"{dispatch_label_prefix}-resolution-clear")
-
-    if widget_push is not None:
-        widget_accepted = False
-        try:
-            widget_accepted = await send_widget_timeline_push(widget_push)
-        except Exception:
-            logger.exception("Failed to send APNs widget push for user %s", widget_push.owner_id)
-        if not widget_accepted:
-
-            def _clear_widget(write_db: Session) -> bool:
-                return clear_widget_timeline_push_stamp(
-                    write_db,
-                    owner_id=widget_push.owner_id,
-                    state_hash=widget_push.state_hash,
-                    previous_state_hash=widget_push.previous_state_hash,
-                    previous_push_at=widget_push.previous_push_at,
-                )
-
-            await execute_post_write(ws, _clear_widget, db, label=f"{dispatch_label_prefix}-widget-clear")
-
-    for live_activity_push in live_activity_pushes:
-        accepted = False
-        try:
-            accepted = await send_session_live_activity_push(live_activity_push)
-        except Exception:
-            logger.exception(
-                "Failed to send APNs Live Activity push for session %s",
-                live_activity_push.session_id,
-            )
-        if not accepted:
-
-            def _clear_live(write_db: Session, push=live_activity_push) -> bool:
-                return clear_live_activity_push_stamp(
-                    write_db,
-                    registration_id=push.registration_id,
-                    state_hash=push.state_hash,
-                    previous_state_hash=push.previous_state_hash,
-                    previous_push_at=push.previous_push_at,
-                )
-
-            await execute_post_write(ws, _clear_live, db, label=f"{dispatch_label_prefix}-live-clear")
-
-
 async def send_session_attention_push(notification: SessionAttentionPush) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
@@ -1352,17 +1138,6 @@ def build_session_live_activity_payload(notification: LiveActivityPush) -> dict:
     }
 
 
-def active_ios_targets_for_owner(
-    db: Session,
-    *,
-    owner_id: int,
-    platform: str = "ios",
-    log_context: str,
-) -> tuple[APNSDeviceTarget, ...] | None:
-    """Public alias for `_active_ios_targets_for_owner` (kept for legacy callers)."""
-    return _active_ios_targets_for_owner(db, owner_id=owner_id, platform=platform, log_context=log_context)
-
-
 def _active_ios_targets_for_owner(
     db: Session,
     *,
@@ -1474,11 +1249,6 @@ def _session_title(session: AgentSession, *, db: Session | None = None) -> str:
     )
 
 
-def _session_project(session: AgentSession) -> str | None:
-    project = str(getattr(session, "project", "") or "").strip()
-    return project or None
-
-
 def _attention_alert_title(*, state: str, provider: str | None) -> str:
     return "Needs permission"
 
@@ -1493,23 +1263,9 @@ def _attention_alert_body(*, state: str, project: str | None, title: str, tool_n
     return _trim_alert_text(" · ".join(parts))
 
 
-def _needs_answer_alert_body(*, project: str | None, pause_title: str | None, title: str) -> str:
-    parts: list[str] = []
-    if project:
-        parts.append(project)
-    if pause_title:
-        parts.append(pause_title)
-    parts.append(title)
-    return _trim_alert_text(" · ".join(parts))
-
-
 def _clean_label(value: object) -> str | None:
     cleaned = str(value or "").strip()
     return cleaned or None
-
-
-def _provider_display_name(provider: str) -> str:
-    return provider_display_name(provider)
 
 
 def _attention_collapse_id(session_id: str) -> str:
@@ -1533,10 +1289,6 @@ def _trim_alert_text(value: str, limit: int = 180) -> str:
 
 def _resolved_attention_state(state: str) -> str:
     return f"{state}:resolved"
-
-
-def _has_unresolved_attention(stamp_state: str | None, state: str) -> bool:
-    return _base_attention_state(stamp_state) == state and stamp_state != _resolved_attention_state(state)
 
 
 def _base_attention_state(state: str | None) -> str | None:

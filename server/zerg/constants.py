@@ -8,7 +8,6 @@
 # ---------------------------------------------------------------------------
 
 from typing import Final
-from typing import Optional
 
 from zerg.config import get_settings
 
@@ -53,16 +52,6 @@ __all__ = [
 # Deprecated helper – retained for backwards-compatibility of *tests* that
 # patched feature flags directly.  New code should access values via
 # ``settings.<flag>``.
-
-
-def _env_truthy(name: str, default: Optional[str] = None) -> bool:  # noqa: D401 – legacy
-    """Return True if *name* env var is set to a truthy value.
-
-    The function now merely proxies to the canonical Settings instance so the
-    semantics remain unchanged while moving away from direct env access.
-    """
-
-    return getattr(_settings, name.lower(), False)  # type: ignore[arg-type]
 
 
 # Public flag exported under the previous constant name so imports stay

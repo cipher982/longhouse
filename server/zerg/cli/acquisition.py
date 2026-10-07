@@ -158,11 +158,3 @@ def emit_install_metadata_event(metadata_payload: Any) -> None:
         props=props,
         background=False,
     )
-
-
-def telemetry_notice() -> str:
-    return (
-        "Anonymous install telemetry is enabled. "
-        "Set LONGHOUSE_TELEMETRY=0 or DO_NOT_TRACK=1 to disable. "
-        "No prompts, paths, secrets, or session contents are sent."
-    )

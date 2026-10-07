@@ -107,11 +107,6 @@ def create_enroll_token(
     return db_token, token
 
 
-def get_enroll_token_by_hash(db: Session, token_hash: str) -> Optional[RunnerEnrollToken]:
-    """Get an enrollment token by its hash."""
-    return db.query(RunnerEnrollToken).filter(RunnerEnrollToken.token_hash == token_hash).first()
-
-
 def validate_and_consume_enroll_token(
     db: Session,
     token: str,

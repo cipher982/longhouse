@@ -19,7 +19,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSessionBranch
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.session_turns import get_session_turn_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -38,94 +37,6 @@ def fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_i
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
-
-
-def fetch_managed_local_events_between_ids(
-    *,
-    db_bind,
-    session_id: UUID,
-    start_event_id: int,
-    end_event_id: int,
-) -> list[AgentEvent]:
-    with SQLAlchemySession(bind=db_bind) as poll_db:
-        return (
-            poll_db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_id)
-            .filter(AgentEvent.id >= int(start_event_id))
-            .filter(AgentEvent.id <= int(end_event_id))
-            .filter(durable_transcript_event_predicate())
-            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
-            .all()
-        )
-
-
-def get_session_turn_snapshot_best_effort(
-    *,
-    db_bind,
-    session_id: UUID,
-    request_id: str,
-):
-    try:
-        return get_session_turn_snapshot(
-            db_bind=db_bind,
-            session_id=session_id,
-            request_id=request_id,
-        )
-    except SQLAlchemyTimeoutError:
-        logger.warning(
-            "Session turn snapshot timed out for %s; falling back to direct evidence",
-            session_id,
-        )
-    except Exception:
-        logger.warning(
-            "Session turn snapshot read failed for %s; falling back to direct evidence",
-            session_id,
-            exc_info=True,
-        )
-    return None
-
-
-def hydrate_turn_events_from_snapshot(
-    *,
-    db_bind,
-    session_id: UUID,
-    request_id: str,
-    expected_user_message: str,
-) -> tuple[object | None, list[AgentEvent]]:
-    snapshot = get_session_turn_snapshot_best_effort(
-        db_bind=db_bind,
-        session_id=session_id,
-        request_id=request_id,
-    )
-    if snapshot is None or snapshot.durable_at is None or snapshot.user_event_id is None or snapshot.durable_assistant_event_id is None:
-        return snapshot, []
-
-    try:
-        events = fetch_managed_local_events_between_ids(
-            db_bind=db_bind,
-            session_id=session_id,
-            start_event_id=int(snapshot.user_event_id),
-            end_event_id=int(snapshot.durable_assistant_event_id),
-        )
-    except SQLAlchemyTimeoutError:
-        logger.warning(
-            "Session turn event hydration timed out for %s; falling back to direct evidence",
-            session_id,
-        )
-        return snapshot, []
-    except Exception:
-        logger.warning(
-            "Session turn event hydration failed for %s; falling back to direct evidence",
-            session_id,
-            exc_info=True,
-        )
-        return snapshot, []
-    if expected_user_message and not managed_local_events_include_expected_turn(
-        events=events,
-        expected_user_message=expected_user_message,
-    ):
-        return snapshot, []
-    return snapshot, events
 
 
 def latest_durable_head_event_id(db: SQLAlchemySession, session_id: UUID) -> int:
@@ -221,40 +132,3 @@ async def await_managed_local_turn_events(
         await asyncio.sleep(poll_interval_secs)
 
     return []
-
-
-async def await_managed_local_events_task(
-    events_task: asyncio.Task[list[AgentEvent]],
-    *,
-    timeout_secs: float,
-) -> list[AgentEvent]:
-    if events_task.done():
-        return events_task.result() or []
-    try:
-        return await asyncio.wait_for(asyncio.shield(events_task), timeout=timeout_secs)
-    except asyncio.TimeoutError:
-        return []
-
-
-async def await_managed_local_terminal_task(
-    terminal_task: asyncio.Task,
-    *,
-    timeout_secs: float,
-):
-    if terminal_task.done():
-        try:
-            return terminal_task.result()
-        except asyncio.CancelledError:
-            return None
-        except Exception:
-            logger.warning("Managed-local terminal waiter failed after durable events", exc_info=True)
-            return None
-    try:
-        return await asyncio.wait_for(asyncio.shield(terminal_task), timeout=timeout_secs)
-    except asyncio.TimeoutError:
-        return None
-    except asyncio.CancelledError:
-        return None
-    except Exception:
-        logger.warning("Managed-local terminal waiter failed after durable events", exc_info=True)
-        return None

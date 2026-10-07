@@ -124,83 +124,11 @@ def create_session_input_row(
     return row
 
 
-def count_queued(db: Session, session_id: UUID) -> int:
-    return (
-        db.query(SessionInput)
-        .filter(
-            SessionInput.session_id == session_id,
-            SessionInput.status == INPUT_STATUS_QUEUED,
-        )
-        .count()
-    )
-
-
-def list_queued_inputs(db: Session, session_id: UUID) -> list[SessionInput]:
-    return (
-        db.query(SessionInput)
-        .filter(
-            SessionInput.session_id == session_id,
-            SessionInput.status == INPUT_STATUS_QUEUED,
-        )
-        .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
-        .all()
-    )
-
-
 RECENT_FAILED_WINDOW_SECS = 15 * 60
-
-
-def list_recent_inputs(db: Session, session_id: UUID) -> list[SessionInput]:
-    """Queued rows + recently-failed rows so the UI can surface drain failures.
-
-    Delivered/cancelled rows are excluded — they've already served their
-    purpose and shouldn't clutter the chip area.
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=RECENT_FAILED_WINDOW_SECS)
-    return (
-        db.query(SessionInput)
-        .filter(
-            SessionInput.session_id == session_id,
-            (
-                (SessionInput.status == INPUT_STATUS_QUEUED)
-                | (SessionInput.status == INPUT_STATUS_DELIVERING)
-                | ((SessionInput.status == INPUT_STATUS_FAILED) & (SessionInput.updated_at >= cutoff))
-            ),
-        )
-        .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
-        .all()
-    )
 
 
 def get_session_input(db: Session, input_id: int) -> SessionInput | None:
     return db.query(SessionInput).filter(SessionInput.id == input_id).first()
-
-
-def cancel_queued_input(db: Session, input_id: int) -> SessionInput | None:
-    """Atomically transition a queued input to cancelled.
-
-    Uses a status-gated UPDATE so concurrent cancels do not both succeed.
-    SQLite's single-writer lock was already serializing this, but the SQL
-    is portable: one of N concurrent callers sees rowcount==1, the rest
-    see rowcount==0 and report the row as no longer cancellable.
-    """
-    now = datetime.now(timezone.utc)
-    updated = (
-        db.query(SessionInput)
-        .filter(
-            SessionInput.id == input_id,
-            SessionInput.status == INPUT_STATUS_QUEUED,
-        )
-        .update(
-            {"status": INPUT_STATUS_CANCELLED, "updated_at": now},
-            synchronize_session=False,
-        )
-    )
-    db.commit()
-    if updated != 1:
-        return None
-    # Return the refreshed row so the caller can report id/status.
-    return get_session_input(db, input_id)
 
 
 def claim_next_queued(

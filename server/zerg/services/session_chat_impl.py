@@ -12,14 +12,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
-from typing import AsyncIterator
 from uuid import UUID
 
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -36,14 +34,9 @@ from zerg.services.managed_local_event_polling import MANAGED_LOCAL_POLL_INTERVA
 from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
-from zerg.services.session_runtime import session_is_closed_for_input
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
-from zerg.services.session_turns import SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
-from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import mark_session_turn_active
-from zerg.services.session_turns import mark_session_turn_failed
-from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.services.session_turns import mark_session_turn_terminal
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
@@ -383,18 +376,6 @@ def _managed_local_launch_response_from_plan(
     return response
 
 
-def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingResponse:
-    return StreamingResponse(
-        stream,
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 def _live_store_session_belongs_to_owner(db: Session, *, session_id: str, owner_id: int) -> bool:
     """Owner binding for a session read straight off the live store.
 
@@ -415,51 +396,6 @@ def _live_store_session_belongs_to_owner(db: Session, *, session_id: str, owner_
     except Exception:
         logger.warning("Live-store owner check failed for session %s; refusing control", session_id, exc_info=True)
         return False
-
-
-def _archive_session_belongs_to_owner(db: Session, *, session_id: UUID, owner_id: int) -> bool:
-    """Owner binding for an archive-only (no live store) deployment.
-
-    The archive schema has no owner column on ``sessions``, so ownership is
-    carried by two independent durable signals: an input this user authored on
-    the session, or a device token of this user's for the device the session
-    was ingested under. A session carrying neither is unbound and belongs to
-    nobody.
-
-    The exception above them is a proof rather than a fallback: when the host
-    has exactly one user, every session on it is that user's and there is no
-    boundary to cross. That is the shape of every self-hosted archive-only
-    deployment. With two or more users the signals decide, and unbound loses.
-    """
-    from zerg.models.agents import AgentSession
-    from zerg.models.agents import SessionInput
-
-    user_ids = [int(row[0]) for row in db.query(User.id).order_by(User.id.asc()).limit(2).all()]
-    if len(user_ids) == 1:
-        return user_ids[0] == int(owner_id)
-
-    authored = (
-        db.query(SessionInput.id)
-        .filter(
-            SessionInput.session_id == session_id,
-            SessionInput.owner_id == int(owner_id),
-        )
-        .first()
-    )
-    if authored is not None:
-        return True
-    device_id = (db.query(AgentSession.device_id).filter(AgentSession.id == session_id).scalar() or "").strip()
-    if not device_id:
-        return False
-    owns_device = (
-        db.query(DeviceToken.id)
-        .filter(
-            DeviceToken.device_id == device_id,
-            DeviceToken.owner_id == int(owner_id),
-        )
-        .first()
-    )
-    return owns_device is not None
 
 
 def _load_session_for_continuation(db: Session, session_id: str, *, owner_id: int):
@@ -599,11 +535,6 @@ def _assert_live_session_action_available(
         status_code=status.HTTP_409_CONFLICT,
         detail="This session does not have a live Longhouse control channel.",
     )
-
-
-def _session_is_closed_for_input(db: Session, source_session) -> bool:
-    session_id = getattr(source_session, "id", None)
-    return session_is_closed_for_input(db, session_id)
 
 
 def _parse_current_session_header(request: Request) -> UUID | None:
@@ -841,23 +772,6 @@ def _runtime_terminal_result_after(*, db_bind, session_id: UUID, after: datetime
         db.close()
 
 
-async def _drain_next_queued_input(
-    *,
-    db_bind,
-    session_id: UUID,
-    lock_scope_id: str | None = None,
-) -> None:
-    """Compatibility shim for the managed input queue wake service."""
-    from zerg.services.session_input_queue import wake_session_input_queue
-
-    await wake_session_input_queue(
-        db_bind=db_bind,
-        session_id=session_id,
-        reason="legacy_drain",
-        lock_scope_id=lock_scope_id,
-    )
-
-
 async def _observe_managed_local_turn_active_phase(
     *,
     request_id: str,
@@ -922,146 +836,6 @@ async def _observe_managed_local_turn_active_phase(
             session_id,
             exc_info=True,
         )
-
-
-def _schedule_managed_local_active_phase_observation(
-    *,
-    request_id: str,
-    session_id: UUID,
-    provider: str,
-    db_bind,
-    after_observation_id: int,
-) -> None:
-    task = asyncio.create_task(
-        _observe_managed_local_turn_active_phase(
-            request_id=request_id,
-            session_id=session_id,
-            provider=provider,
-            db_bind=db_bind,
-            after_observation_id=after_observation_id,
-        )
-    )
-
-    def _log_task_failure(done: asyncio.Task[None]) -> None:
-        try:
-            done.result()
-        except asyncio.CancelledError:
-            logger.debug("[%s] Managed-local active watcher cancelled for %s", request_id, session_id)
-        except Exception:
-            logger.exception("[%s] Managed-local active watcher failed for %s", request_id, session_id)
-
-    task.add_done_callback(_log_task_failure)
-
-
-def _schedule_managed_local_lock_release(
-    *,
-    lock_scope_id: str,
-    request_id: str,
-    session_id: UUID,
-    provider: str,
-    db_bind,
-    after_observation_id: int,
-) -> None:
-    task = asyncio.create_task(
-        _release_managed_local_lock_after_terminal(
-            lock_scope_id=lock_scope_id,
-            request_id=request_id,
-            session_id=session_id,
-            provider=provider,
-            db_bind=db_bind,
-            after_observation_id=after_observation_id,
-        )
-    )
-
-    def _log_task_failure(done: asyncio.Task[None]) -> None:
-        try:
-            done.result()
-        except asyncio.CancelledError:
-            logger.debug("[%s] Managed-local lock watcher cancelled for %s", request_id, session_id)
-        except Exception:
-            logger.exception("[%s] Managed-local lock watcher failed for %s", request_id, session_id)
-
-    task.add_done_callback(_log_task_failure)
-
-
-def _managed_local_send_failure_code(send_result) -> str:
-    if bool(getattr(send_result, "ok", False)) or int(getattr(send_result, "exit_code", 1) or 1) == 0:
-        return SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
-    return SESSION_TURN_ERROR_SEND_FAILED
-
-
-def _mark_managed_local_turn_send_accepted(
-    db: Session,
-    *,
-    session_id: UUID,
-    request_id: str,
-    baseline_event_id: int,
-    baseline_observation_cursor: int,
-    user_submitted_at: datetime,
-    expected_user_text: str,
-    accepted_at: datetime,
-    user_event_id: int | None,
-    session_input_id: int | None,
-) -> bool:
-    create_session_turn(
-        db,
-        session_id=session_id,
-        request_id=request_id,
-        baseline_event_id=baseline_event_id,
-        baseline_observation_cursor=baseline_observation_cursor,
-        user_submitted_at=user_submitted_at,
-        expected_user_text=expected_user_text,
-        session_input_id=session_input_id,
-    )
-    return mark_session_turn_send_accepted(
-        db,
-        session_id=session_id,
-        request_id=request_id,
-        accepted_at=accepted_at,
-        user_event_id=user_event_id,
-        session_input_id=session_input_id,
-    )
-
-
-def _mark_managed_local_turn_failed_for_send(
-    db: Session,
-    *,
-    session_id: UUID,
-    request_id: str,
-    baseline_event_id: int,
-    baseline_observation_cursor: int,
-    user_submitted_at: datetime,
-    expected_user_text: str,
-    accepted_at: datetime,
-    user_event_id: int | None,
-    session_input_id: int | None,
-    error_code: str,
-) -> bool:
-    create_session_turn(
-        db,
-        session_id=session_id,
-        request_id=request_id,
-        baseline_event_id=baseline_event_id,
-        baseline_observation_cursor=baseline_observation_cursor,
-        user_submitted_at=user_submitted_at,
-        expected_user_text=expected_user_text,
-        session_input_id=session_input_id,
-    )
-    if error_code == SESSION_TURN_ERROR_VERIFICATION_TIMEOUT:
-        mark_session_turn_send_accepted(
-            db,
-            session_id=session_id,
-            request_id=request_id,
-            accepted_at=accepted_at,
-            user_event_id=user_event_id,
-            session_input_id=session_input_id,
-        )
-    return mark_session_turn_failed(
-        db,
-        session_id=session_id,
-        request_id=request_id,
-        error_code=error_code,
-    )
 
 
 async def _release_catalog_lock_after_terminal(

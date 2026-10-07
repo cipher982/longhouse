@@ -13,7 +13,6 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from zerg.models.agents import AgentSession
 from zerg.services.bug_reports import read_manifest
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_CANCELLED
@@ -44,19 +43,6 @@ class ConsoleTurnUnavailable(RuntimeError):
 
 class ConsoleTurnConflict(RuntimeError):
     pass
-
-
-def stamp_console_result(db: Session, *, session_id, outcome: str, at: datetime) -> None:
-    """Denormalize a terminal Console turn onto the session row for unread derivation.
-
-    Only terminal outcomes reach here — a draining turn's early terminal_at
-    must never stamp (docs/specs/console-unread-acknowledgement.md).
-    """
-
-    session = db.get(AgentSession, session_id)
-    if session is not None:
-        session.last_console_result_at = at
-        session.last_console_result_outcome = outcome
 
 
 @dataclass(frozen=True)

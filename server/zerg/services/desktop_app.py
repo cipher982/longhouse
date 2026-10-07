@@ -379,24 +379,3 @@ def install_desktop_app_service(
         "binary_path": installed_app.launch_path,
         "binary_source": installed_app.source,
     }
-
-
-def uninstall_desktop_app_service() -> dict[str, str]:
-    if detect_platform() != Platform.MACOS:
-        return {
-            "success": "true",
-            "platform": detect_platform().value,
-            "message": "Longhouse desktop app is not supported",
-        }
-
-    removed_any = False
-    for plist_path, _, _ in _service_candidates():
-        if plist_path.exists():
-            subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True, check=False)
-            plist_path.unlink(missing_ok=True)
-            removed_any = True
-
-    if not removed_any:
-        return {"success": "true", "platform": "macos", "message": "Longhouse desktop app not installed"}
-
-    return {"success": "true", "platform": "macos", "message": "Longhouse desktop app removed"}

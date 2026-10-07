@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 LAUNCH_ACTOR_HUMAN_SHELL = "human_shell"
 LAUNCH_ACTOR_HUMAN_UI = "human_ui"
 LAUNCH_ACTOR_AUTOMATION = "automation"
@@ -87,21 +85,3 @@ def sanitize_launch_provenance(
     if hidden_origin_blocks_launch_actor(hidden_origin, actor) or (is_sidechain and actor in HUMAN_LAUNCH_ACTORS):
         return None, None
     return actor, surface
-
-
-def human_shell_provenance_for_interactive_tty(
-    *,
-    env: Mapping[str, str | None],
-    stdin_is_tty: bool,
-    stdout_is_tty: bool,
-) -> tuple[str | None, str | None]:
-    """Return the terminal-human stamp only for direct interactive wrapper launches."""
-
-    if not stdin_is_tty or not stdout_is_tty:
-        return None, None
-    if normalize_hidden_origin_kind(env.get("LONGHOUSE_ORIGIN_KIND")):
-        return None, None
-    sidechain = str(env.get("LONGHOUSE_IS_SIDECHAIN") or "").strip().lower()
-    if sidechain in {"1", "true", "yes", "on"}:
-        return None, None
-    return LAUNCH_ACTOR_HUMAN_SHELL, LAUNCH_SURFACE_TERMINAL

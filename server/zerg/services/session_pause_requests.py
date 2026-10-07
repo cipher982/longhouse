@@ -12,7 +12,6 @@ from uuid import uuid5
 
 from sqlalchemy.orm import Session
 
-from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveRuntimeState
@@ -386,77 +385,6 @@ def pending_interaction_from_live_runtime(runtime: LiveRuntimeState | None) -> d
     }
 
 
-def load_hot_session_projection_map(session_ids: list[UUID]) -> dict[UUID, tuple[dict[str, Any] | None, str]]:
-    """Load hot interaction and transcript convergence truth for detail reads.
-
-    The archive still owns transcript bodies, but the bounded catalog owns the
-    current interaction and convergence facts.  A present hot runtime row with
-    no interaction intentionally clears a stale archive pause projection.
-    """
-    if not session_ids:
-        return {}
-    from zerg.services.catalog_facts import session_facts_map
-    from zerg.services.catalog_read_gateway import CatalogReadError
-
-    try:
-        facts_by_session = session_facts_map([str(value) for value in session_ids])
-    except CatalogReadError:
-        return {}
-    result: dict[UUID, tuple[dict[str, Any] | None, str]] = {}
-    for facts in facts_by_session.values():
-        if not isinstance(facts, dict):
-            continue
-        catalog = facts.get("catalog")
-        if not isinstance(catalog, dict) or not catalog.get("session_id"):
-            continue
-        session_id = UUID(str(catalog["session_id"]))
-        runtime = facts.get("runtime")
-        projection = runtime.get("pending_interaction_projection_json") if isinstance(runtime, dict) else None
-        if isinstance(projection, dict):
-            projection = {**projection, "can_respond": bool(runtime.get("pending_interaction_can_respond"))}
-            for key in ("occurred_at", "created_at", "expires_at"):
-                if isinstance(projection.get(key), str):
-                    try:
-                        projection[key] = datetime.fromisoformat(projection[key].replace("Z", "+00:00"))
-                    except ValueError:
-                        projection[key] = None
-        else:
-            projection = None
-        card = facts.get("card")
-        archive_state = str(card.get("archive_state") or "pending") if isinstance(card, dict) else "pending"
-        result[session_id] = (projection, archive_state)
-    return result
-
-
-def reply_transport_for_row(row: "SessionPauseRequest") -> str | None:
-    """The provider_ref.reply_transport for a pause request, if set."""
-    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
-    value = _clean_str(ref.get("reply_transport"))
-    return value
-
-
-def _provider_ref_source(row: "SessionPauseRequest") -> str | None:
-    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
-    return _clean_str(ref.get("source"))
-
-
-def is_pull_reply_transport(row: "SessionPauseRequest") -> bool:
-    """True when the answer is delivered by the provider polling (resolve in place).
-
-    Explicit pull transport always wins. For backward compatibility, a
-    Claude permission-gate row (kind=permission_prompt, source=claude_permission_gate)
-    written before reply_transport existed defaults to PULL — it must never be
-    pushed over managed control (there is no live process to push to). Other rows
-    (e.g. structured_question) keep their historical PUSH default.
-    """
-    transport = reply_transport_for_row(row)
-    if transport in PULL_REPLY_TRANSPORTS:
-        return True
-    if transport is None and _clean_str(getattr(row, "kind", None)) == PAUSE_KIND_PERMISSION_PROMPT:
-        return _provider_ref_source(row) == "claude_permission_gate"
-    return False
-
-
 def make_pause_request_key(
     *,
     provider: str,
@@ -602,55 +530,6 @@ def resolve_pause_request(
     return row
 
 
-def resolve_pending_pause_requests_for_runtime(
-    db: Session,
-    *,
-    runtime_key: str,
-    status: str = "resolved",
-    occurred_at: datetime | None = None,
-    response_text: str | None = None,
-) -> int:
-    return _finish_pending(
-        db,
-        filters=[SessionPauseRequest.runtime_key == runtime_key],
-        status=status,
-        occurred_at=occurred_at,
-        response_text=response_text,
-    )
-
-
-def expire_pending_pause_requests_for_session(
-    db: Session,
-    *,
-    session_id: UUID,
-    occurred_at: datetime | None = None,
-    response_text: str | None = None,
-) -> int:
-    return _finish_pending(
-        db,
-        filters=[SessionPauseRequest.session_id == session_id],
-        status="expired",
-        occurred_at=occurred_at,
-        response_text=response_text,
-    )
-
-
-def expire_pending_pause_requests_for_runtime(
-    db: Session,
-    *,
-    runtime_key: str,
-    occurred_at: datetime | None = None,
-    response_text: str | None = None,
-) -> int:
-    return _finish_pending(
-        db,
-        filters=[SessionPauseRequest.runtime_key == runtime_key],
-        status="expired",
-        occurred_at=occurred_at,
-        response_text=response_text,
-    )
-
-
 def load_active_pause_request_map(db: Session, session_ids: list[UUID]) -> dict[UUID, SessionPauseRequest]:
     if not session_ids:
         return {}
@@ -675,108 +554,6 @@ def load_active_pause_request_map(db: Session, session_ids: list[UUID]) -> dict[
             continue
         by_session.setdefault(row.session_id, row)
     return by_session
-
-
-def load_active_pause_request_for_session(db: Session, session_id: UUID) -> SessionPauseRequest | None:
-    return load_active_pause_request_map(db, [session_id]).get(session_id)
-
-
-def list_pause_requests_for_session(
-    db: Session,
-    session_id: UUID,
-    *,
-    status: str | None = PENDING_STATUS,
-) -> list[SessionPauseRequest]:
-    query = db.query(SessionPauseRequest).filter(SessionPauseRequest.session_id == session_id)
-    cleaned_status = _clean_str(status)
-    if cleaned_status:
-        query = query.filter(SessionPauseRequest.status == cleaned_status)
-    rows = query.order_by(
-        SessionPauseRequest.status.asc(),
-        SessionPauseRequest.last_seen_at.desc(),
-        SessionPauseRequest.occurred_at.desc(),
-        SessionPauseRequest.created_at.desc(),
-    ).all()
-    now = datetime.now(timezone.utc)
-    return [
-        row
-        for row in rows
-        if is_user_facing_pause_request(row)
-        and not (row.status == PENDING_STATUS and normalize_utc(row.expires_at) is not None and normalize_utc(row.expires_at) <= now)
-    ]
-
-
-def get_pause_request_for_session(
-    db: Session,
-    *,
-    session_id: UUID,
-    pause_request_id: UUID,
-) -> SessionPauseRequest | None:
-    return (
-        db.query(SessionPauseRequest)
-        .filter(
-            SessionPauseRequest.session_id == session_id,
-            SessionPauseRequest.id == pause_request_id,
-        )
-        .first()
-    )
-
-
-def apply_pause_runtime_event(db: Session, event: Any) -> bool:
-    """Apply a pause_request/pause_resolution runtime event without writing phase."""
-
-    payload = event.payload if isinstance(event.payload, dict) else {}
-    occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
-    runtime_key = _clean_str(event.runtime_key) or ""
-    provider = _clean_str(event.provider) or "unknown"
-    provider_request_id = _clean_str(payload.get("provider_request_id") or payload.get("request_id"))
-    request_key = _clean_str(payload.get("request_key")) or make_pause_request_key(
-        provider=provider,
-        runtime_key=runtime_key,
-        provider_request_id=provider_request_id,
-        fallback=_clean_str(getattr(event, "dedupe_key", None)),
-    )
-
-    if event.kind == "pause_request":
-        if event.session_id is None:
-            return False
-        if db.query(AgentSession.id).filter(AgentSession.id == event.session_id).first() is None:
-            return False
-        if _bool(payload.get("single_active", True)):
-            _supersede_runtime_requests_if_needed(db, runtime_key=runtime_key, request_key=request_key, occurred_at=occurred_at)
-        _row, changed = upsert_pause_request(
-            db,
-            session_id=event.session_id,
-            runtime_key=runtime_key,
-            provider=provider,
-            request_key=request_key,
-            provider_request_id=provider_request_id,
-            provider_ref=_mapping(payload.get("provider_ref") or payload.get("provider_ref_json")),
-            kind=_clean_str(payload.get("kind")) or PAUSE_KIND_STRUCTURED_QUESTION,
-            tool_name=_clean_str(payload.get("tool_name") or event.tool_name),
-            title=_clean_str(payload.get("title")),
-            summary=_clean_str(payload.get("summary")),
-            request_payload=_request_payload(payload),
-            can_respond=_bool(payload.get("can_respond")),
-            occurred_at=occurred_at,
-            expires_at=_datetime_payload(payload.get("expires_at")),
-        )
-        return changed
-
-    if event.kind == "pause_resolution":
-        row = resolve_pause_request(
-            db,
-            request_key=request_key,
-            runtime_key=runtime_key,
-            provider_request_id=provider_request_id,
-            status=_clean_str(payload.get("status")) or "resolved",
-            occurred_at=occurred_at,
-            response_payload=_mapping(payload.get("response_payload") or payload.get("response_payload_json")),
-            response_text=_clean_str(payload.get("response_text") or payload.get("message")),
-        )
-        return bool(row is not None and row.status != PENDING_STATUS)
-
-    return False
 
 
 def pause_runtime_request_key(event: Any) -> str:
@@ -845,46 +622,6 @@ def serialize_pause_request_projection(
         "resolved_at": normalize_utc(row.resolved_at),
         "expires_at": normalize_utc(row.expires_at),
     }
-
-
-def _finish_pending(
-    db: Session,
-    *,
-    filters: list[Any],
-    status: str,
-    occurred_at: datetime | None,
-    response_text: str | None = None,
-) -> int:
-    resolved_at = normalize_utc(occurred_at) or datetime.now(timezone.utc)
-    rows = db.query(SessionPauseRequest).filter(SessionPauseRequest.status == PENDING_STATUS, *filters).all()
-    changed = 0
-    for row in rows:
-        row.status = _terminal_status(status)
-        row.resolved_at = resolved_at
-        if response_text:
-            row.response_text = response_text
-        db.add(row)
-        changed += 1
-    if changed:
-        db.flush()
-    return changed
-
-
-def _supersede_runtime_requests_if_needed(db: Session, *, runtime_key: str, request_key: str, occurred_at: datetime) -> None:
-    rows = (
-        db.query(SessionPauseRequest)
-        .filter(SessionPauseRequest.runtime_key == runtime_key)
-        .filter(SessionPauseRequest.status == PENDING_STATUS)
-        .filter(SessionPauseRequest.request_key != request_key)
-        .all()
-    )
-    for row in rows:
-        row.status = "resolved"
-        row.resolved_at = occurred_at
-        row.response_text = "Superseded by a newer provider question."
-        db.add(row)
-    if rows:
-        db.flush()
 
 
 def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:

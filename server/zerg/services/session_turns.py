@@ -13,7 +13,6 @@ from typing import Callable
 from typing import TypeVar
 from uuid import UUID
 
-from sqlalchemy import and_
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
@@ -22,7 +21,6 @@ from sqlalchemy.orm import Session
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
@@ -34,7 +32,6 @@ from zerg.services.provider_interaction_semantics import semantic_event_included
 from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
-from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
@@ -161,22 +158,6 @@ def run_session_turn_write(
         return result
 
 
-def run_best_effort_session_turn_write(
-    *,
-    db_bind,
-    label: str,
-    fn: Callable[[Session], object],
-):
-    try:
-        with Session(bind=db_bind) as turn_db:
-            result = fn(turn_db)
-            turn_db.commit()
-            return result
-    except Exception:
-        logger.warning("Session turn write failed for %s", label, exc_info=True)
-        return None
-
-
 def _log_background_session_turn_write_failure(task: asyncio.Task, *, label: str) -> None:
     try:
         exc = task.exception()
@@ -219,25 +200,6 @@ async def execute_session_turn_write(
             timeout_seconds,
         )
         raise
-
-
-async def execute_best_effort_session_turn_write(
-    *,
-    db_bind,
-    label: str,
-    fn: Callable[[Session], T],
-    timeout_seconds: float | None = None,
-) -> T | None:
-    try:
-        return await execute_session_turn_write(
-            db_bind=db_bind,
-            label=label,
-            fn=fn,
-            timeout_seconds=timeout_seconds,
-        )
-    except Exception:
-        logger.warning("Session turn write failed for %s", label, exc_info=True)
-        return None
 
 
 def create_session_turn(
@@ -444,104 +406,6 @@ def materialize_managed_transcript_turns(
     return created
 
 
-def materialize_pending_managed_transcript_turn(
-    db: Session,
-    *,
-    session_id: UUID,
-) -> bool:
-    """Materialize one pending reconstructed turn from transcript/runtime state.
-
-    This keeps list endpoints from reconstructing "waiting for assistant output"
-    by scanning ``events`` at request time. Call it from background,
-    maintenance, or non-list write paths that are allowed to inspect transcript
-    history.
-    """
-
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
-    if session is None or project_session_capabilities(db, session_id=session_id).managed_transport is None:
-        return False
-
-    existing_pending = (
-        db.query(SessionTurn.id)
-        .filter(
-            SessionTurn.session_id == session_id,
-            SessionTurn.durable_at.is_(None),
-            SessionTurn.state.in_(tuple(PENDING_RESPONSE_TURN_STATES)),
-        )
-        .limit(1)
-        .one_or_none()
-    )
-    if existing_pending is not None:
-        return False
-
-    latest_user_event = _latest_semantic_user_event_map(
-        db,
-        [session_id],
-        {session_id: str(session.provider or "")},
-    ).get(session_id)
-    if latest_user_event is None:
-        return False
-    latest_user_id, latest_user_at, latest_user_text = latest_user_event
-    latest_response_id = (
-        db.query(func.max(AgentEvent.id))
-        .filter(AgentEvent.session_id == session_id)
-        .filter(durable_transcript_event_predicate())
-        .filter(AgentEvent.role.in_(("assistant", "tool")))
-        .scalar()
-        or 0
-    )
-    latest_user_id_int = int(latest_user_id or 0)
-    if latest_user_id_int <= int(latest_response_id or 0):
-        return False
-
-    user_observed_at = normalize_utc(latest_user_at)
-    if user_observed_at is None:
-        return False
-    active_observation = (
-        db.query(SessionObservation.observed_at)
-        .filter(SessionObservation.session_id == session_id)
-        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
-        .filter(SessionObservation.observed_at >= user_observed_at)
-        .filter(SessionObservation.payload_json.like('%"kind":"phase_signal"%'))
-        .filter(
-            or_(
-                SessionObservation.payload_json.like('%"phase":"thinking"%'),
-                SessionObservation.payload_json.like('%"phase":"running"%'),
-                SessionObservation.payload_json.like('%"phase":"blocked"%'),
-            )
-        )
-        .order_by(SessionObservation.observed_at.asc(), SessionObservation.id.asc())
-        .limit(1)
-        .scalar()
-    )
-    active_at = normalize_utc(active_observation)
-    if active_at is None:
-        return False
-
-    request_id = f"{SESSION_TURN_RECONSTRUCTED_REQUEST_PREFIX}:pending:{latest_user_id_int}"
-    normalized_user_text = strip_claude_channel_wrapper(str(latest_user_text or ""))
-    try:
-        with db.begin_nested():
-            turn = create_session_turn(
-                db,
-                session_id=session_id,
-                request_id=request_id,
-                source_kind=SESSION_TURN_SOURCE_TRANSCRIPT_RECONSTRUCTED,
-                timing_confidence=SESSION_TURN_CONFIDENCE_INFERRED,
-                baseline_event_id=int(latest_response_id or 0) or None,
-                user_submitted_at=user_observed_at,
-                expected_user_text=normalized_user_text or None,
-            )
-            if turn.durable_at is None:
-                turn.user_event_id = latest_user_id_int
-                turn.send_accepted_at = user_observed_at
-                turn.active_phase_observed_at = active_at
-                turn.state = SESSION_TURN_STATE_ACTIVE
-    except IntegrityError:
-        return False
-    return True
-
-
 def _transcript_materialization_event_floor(existing_turns: list[SessionTurn]) -> int | None:
     assistant_event_ids = [
         int(event_id)
@@ -569,111 +433,6 @@ def get_session_turn(
         )
         .one_or_none()
     )
-
-
-def load_pending_response_turn_map(
-    db: Session,
-    session_ids: list[UUID],
-    *,
-    include_event_fallback: bool = True,
-) -> dict[UUID, bool]:
-    """Return sessions whose latest user prompt has no visible response yet.
-
-    Managed sends create exact ``SessionTurn`` rows, but imported/native
-    provider transcripts can still produce a user prompt plus runtime phase
-    signals before the matching assistant output lands. In those cases total
-    user/assistant counts are not useful: real Claude transcripts often have
-    many assistant/tool events per user turn. Fall back to event order plus a
-    post-prompt active phase so clients can honestly show transcript syncing
-    while the archive catches up.
-    """
-    if not session_ids:
-        return {}
-    rows = (
-        db.query(SessionTurn.session_id)
-        .filter(SessionTurn.session_id.in_(session_ids))
-        .filter(SessionTurn.durable_at.is_(None))
-        .filter(SessionTurn.state.in_(tuple(PENDING_RESPONSE_TURN_STATES)))
-        .all()
-    )
-    pending = {row[0]: True for row in rows if row[0] is not None}
-    if include_event_fallback:
-        remaining_session_ids = [session_id for session_id in session_ids if session_id not in pending]
-        pending.update(_load_unanswered_user_prompt_map(db, remaining_session_ids))
-    return pending
-
-
-def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> dict[UUID, bool]:
-    if not session_ids:
-        return {}
-
-    provider_by_session = {
-        session.id: str(session.provider or "") for session in db.query(AgentSession).filter(AgentSession.id.in_(session_ids)).all()
-    }
-    latest_user_events = _latest_semantic_user_event_map(db, session_ids, provider_by_session)
-    latest_user_id_by_session: dict[UUID, int] = {}
-    latest_user_timestamp_by_session: dict[UUID, datetime] = {}
-    for session_id, (event_id, timestamp, _content) in latest_user_events.items():
-        latest_user_id_by_session[session_id] = int(event_id)
-        if timestamp is not None:
-            latest_user_timestamp_by_session[session_id] = timestamp
-    if not latest_user_id_by_session:
-        return {}
-
-    latest_response_rows = (
-        db.query(AgentEvent.session_id, func.max(AgentEvent.id))
-        .filter(AgentEvent.session_id.in_(latest_user_id_by_session.keys()))
-        .filter(durable_transcript_event_predicate())
-        .filter(AgentEvent.role.in_(("assistant", "tool")))
-        .group_by(AgentEvent.session_id)
-        .all()
-    )
-    latest_response_id_by_session = {
-        session_id: int(event_id) for session_id, event_id in latest_response_rows if session_id is not None and event_id is not None
-    }
-
-    candidate_user_ids = [
-        user_event_id
-        for session_id, user_event_id in latest_user_id_by_session.items()
-        if user_event_id > int(latest_response_id_by_session.get(session_id, 0) or 0)
-    ]
-    if not candidate_user_ids:
-        return {}
-
-    active_phase_conditions = []
-    for session_id, user_event_id in latest_user_id_by_session.items():
-        if user_event_id not in candidate_user_ids:
-            continue
-        timestamp = latest_user_timestamp_by_session.get(session_id)
-        observed_after = normalize_utc(timestamp)
-        if session_id is None or observed_after is None:
-            continue
-        active_phase_conditions.append(
-            and_(
-                SessionObservation.session_id == session_id,
-                SessionObservation.observed_at >= observed_after,
-            )
-        )
-    if not active_phase_conditions:
-        return {}
-
-    rows = (
-        db.query(SessionObservation.session_id)
-        .filter(SessionObservation.session_id.in_(latest_user_id_by_session.keys()))
-        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
-        .filter(or_(*active_phase_conditions))
-        .filter(SessionObservation.payload_json.like('%"kind":"phase_signal"%'))
-        .filter(
-            or_(
-                SessionObservation.payload_json.like('%"phase":"thinking"%'),
-                SessionObservation.payload_json.like('%"phase":"running"%'),
-                SessionObservation.payload_json.like('%"phase":"blocked"%'),
-            )
-        )
-        .group_by(SessionObservation.session_id)
-        .all()
-    )
-    return {row[0]: True for row in rows if row[0] is not None}
 
 
 def _latest_semantic_user_event_map(
@@ -767,49 +526,6 @@ def _latest_semantic_user_event_map(
         if current is None or candidate[0] > current[0]:
             latest[row.session_id] = candidate
     return latest
-
-
-def get_session_turn_by_id(
-    db: Session,
-    *,
-    session_id: UUID,
-    turn_id: int,
-) -> SessionTurn | None:
-    if not turn_id or turn_id <= 0:
-        return None
-    return (
-        db.query(SessionTurn)
-        .filter(
-            SessionTurn.session_id == session_id,
-            SessionTurn.id == turn_id,
-        )
-        .one_or_none()
-    )
-
-
-def list_session_turns(
-    db: Session,
-    *,
-    session_id: UUID,
-    limit: int = 50,
-    offset: int = 0,
-    order: str = "asc",
-) -> tuple[list[SessionTurn], int]:
-    query = db.query(SessionTurn).filter(SessionTurn.session_id == session_id)
-    total = query.count()
-
-    order_columns = (
-        SessionTurn.user_submitted_at,
-        SessionTurn.created_at,
-        SessionTurn.id,
-    )
-    if order == "desc":
-        query = query.order_by(*(column.desc() for column in order_columns))
-    else:
-        query = query.order_by(*(column.asc() for column in order_columns))
-
-    turns = query.offset(max(0, offset)).limit(max(1, limit)).all()
-    return turns, total
 
 
 def get_session_turn_snapshot(

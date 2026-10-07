@@ -316,30 +316,6 @@ def get_model_for_use_case(use_case: str) -> str:
     return _resolve_model_reference(tier_or_model, source=f"useCases.text.{use_case}")
 
 
-def get_api_key_env_var_for_use_case(use_case: str) -> str:
-    """Return API key env var required for the use-case's resolved model."""
-    model_id = get_model_for_use_case(use_case)
-    model_config = MODELS_BY_ID.get(model_id)
-    if not model_config:
-        raise ValueError(f"Model {model_id} not found in models config")
-    return _get_api_key_env_var(model_config)
-
-
-def validate_use_case_llm_config(use_case: str) -> tuple[str, ModelProvider, str]:
-    """Validate that a use case resolves to a model and has required key env var."""
-    model_id = get_model_for_use_case(use_case)
-    model_config = MODELS_BY_ID.get(model_id)
-    if not model_config:
-        raise ValueError(f"Model {model_id} not found in models config")
-
-    api_key_env_var = _get_api_key_env_var(model_config)
-    if not os.getenv(api_key_env_var):
-        model_detail = f"model='{model_id}', provider='{model_config.provider.value}'"
-        raise ValueError(f"{api_key_env_var} required for use case '{use_case}' ({model_detail})")
-
-    return model_id, model_config.provider, api_key_env_var
-
-
 def resolve_use_case_runtime_identity(use_case: str) -> UseCaseRuntimeIdentity:
     """Resolve durable transport identity, including an explicit missing key.
 
@@ -397,44 +373,9 @@ def resolve_use_case_runtime_binding(use_case: str) -> UseCaseRuntimeBinding:
 # =============================================================================
 
 
-def get_model_by_id(model_id: str) -> Optional[ModelConfig]:
-    """Get a model by its ID."""
-    return MODELS_BY_ID.get(model_id)
-
-
-def get_default_model() -> ModelConfig:
-    """Get the default model."""
-    return DEFAULT_MODEL
-
-
-def get_default_model_id() -> str:
-    """Get the default model ID as a string."""
-    return DEFAULT_MODEL.id
-
-
-def get_all_models() -> List[ModelConfig]:
-    """Get all available models."""
-    return AVAILABLE_MODELS
-
-
 def get_all_models_for_api() -> List[Dict]:
     """Get all models in a format suitable for API responses."""
     return [model.to_dict() for model in AVAILABLE_MODELS]
-
-
-def get_tier_model(tier: str) -> str:
-    """
-    Get model ID for a tier.
-
-    Args:
-        tier: One of "TIER_1", "TIER_2", "TIER_3"
-
-    Returns:
-        The model ID for that tier.
-    """
-    if tier not in _TIERS:
-        raise ValueError(f"Unknown tier: {tier}. Valid: {list(_TIERS.keys())}")
-    return _TIERS[tier]
 
 
 # =============================================================================

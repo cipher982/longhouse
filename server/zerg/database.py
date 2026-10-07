@@ -76,11 +76,6 @@ def get_test_worker_id() -> str | None:
     return _test_worker_id.get()
 
 
-def list_test_worker_ids() -> list[str]:
-    """Return known test worker ids for E2E DB routing."""
-    return list(_worker_session_factories.keys())
-
-
 def _safe_worker_id(worker_id: str) -> str:
     # Keep filenames stable + safe (allow digits, letters, dash, underscore).
     return "".join(ch for ch in worker_id if ch.isalnum() or ch in {"-", "_"}).strip() or "0"
@@ -541,11 +536,6 @@ def _resolve_write_session_factory() -> sessionmaker:
     return session_factory
 
 
-def get_write_engine() -> Engine | None:
-    """Return the dedicated write engine (for WAL checkpoint etc.)."""
-    return _write_engine
-
-
 def get_live_engine() -> Engine | None:
     """Return the optional Live Store read engine."""
     return live_engine
@@ -559,11 +549,6 @@ def get_live_session_factory() -> sessionmaker | None:
             factory, _write_factory = _get_or_create_live_worker_session_factories(worker_id)
             return factory
     return live_session_factory
-
-
-def get_live_write_engine() -> Engine | None:
-    """Return the optional Live Store write engine."""
-    return live_write_engine
 
 
 def get_live_write_session_factory() -> sessionmaker | None:

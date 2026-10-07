@@ -1506,23 +1506,6 @@ def _canonical_outbox_value(value: Any) -> Any:
     return value
 
 
-def _launch_view_dto(view: Any) -> dict[str, Any]:
-    return {
-        "session_id": str(view.session_id),
-        "launch_state": view.launch_state,
-        "execution_lifetime": view.execution_lifetime,
-        "launch_error_code": view.launch_error_code,
-        "launch_error_message": view.launch_error_message,
-        "owner_id": view.owner_id,
-        "provider": view.provider,
-        "device_id": view.device_id,
-        "machine_id": view.machine_id,
-        "project": view.project,
-        "created_at": _encode_datetime(view.created_at),
-        "updated_at": _encode_datetime(view.updated_at),
-    }
-
-
 def _interaction_id(request_key: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"longhouse-pause:{request_key}"))
 

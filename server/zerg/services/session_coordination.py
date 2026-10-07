@@ -6,16 +6,9 @@ session discovery and tail semantics.
 
 from __future__ import annotations
 
-from collections.abc import Collection
-from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
-from sqlalchemy.orm import Session
-
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
@@ -25,7 +18,6 @@ from zerg.services.agents.kernel_capabilities import project_capabilities_from_r
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.live_catalog_timeline import project_catalog_timeline_row
-from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_views import WallSessionResponse
 
 
@@ -115,89 +107,3 @@ def project_storage_v2_wall(
             break
 
     return items
-
-
-def build_peer_payloads(
-    sessions: Sequence[WallSessionResponse],
-    *,
-    active_only: bool = True,
-    exclude_session_id: UUID | None = None,
-    limit: int | None = None,
-) -> list[dict[str, Any]]:
-    """Project wall sessions into the narrower peer payload used by agents."""
-    excluded_session_id = str(exclude_session_id) if exclude_session_id is not None else None
-    peers: list[dict[str, Any]] = []
-
-    for session in sessions:
-        if excluded_session_id and session.session_id == excluded_session_id:
-            continue
-        if active_only and not session.has_live_presence:
-            continue
-
-        peers.append(
-            {
-                "session_id": session.session_id,
-                "device_name": session.device_name,
-                "provider": session.provider,
-                "cwd": session.cwd,
-                "git_repo": session.git_repo,
-                "kernel_control_label": session.kernel_control_label,
-                "kernel_live_control_available": session.kernel_live_control_available,
-                "kernel_host_reattach_available": session.kernel_host_reattach_available,
-                "kernel_observe_only": session.kernel_observe_only,
-                "kernel_search_only": session.kernel_search_only,
-                "kernel_staleness_reason": session.kernel_staleness_reason,
-                "presence_state": session.presence_state,
-                "summary_title": session.summary_title,
-                "git_branch": session.git_branch,
-            }
-        )
-        if limit is not None and len(peers) >= limit:
-            break
-
-    return peers
-
-
-def load_session_tail(
-    db: Session,
-    *,
-    session_id: UUID,
-    limit: int = 30,
-    roles: Collection[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Return the recent tail of a session in chronological order.
-
-    ``roles`` narrows which event roles count toward ``limit``, so a caller can
-    ask for real turns instead of tool output.
-
-    Content is returned whole. The per-event budget belongs to the caller that
-    knows what the requester asked for, so the router owns the single
-    truncation site.
-    """
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if session is None:
-        raise ValueError("Session not found")
-
-    selected_roles = sorted(roles) if roles else ["user", "assistant", "tool"]
-    events = (
-        db.query(AgentEvent)
-        .filter(AgentEvent.session_id == session_id)
-        .filter(AgentEvent.role.in_(selected_roles))
-        .filter(AgentEvent.content_text.isnot(None))
-        .filter(durable_transcript_event_predicate())
-        .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
-        .limit(limit)
-        .all()
-    )
-    events.reverse()
-
-    return [
-        {
-            "id": event.id,
-            "role": event.role,
-            "content": event.content_text or "",
-            "tool_name": event.tool_name,
-            "timestamp": event.timestamp.isoformat() if event.timestamp else None,
-        }
-        for event in events
-    ]

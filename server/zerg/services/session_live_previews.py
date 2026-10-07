@@ -721,19 +721,6 @@ def load_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[
     return preview_map_from_rows(rows)
 
 
-def load_live_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[str, TranscriptPreview]:
-    if not session_ids:
-        return {}
-    session_id_strings = [str(session_id) for session_id in session_ids]
-    rows = (
-        db.query(LiveSessionLivePreview)
-        .filter(LiveSessionLivePreview.session_id.in_(session_id_strings))
-        .filter(LiveSessionLivePreview.superseded_at.is_(None))
-        .all()
-    )
-    return preview_map_from_rows(rows)
-
-
 def preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
     previews: dict[str, TranscriptPreview] = {}
     for row in rows:

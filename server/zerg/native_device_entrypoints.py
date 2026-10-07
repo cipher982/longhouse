@@ -63,10 +63,3 @@ def available_native_managed_launch_commands() -> tuple[tuple[str, str], ...]:
             continue
         out.append((str(providers[0]), target))
     return tuple(sorted(out))
-
-
-def native_launch_command_for_provider(provider: str) -> str | None:
-    for candidate, command in available_native_managed_launch_commands():
-        if candidate == provider:
-            return command
-    return None

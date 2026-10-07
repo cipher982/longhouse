@@ -278,34 +278,6 @@ def list_session_ids_with_queued_live_receipts(db: Session, *, limit: int) -> li
     return session_ids
 
 
-def cancel_live_queued_receipt(
-    db: Session,
-    *,
-    session_id: UUID | str,
-    receipt_id: str,
-) -> LiveInputReceiptSnapshot | None:
-    now = datetime.now(timezone.utc)
-    updated = (
-        db.query(LiveSessionInputReceipt)
-        .filter(
-            LiveSessionInputReceipt.session_id == _session_key(session_id),
-            LiveSessionInputReceipt.id == str(receipt_id),
-            LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
-        )
-        .update(
-            {
-                "status": INPUT_STATUS_CANCELLED,
-                "updated_at": now,
-            },
-            synchronize_session=False,
-        )
-    )
-    db.commit()
-    if updated != 1:
-        return None
-    return load_live_input_receipt_by_id(db, receipt_id=str(receipt_id))
-
-
 def claim_next_live_queued_receipt(
     db: Session,
     *,

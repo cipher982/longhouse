@@ -147,31 +147,3 @@ def provider_proof_session_clause(model):
     if machine_id_column is not None:
         clauses.append(func.lower(func.coalesce(machine_id_column, "")) == PROVIDER_FACTORY_MACHINE_ID)
     return or_(*clauses)
-
-
-def internal_canary_session_clause(model):
-    """Return a SQLAlchemy clause matching synthetic canary/debug sessions.
-
-    The canary producer should write provider=canary/project=canary, but live
-    dogfood data already has typo/legacy rows. User-facing timeline defaults
-    should hide all of them; explicit provider=canary remains the debug escape.
-    """
-
-    provider = func.lower(func.coalesce(model.provider, ""))
-    project = func.lower(func.coalesce(model.project, ""))
-    device_id = func.lower(func.coalesce(model.device_id, ""))
-    label_clauses = []
-    for prefix in INTERNAL_CANARY_LABEL_PREFIXES:
-        label_clauses.extend(
-            [
-                project == prefix,
-                project.like(f"{prefix}-%"),
-                device_id == prefix,
-                device_id.like(f"%-{prefix}"),
-            ]
-        )
-
-    return or_(
-        provider.in_(INTERNAL_CANARY_PROVIDER_ALIASES),
-        *label_clauses,
-    )

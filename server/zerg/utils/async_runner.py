@@ -188,29 +188,3 @@ _shared_runner = SharedAsyncRunner()
 def get_shared_runner() -> SharedAsyncRunner:
     """Get the global shared async runner instance."""
     return _shared_runner
-
-
-def run_in_shared_loop(coro: Awaitable[Any]) -> Any:
-    """Run a coroutine in the shared async loop.
-
-    This is the main entry point for running async code from sync contexts.
-
-    Args:
-        coro: The coroutine to execute
-
-    Returns:
-        The result of the coroutine
-    """
-    return _shared_runner.run_coroutine(coro)
-
-
-def run_sync_in_shared_loop(func: Callable[[], Any]) -> Any:
-    """Run a synchronous function in the shared async loop.
-
-    Args:
-        func: The synchronous function to execute
-
-    Returns:
-        The result of the function
-    """
-    return _shared_runner.run_sync(func)

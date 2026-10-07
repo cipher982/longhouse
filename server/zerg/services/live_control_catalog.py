@@ -453,11 +453,6 @@ def live_session_input_block_reason(db: Session, session: LiveControlSession) ->
     return live_control_command_block_reason(db, session_id=session.id)
 
 
-def live_session_closed_for_input(db: Session, session: LiveControlSession) -> bool:
-    """Compatibility predicate for whether the current run rejects new input."""
-    return live_session_input_block_reason(db, session) is not None
-
-
 async def live_control_session_activity_state(session_id: UUID | str, *, owner_id: int) -> str | None:
     """The served activity state for one session, or None when unreadable.
 

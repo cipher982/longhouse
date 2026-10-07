@@ -8,7 +8,6 @@ from datetime import time
 from datetime import timedelta
 from datetime import timezone
 from enum import Enum
-from typing import Literal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -179,10 +178,6 @@ def evaluate_tier2_delivery(
             return AttentionDeliveryDecision(AttentionDeliveryAction.QUEUE, "quiet_hours", queue_until)
 
     return AttentionDeliveryDecision(AttentionDeliveryAction.DELIVER)
-
-
-def tier_label(tier: Literal[1, 2]) -> str:
-    return "tier1" if tier == 1 else "tier2"
 
 
 @dataclass(frozen=True)

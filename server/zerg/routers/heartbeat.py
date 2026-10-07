@@ -58,11 +58,8 @@ from zerg.metrics import agents_heartbeat_rejected_total
 from zerg.metrics import agents_heartbeat_requests_total
 from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import agents_machine_evidence_dropped_total
-from zerg.metrics import managed_session_heartbeat_lease_rows_total
-from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
-from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -861,18 +858,6 @@ def _normalize_unmanaged_provider_session_id(provider: str, provider_session_id:
     return value
 
 
-def _managed_lease_state_label(lease: ManagedSessionLeaseIn) -> str:
-    state = (lease.state or "").strip().lower()
-    return state if state in MANAGED_SESSION_LEASE_STATES else "other"
-
-
-def _record_managed_session_lease(lease: ManagedSessionLeaseIn) -> None:
-    managed_session_heartbeat_lease_rows_total.labels(
-        provider=_managed_lease_provider_label(lease),
-        state=_managed_lease_state_label(lease),
-    ).inc()
-
-
 def _resolved_join_key_value(evidence: ResolvedEvidenceIn, prefix: str) -> str | None:
     match_prefix = f"{prefix}="
     for raw_key in evidence.join_keys:
@@ -965,76 +950,11 @@ def _resolved_process_start_timestamp(process: ResolvedProcessIn) -> datetime | 
     return process.started_at
 
 
-def _is_managed_codex_session(db: Session, session: AgentSession | None) -> bool:
-    if session is None:
-        return False
-    if str(session.provider or "").strip().lower() != "codex":
-        return False
-    capabilities = project_session_capabilities(db, session_id=session.id)
-    transport = capabilities.managed_transport
-    return bool(
-        capabilities.live_control_available
-        or capabilities.host_reattach_available
-        or (transport is not None and transport.value == "codex_app_server")
-    )
-
-
 def _is_managed_session(db: Session, session: AgentSession | None) -> bool:
     if session is None:
         return False
     capabilities = project_session_capabilities(db, session_id=session.id)
     return bool(capabilities.live_control_available or capabilities.host_reattach_available or capabilities.managed_transport is not None)
-
-
-def _runtime_events_for_managed_leases(
-    leases: list[ManagedSessionLeaseIn],
-    *,
-    device_id: str,
-    received_at: datetime,
-) -> list[RuntimeEventIngest]:
-    del device_id, received_at
-    for lease in leases:
-        _record_managed_session_lease(lease)
-    # Managed lease freshness is materialized into ManagedSessionControlState.
-    # The runtime reducer still accepts historical engine_attached_lease events,
-    # but the default heartbeat path must not synthesize provider phase events
-    # merely to keep managed control alive.
-    return []
-
-
-def _latest_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None:
-    row = (
-        db.query(AgentHeartbeat.sessions_digest)
-        .filter(AgentHeartbeat.device_id == device_id)
-        .order_by(AgentHeartbeat.received_at.desc(), AgentHeartbeat.id.desc())
-        .first()
-    )
-    if row is None:
-        return None
-    digest = str(row.sessions_digest or "").strip()
-    return digest or None
-
-
-def _latest_live_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None:
-    row = (
-        db.query(LiveHeartbeatStamp.sessions_digest)
-        .filter(LiveHeartbeatStamp.device_id == device_id)
-        .order_by(LiveHeartbeatStamp.received_at.desc(), LiveHeartbeatStamp.id.desc())
-        .first()
-    )
-    if row is None:
-        return None
-    digest = str(row.sessions_digest or "").strip()
-    return digest or None
-
-
-def _managed_lease_session_ids(leases: list[ManagedSessionLeaseIn]) -> set[UUID]:
-    return {lease.session_id for lease in leases if lease.session_id is not None}
-
-
-def _has_final_managed_codex_terminal(db: Session, session_id: UUID) -> bool:
-    state = load_runtime_state_map(db, [session_id]).get(str(session_id))
-    return str(getattr(state, "terminal_state", "") or "").strip() == "session_ended"
 
 
 def _runtime_events_for_missing_unbound_unmanaged_sessions(

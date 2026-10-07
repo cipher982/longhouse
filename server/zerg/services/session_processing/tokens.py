@@ -230,13 +230,3 @@ def _truncate_sandwich(
         combined_tokens = enc.encode(combined, disallowed_special=())
 
     return combined, len(combined_tokens), True
-
-
-def estimate_tokens_fast(text: str) -> int:
-    """Conservative token estimate (~3 chars/token).
-
-    Use when tiktoken is unavailable or for rough budget checks.
-    """
-    if not text:
-        return 0
-    return len(text) // 3

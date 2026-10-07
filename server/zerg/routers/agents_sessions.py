@@ -1468,22 +1468,6 @@ def _is_hex_digest(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
-def _object_source_key(item: dict[str, object]) -> str:
-    """The source-order key a replica uses to reassemble one session in order."""
-
-    return json.dumps(
-        [
-            str(item["machine_id"]),
-            str(item["provider"]),
-            str(item["opaque_source_id"]),
-            str(item["source_epoch"]),
-            f"{int(str(item['range_start'])):020d}",
-            str(item["envelope_id"]),
-        ],
-        separators=(",", ":"),
-    )
-
-
 def _project_archive_object(item: dict[str, object]) -> dict[str, object]:
     return {
         "envelope_id": str(item["envelope_id"]),

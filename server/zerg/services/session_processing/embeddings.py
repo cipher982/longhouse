@@ -8,7 +8,6 @@ import os
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -60,11 +59,6 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def estimate_tokens(text: str) -> int:
-    """Conservative token estimate (char-based, ~3 chars/token)."""
-    return len(text) // 3
-
-
 def embedding_to_bytes(arr: np.ndarray) -> bytes:
     """Serialize numpy float32 array to bytes."""
     return arr.astype(np.float32).tobytes()
@@ -73,11 +67,6 @@ def embedding_to_bytes(arr: np.ndarray) -> bytes:
 def bytes_to_embedding(data: bytes, dims: int) -> np.ndarray:
     """Deserialize bytes back to numpy float32 array."""
     return np.frombuffer(data, dtype=np.float32).copy().reshape(dims)
-
-
-def _chunk_batches(chunks: Sequence[EmbeddingChunk]) -> list[list[EmbeddingChunk]]:
-    batch_size = max(1, EMBEDDING_BATCH_SIZE)
-    return [list(chunks[i : i + batch_size]) for i in range(0, len(chunks), batch_size)]
 
 
 def prepare_turn_chunks(events: list[dict], *, provider: str | None = None) -> list[EmbeddingChunk]:

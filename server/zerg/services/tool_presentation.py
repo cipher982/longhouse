@@ -44,10 +44,6 @@ def _load_rules(path: str = str(DEFAULT_RULES_PATH)) -> dict[str, Any]:
     return value
 
 
-def clear_tool_presentation_cache() -> None:
-    _load_rules.cache_clear()
-
-
 def _skip_space(text: str, index: int) -> int:
     while index < len(text) and text[index].isspace():
         index += 1
