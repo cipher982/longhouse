@@ -113,21 +113,25 @@ export function ReasoningRow({
             Show less
           </button>
         </>
-      ) : (
+      ) : openable ? (
         <button
           type="button"
           className="tl-thought__head"
           aria-expanded={false}
-          aria-controls={bodyId}
           aria-label="Expand reasoning"
-          onClick={() => {
-            if (openable) setExpanded(true);
-          }}
+          onClick={() => setExpanded(true)}
         >
           <span ref={proseRef} className="tl-thought__prose">
             {prose || "No reasoning details"}
           </span>
         </button>
+      ) : (
+        // A thought that fits its three lines is text, not a control.
+        <div className="tl-thought__head">
+          <span ref={proseRef} className="tl-thought__prose">
+            {prose || "No reasoning details"}
+          </span>
+        </div>
       )}
     </div>
   );

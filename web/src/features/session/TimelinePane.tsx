@@ -1226,13 +1226,11 @@ function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteracti
 
 /** The first call's own words for what it was doing, with a count of the rest. */
 function firstIntentLabel(interactions: ToolInteraction[]): string | null {
-  const intents = interactions
-    .filter((interaction) => !isEditInteraction(interaction))
-    .map(getToolIntentLabel)
-    .filter((intent): intent is string => Boolean(intent));
-  if (intents.length === 0) return null;
-  const others = new Set(intents.slice(1).filter((intent) => intent !== intents[0])).size;
-  return others > 0 ? `${intents[0]} +${others}` : intents[0];
+  const calls = interactions.filter((interaction) => !isEditInteraction(interaction));
+  const first = calls.map(getToolIntentLabel).find((intent): intent is string => Boolean(intent));
+  if (!first) return null;
+  const rest = calls.length - 1;
+  return rest > 0 ? `${first} +${rest}` : first;
 }
 
 function ToolRow(props: {
