@@ -96,6 +96,11 @@ def git(repo: str | Path, *args: str, stdin: str | None = None, check: bool = Tr
     return proc.stdout
 
 
+def git_ok(repo: str | Path, *args: str) -> bool:
+    """A git question answered by its exit status (merge-base --is-ancestor)."""
+    return subprocess.run(["git", "-c", "core.quotepath=false", *args], cwd=repo, capture_output=True).returncode == 0
+
+
 def resolve(repo: str | Path, rev: str) -> str:
     return git(repo, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}", check=False).strip() or _missing(rev)
 
@@ -323,14 +328,18 @@ class Landed:
         for rev in revs:
             if rev == "--not":
                 negate = True
-            elif ".." in rev and "..." not in rev:
+            elif "..." in rev or (rev.startswith("--") and not rev.startswith("--glob=")):
+                raise GateError(f"cannot read a landed history from {rev!r} (A..B, ^X, --not and --glob= only)")
+            elif ".." in rev:
                 a, b = rev.split("..", 1)
-                excludes.append(a)
+                excludes.append(a or "HEAD")
                 tips.append(resolve(repo, b or "HEAD"))
             elif rev.startswith("^"):
                 excludes.append(rev[1:])
-            elif negate or rev.startswith("--"):
-                (excludes if negate else tips).append(rev)
+            elif negate:
+                excludes.append(rev)
+            elif rev.startswith("--glob="):
+                tips += git(repo, "for-each-ref", "--format=%(objectname)", rev.removeprefix("--glob="), check=False).split()
             else:
                 tips.append(resolve(repo, rev))
         return cls(repo, [*tips, *remote_main_shas(repo)], excludes)
@@ -358,8 +367,7 @@ class Landed:
         if key not in self._memo:
             self._memo[key] = bool(
                 sha in self.shas()
-                or any(subprocess.run(["git", "merge-base", "--is-ancestor", sha, tip], cwd=self.repo,
-                                      capture_output=True).returncode == 0 for tip in self.tips)
+                or any(git_ok(self.repo, "merge-base", "--is-ancestor", sha, tip) for tip in self.tips)
                 or (patch_id and patch_id in self.patches()))
         return self._memo[key]
 
@@ -399,15 +407,17 @@ class Receipts:
 
     A receipt whose head did not land (a proposal: withdrawn, reworked, or landed only in part) still
     covers the commits of it that did land, by SHA or patch, but only while it holds no open gated
-    finding. One that does has no say at all, coverage included: its finding may be about the part that
-    never landed, and attribution by file cannot always tell (a revert touches its original's file), so
-    the landed commits need a review of what landed instead. Nothing gets through that the old rule
-    refused: there, every finding of every covering receipt blocked.
+    finding. One that does has no say at all, coverage and findings both (David, 2026-10-07: an
+    unlanded proposal must never affect a target): its finding may be about the part that never
+    landed, and attribution by file cannot tell (a revert touches its original's file). A landed
+    commit such a receipt covered then needs another covering receipt, and that receipt alone decides:
+    a proposal's finding about a landed commit is dropped by design, where the old rule refused it.
 
     Supersession: an open finding stops counting for a commit once a later complete review covers the
-    commit, reaches past everything the first review saw (its head is not a commit of the first
-    review: it read the fix too), and has no open finding of its own about the commit. A re-review of
-    exactly the same commits does not supersede anything: that would be review shopping, not a fix."""
+    commit, has no open finding of its own about it, and read a fix: a commit the first review did not
+    see that changes the file the finding names (or, for a finding attributed to its whole receipt, a
+    head past everything the first review saw). A re-review of the same commits, or of the same commits
+    plus unrelated ones, supersedes nothing; that needs a disposition."""
 
     def __init__(self, repo: str | Path, events: list[dict], landed: Landed):
         self.repo = repo
@@ -483,18 +493,24 @@ class Receipts:
         keys = self.about(r, finding)
         return commit.sha in keys or (not commit.merge and (commit.patch_id(self.repo) or "") in keys)
 
+    def reads_fix(self, old: dict, finding: dict, later: dict) -> bool:
+        """Whether `later` reviewed a fix of `old`'s finding: a commit `old` did not see that changes the
+        finding's file, or, when the finding names no file `old`'s commits changed, a head past all of them."""
+        seen = _keys(old.get("commits") or [])
+        new = [c for c in later.get("commits") or [] if not _keys([c]) & seen]
+        path = finding_path(finding.get("where"))
+        if path and any(path in (self._entry_files(old, c) or []) for c in old.get("commits") or []):
+            return any(path in (self._entry_files(later, c) or []) for c in new)
+        return bool(new) and not ({later.get("head"), _head_patch(later)} - {None}) & seen
+
     def blocking(self, commit: Commit, covering: list[dict]) -> list[tuple[dict, dict]]:
         """(receipt, finding) pairs still open about this commit and not superseded."""
         mine = {r["id"]: [f for f in self.open(r) if self.is_about(r, f, commit)] for r in covering}
         out = []
         for r in covering:
-            seen = _keys(r.get("commits") or [])
-            later_clean = [r2 for r2 in covering
-                           if self.order[r2["id"]] > self.order[r["id"]] and r2.get("state") == "complete"
-                           and not mine[r2["id"]]
-                           and not ({r2.get("head"), _head_patch(r2)} - {None}) & seen]
-            if not later_clean:
-                out += [(r, f) for f in mine[r["id"]]]
+            later_clean = [r2 for r2 in covering if self.order[r2["id"]] > self.order[r["id"]]
+                           and r2.get("state") == "complete" and not mine[r2["id"]]]
+            out += [(r, f) for f in mine[r["id"]] if not any(self.reads_fix(r, f, r2) for r2 in later_clean)]
         return out
 
 

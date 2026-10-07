@@ -887,6 +887,20 @@ class PromotionRuleTests(unittest.TestCase):
         self.assertEqual(self.promote(), [])
         self.assertNotIn(old, [r for v in self.promote() for r in v.reasons])
 
+    def test_a_later_clean_review_that_reads_no_change_to_the_findings_file_does_not_supersede(self):
+        x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
+        self.repo.receipt(self.served, x, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
+        other = self.repo.commit("unrelated", {"server/zerg/other.py": "1"})
+        self.repo.receipt(self.served, other)  # x plus an unrelated commit, clean: nothing fixed x
+        self.assertEqual([v.commit.sha for v in self.promote()], [x])
+
+    def test_a_finding_attributed_to_its_whole_receipt_is_superseded_by_a_review_reaching_past_it(self):
+        x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
+        self.repo.receipt(self.served, x, findings=[finding("F1", "blocking")])  # names no file x changed
+        fix = self.repo.commit("fix", {"server/zerg/y.py": "1"})
+        self.repo.receipt(self.served, fix)
+        self.assertEqual(self.promote(), [])
+
     def test_a_re_review_that_still_finds_the_problem_does_not_supersede(self):
         x = self.repo.commit("feature x", {"server/zerg/x.py": "1"})
         self.repo.receipt(self.served, x, findings=[self.located("F1", "blocking", "server/zerg/x.py")])
