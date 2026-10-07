@@ -70,6 +70,8 @@ ACCESS_PRESENTATION_KEYS: tuple[str, ...] = (
     "console_no_target",
 )
 TRANSCRIPT_PRESENTATION_KEYS: tuple[str, ...] = ("transcript_lagging",)
+# presentation.signal.state: the attention axis every client draws.
+SIGNAL_STATES: tuple[str, ...] = ("attention", "working", "quiet", "unknown", "closed")
 
 
 def session_state_contract_manifest() -> dict[str, Any]:
@@ -82,6 +84,7 @@ def session_state_contract_manifest() -> dict[str, Any]:
             "primary": list(PRIMARY_PRESENTATION_KEYS),
             "access": list(ACCESS_PRESENTATION_KEYS),
             "transcript": list(TRANSCRIPT_PRESENTATION_KEYS),
+            "signal": list(SIGNAL_STATES),
         },
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1538,6 +1541,7 @@ __all__ = [
     "helm_activity_held_by_lease",
     "PRESENTATION_POLICY_VERSION",
     "PRIMARY_PRESENTATION_KEYS",
+    "SIGNAL_STATES",
     "STATE_CONTRACT_VERSION",
     "TRANSCRIPT_PRESENTATION_KEYS",
     "SessionActionAvailability",

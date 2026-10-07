@@ -179,3 +179,12 @@ def test_no_headline_is_unknown():
     primary, signal = _signal(mode="helm")
     assert primary is None
     assert signal.state == "unknown"
+
+
+def test_the_served_literal_is_the_manifest_vocabulary():
+    from typing import get_args
+
+    from zerg.services.session_state_contract import SIGNAL_STATES
+    from zerg.services.session_state_contract import SignalState
+
+    assert get_args(SignalState) == SIGNAL_STATES
