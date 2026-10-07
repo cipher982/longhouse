@@ -20,6 +20,13 @@ const distAssetsDir = path.join(distDir, 'assets');
 // dependency was added, and prerender code (react-dom/static) is in no client
 // chunk. Budget = 451.5 + 16.6 (the largest single feature since the split) =
 // 468.1, rounded up to 470.
+// Re-measured 2026-10-07: 471.8 KiB in CI (first over at 470.4 with the host
+// update continuity web work, a5a130e9e). Per-chunk gzip against the last green
+// run's web-dist (a77248039, 2026-10-06): +4.1 KiB, all feature code in existing
+// chunks: base +1.8 (host-update continuity), session detail +0.8 (steer and
+// attachments), ModelPicker +0.8 (composer model chip), index +0.5. No
+// dependency changed (web/package.json identical). Same margin rule:
+// 471.8 + 16.6 = 488.4, rounded up to 490.
 //
 // entryGzip is what index.html loads before any route renders (the entry
 // script and its modulepreloads): the cost every visitor, landing page
@@ -29,7 +36,7 @@ const distAssetsDir = path.join(distDir, 'assets');
 // room for a handful of new docs pages (about 2.5 KiB each) but not for
 // react-markdown (about 30) or dnd-kit (about 28) to join the entry.
 const budgets = {
-  jsTotalGzip: 470 * 1024,
+  jsTotalGzip: 490 * 1024,
   entryGzip: 160 * 1024,
   cssTotalGzip: 70 * 1024,
   totalGzip: 550 * 1024,
