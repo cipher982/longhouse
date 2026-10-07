@@ -6,8 +6,7 @@
  * actually rendered — acknowledgement is bounded to what was seen, and only
  * while the tab is visible: a restored background tab must not clear unread
  * it never showed. Re-fires when a turn settles while the workspace stays
- * open (last_result_at moves via the workspace stream). Shared viewers never
- * acknowledge.
+ * open (last_result_at moves via the workspace stream).
  */
 
 import { useEffect } from "react";
@@ -18,17 +17,15 @@ import { type SessionStateFacts } from "@/shared/api/agents";
 export function useMarkSessionRead({
   sessionId,
   sessionState,
-  disabled = false,
 }: {
   sessionId: string | null;
   sessionState: SessionStateFacts | null | undefined;
-  disabled?: boolean;
 }): void {
   const unread = sessionState?.unread === true;
   const readThrough = sessionState?.last_result_at ?? null;
 
   useEffect(() => {
-    if (disabled || !sessionId || !unread || !readThrough) return;
+    if (!sessionId || !unread || !readThrough) return;
     const fire = (): boolean => {
       if (document.visibilityState !== "visible") return false;
       void markSessionRead(sessionId, readThrough).catch(() => {});
@@ -40,5 +37,5 @@ export function useMarkSessionRead({
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [disabled, sessionId, unread, readThrough]);
+  }, [sessionId, unread, readThrough]);
 }

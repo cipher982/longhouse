@@ -301,7 +301,7 @@ describe("agentSessionWorkspaceQueryOptions", () => {
     const workspace = { session: { id: "session-1" } };
     apiMocks.fetchAgentSessionWorkspace.mockResolvedValue(workspace);
 
-    // SessionsPage prefetches without share params; the session page passes them as null.
+    // SessionsPage prefetches with the same options the session page reads.
     await queryClient.prefetchQuery(
       agentSessionWorkspaceQueryOptions("session-1", { limit: 200, branch_mode: "head" }),
     );
@@ -310,8 +310,6 @@ describe("agentSessionWorkspaceQueryOptions", () => {
         useAgentSessionWorkspace("session-1", {
           limit: 200,
           branch_mode: "head",
-          shared_by: null,
-          share_token: null,
         }),
       { wrapper: makeWrapper(queryClient) },
     );

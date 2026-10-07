@@ -58,7 +58,6 @@ import {
 import { TimelinePane } from "./TimelinePane";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import { useSessionWorkspace } from "./useSessionWorkspace";
-import { useAuth } from "@/features/auth/auth";
 import { useHeaderSlot } from "@/app/headerSlot";
 import { useStoredState } from "@/shared/hooks/useStoredState";
 import { GaugeIcon } from "@/shared/ui/icons";
@@ -102,16 +101,13 @@ function SessionDetailWorkspaceRoute({
   returnTo,
   sessionId,
   debugTelemetry,
-  sharedByUserId,
 }: {
   highlightEventId: AgentEventId | null;
   returnTo: string;
   sessionId: string | null;
   debugTelemetry: boolean;
-  sharedByUserId: number | null;
 }) {
   const navigate = useNavigate();
-  const { user: currentUser } = useAuth();
   const headerSlot = useHeaderSlot();
   const sessionRail = useSessionRail();
   // The readout panel (turn clock, context, tool calls, activity) is opt-in:
@@ -123,10 +119,7 @@ function SessionDetailWorkspaceRoute({
   );
   const display = useDisplaySettings();
   const displayStyle = useMemo(() => displaySettingsStyle(display.settings), [display.settings]);
-  const workspace = useSessionWorkspace(sessionId, {
-    highlightEventId,
-    shared_by: sharedByUserId,
-  });
+  const workspace = useSessionWorkspace(sessionId, { highlightEventId });
 
   const {
     session,
@@ -202,12 +195,11 @@ function SessionDetailWorkspaceRoute({
     row.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [selectKey, pinTurn]);
 
-  // Read-on-open acknowledgement for Console results; shared viewers never
-  // acknowledge (console-unread-acknowledgement spec).
+  // Read-on-open acknowledgement for Console results
+  // (console-unread-acknowledgement spec).
   useMarkSessionRead({
     sessionId,
     sessionState: session?.session_state,
-    disabled: sharedByUserId != null,
   });
   const sessionStartedLabel = useMemo(
     () => getSessionStartedLabel(session, nowMs),
@@ -372,20 +364,6 @@ function SessionDetailWorkspaceRoute({
 
   const title = getSessionCardText(session, { titleMaxChars: 96 }).title;
   const displaySession = session;
-
-  // Shared-by pill render conditions. These depend on `displaySession`
-  // (declared just above) and the current viewer.
-  const sessionSharer = displaySession.sharer ?? null;
-  const currentUserId = currentUser?.id ?? null;
-  // Defense in depth: the server already hides self-share, but if the cached
-  // session response ever disagrees with the current viewer (e.g. a stale
-  // query after logout/login in another tab), still skip the pill.
-  const shouldShowSharedByPill =
-    sessionSharer !== null &&
-    sessionSharer !== undefined &&
-    (currentUserId === null || sessionSharer.id !== currentUserId);
-  const sharedByDisplayName =
-    sessionSharer?.display_name?.trim() || "a teammate";
 
   const branchSourceSession = currentThreadSession || session;
   const interaction = getSessionInteractionCapabilities({
@@ -603,18 +581,6 @@ function SessionDetailWorkspaceRoute({
                   {usageLabel}
                 </span>
               ) : null}
-            </span>
-          </span>
-        ) : null}
-        {shouldShowSharedByPill ? (
-          <span
-            data-testid="session-shared-by-pill"
-            className="session-shared-by-pill"
-            title={`Shared by ${sharedByDisplayName}`}
-          >
-            <span className="session-shared-by-pill__label">Shared by</span>
-            <span className="session-shared-by-pill__name">
-              {sharedByDisplayName}
             </span>
           </span>
         ) : null}
@@ -940,15 +906,6 @@ export default function SessionDetailPage() {
 
   const debugTelemetry = searchParams.get("debug") === "telemetry";
   const shouldAutoResume = searchParams.get("resume") === "1";
-  const sharedByUserId = useMemo(() => {
-    const raw = searchParams.get("shared_by");
-    if (!raw) return null;
-    const parsed = Number(raw);
-    // Server already enforces ge=1; keep the client permissive so a stale
-    // param or a manually-typed value does not crash the page.
-    if (!Number.isFinite(parsed) || parsed < 1) return null;
-    return Math.trunc(parsed);
-  }, [searchParams]);
   const returnTo =
     (location.state as { from?: string } | null)?.from ?? "/timeline";
 
@@ -976,12 +933,9 @@ export default function SessionDetailPage() {
       highlightEventId={highlightEventId}
       returnTo={returnTo}
       debugTelemetry={debugTelemetry}
-      sharedByUserId={sharedByUserId}
     />
   );
-  // A shared view is someone else's session; the viewer's own rail does not
-  // belong beside it. Everywhere else the rail stays mounted across switches.
-  if (sharedByUserId != null) return workspaceRoute;
+  // The rail stays mounted across session switches.
   return (
     <SessionRailFrame activeSessionId={sessionId ?? null} returnTo={returnTo}>
       {workspaceRoute}

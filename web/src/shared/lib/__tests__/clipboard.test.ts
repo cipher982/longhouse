@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSessionShareUrl, copyToClipboard } from "../clipboard";
+import { copyToClipboard } from "../clipboard";
 
 describe("copyToClipboard", () => {
   let originalClipboard: PropertyDescriptor | undefined;
@@ -74,23 +74,5 @@ describe("copyToClipboard", () => {
 
     expect(await copyToClipboard("")).toBe(false);
     expect(writeText).not.toHaveBeenCalled();
-  });
-});
-
-describe("buildSessionShareUrl", () => {
-  it("strips a trailing slash from the base URL", () => {
-    const url = buildSessionShareUrl("https://david010.longhouse.ai/", "/share/lhshr_abc");
-    expect(url).toBe("https://david010.longhouse.ai/share/lhshr_abc");
-  });
-
-  it("treats a bare token as a /share route", () => {
-    const url = buildSessionShareUrl("https://david010.longhouse.ai", "lhshr_token");
-    expect(url).toBe("https://david010.longhouse.ai/share/lhshr_token");
-  });
-
-  it("keeps absolute share URLs unchanged", () => {
-    expect(buildSessionShareUrl("https://h.example", "https://other.example/share/lhshr_token")).toBe(
-      "https://other.example/share/lhshr_token",
-    );
   });
 });

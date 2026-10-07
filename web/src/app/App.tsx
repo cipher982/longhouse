@@ -118,11 +118,6 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
         </ErrorBoundary>
       ),
     },
-    // No "/share/:token" route: session sharing is disabled until the share
-    // tables exist under the live catalog, so no share link can be minted and
-    // none can be opened. `ShareLandingPage` is kept, unmounted, next to the
-    // shelved server routes in `zerg/routers/session_shares.py`. Until then
-    // "/share/..." falls through to the "*" redirect below.
     {
       path: "/docs/*",
       element: (

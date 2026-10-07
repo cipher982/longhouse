@@ -24,7 +24,6 @@ const wallClockMocks = vi.hoisted(() => ({
   useWallClock: vi.fn(),
 }));
 const agentApiMocks = vi.hoisted(() => ({
-  createSessionShare: vi.fn(),
   createSessionResumeIntent: vi.fn(),
   respondToPauseRequest: vi.fn(),
 }));
@@ -33,7 +32,6 @@ const authMocks = vi.hoisted(() => ({
 }));
 const clipboardMocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
-  buildSessionShareUrl: vi.fn(),
 }));
 
 vi.mock("../useSessionWorkspace", () => ({
@@ -60,7 +58,6 @@ vi.mock("@/shared/lib/clipboard", async (importOriginal) => {
   return {
     ...actual,
     copyToClipboard: clipboardMocks.copyToClipboard,
-    buildSessionShareUrl: clipboardMocks.buildSessionShareUrl,
   };
 });
 
@@ -81,7 +78,6 @@ vi.mock("@/shared/api/agents", async (importOriginal) => {
     await importOriginal<typeof import("@/shared/api/agents")>();
   return {
     ...actual,
-    createSessionShare: agentApiMocks.createSessionShare,
     createSessionResumeIntent: agentApiMocks.createSessionResumeIntent,
     respondToPauseRequest: agentApiMocks.respondToPauseRequest,
   };
@@ -358,15 +354,6 @@ describe("SessionDetailPage", () => {
       status: "resolved",
       pause_request: makePauseRequest({ status: "resolved" }),
     });
-    agentApiMocks.createSessionShare.mockResolvedValue({
-      id: 101,
-      session_id: "session-codex",
-      token: "lhshr_test_token",
-      share_url: "/share/lhshr_test_token",
-      expires_at: "2026-04-21T00:00:00Z",
-      revoked_at: null,
-      sharer: { id: 7, display_name: "Tester" },
-    });
     agentApiMocks.createSessionResumeIntent.mockResolvedValue({
       session_id: "session-codex",
       provider: "codex",
@@ -393,7 +380,7 @@ describe("SessionDetailPage", () => {
     );
     // Default: no authenticated user (dev / auth-disabled). Individual tests
     // override with `authMocks.useAuth.mockReturnValue(...)` to opt in to a
-    // real user and exercise the Copy link / Shared by surfaces.
+    // real user.
     authMocks.useAuth.mockReturnValue({
       user: null,
       isAuthenticated: false,
@@ -403,15 +390,6 @@ describe("SessionDetailPage", () => {
       refreshAuth: vi.fn(),
     });
     clipboardMocks.copyToClipboard.mockResolvedValue(true);
-    clipboardMocks.buildSessionShareUrl.mockImplementation(
-      (baseUrl, shareUrlOrToken) => {
-        const cleanBase = baseUrl.replace(/\/+$/, "");
-        const raw = String(shareUrlOrToken);
-        return raw.startsWith("/")
-          ? `${cleanBase}${raw}`
-          : `${cleanBase}/share/${raw}`;
-      },
-    );
 
     const session = makeSession({
       ended_at: null,
@@ -1662,7 +1640,7 @@ describe("SessionDetailPage", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Copy link + Shared by pill (B2)
+// Header affordances
 // ---------------------------------------------------------------------------
 
 function renderSessionDetailPageAt(
@@ -1720,28 +1698,10 @@ function renderSessionDetailPageAt(
   );
 }
 
-describe("SessionDetailPage — signed copy link + shared attribution", () => {
+describe("SessionDetailPage — header affordances", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    agentApiMocks.createSessionShare.mockResolvedValue({
-      id: 101,
-      session_id: "session-codex",
-      token: "lhshr_test_token",
-      share_url: "/share/lhshr_test_token",
-      expires_at: "2026-04-21T00:00:00Z",
-      revoked_at: null,
-      sharer: { id: 7, display_name: "Tester" },
-    });
     clipboardMocks.copyToClipboard.mockResolvedValue(true);
-    clipboardMocks.buildSessionShareUrl.mockImplementation(
-      (baseUrl, shareUrlOrToken) => {
-        const cleanBase = baseUrl.replace(/\/+$/, "");
-        const raw = String(shareUrlOrToken);
-        return raw.startsWith("/")
-          ? `${cleanBase}${raw}`
-          : `${cleanBase}/share/${raw}`;
-      },
-    );
   });
 
   it("hides the Copy link button when there is no authenticated user", () => {
@@ -1760,19 +1720,13 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
     ).not.toBeInTheDocument();
   });
 
-  // Session sharing is shelved: its tables live on the archive schema and do
-  // not exist under the live catalog, so the routes are unmounted and the UI
-  // offers nothing. What matters now is that the affordance is absent -- the
-  // tests that used to prove it worked would otherwise just fail loudly and
-  // get deleted without anything taking their place.
-  it("offers no share affordance while sharing is shelved", () => {
+  it("offers no share affordance", () => {
     renderSessionDetailPageAt("/timeline/session-codex", {
       user: { id: 1, email: "david@example.com", display_name: "David Rose" },
     });
     expect(
       screen.queryByRole("button", { name: /copy link/i }),
     ).not.toBeInTheDocument();
-    expect(agentApiMocks.createSessionShare).not.toHaveBeenCalled();
   });
 
   it("shows where a branch came from, from the moment it exists", () => {
@@ -1798,63 +1752,6 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
     });
     expect(
       screen.queryByTestId("session-branched-from"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not render the Shared by pill when ?shared_by is absent", () => {
-    renderSessionDetailPageAt("/timeline/session-codex", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-    });
-    expect(
-      screen.queryByTestId("session-shared-by-pill"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("renders the Shared by pill when ?shared_by resolves to another user", () => {
-    renderSessionDetailPageAt("/timeline/session-codex?shared_by=8", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-      session: makeSession({
-        sharer: { id: 8, display_name: "Casey" },
-      }),
-    });
-    const pill = screen.getByTestId("session-shared-by-pill");
-    expect(pill).toHaveTextContent("Shared by");
-    expect(pill).toHaveTextContent("Casey");
-  });
-
-  it("hides the Shared by pill when the session sharer matches the current user (defense in depth)", () => {
-    renderSessionDetailPageAt("/timeline/session-codex?shared_by=1", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-      // The server already strips self-share, but a stale cached response
-      // could still carry the field. The client must also gate the pill.
-      session: makeSession({
-        sharer: { id: 1, display_name: "David Rose" },
-      }),
-    });
-    expect(
-      screen.queryByTestId("session-shared-by-pill"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("falls back to 'a teammate' when the sharer's display_name is null", () => {
-    renderSessionDetailPageAt("/timeline/session-codex?shared_by=8", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-      session: makeSession({
-        sharer: { id: 8, display_name: null },
-      }),
-    });
-    const pill = screen.getByTestId("session-shared-by-pill");
-    expect(pill).toHaveTextContent("Shared by");
-    expect(pill).toHaveTextContent("a teammate");
-  });
-
-  it("ignores a non-positive shared_by param (e.g. shared_by=0)", () => {
-    renderSessionDetailPageAt("/timeline/session-codex?shared_by=0", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-    });
-    // No pill — the page treats shared_by=0 as if it were absent.
-    expect(
-      screen.queryByTestId("session-shared-by-pill"),
     ).not.toBeInTheDocument();
   });
 });

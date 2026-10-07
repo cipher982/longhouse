@@ -45,13 +45,3 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     document.body.removeChild(textarea);
   }
 }
-
-export function buildSessionShareUrl(baseUrl: string, shareUrlOrToken: string): string {
-  const cleanBase = baseUrl.replace(/\/+$/, "");
-  const raw = shareUrlOrToken.trim();
-  if (/^https?:\/\//i.test(raw)) {
-    return raw;
-  }
-  const path = raw.startsWith("/") ? raw : `/share/${encodeURIComponent(raw)}`;
-  return `${cleanBase}${path}`;
-}

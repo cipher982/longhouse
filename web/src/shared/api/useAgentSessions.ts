@@ -66,20 +66,18 @@ type AgentSessionWorkspaceQueryOptions = Pick<
 type AgentSessionWorkspaceParams = {
   limit?: number;
   branch_mode?: "head" | "all";
-  shared_by?: number | null;
-  share_token?: string | null;
 };
 
 /**
  * The one query key and fetch for a session workspace. Prefetchers and the
  * session page both build from this, so a prefetch lands in the cache entry
- * the page reads (an `undefined` and a `null` share param hash differently).
+ * the page reads.
  */
 export function agentSessionWorkspaceQueryOptions(
   sessionId: string | null,
-  { limit = 200, branch_mode = "head", shared_by, share_token }: AgentSessionWorkspaceParams = {},
+  { limit = 200, branch_mode = "head" }: AgentSessionWorkspaceParams = {},
 ) {
-  const params = { limit, branch_mode, shared_by: shared_by ?? null, share_token: share_token ?? null };
+  const params = { limit, branch_mode };
   return {
     queryKey: ["agent-session-workspace", sessionId, params] as const,
     queryFn: () => fetchAgentSessionWorkspace(sessionId!, params),

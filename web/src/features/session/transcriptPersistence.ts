@@ -56,12 +56,7 @@ function persistedKind(queryKey: readonly unknown[]): "workspace" | "pages" | "b
   const params = queryKey[2] as Params;
   if (typeof queryKey[1] !== "string") return null;
   if (queryKey[0] === "agent-session-workspace") {
-    return params?.limit === PAGE_SIZE &&
-      params?.branch_mode === "head" &&
-      params?.shared_by == null &&
-      params?.share_token == null
-      ? "workspace"
-      : null;
+    return params?.limit === PAGE_SIZE && params?.branch_mode === "head" ? "workspace" : null;
   }
   if (queryKey[0] === "agent-session-projection-infinite") {
     return params?.limit === PAGE_SIZE && params?.branch_mode === "head" ? "pages" : null;
