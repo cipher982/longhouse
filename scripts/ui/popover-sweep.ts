@@ -15,6 +15,11 @@
  * Content a trigger expands inline (a tool row's output, a notice body) is
  * not an overlay and is not judged: it scrolls with the page.
  *
+ * Triggers are the ones that declare a popup: <details>, aria-haspopup and
+ * aria-expanded. A declared trigger inside an opened menu (a menu item that
+ * opens a drawer) is followed one level down, and dialogs a scene renders
+ * already open are judged on arrival.
+ *
  * Used by `ui-capture --sweep`, which `make ui-sweep` runs for every fixture
  * scene at desktop, wide and phone sizes.
  */
@@ -56,12 +61,13 @@ const VISIBLE_FN = `(el) => {
   return r.width >= 1 && r.height >= 1;
 }`;
 
+const TRIGGER_SELECTOR =
+  'details:not([open]) > summary, [aria-haspopup]:not([aria-haspopup="false"]):not([aria-expanded="true"]), button[aria-expanded="false"]';
+
 const MARK_TRIGGERS = `(() => {
   const visible = ${VISIBLE_FN};
   const label = ${LABEL_FN};
-  const nodes = document.querySelectorAll(
-    'details:not([open]) > summary, [aria-haspopup]:not([aria-haspopup="false"]):not([aria-expanded="true"]), button[aria-expanded="false"]'
-  );
+  const nodes = document.querySelectorAll('${TRIGGER_SELECTOR}');
   const out = [];
   for (const el of nodes) {
     if (el.closest("[data-sweep-trigger]")) continue;
@@ -80,17 +86,24 @@ const SNAPSHOT_VISIBLE = `(() => {
   for (const el of document.querySelectorAll("body *")) el.__sweepWasVisible = visible(el);
 })()`;
 
-const CHECK_OVERLAYS = `(() => {
+// mode "new": overlays that appeared since SNAPSHOT_VISIBLE. mode "open":
+// dialogs and menus already showing (a scene that renders one open). parent:
+// mark declared triggers inside the overlays as data-sweep-child="<parent>.<n>".
+const CHECK_OVERLAYS = `((mode, parent) => {
   const visible = ${VISIBLE_FN};
   const label = ${LABEL_FN};
   const vw = document.documentElement.clientWidth;
   const vh = document.documentElement.clientHeight;
   const TOL = 1;
   const appeared = [];
-  for (const el of document.querySelectorAll("body *")) {
-    if (el.__sweepWasVisible || !visible(el)) continue;
+  const candidates = mode === "open"
+    ? document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="listbox"]')
+    : document.querySelectorAll("body *");
+  for (const el of candidates) {
+    if (mode === "new" && el.__sweepWasVisible) continue;
+    if (!visible(el)) continue;
     const pos = getComputedStyle(el).position;
-    if (pos !== "absolute" && pos !== "fixed") continue;
+    if (mode === "new" && pos !== "absolute" && pos !== "fixed") continue;
     const r = el.getBoundingClientRect();
     if (r.width < 24 || r.height < 16) continue; // dots, carets, focus rings
     if (getComputedStyle(el).pointerEvents === "none") continue; // decoration
@@ -146,69 +159,146 @@ const CHECK_OVERLAYS = `(() => {
       }
     }
   }
-  return { checked: roots.length, overlays: roots.map(label), failures };
-})()`;
+  const children = [];
+  if (parent !== null) {
+    for (const root of roots) {
+      for (const el of root.querySelectorAll('${TRIGGER_SELECTOR}')) {
+        if (el.disabled || el.getAttribute("aria-disabled") === "true" || !visible(el)) continue;
+        el.setAttribute("data-sweep-child", parent + "." + children.length);
+        children.push(label(el));
+      }
+    }
+  }
+  return { checked: roots.length, overlays: roots.map(label), failures, children };
+})`;
 
-const CLOSE_TRIGGER = `((index) => {
-  const el = document.querySelector('[data-sweep-trigger="' + index + '"]');
-  if (!el) return;
-  const details = el.tagName === "SUMMARY" ? el.parentElement : null;
+const CLOSE_DETAILS = `((selector) => {
+  const el = document.querySelector(selector);
+  const details = el && el.tagName === "SUMMARY" ? el.parentElement : null;
   if (details && details.open) details.open = false;
 })`;
+
+// A menu's items unmount when it closes: after reopening it, find the child
+// again by its label and mark it.
+const REMARK_CHILD = `((childId, name) => {
+  const visible = ${VISIBLE_FN};
+  const label = ${LABEL_FN};
+  for (const el of document.querySelectorAll('${TRIGGER_SELECTOR}')) {
+    if (el.hasAttribute("data-sweep-trigger") || !visible(el) || label(el) !== name) continue;
+    el.setAttribute("data-sweep-child", childId);
+    return true;
+  }
+  return false;
+})`;
+
+type CheckResult = {
+  checked: number;
+  overlays: string[];
+  failures: Omit<PopoverFailure, "trigger">[];
+  children: string[];
+};
 
 /** shotPrefix: also save a PNG of the page with each overlay open (`<prefix>-<n>.png`). */
 export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<PopoverSweepReport> {
   const viewport = page.viewportSize() ?? { width: 0, height: 0 };
   const url = page.url();
-  const triggers = (await page.evaluate(MARK_TRIGGERS)) as string[];
   const report: PopoverSweepReport = {
     viewport,
-    triggers: triggers.length,
+    triggers: 0,
     overlaysChecked: 0,
     opened: [],
     skipped: [],
     failures: [],
   };
+  const record = (trigger: string, result: CheckResult) => {
+    report.overlaysChecked += result.checked;
+    report.opened.push({ trigger, overlays: result.overlays });
+    for (const failure of result.failures) report.failures.push({ trigger, ...failure });
+  };
 
-  for (let index = 0; index < triggers.length; index += 1) {
-    const trigger = page.locator(`[data-sweep-trigger="${index}"]`);
-    if ((await trigger.count()) === 0 || !(await trigger.isVisible())) {
-      report.skipped.push(`${triggers[index]}: gone before its turn`);
-      continue;
-    }
+  // A dialog the scene renders open never gets a trigger click: judge it now.
+  const atLoad = (await page.evaluate(`${CHECK_OVERLAYS}("open", null)`)) as CheckResult;
+  if (atLoad.checked > 0) record("(open at load)", atLoad);
+
+  // Click a trigger, judge what it opened, then put the page back.
+  const openAndCheck = async (
+    selector: string,
+    name: string,
+    parent: string | null,
+    shot: string,
+  ): Promise<CheckResult | null> => {
+    const trigger = page.locator(selector);
     await page.evaluate(SNAPSHOT_VISIBLE);
     try {
       await trigger.click({ timeout: 2_000 });
     } catch (error) {
-      report.skipped.push(`${triggers[index]}: not clickable (${String(error).split("\n")[0].slice(0, 80)})`);
-      continue;
+      report.skipped.push(`${name}: not clickable (${String(error).split("\n")[0].slice(0, 80)})`);
+      return null;
     }
     await page.waitForTimeout(200);
     if (page.url() !== url) {
-      report.skipped.push(`${triggers[index]}: navigated away`);
+      report.skipped.push(`${name}: navigated away`);
       await page.goBack().catch(() => undefined);
-      break;
+      return null;
     }
-    const result = (await page.evaluate(CHECK_OVERLAYS)) as {
-      checked: number;
-      overlays: string[];
-      failures: Omit<PopoverFailure, "trigger">[];
-    };
-    report.overlaysChecked += result.checked;
-    report.opened.push({ trigger: triggers[index], overlays: result.overlays });
+    const result = (await page.evaluate(
+      `${CHECK_OVERLAYS}("new", ${JSON.stringify(parent)})`,
+    )) as CheckResult;
+    record(name, result);
     if (shotPrefix && result.checked > 0) {
-      await page.screenshot({ path: `${shotPrefix}-${index}.png` });
+      await page.screenshot({ path: `${shotPrefix}-${shot}.png` });
     }
-    for (const failure of result.failures) report.failures.push({ trigger: triggers[index], ...failure });
-
-    // Put the page back: Escape for menus and dialogs, then close a <details>
-    // directly, then a second click for a toggle that ignores Escape.
+    return result;
+  };
+  // Escape for menus and dialogs, then close a <details> directly, then a
+  // second click for a toggle that ignores Escape.
+  const close = async (selector: string) => {
     await page.keyboard.press("Escape");
-    await page.evaluate(`${CLOSE_TRIGGER}(${index})`);
+    await page.evaluate(`${CLOSE_DETAILS}(${JSON.stringify(selector)})`);
+    const trigger = page.locator(selector);
     if ((await trigger.count()) > 0 && (await trigger.getAttribute("aria-expanded")) === "true") {
       await trigger.click({ timeout: 2_000 }).catch(() => undefined);
     }
     await page.waitForTimeout(100);
+  };
+
+  const triggers = (await page.evaluate(MARK_TRIGGERS)) as string[];
+  report.triggers = triggers.length;
+  for (let index = 0; index < triggers.length; index += 1) {
+    const selector = `[data-sweep-trigger="${index}"]`;
+    if ((await page.locator(selector).count()) === 0 || !(await page.locator(selector).isVisible())) {
+      report.skipped.push(`${triggers[index]}: gone before its turn`);
+      continue;
+    }
+    const result = await openAndCheck(selector, triggers[index], String(index), String(index));
+    if (result === null) {
+      if (page.url() !== url) break;
+      continue;
+    }
+    await close(selector);
+
+    // One level down: a declared trigger inside the menu just opened.
+    report.triggers += result.children.length;
+    for (let child = 0; child < result.children.length; child += 1) {
+      const childSelector = `[data-sweep-child="${index}.${child}"]`;
+      const childName = `${triggers[index]} > ${result.children[child]}`;
+      if (!(await page.locator(childSelector).isVisible().catch(() => false))) {
+        await page.locator(selector).click({ timeout: 2_000 }).catch(() => undefined);
+        await page.waitForTimeout(200);
+        await page.evaluate(
+          `${REMARK_CHILD}(${JSON.stringify(`${index}.${child}`)}, ${JSON.stringify(result.children[child])})`,
+        );
+      }
+      if (!(await page.locator(childSelector).isVisible().catch(() => false))) {
+        report.skipped.push(`${childName}: its menu did not reopen`);
+        continue;
+      }
+      const childResult = await openAndCheck(childSelector, childName, null, `${index}-${child}`);
+      if (childResult === null && page.url() !== url) break;
+      await close(childSelector);
+      await close(selector);
+    }
+    if (page.url() !== url) break;
   }
   return report;
 }

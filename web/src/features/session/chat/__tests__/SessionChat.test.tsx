@@ -309,6 +309,48 @@ describe("SessionChat", () => {
     });
   });
 
+  it("lets the model id box extend a listed id instead of clearing mid-word", async () => {
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/providers/codex/models")) {
+        return Promise.resolve({
+          device_id: "cinder",
+          provider: "codex",
+          models: [
+            { model: "gpt-5.6-luna", label: "gpt 5.6 luna", last_used_at: "2026-09-25T12:00:00Z" },
+          ],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const user = userEvent.setup();
+    renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        device_id: "cinder",
+        provider: "codex",
+        selected_model: "gpt-5.5",
+        session_state: makeSessionStateFacts({ access: "live_control", mode: "console" }),
+      }),
+    });
+
+    await user.click(
+      (await screen.findByTestId("session-model-select")).querySelector("summary")!,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /gpt 5\.6 luna/ })).toBeInTheDocument(),
+    );
+    const input = screen.getByTestId("session-model-select-input");
+    await user.clear(input);
+    // Passes through "gpt-5.6-luna", a listed id, on the way.
+    await user.type(input, "gpt-5.6-luna-preview");
+    expect(input).toHaveValue("gpt-5.6-luna-preview");
+    expect(screen.getByTestId("session-model-select")).toHaveTextContent("gpt-5.6-luna-preview");
+  });
+
   it("hydrates a late session model without replacing a user's multipart choice", async () => {
     const user = userEvent.setup();
     let multipartBody: FormData | null = null;

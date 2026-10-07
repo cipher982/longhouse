@@ -10,6 +10,8 @@ export interface SessionOverflowMenuItem {
   onSelect: () => void;
   disabled?: boolean;
   danger?: boolean;
+  /** The item opens a dialog or drawer: announced as aria-haspopup="dialog". */
+  opensDialog?: boolean;
   testId?: string;
 }
 
@@ -64,6 +66,7 @@ export function SessionOverflowMenu({
                 "session-overflow-menu__item",
                 item.danger && "session-overflow-menu__item--danger",
               )}
+              aria-haspopup={item.opensDialog ? "dialog" : undefined}
               disabled={item.disabled}
               data-testid={item.testId}
               onClick={() => {

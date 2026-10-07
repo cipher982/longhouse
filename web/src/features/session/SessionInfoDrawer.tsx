@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 interface SessionInfoDrawerProps {
   open: boolean;
@@ -41,7 +42,10 @@ export function SessionInfoDrawer({
 
   if (!open) return null;
 
-  return (
+  // On body, not in the page: #app-container is its own stacking context
+  // under the app header, so a drawer rendered inside it sat beneath the
+  // header's controls whatever its z-index.
+  return createPortal(
     <div
       className="session-info-drawer"
       role="dialog"
@@ -72,6 +76,7 @@ export function SessionInfoDrawer({
         </div>
         <div className="session-info-drawer__body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

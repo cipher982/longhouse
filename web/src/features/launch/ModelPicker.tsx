@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchRecentModels } from "@/shared/api/index";
 import { getProviderLabel } from "@/shared/lib/providers";
@@ -73,7 +73,6 @@ export default function ModelPicker({
         testId={testId}
         providerLabel={providerLabel}
         selectedModel={selectedModel}
-        value={value}
         models={recentModelsQuery.data?.models ?? []}
         onChange={onChange}
         choose={choose}
@@ -140,7 +139,6 @@ interface CompactModelPickerProps {
   testId: string;
   providerLabel: string;
   selectedModel: string;
-  value: string;
   models: { model: string; last_used_at: string | null; label?: string | null }[];
   onChange: (model: string) => void;
   choose: (model: string) => void;
@@ -155,7 +153,6 @@ function CompactModelPicker({
   testId,
   providerLabel,
   selectedModel,
-  value,
   models,
   onChange,
   choose,
@@ -182,8 +179,16 @@ function CompactModelPicker({
     };
   }, [detailsRef]);
 
-  // The free-text box holds only an id the list does not already show.
+  // The free-text box is its own draft: it starts with an id the list does
+  // not show and is cleared by picking a row, but typing never clears it,
+  // even when a prefix of what is typed matches a listed id.
+  const [manualDraft, setManualDraft] = useState<string | null>(null);
   const isListed = models.some((recent) => recent.model === selectedModel);
+  const manualValue = manualDraft ?? (isListed ? "" : selectedModel);
+  const pick = (model: string) => {
+    setManualDraft(null);
+    choose(model);
+  };
   const selectedLabel = selectedModel
     ? models.find((recent) => recent.model === selectedModel)?.label || selectedModel
     : "Default model";
@@ -209,7 +214,7 @@ function CompactModelPicker({
               type="button"
               className={`model-chip__option${selected ? " is-selected" : ""}`}
               aria-pressed={selected}
-              onClick={() => choose(recent.model)}
+              onClick={() => pick(recent.model)}
             >
               <span className="model-chip__option-copy">
                 <span className="model-chip__option-name">{recent.label || recent.model}</span>
@@ -226,7 +231,7 @@ function CompactModelPicker({
           type="button"
           className={`model-chip__option${!selectedModel ? " is-selected" : ""}`}
           aria-pressed={!selectedModel}
-          onClick={() => choose("")}
+          onClick={() => pick("")}
         >
           <span className="model-chip__option-copy">
             <span className="model-chip__option-name">Default</span>
@@ -238,8 +243,11 @@ function CompactModelPicker({
           <span>Other model id</span>
           <input
             type="text"
-            value={isListed ? "" : value}
-            onChange={(event) => onChange(event.target.value)}
+            value={manualValue}
+            onChange={(event) => {
+              setManualDraft(event.target.value);
+              onChange(event.target.value);
+            }}
             placeholder="provider/model-id"
             autoComplete="off"
             spellCheck={false}

@@ -672,6 +672,7 @@ function SessionDetailWorkspaceRoute({
               key: "details",
               label: "Session details",
               testId: "session-info-button",
+              opensDialog: true,
               onSelect: () => setDrawerOpen(true),
             },
             {

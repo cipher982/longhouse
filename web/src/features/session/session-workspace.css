@@ -3447,10 +3447,17 @@
 
 /* ===== Info drawer ===== */
 
+/* A modal, portaled to <body> so its scrim covers the app header too (inside
+   the page the header's controls drew over the drawer's title; found by
+   make ui-sweep). Outside the route it gets the route's resting tint. */
 .session-info-drawer {
+  --session-energy: rgba(233, 185, 73, 0.5);
+  --session-energy-border: rgba(233, 185, 73, 0.18);
+  --session-energy-soft: rgba(233, 185, 73, 0.04);
+  --session-energy-wash: rgba(233, 185, 73, 0.04);
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: flex;
   justify-content: flex-end;
 }
