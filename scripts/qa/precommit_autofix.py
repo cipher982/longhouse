@@ -40,6 +40,7 @@ import sys
 from pathlib import Path
 
 STATE_DIRNAME = "longhouse-autofix"
+ABSENT = "absent"  # the recorded pre-fix "blob" of a file the fix created (a generator's first output)
 
 
 def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -84,11 +85,18 @@ def _read(path: str) -> bytes | None:
 
 def _blob(path: str, content: bytes | None) -> str:
     """The blob `git add` would write for this content at this path (--path applies the same clean filters,
-    autocrlf and .gitattributes). Empty when unknown: post-commit then leaves the path alone."""
+    autocrlf and .gitattributes). ABSENT for a file the fix created. Empty when unknown: post-commit then
+    leaves the path alone."""
     if content is None:
-        return ""
+        return ABSENT
     proc = subprocess.run(["git", "hash-object", "--stdin", "--path", path], input=content, capture_output=True)
     return proc.stdout.decode().strip() if proc.returncode == 0 else ""
+
+
+def _worktree_is_head(path: str) -> bool:
+    """By blob, so it also answers for a path the index does not list (which `git diff HEAD` reports as deleted)."""
+    head = git("rev-parse", "--verify", "--quiet", f"HEAD:{path}", check=False).stdout.strip()
+    return bool(head) and head == _blob(path, Path(path).read_bytes())
 
 
 def _index_blob(path: str) -> str:
@@ -153,9 +161,8 @@ def post_commit() -> int:
     record.unlink(missing_ok=True)
     # Only where the working tree is exactly what was committed and the index still holds the pre-fix copy:
     # then the index becomes HEAD for that path, and nothing anyone staged or changed since is touched.
-    settled = [e[0] for e in entries if len(e) == 2 and Path(e[0]).exists()
-               and git("diff", "--quiet", "HEAD", "--", e[0], check=False).returncode == 0
-               and e[1] and _index_blob(e[0]) == e[1]]
+    settled = [e[0] for e in entries if len(e) == 2 and Path(e[0]).exists() and _worktree_is_head(e[0])
+               and e[1] and _index_blob(e[0]) == ("" if e[1] == ABSENT else e[1])]
     if settled:
         git("add", "--", *settled, check=False)
     return 0

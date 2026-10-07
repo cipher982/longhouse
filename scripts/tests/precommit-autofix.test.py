@@ -177,6 +177,33 @@ class AutofixTests(unittest.TestCase):
         self.assertEqual(self.fix("a.txt").returncode, 0)
         state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
         self.assertEqual((state / "staged").read_text(), f"a.txt\t{self.blob('hello')}\n")
+        # And post-commit settles the real index against it: commit the fix, then leave the real index holding
+        # the pre-fix copy, as `git commit -o` does.
+        self.git("commit", "-q", "-m", "fixed")
+        self.git("update-index", "--cacheinfo", f"100644,{self.blob('hello')},a.txt")
+        self.assertEqual(self.git("status", "--short"), "MM a.txt\n")
+        self.assertEqual(self.autofix("post-commit").returncode, 0)
+        self.assertEqual(self.git("status", "--short"), "")
+
+    def test_a_generated_file_the_fix_created_is_settled_into_the_index_after_commit_o(self):
+        (self.dir / "source.txt").write_text("four\n")
+        self.git("add", "source.txt")
+        self.git("rm", "-q", "--cached", "generated.txt")
+        (self.dir / "generated.txt").unlink()
+        self.git("commit", "-q", "-m", "no generated file yet")
+        (self.dir / "source.txt").write_text("seven\n")
+        self.git("add", "source.txt")
+        self.snapshot()
+        self.assertEqual(self.fix(cmd="gen.py", watch="generated.txt").returncode, 0)
+        state = Path(self.git("rev-parse", "--absolute-git-dir").strip()) / "longhouse-autofix"
+        self.assertEqual((state / "staged").read_text(), "generated.txt\tabsent\n")
+        # `commit -o source.txt` committed both from its temporary index; the real index never saw the new file.
+        self.git("commit", "-q", "-m", "with the generated file")
+        self.git("rm", "-q", "--cached", "generated.txt")
+        self.assertEqual(self.git("status", "--short"), "D  generated.txt\n?? generated.txt\n")
+        (state / "staged").write_text("generated.txt\tabsent\n")
+        self.assertEqual(self.autofix("post-commit").returncode, 0)
+        self.assertEqual(self.git("status", "--short"), "", "no phantom staged deletion")
 
     def test_post_commit_never_touches_a_path_whose_working_tree_moved_on(self):
         (self.dir / "a.txt").write_text("edited after the commit\n")
