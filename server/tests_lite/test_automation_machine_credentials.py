@@ -160,3 +160,72 @@ def test_set_automation_machine_mirrors_reclassified_rows_to_searchd(monkeypatch
             "source_commit_seq": 9,
         },
     )
+
+
+def test_live_only_history_is_backfilled_and_live_rows_take_the_credential(live_catalog, live_catalog_client):  # noqa: F811
+    owner = live_catalog.create_user("owner@automation-creds.test")
+    token = live_catalog.create_device_token(owner_id=owner, device_id=SAURON)
+
+    def seed_live_row(session_id: str) -> None:
+        """A session the live catalog knows before any transcript is archived."""
+
+        from zerg.catalogd.schema import create_catalog_engine
+        from zerg.models.live_store import LiveSession
+        from zerg.models.live_store import LiveSessionCatalog
+        from zerg.services.catalogd_supervisor import catalogd_paths
+
+        now = datetime.now(UTC).replace(microsecond=0)
+        engine = create_catalog_engine(catalogd_paths()[0])
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    LiveSession.__table__.insert().values(
+                        session_id=session_id, owner_id=str(owner), provider="opencode", started_at=now, last_seen_at=now, updated_at=now
+                    )
+                )
+                connection.execute(
+                    LiveSessionCatalog.__table__.insert().values(
+                        session_id=session_id,
+                        provider="opencode",
+                        environment="production",
+                        device_id=SAURON,
+                        started_at=now,
+                        user_state="active",
+                        notification_muted=0,
+                    )
+                )
+        finally:
+            engine.dispose()
+
+    live_only = str(uuid4())
+    seed_live_row(live_only)
+
+    result = _set(live_catalog, owner_id=owner, device_id=SAURON, automation=True)
+    assert live_only in result["reclassified"]
+    backfilled = _catalog(live_catalog, live_only)
+    assert backfilled["launch_actor"] == "automation"
+    assert bool(backfilled["hidden_from_default_timeline"]) is True
+
+    # A session whose live row exists before its first ship takes the
+    # credential on both the archived and the live row.
+    both = str(uuid4())
+    seed_live_row(both)
+    _ship(live_catalog, live_catalog_client, token=token, device_id=SAURON, session_id=both)
+    shipped = _catalog(live_catalog, both)
+    assert shipped["launch_actor"] == "automation"
+    assert bool(shipped["hidden_from_default_timeline"]) is True
+    from sqlalchemy import select
+
+    from zerg.catalogd.schema import create_catalog_engine
+    from zerg.models.live_store import LiveSessionCatalog
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    engine = create_catalog_engine(catalogd_paths()[0])
+    try:
+        with engine.connect() as connection:
+            live_actor = connection.execute(
+                select(LiveSessionCatalog.__table__.c.launch_actor).where(LiveSessionCatalog.__table__.c.session_id == both)
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    assert live_actor == "automation"

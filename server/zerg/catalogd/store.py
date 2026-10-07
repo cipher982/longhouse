@@ -8596,6 +8596,21 @@ class CatalogStore:
                     )
                 ).scalars()
             ]
+            # Sessions known only to the live catalog (no archived row yet)
+            # belong to the same machine history.
+            live_only = LiveSession.__table__
+            session_ids += [
+                str(value)
+                for value in connection.execute(
+                    select(catalog.c.session_id).where(
+                        catalog.c.device_id == device_id,
+                        catalog.c.launch_actor.is_(None),
+                        func.coalesce(catalog.c.origin_kind, "") != "console",
+                        catalog.c.session_id.in_(select(live_only.c.session_id).where(live_only.c.owner_id == str(owner_id))),
+                        catalog.c.session_id.notin_(select(storage.c.session_id)),
+                    )
+                ).scalars()
+            ]
             commit_seq = _advance_commit_seq(connection, observed_at)
             for start in range(0, len(session_ids), 500):
                 chunk = session_ids[start : start + 500]
@@ -10419,6 +10434,15 @@ class CatalogStore:
                     session_values["launch_surface"] = session_values["launch_surface"] or existing_session.get("launch_surface")
                 elif credential_automation:
                     session_values["launch_actor"] = "automation"
+                    # The live rows carry the same provenance; a live row with
+                    # none of its own takes the credential's, so a later full
+                    # visibility reconcile reads the same answer.
+                    for table in (live_session_catalog, live_timeline_card):
+                        connection.execute(
+                            update(table)
+                            .where(table.c.session_id == session_key, table.c.launch_actor.is_(None))
+                            .values(launch_actor="automation", updated_at=commit_time)
+                        )
             if render_manifest is None and _session_keeps_published_render(connection, existing_session):
                 # This envelope's `render_state` is a receipt about the envelope
                 # (no render attached), not a verdict on the session. A commit
