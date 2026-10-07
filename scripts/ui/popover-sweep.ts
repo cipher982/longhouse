@@ -340,10 +340,15 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
       const childName = `${triggers[index]} > ${result.children[child]}`;
       if (!(await page.locator(childSelector).isVisible().catch(() => false))) {
         await page.locator(selector).click({ timeout: 2_000 }).catch(() => undefined);
-        await page.waitForTimeout(200);
-        await page.evaluate(
-          `${REMARK_CHILD}(${JSON.stringify(`${index}.${child}`)}, ${JSON.stringify(result.children[child])})`,
-        );
+        // A reopened modal may render its contents a beat later (a loaded CI
+        // guest took over 200 ms): look for the child for up to 3 s.
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          await page.waitForTimeout(150);
+          const found = await page.evaluate(
+            `${REMARK_CHILD}(${JSON.stringify(`${index}.${child}`)}, ${JSON.stringify(result.children[child])})`,
+          );
+          if (found) break;
+        }
       }
       if (!(await page.locator(childSelector).isVisible().catch(() => false))) {
         report.failures.push({

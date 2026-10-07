@@ -349,6 +349,14 @@ describe("SessionChat", () => {
     await user.type(input, "gpt-5.6-luna-preview");
     expect(input).toHaveValue("gpt-5.6-luna-preview");
     expect(screen.getByTestId("session-model-select")).toHaveTextContent("gpt-5.6-luna-preview");
+
+    // A model chosen elsewhere replaces the draft instead of hiding behind it.
+    await user.click(screen.getByRole("button", { name: /gpt 5\.6 luna/ }));
+    await user.click(
+      screen.getByTestId("session-model-select").querySelector("summary")!,
+    );
+    expect(screen.getByTestId("session-model-select-input")).toHaveValue("");
+    expect(screen.getByTestId("session-model-select")).toHaveTextContent("gpt 5.6 luna");
   });
 
   it("hydrates a late session model without replacing a user's multipart choice", async () => {

@@ -183,6 +183,11 @@ function CompactModelPicker({
   // not show and is cleared by picking a row, but typing never clears it,
   // even when a prefix of what is typed matches a listed id.
   const [manualDraft, setManualDraft] = useState<string | null>(null);
+  // A model chosen elsewhere (a row, or an edited outbox entry restoring its
+  // model) replaces the draft; the draft's own keystrokes never do.
+  useEffect(() => {
+    setManualDraft((draft) => (draft !== null && draft.trim() === selectedModel ? draft : null));
+  }, [selectedModel]);
   const isListed = models.some((recent) => recent.model === selectedModel);
   const manualValue = manualDraft ?? (isListed ? "" : selectedModel);
   const pick = (model: string) => {
