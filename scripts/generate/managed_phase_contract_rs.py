@@ -33,6 +33,13 @@ def _load_phases() -> list[dict]:
     phases = payload.get("phases")
     if not isinstance(phases, list) or not phases:
         raise SystemExit(f"{CONTRACT} must contain a non-empty 'phases' array")
+    # The server matches presence posts against the stripped, lower-cased phase;
+    # the generated Rust and TypeScript emit raw_phase verbatim. Refuse a phase
+    # whose two forms differ so the three vocabularies cannot diverge.
+    for item in phases:
+        raw = item["raw_phase"]
+        if raw != raw.strip().lower():
+            raise SystemExit(f"{CONTRACT}: raw_phase {raw!r} must be lower-case with no surrounding whitespace")
     return phases
 
 
